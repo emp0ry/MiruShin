@@ -11,7 +11,7 @@
 <p align="center">
   <img alt="Flutter" src="https://img.shields.io/badge/Flutter-stable-02569B?logo=flutter&logoColor=white">
   <img alt="Dart" src="https://img.shields.io/badge/Dart-3.11%2B-0175C2?logo=dart&logoColor=white">
-  <img alt="Platforms" src="https://img.shields.io/badge/Platforms-Android%20%7C%20iOS%20%7C%20Windows%20%7C%20macOS%20%7C%20Linux-111827">
+  <img alt="Platforms" src="https://img.shields.io/badge/Platforms-Android%20%7C%20iOS%20%7C%20Windows%20%7C%20macOS-111827">
   <img alt="Catalogs" src="https://img.shields.io/badge/Catalogs-TMDB%20%7C%20AniList-16A34A">
 </p>
 
@@ -61,8 +61,6 @@ flutter run
 ```
 
 You can also run a specific target with commands like `flutter run -d macos`, `flutter run -d windows`, or `flutter run -d android`.
-
-On Linux, if you run a downloaded binary or extracted build directly, make it executable first with `chmod +x mirushin`. For AppImage releases, use `chmod +x MiruShin-*.AppImage` before launching.
 
 ## First-Time Setup
 
