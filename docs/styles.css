@@ -726,7 +726,6 @@ main section[id],
   border-radius: 18px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background:
-    radial-gradient(circle at 30% 30%, rgba(216, 180, 255, 0.26), transparent 34%),
     linear-gradient(135deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.03));
   position: relative;
 }
