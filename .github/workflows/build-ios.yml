@@ -1,0 +1,71 @@
+name: Build iOS
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  APP_NAME: MiruShin
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Flutter (stable)
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter pub get
+        run: flutter pub get
+
+      - name: Prepare iOS no-codesign config
+        shell: bash
+        run: |
+          {
+            echo ""
+            echo "CODE_SIGN_ENTITLEMENTS="
+            echo "DEVELOPMENT_TEAM="
+            echo "PROVISIONING_PROFILE_SPECIFIER="
+            echo "CODE_SIGN_STYLE=Manual"
+          } >> ios/Flutter/Release.xcconfig
+
+      - name: Build iOS (release, no codesign)
+        run: flutter build ios --release --no-codesign
+
+      - name: Read version from pubspec.yaml
+        id: ver
+        shell: bash
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d'+' -f1)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Create IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          APP_PATH="build/ios/iphoneos/Runner.app"
+          if [ ! -d "$APP_PATH" ]; then
+            echo "ERROR: iOS app not found at $APP_PATH"
+            ls -la build/ios/iphoneos || true
+            exit 1
+          fi
+          rm -rf Payload
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/
+          zip -r "${APP_NAME}-ios-v${VERSION}.ipa" Payload
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: MiruShin-ios
+          path: MiruShin-ios-v*.ipa

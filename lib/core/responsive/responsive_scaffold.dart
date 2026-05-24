@@ -1,0 +1,137 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../app/app_routes.dart';
+import '../../app/theme/app_theme_extension.dart';
+import '../../features/catalog/application/catalog_mode.dart';
+import 'adaptive_navigation.dart';
+import 'app_breakpoints.dart';
+import 'app_navigation_item.dart';
+
+class ResponsiveScaffold extends ConsumerWidget {
+  const ResponsiveScaffold({
+    required this.child,
+    required this.currentLocation,
+    required this.onDestinationSelected,
+    super.key,
+  });
+
+  final Widget child;
+  final String currentLocation;
+  final ValueChanged<String> onDestinationSelected;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final AppThemeExtension palette = AppThemeExtension.of(context);
+    final CatalogMode catalogMode = ref.watch(catalogModeProvider);
+    final List<AppNavigationItem> items = appNavigationItemsForMode(
+      catalogMode,
+    );
+    void switchCatalogMode() {
+      final CatalogMode next = ref.read(catalogModeProvider).toggled;
+      unawaited(ref.read(catalogModeProvider.notifier).setMode(next));
+      _showCatalogSwitchBanner(context, next);
+      if (currentLocation.startsWith('/media') ||
+          currentLocation.startsWith('/watch')) {
+        onDestinationSelected('/board');
+      } else if (next == CatalogMode.tmdb &&
+          currentLocation.startsWith(AppRoutes.profile)) {
+        onDestinationSelected(AppRoutes.settings);
+      }
+    }
+
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        final WindowSizeClass sizeClass = AppBreakpoints.classify(
+          constraints.maxWidth,
+        );
+
+        return DecoratedBox(
+          decoration: BoxDecoration(gradient: palette.shellGradient),
+          child: Scaffold(
+            backgroundColor: Colors.transparent,
+            body: SafeArea(
+              bottom: sizeClass != WindowSizeClass.compact,
+              child: Row(
+                children: <Widget>[
+                  if (sizeClass != WindowSizeClass.compact)
+                    AdaptiveNavigation(
+                      items: items,
+                      currentLocation: currentLocation,
+                      onDestinationSelected: onDestinationSelected,
+                      sizeClass: sizeClass,
+                      catalogMode: catalogMode,
+                      onLogoPressed: switchCatalogMode,
+                    ),
+                  Expanded(child: child),
+                ],
+              ),
+            ),
+            bottomNavigationBar: sizeClass == WindowSizeClass.compact
+                ? AdaptiveNavigation(
+                    items: items,
+                    currentLocation: currentLocation,
+                    onDestinationSelected: onDestinationSelected,
+                    sizeClass: sizeClass,
+                    catalogMode: catalogMode,
+                    onLogoPressed: switchCatalogMode,
+                  )
+                : null,
+          ),
+        );
+      },
+    );
+  }
+}
+
+void _showCatalogSwitchBanner(BuildContext context, CatalogMode mode) {
+  final OverlayState? overlay = Overlay.maybeOf(context);
+  if (overlay == null) return;
+  final OverlayEntry entry = OverlayEntry(
+    builder: (BuildContext context) {
+      final ColorScheme scheme = Theme.of(context).colorScheme;
+      return Positioned(
+        top: MediaQuery.paddingOf(context).top + 12,
+        left: 24,
+        right: 24,
+        child: Center(
+          child: Material(
+            color: Colors.transparent,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: scheme.inverseSurface,
+                borderRadius: BorderRadius.circular(12),
+                boxShadow: <BoxShadow>[
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.22),
+                    blurRadius: 22,
+                    offset: const Offset(0, 8),
+                  ),
+                ],
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 18,
+                  vertical: 12,
+                ),
+                child: Text(
+                  'Switched to ${mode.label}',
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    color: scheme.onInverseSurface,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    },
+  );
+  overlay.insert(entry);
+  Future<void>.delayed(const Duration(seconds: 3), () {
+    if (entry.mounted) entry.remove();
+  });
+}

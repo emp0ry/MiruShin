@@ -1,0 +1,164 @@
+name: Build Linux (tar.gz + AppImage)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  APP_NAME: MiruShin
+  PUBSPEC_APP_NAME: mirushin
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Flutter (stable)
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install Linux build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev \
+            libfuse2 libglib2.0-0 libsecret-1-dev libmpv-dev python3-pil
+
+      - name: Flutter pub get
+        run: flutter pub get
+
+      - name: Build Linux (release)
+        run: flutter build linux --release
+
+      - name: Read version from pubspec.yaml
+        id: ver
+        shell: bash
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d'+' -f1)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Create tar.gz bundle
+        id: tgz
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          OUT_DIR="build/linux/x64/release/bundle"
+          if [ ! -d "$OUT_DIR" ]; then
+            echo "ERROR: bundle not found at $OUT_DIR"
+            ls -la build/linux/x64/release || true
+            exit 1
+          fi
+
+          TGZ="${APP_NAME}-linux-v${VERSION}.tar.gz"
+          tar -C "$OUT_DIR" -czf "$TGZ" .
+          echo "tgz_path=$TGZ" >> "$GITHUB_OUTPUT"
+
+      - name: Build AppImage
+        id: appimage
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          OUT_DIR="build/linux/x64/release/bundle"
+
+          curl -L -o linuxdeploy-x86_64.AppImage \
+            https://github.com/linuxdeploy/linuxdeploy/releases/latest/download/linuxdeploy-x86_64.AppImage
+
+          GTK_PLUGIN_OK=0
+          if [ -f linuxdeploy-plugin-gtk-x86_64.AppImage ]; then
+            SIZE=$(stat -c%s linuxdeploy-plugin-gtk-x86_64.AppImage || echo 0)
+            if [ "$SIZE" -gt 1000000 ]; then
+              GTK_PLUGIN_OK=1
+            fi
+          fi
+
+          if [ "$GTK_PLUGIN_OK" -ne 1 ]; then
+            echo "WARN: linuxdeploy-plugin-gtk AppImage not available, building without GTK plugin"
+          fi
+
+          chmod +x linuxdeploy-x86_64.AppImage
+          if [ -f linuxdeploy-plugin-gtk-x86_64.AppImage ]; then
+            chmod +x linuxdeploy-plugin-gtk-x86_64.AppImage
+          fi
+
+          rm -rf AppDir
+          mkdir -p AppDir/usr/bin
+          cp -r "$OUT_DIR/"* AppDir/usr/bin/
+
+          APP_BIN="AppDir/usr/bin/${PUBSPEC_APP_NAME}"
+          if [ ! -x "$APP_BIN" ]; then
+            APP_BIN="$(find AppDir/usr/bin -maxdepth 1 -type f -executable | head -n 1)"
+          fi
+          if [ -z "$APP_BIN" ]; then
+            echo "ERROR: cannot find main executable in AppDir/usr/bin"
+            ls -la AppDir/usr/bin || true
+            exit 1
+          fi
+
+          mkdir -p AppDir/usr/share/applications
+          cat > AppDir/usr/share/applications/mirushin.desktop <<EOAPP
+          [Desktop Entry]
+          Type=Application
+          Name=${APP_NAME}
+          Exec=$(basename "$APP_BIN")
+          Icon=mirushin
+          Categories=AudioVideo;
+          EOAPP
+
+          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+          if [ -f "assets/icons/logo.png" ]; then
+            python3 -c 'from PIL import Image; Image.open("assets/icons/logo.png").resize((256, 256), Image.LANCZOS).save("AppDir/usr/share/icons/hicolor/256x256/apps/mirushin.png")'
+          else
+            echo "ERROR: assets/icons/logo.png not found"
+            exit 1
+          fi
+
+          export LINUXDEPLOY=./linuxdeploy-x86_64.AppImage
+          if [ "$GTK_PLUGIN_OK" -eq 1 ]; then
+            export LINUXDEPLOY_PLUGIN_GTK=./linuxdeploy-plugin-gtk-x86_64.AppImage
+          fi
+
+          if [ "$GTK_PLUGIN_OK" -eq 1 ]; then
+            ./linuxdeploy-x86_64.AppImage \
+              --appdir AppDir \
+              --executable "$APP_BIN" \
+              --desktop-file AppDir/usr/share/applications/mirushin.desktop \
+              --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/mirushin.png \
+              --plugin gtk \
+              --output appimage
+          else
+            ./linuxdeploy-x86_64.AppImage \
+              --appdir AppDir \
+              --executable "$APP_BIN" \
+              --desktop-file AppDir/usr/share/applications/mirushin.desktop \
+              --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/mirushin.png \
+              --output appimage
+          fi
+
+          APPIMAGE_OUT=$(find . -maxdepth 1 -type f -name '*.AppImage' | head -n 1)
+          if [ -z "$APPIMAGE_OUT" ]; then
+            echo "ERROR: AppImage was not created"
+            exit 1
+          fi
+          FINAL="${APP_NAME}-linux-v${VERSION}.AppImage"
+          mv "$APPIMAGE_OUT" "$FINAL"
+          chmod +x "$FINAL"
+
+          echo "appimage_path=$FINAL" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: MiruShin-linux
+          path: |
+            ${{ steps.appimage.outputs.appimage_path }}
+            ${{ steps.tgz.outputs.tgz_path }}

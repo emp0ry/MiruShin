@@ -1,0 +1,305 @@
+package com.emp0ry.mirushin
+
+import android.app.PendingIntent
+import android.app.PictureInPictureParams
+import android.app.RemoteAction
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.res.Configuration
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.drawable.Icon
+import android.media.AudioManager
+import android.media.MediaMetadata
+import android.media.session.MediaSession
+import android.media.session.PlaybackState
+import android.os.Build
+import android.util.Rational
+import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.MethodChannel
+import kotlinx.coroutines.*
+import java.net.HttpURLConnection
+import java.net.URL
+
+class MainActivity : FlutterActivity() {
+
+    companion object {
+        private const val ACTION_PLAY_PAUSE = "com.emp0ry.mirushin.PIP_PLAY_PAUSE"
+        private const val ACTION_NEXT       = "com.emp0ry.mirushin.PIP_NEXT"
+        private const val RC_PLAY_PAUSE     = 1
+        private const val RC_NEXT           = 2
+    }
+
+    private var mediaChannel: MethodChannel? = null
+    private var pipChannel: MethodChannel? = null
+    private var session: MediaSession? = null
+    private var noisyReceiver: BroadcastReceiver? = null
+    private var pipActionReceiver: BroadcastReceiver? = null
+
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private var artworkUrl = ""
+    private var artworkBitmap: Bitmap? = null
+    private var artworkJob: Job? = null
+
+    // Last known PiP params so we can restore them when updating actions.
+    private var pipRatioW = 16
+    private var pipRatioH = 9
+    private var pipIsPlaying = true
+    private var pipHasNext = false
+
+    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        super.configureFlutterEngine(flutterEngine)
+
+        // ── Media session channel ──────────────────────────────────────────
+        val mch = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger, "mirushin/media_session"
+        )
+        mediaChannel = mch
+        mch.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "updateNowPlaying" -> {
+                    @Suppress("UNCHECKED_CAST")
+                    (call.arguments as? Map<String, Any>)?.let { updateNowPlaying(it) }
+                    result.success(null)
+                }
+                "clearNowPlaying" -> {
+                    clearSession()
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        // ── PiP channel ────────────────────────────────────────────────────
+        val pch = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger, "mirushin/pip"
+        )
+        pipChannel = pch
+        pch.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "isSupported" -> result.success(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                "enter" -> {
+                    val args = call.arguments as? Map<*, *>
+                    val ratioW    = (args?.get("ratioW")    as? Number)?.toInt()  ?: 16
+                    val ratioH    = (args?.get("ratioH")    as? Number)?.toInt()  ?: 9
+                    val isPlaying = (args?.get("isPlaying") as? Boolean) ?: true
+                    val hasNext   = (args?.get("hasNext")   as? Boolean) ?: false
+                    enterPip(ratioW, ratioH, isPlaying, hasNext)
+                    result.success(null)
+                }
+                "updateParams" -> {
+                    val args      = call.arguments as? Map<*, *>
+                    val isPlaying = (args?.get("isPlaying") as? Boolean) ?: pipIsPlaying
+                    val hasNext   = (args?.get("hasNext")   as? Boolean) ?: pipHasNext
+                    pipIsPlaying  = isPlaying
+                    pipHasNext    = hasNext
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && isInPictureInPictureMode) {
+                        setPictureInPictureParams(buildPipParams(pipRatioW, pipRatioH, isPlaying, hasNext))
+                    }
+                    result.success(null)
+                }
+                "bringToForeground" -> {
+                    val intent = Intent(this, MainActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                    }
+                    startActivity(intent)
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        registerPipActionReceiver()
+    }
+
+    // ── PiP enter ─────────────────────────────────────────────────────────
+
+    private fun enterPip(ratioW: Int, ratioH: Int, isPlaying: Boolean, hasNext: Boolean) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        pipRatioW   = ratioW
+        pipRatioH   = ratioH
+        pipIsPlaying = isPlaying
+        pipHasNext   = hasNext
+        enterPictureInPictureMode(buildPipParams(ratioW, ratioH, isPlaying, hasNext))
+    }
+
+    private fun buildPipParams(
+        ratioW: Int, ratioH: Int, isPlaying: Boolean, hasNext: Boolean
+    ): PictureInPictureParams {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            return PictureInPictureParams.Builder().build()
+        }
+        val w = ratioW.coerceIn(1, 239)
+        val h = ratioH.coerceIn(1, 239)
+        val builder = PictureInPictureParams.Builder()
+            .setAspectRatio(Rational(w, h))
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            builder.setSeamlessResizeEnabled(true)
+        }
+
+        val actions = mutableListOf<RemoteAction>()
+
+        val ppIcon  = if (isPlaying) android.R.drawable.ic_media_pause
+                      else           android.R.drawable.ic_media_play
+        val ppLabel = if (isPlaying) "Pause" else "Play"
+        val ppIntent = PendingIntent.getBroadcast(
+            this, RC_PLAY_PAUSE, Intent(ACTION_PLAY_PAUSE),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        actions += RemoteAction(Icon.createWithResource(this, ppIcon), ppLabel, ppLabel, ppIntent)
+
+        if (hasNext) {
+            val nextIntent = PendingIntent.getBroadcast(
+                this, RC_NEXT, Intent(ACTION_NEXT),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            actions += RemoteAction(
+                Icon.createWithResource(this, android.R.drawable.ic_media_next),
+                "Next", "Next episode", nextIntent
+            )
+        }
+
+        builder.setActions(actions)
+        return builder.build()
+    }
+
+    // ── PiP lifecycle ──────────────────────────────────────────────────────
+
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean, newConfig: Configuration
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        pipChannel?.invokeMethod("pipModeChanged", isInPictureInPictureMode)
+    }
+
+    private fun registerPipActionReceiver() {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                when (intent.action) {
+                    ACTION_PLAY_PAUSE -> mediaChannel?.invokeMethod("togglePlay", null)
+                    ACTION_NEXT       -> mediaChannel?.invokeMethod("next",       null)
+                }
+            }
+        }
+        pipActionReceiver = receiver
+        val filter = IntentFilter().apply {
+            addAction(ACTION_PLAY_PAUSE)
+            addAction(ACTION_NEXT)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(receiver, filter)
+        }
+    }
+
+    // ── Media session / Now Playing ────────────────────────────────────────
+
+    private fun updateNowPlaying(args: Map<String, Any>) {
+        val title        = args["title"]       as? String  ?: ""
+        val subtitle     = args["subtitle"]    as? String  ?: ""
+        val newArtwork   = args["artworkUrl"]  as? String  ?: ""
+        val posMs        = (args["positionMs"] as? Number)?.toLong()  ?: 0L
+        val durMs        = (args["durationMs"] as? Number)?.toLong()  ?: 0L
+        val isPlaying    = args["isPlaying"]   as? Boolean ?: false
+
+        if (session == null) {
+            val s = MediaSession(this, "MiruShin")
+            s.setCallback(object : MediaSession.Callback() {
+                override fun onPlay()            { mediaChannel?.invokeMethod("play",   null) }
+                override fun onPause()           { mediaChannel?.invokeMethod("pause",  null) }
+                override fun onSkipToNext()      { mediaChannel?.invokeMethod("next",   null) }
+                override fun onSeekTo(pos: Long) { mediaChannel?.invokeMethod("seekTo", pos.toInt()) }
+                override fun onStop()            { mediaChannel?.invokeMethod("stop",   null) }
+            })
+            s.isActive = true
+            session = s
+            registerNoisyReceiver()
+        }
+
+        fun applyMetadata(bitmap: Bitmap?) {
+            val builder = MediaMetadata.Builder()
+                .putString(MediaMetadata.METADATA_KEY_TITLE,    title)
+                .putString(MediaMetadata.METADATA_KEY_ARTIST,   subtitle)
+                .putLong(  MediaMetadata.METADATA_KEY_DURATION, durMs)
+            if (bitmap != null) builder.putBitmap(MediaMetadata.METADATA_KEY_ART, bitmap)
+            session?.setMetadata(builder.build())
+        }
+
+        applyMetadata(artworkBitmap)
+
+        if (newArtwork.isNotEmpty() && newArtwork != artworkUrl) {
+            artworkUrl    = newArtwork
+            artworkBitmap = null
+            artworkJob?.cancel()
+            artworkJob = scope.launch {
+                val bmp = withContext(Dispatchers.IO) { downloadBitmap(newArtwork) }
+                if (isActive && bmp != null && artworkUrl == newArtwork) {
+                    artworkBitmap = bmp
+                    applyMetadata(bmp)
+                }
+            }
+        }
+
+        val stateCode = if (isPlaying) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED
+        val pbState = PlaybackState.Builder()
+            .setActions(
+                PlaybackState.ACTION_PLAY        or
+                PlaybackState.ACTION_PAUSE       or
+                PlaybackState.ACTION_PLAY_PAUSE  or
+                PlaybackState.ACTION_SKIP_TO_NEXT or
+                PlaybackState.ACTION_SEEK_TO
+            )
+            .setState(stateCode, posMs, 1f)
+            .build()
+        session?.setPlaybackState(pbState)
+    }
+
+    private fun downloadBitmap(url: String): Bitmap? = try {
+        val conn = URL(url).openConnection() as HttpURLConnection
+        conn.connectTimeout = 6_000
+        conn.readTimeout    = 12_000
+        conn.connect()
+        BitmapFactory.decodeStream(conn.inputStream)
+    } catch (_: Exception) { null }
+
+    private fun registerNoisyReceiver() {
+        val filter   = IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                mediaChannel?.invokeMethod("audioRouteChanged", true)
+            }
+        }
+        noisyReceiver = receiver
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(receiver, filter)
+        }
+    }
+
+    private fun clearSession() {
+        artworkJob?.cancel()
+        artworkUrl    = ""
+        artworkBitmap = null
+        session?.isActive = false
+        session?.release()
+        session = null
+        noisyReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
+        noisyReceiver = null
+    }
+
+    override fun onDestroy() {
+        clearSession()
+        pipActionReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
+        pipActionReceiver = null
+        scope.cancel()
+        super.onDestroy()
+    }
+}

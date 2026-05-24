@@ -1,0 +1,64 @@
+name: Build Windows (ZIP)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  APP_NAME: MiruShin
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Flutter (stable)
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter pub get
+        run: flutter pub get
+
+      - name: Build Windows (release)
+        run: flutter build windows --release
+
+      - name: Read version from pubspec.yaml
+        id: ver
+        shell: pwsh
+        run: |
+          $v = (Get-Content "pubspec.yaml" | Where-Object { $_ -match '^version:' } | ForEach-Object {
+            ($_ -split ':')[1].Trim().Split(' ')[0]
+          } | Select-Object -First 1)
+          if (-not $v) { throw "Version not found in pubspec.yaml" }
+          $v = $v.Split('+')[0]
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Create ZIP from Release folder contents
+        id: zip
+        shell: pwsh
+        run: |
+          $sourceDir = "build/windows/x64/runner/Release"
+          if (-not (Test-Path $sourceDir)) { throw "Source folder not found: $sourceDir" }
+
+          $version = "${{ steps.ver.outputs.version }}"
+          $zipFile = "${{ env.APP_NAME }}-windows-v$version.zip"
+
+          if (Test-Path $zipFile) { Remove-Item $zipFile -Force }
+
+          Compress-Archive -Path (Join-Path $sourceDir '*') -DestinationPath $zipFile -Force
+
+          "zip_path=$zipFile" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: MiruShin-windows
+          path: ${{ steps.zip.outputs.zip_path }}

@@ -1,0 +1,16 @@
+{
+  "name": "MiruShin",
+  "short_name": "MiruShin",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#06090d",
+  "theme_color": "#0a0f15",
+  "icons": [
+    {
+      "src": "assets/logo.ico",
+      "sizes": "32x32",
+      "type": "image/x-icon",
+      "purpose": "any"
+    }
+  ]
+}

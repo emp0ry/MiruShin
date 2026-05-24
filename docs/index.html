@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0a0f15">
+    <meta
+      name="description"
+      content="MiruShin is a cinematic Flutter media player for discovery, watching, and AniList tracking with Sora-compatible modules."
+    >
+    <title>MiruShin | Discover, Watch, Track</title>
+    <link rel="icon" href="assets/logo.ico" type="image/x-icon">
+    <link rel="shortcut icon" href="assets/logo.ico" type="image/x-icon">
+    <link rel="manifest" href="site.webmanifest">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Sora:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    >
+    <link rel="stylesheet" href="styles.css">
+    <script defer src="script.js"></script>
+  </head>
+  <body data-page="home">
+    <div class="backdrop"></div>
+    <header class="site-header">
+      <div class="container nav-shell">
+        <a class="brand" href="#top" aria-label="MiruShin home">
+          <img src="assets/logo.png" alt="" width="44" height="44">
+          <span class="brand-copy">
+            <strong>MiruShin</strong>
+          </span>
+        </a>
+
+        <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">
+          <span></span>
+          <span></span>
+        </button>
+
+        <nav class="site-nav" id="site-nav" aria-label="Primary">
+          <a href="#features">Features</a>
+          <a href="#experience">Experience</a>
+          <a href="#responsibility">Responsibility</a>
+          <a href="privacy.html">Privacy</a>
+          <a href="legal.html">Legal</a>
+          <a
+            class="button button-ghost"
+            href="https://github.com/emp0ry/MiruShin"
+            target="_blank"
+            rel="noreferrer"
+          >
+            GitHub
+          </a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero section" id="top">
+        <div class="container hero-grid">
+          <div class="hero-copy reveal">
+            <div class="eyebrow">
+              <span class="eyebrow-dot"></span>
+              Flutter media player · TMDB · AniList · Sora-compatible modules
+            </div>
+            <h1>Discover. Watch. Track. Repeat.</h1>
+            <p class="hero-text">
+              MiruShin is built for people who want their anime setup to feel sharp, fast,
+              and intentional. Explore rich catalogs, resolve sources through Sora-compatible
+              modules you trust, and land in a player that actually respects your flow.
+            </p>
+            <div class="hero-notes">
+              <div class="hero-note">
+                Switch between TMDB and AniList by clicking the top-left logo. In compact mode,
+                open <strong>More</strong> and use the catalog switch option there.
+              </div>
+              <div class="hero-note">
+                For information on how to get Sora addons, please join the
+                <a href="https://discord.gg/XR3SrmUbpd" target="_blank" rel="noreferrer">Sora Discord</a>
+                server.
+              </div>
+            </div>
+            <div class="hero-actions">
+              <a class="button button-primary" href="https://github.com/emp0ry/MiruShin" target="_blank" rel="noreferrer">
+                View Source
+              </a>
+              <a class="button button-secondary" href="#responsibility">
+                Read the Rules
+              </a>
+            </div>
+            <div class="hero-metrics">
+              <div class="metric-card">
+                <strong>2 catalog modes</strong>
+                <span>TMDB and AniList</span>
+              </div>
+              <div class="metric-card">
+                <strong>Player-first</strong>
+                <span>HLS, MP4, DASH, subtitles, AniSkip</span>
+              </div>
+              <div class="metric-card">
+                <strong>Bring your own modules</strong>
+                <span>No bundled modules or content</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="hero-stage hero-stage-real reveal reveal-delay">
+            <div class="stage-glow"></div>
+            <div class="hero-shot-stack">
+              <img
+                class="hero-shot hero-shot-primary"
+                src="assets/imgs/board.png"
+                alt="MiruShin board screen"
+                loading="eager"
+              >
+              <img
+                class="hero-shot hero-shot-secondary"
+                src="assets/imgs/player.png"
+                alt="MiruShin player screen"
+                loading="eager"
+              >
+            </div>
+            <div class="floating-card floating-card-left">
+              <strong>Real app screenshots</strong>
+              <span>Board and player views from the current MiruShin UI.</span>
+            </div>
+            <div class="floating-card floating-card-right">
+              <strong>Desktop-grade flow</strong>
+              <span>Browse on the board, resolve sources, and drop straight into the player.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section screenshots" id="screenshots">
+        <div class="container">
+          <div class="section-head reveal">
+            <span class="section-kicker">In motion</span>
+            <h2>Board and player views that feel like a real desktop app.</h2>
+            <p>
+              MiruShin is designed to look sharp both when you are browsing a catalog and when you
+              are already deep into an episode.
+            </p>
+          </div>
+
+          <div class="screenshot-grid">
+            <figure class="screenshot-card reveal">
+              <img
+                class="screenshot-image"
+                src="assets/imgs/board.png"
+                alt="MiruShin board view screenshot"
+                loading="lazy"
+              >
+              <figcaption class="screenshot-caption">
+                <strong>Board</strong>
+                <span>Featured media, dense metadata, and fast access to discovery, library, and addons.</span>
+              </figcaption>
+            </figure>
+
+            <figure class="screenshot-card reveal reveal-delay">
+              <img
+                class="screenshot-image"
+                src="assets/imgs/player.png"
+                alt="MiruShin player view screenshot"
+                loading="lazy"
+              >
+              <figcaption class="screenshot-caption">
+                <strong>Player</strong>
+                <span>Streams, subtitles, zoom, speed, quality, and a clean control layout built for actual watching.</span>
+              </figcaption>
+            </figure>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="features">
+        <div class="container">
+          <div class="section-head reveal">
+            <span class="section-kicker">Why it feels different</span>
+            <h2>Built like a player, not a pile of tabs.</h2>
+            <p>
+              MiruShin keeps discovery, source resolution, tracking, and playback in the same
+              language. Less friction. Better handoff. A lot more intent.
+            </p>
+          </div>
+
+          <div class="feature-grid">
+            <article class="feature-card reveal">
+              <div class="feature-icon icon-sun"></div>
+              <h3>Cinematic discovery</h3>
+              <p>
+                Browse trending rails, filtered views, and detailed metadata across TMDB and AniList
+                without losing the visual punch.
+              </p>
+            </article>
+            <article class="feature-card reveal reveal-delay-sm">
+              <div class="feature-icon icon-wave"></div>
+              <h3>Sora module watch flow</h3>
+              <p>
+                Resolve sources through Sora-compatible modules, choose seasons and episodes, then jump
+                into playback without a messy context switch.
+              </p>
+              <p class="feature-footnote">
+                Need addon sources? Join the
+                <a href="https://discord.gg/XR3SrmUbpd" target="_blank" rel="noreferrer">Sora Discord</a>.
+              </p>
+            </article>
+            <article class="feature-card reveal reveal-delay-md">
+              <div class="feature-icon icon-play"></div>
+              <h3>Serious player controls</h3>
+              <p>
+                HLS, MP4, and DASH playback, subtitle tuning, quality switching, autoplay next, and
+                AniSkip markers for a smoother episode rhythm.
+              </p>
+            </article>
+            <article class="feature-card reveal">
+              <div class="feature-icon icon-grid"></div>
+              <h3>Library that stays useful</h3>
+              <p>
+                Keep local progress, sync AniList folders, return to what matters, and keep the whole
+                experience centered on actual watching.
+              </p>
+            </article>
+            <article class="feature-card reveal reveal-delay-sm">
+              <div class="feature-icon icon-orbit"></div>
+              <h3>Profile and social depth</h3>
+              <p>
+                Activities, favourites, reviews, statistics, exports, and AniList profile surfaces are
+                all built into the same app shell.
+              </p>
+            </article>
+            <article class="feature-card reveal reveal-delay-md">
+              <div class="feature-icon icon-lock"></div>
+              <h3>Local-first posture</h3>
+              <p>
+                Tokens are entered by the user, stored on device, and used only for the services and
+                modules they explicitly enable.
+              </p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section experience" id="experience">
+        <div class="container split-layout">
+          <div class="section-head reveal">
+            <span class="section-kicker">From catalog to player</span>
+            <h2>One watch flow, no stitched-together feeling.</h2>
+            <p>
+              MiruShin is designed so discovery, source selection, and playback feel like one product.
+              That matters more than any single feature.
+            </p>
+          </div>
+
+          <div class="steps-card reveal reveal-delay">
+            <article class="step-row">
+              <span class="step-index">01</span>
+              <div>
+                <h3>Find something worth pressing play on</h3>
+                <p>Use TMDB or AniList mode, browse the board, open details, and keep context all the way down.</p>
+              </div>
+            </article>
+            <article class="step-row">
+              <span class="step-index">02</span>
+              <div>
+                <h3>Resolve sources through modules you trust</h3>
+                <p>Install Sora-compatible modules yourself, preview them, enable them, and keep control over what is being used. To change catalogs, click the top-left logo, or use More on compact layouts.</p>
+              </div>
+            </article>
+            <article class="step-row">
+              <span class="step-index">03</span>
+              <div>
+                <h3>Land in a player that respects momentum</h3>
+                <p>Resume progress, tune subtitles, skip openings, autoplay next, sync AniList progress, and stay in the zone.</p>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section responsibility" id="responsibility">
+        <div class="container">
+          <div class="responsibility-shell reveal">
+            <div class="section-head">
+              <span class="section-kicker">Responsibility first</span>
+              <h2>You bring the content. MiruShin brings the player.</h2>
+              <p>
+                MiruShin supports Sora-compatible modules, but it does not host media, ship modules,
+                or provide content. What you connect is your decision, and your responsibility.
+              </p>
+            </div>
+
+            <div class="legal-grid">
+              <article class="legal-card">
+                <h3>No content provided</h3>
+                <p>
+                  MiruShin is a media player and interface layer. It does not host, upload, store, or
+                  provide media content.
+                </p>
+              </article>
+              <article class="legal-card">
+                <h3>User responsibility</h3>
+                <p>
+                  You must ensure you have legal rights to any content you use and that your use complies
+                  with applicable law, copyright, and intellectual property rules.
+                </p>
+              </article>
+              <article class="legal-card">
+                <h3>No liability</h3>
+                <p>
+                  The software is provided as is, without warranties. Users bear full responsibility for
+                  how they use the app, their accounts, and any installed modules.
+                </p>
+              </article>
+              <article class="legal-card">
+                <h3>Modules</h3>
+                <p>
+                  MiruShin includes no built-in Sora modules. Third-party modules are the responsibility
+                  of their creators, not MiruShin or emp0ry.
+                </p>
+              </article>
+            </div>
+
+            <div class="responsibility-actions">
+              <a class="button button-primary" href="legal.html">Read Legal Notice</a>
+              <a class="button button-secondary" href="privacy.html">Read Privacy Policy</a>
+              <a class="button button-secondary" href="https://discord.gg/XR3SrmUbpd" target="_blank" rel="noreferrer">
+                Sora Discord
+              </a>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="container footer-grid">
+        <div>
+          <a class="brand brand-footer" href="#top">
+            <img src="assets/logo.png" alt="" width="36" height="36">
+            <span class="brand-copy">
+              <strong>MiruShin</strong>
+            </span>
+          </a>
+          <p class="footer-copy">
+            Designed for discovery, Sora-compatible module workflows, and player-first watching.
+          </p>
+        </div>
+
+        <div class="footer-links">
+          <a href="https://github.com/emp0ry/MiruShin" target="_blank" rel="noreferrer">GitHub</a>
+          <a href="privacy.html">Privacy Policy</a>
+          <a href="legal.html">Legal Notice</a>
+        </div>
+
+        <div class="footer-credits">
+          <p>Built and published by emp0ry.</p>
+          <p>Credits: cranci1 for Sora and the Sora module ecosystem, plus TMDB, AniList, Shikimori, and AniSkip.</p>
+          <p>&copy; <span data-year></span> MiruShin</p>
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>
