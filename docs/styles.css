@@ -110,7 +110,7 @@ main section[id],
   backdrop-filter: blur(18px);
   background: rgba(8, 7, 18, 0.97);
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-  overflow-x: clip;
+  overflow: visible;
 }
 
 .nav-shell {
@@ -122,6 +122,7 @@ main section[id],
   min-height: 86px;
   min-width: 0;
   overflow: visible;
+  z-index: 21;
 }
 
 .brand {
@@ -1444,6 +1445,7 @@ main section[id],
 
   .site-nav {
     position: absolute;
+    z-index: 30;
     top: calc(100% + 0.5rem);
     right: 0;
     left: 0;

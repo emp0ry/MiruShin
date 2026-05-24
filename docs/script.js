@@ -1,5 +1,7 @@
 const navToggle = document.querySelector(".nav-toggle");
-const siteNav = document.querySelector(".site-nav");
+const siteNav = navToggle
+  ? document.getElementById(navToggle.getAttribute("aria-controls") || "")
+  : document.querySelector(".site-nav");
 
 if (navToggle && siteNav) {
   navToggle.addEventListener("click", () => {
