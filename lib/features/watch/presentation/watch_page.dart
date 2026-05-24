@@ -492,17 +492,46 @@ class _WatchPageState extends ConsumerState<WatchPage> {
       return;
     }
 
-    final SoraEpisode next = _episodeForPlayback(episodes[index + 1], null);
+    final SoraEpisode rawNext = episodes[index + 1];
+    final AnimeEpisodeMetadata? nextMetadata = await _metadataForAutoNext(
+      item,
+      rawNext,
+    );
+    if (!mounted) return;
+
+    final SoraEpisode next = _episodeForPlayback(rawNext, nextMetadata);
     // Discard any stale cached stream for the next episode so resolution
     // always uses a fresh URL (avoids instant failure from expired cache).
     ref.invalidate(
-      soraStreamBundleProvider(SoraStreamRequest(
-        addonId: source.addonId,
-        episode: next,
-      )),
+      soraStreamBundleProvider(
+        SoraStreamRequest(addonId: source.addonId, episode: next),
+      ),
     );
     _isAutoNextPlayback = true;
     _pickEpisode(next);
+  }
+
+  Future<AnimeEpisodeMetadata?> _metadataForAutoNext(
+    MediaItem item,
+    SoraEpisode episode,
+  ) async {
+    final int? anilistId = _animeAnilistId(item);
+    if (anilistId == null) return null;
+
+    final SettingsState settings = ref.read(settingsProvider);
+    try {
+      final AnimeEpisodeMetadataBundle bundle = await ref.read(
+        animeEpisodeMetadataProvider(
+          AnimeEpisodeMetadataRequest(
+            anilistId: anilistId,
+            languageCode: _episodeMetadataLanguage(settings),
+          ),
+        ).future,
+      );
+      return bundle.forNumber(episode.number);
+    } on Object {
+      return null;
+    }
   }
 
   void _showStreamSheet(NormalizedStreamBundle bundle) {
