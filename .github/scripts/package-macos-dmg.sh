@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 
 VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d'+' -f1)
 
@@ -36,13 +36,13 @@ cp -R "$APP_SRC" "$STAGE_DIR/MiruShin.app"
 APP_BUNDLE="$STAGE_DIR/MiruShin.app"
 
 if [ -d "$APP_BUNDLE/Contents/Frameworks" ]; then
-  find "$APP_BUNDLE/Contents/Frameworks" -type d -name "*.framework" -print0 \
-    | while IFS= read -r -d '' fw; do
-        codesign --force --sign - "$fw" || true
-      done
   find "$APP_BUNDLE/Contents/Frameworks" -type f \( -name "*.dylib" -o -name "*.so" \) -print0 \
     | while IFS= read -r -d '' lib; do
-        codesign --force --sign - "$lib" || true
+        codesign --force --sign - "$lib"
+      done
+  find "$APP_BUNDLE/Contents/Frameworks" -depth -type d -name "*.framework" -print0 \
+    | while IFS= read -r -d '' fw; do
+        codesign --force --sign - "$fw"
       done
 fi
 

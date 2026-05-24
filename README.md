@@ -62,6 +62,8 @@ flutter run
 
 You can also run a specific target with commands like `flutter run -d macos`, `flutter run -d windows`, or `flutter run -d android`.
 
+On Linux, if you run a downloaded binary or extracted build directly, make it executable first with `chmod +x mirushin`. For AppImage releases, use `chmod +x MiruShin-*.AppImage` before launching.
+
 ## First-Time Setup
 
 MiruShin is configured at runtime from the in-app Settings page. There is no `.env` file to edit for the normal setup flow.

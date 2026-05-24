@@ -31,32 +31,16 @@ class AniListOAuthListener {
   }
 }
 
-// Ensures only one desktop listener is alive at a time.
 AniListOAuthListener? _activeListener;
 
 Future<AniListOAuthListener> startAniListOAuthListener({
   required int port,
 }) async {
-  // Cancel any previous listener before rebinding the port.
   final AniListOAuthListener? previous = _activeListener;
   _activeListener = null;
   await previous?.cancel();
 
-  HttpServer server;
-  try {
-    server = await HttpServer.bind(
-      InternetAddress.loopbackIPv6,
-      port,
-      v6Only: false,
-      shared: true,
-    );
-  } catch (error) {
-    if (kDebugMode) {
-      debugPrint('[AniList OAuth] Failed to bind localhost:$port: $error');
-    }
-    rethrow;
-  }
-
+  final HttpServer server = await _bindLocalhostServer(port);
   final Completer<AniListOAuthResult?> completer =
       Completer<AniListOAuthResult?>();
 
@@ -113,6 +97,31 @@ Future<AniListOAuthListener> startAniListOAuthListener({
   final AniListOAuthListener listener = AniListOAuthListener(server, completer);
   _activeListener = listener;
   return listener;
+}
+
+Future<HttpServer> _bindLocalhostServer(int port) async {
+  Object? lastError;
+  for (final InternetAddress address in <InternetAddress>[
+    InternetAddress.loopbackIPv4,
+    InternetAddress.loopbackIPv6,
+  ]) {
+    try {
+      return await HttpServer.bind(
+        address,
+        port,
+        v6Only: address.type == InternetAddressType.IPv6,
+        shared: true,
+      );
+    } catch (error) {
+      lastError = error;
+      if (kDebugMode) {
+        debugPrint(
+          '[AniList OAuth] Failed to bind ${address.address}:$port: $error',
+        );
+      }
+    }
+  }
+  throw lastError ?? StateError('Failed to bind localhost:$port');
 }
 
 const String _fragmentCapturePage = '''

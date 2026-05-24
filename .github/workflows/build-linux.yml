@@ -9,6 +9,7 @@ permissions:
 env:
   APP_NAME: MiruShin
   PUBSPEC_APP_NAME: mirushin
+  LINUX_APP_ID: com.emp0ry.mirushin
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
@@ -72,23 +73,11 @@ jobs:
 
           curl -L -o linuxdeploy-x86_64.AppImage \
             https://github.com/linuxdeploy/linuxdeploy/releases/latest/download/linuxdeploy-x86_64.AppImage
-
-          GTK_PLUGIN_OK=0
-          if [ -f linuxdeploy-plugin-gtk-x86_64.AppImage ]; then
-            SIZE=$(stat -c%s linuxdeploy-plugin-gtk-x86_64.AppImage || echo 0)
-            if [ "$SIZE" -gt 1000000 ]; then
-              GTK_PLUGIN_OK=1
-            fi
-          fi
-
-          if [ "$GTK_PLUGIN_OK" -ne 1 ]; then
-            echo "WARN: linuxdeploy-plugin-gtk AppImage not available, building without GTK plugin"
-          fi
+          curl -L -o linuxdeploy-plugin-gtk.sh \
+            https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh
 
           chmod +x linuxdeploy-x86_64.AppImage
-          if [ -f linuxdeploy-plugin-gtk-x86_64.AppImage ]; then
-            chmod +x linuxdeploy-plugin-gtk-x86_64.AppImage
-          fi
+          chmod +x linuxdeploy-plugin-gtk.sh
 
           rm -rf AppDir
           mkdir -p AppDir/usr/bin
@@ -105,44 +94,34 @@ jobs:
           fi
 
           mkdir -p AppDir/usr/share/applications
-          cat > AppDir/usr/share/applications/mirushin.desktop <<EOAPP
+          cat > "AppDir/usr/share/applications/${LINUX_APP_ID}.desktop" <<EOAPP
           [Desktop Entry]
           Type=Application
           Name=${APP_NAME}
           Exec=$(basename "$APP_BIN")
-          Icon=mirushin
+          Icon=${LINUX_APP_ID}
           Categories=AudioVideo;
+          StartupWMClass=${APP_NAME}
           EOAPP
 
           mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
-          if [ -f "assets/icons/logo.png" ]; then
-            python3 -c 'from PIL import Image; Image.open("assets/icons/logo.png").resize((256, 256), Image.LANCZOS).save("AppDir/usr/share/icons/hicolor/256x256/apps/mirushin.png")'
+          if [ -f "linux/runner/resources/logo.png" ]; then
+            python3 -c 'from PIL import Image; Image.open("linux/runner/resources/logo.png").resize((256, 256), Image.LANCZOS).save("AppDir/usr/share/icons/hicolor/256x256/apps/${LINUX_APP_ID}.png")'
           else
-            echo "ERROR: assets/icons/logo.png not found"
+            echo "ERROR: linux/runner/resources/logo.png not found"
             exit 1
           fi
 
           export LINUXDEPLOY=./linuxdeploy-x86_64.AppImage
-          if [ "$GTK_PLUGIN_OK" -eq 1 ]; then
-            export LINUXDEPLOY_PLUGIN_GTK=./linuxdeploy-plugin-gtk-x86_64.AppImage
-          fi
+          export LINUXDEPLOY_PLUGIN_GTK=./linuxdeploy-plugin-gtk.sh
 
-          if [ "$GTK_PLUGIN_OK" -eq 1 ]; then
-            ./linuxdeploy-x86_64.AppImage \
-              --appdir AppDir \
-              --executable "$APP_BIN" \
-              --desktop-file AppDir/usr/share/applications/mirushin.desktop \
-              --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/mirushin.png \
-              --plugin gtk \
-              --output appimage
-          else
-            ./linuxdeploy-x86_64.AppImage \
-              --appdir AppDir \
-              --executable "$APP_BIN" \
-              --desktop-file AppDir/usr/share/applications/mirushin.desktop \
-              --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/mirushin.png \
-              --output appimage
-          fi
+          ./linuxdeploy-x86_64.AppImage \
+            --appdir AppDir \
+            --executable "$APP_BIN" \
+            --desktop-file "AppDir/usr/share/applications/${LINUX_APP_ID}.desktop" \
+            --icon-file "AppDir/usr/share/icons/hicolor/256x256/apps/${LINUX_APP_ID}.png" \
+            --plugin gtk \
+            --output appimage
 
           APPIMAGE_OUT=$(find . -maxdepth 1 -type f -name '*.AppImage' | head -n 1)
           if [ -z "$APPIMAGE_OUT" ]; then

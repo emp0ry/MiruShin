@@ -6,10 +6,15 @@ import 'anilist_oauth_listener.dart';
 class AniListOAuthService {
   const AniListOAuthService();
 
-  Uri buildImplicitAuthUri({required String clientId}) {
+  Uri buildImplicitAuthUri({
+    required String clientId,
+    String? redirectUri,
+  }) {
     return Uri.https('anilist.co', '/api/v2/oauth/authorize', <String, String>{
       'client_id': clientId.trim(),
       'response_type': 'token',
+      if (redirectUri != null && redirectUri.trim().isNotEmpty)
+        'redirect_uri': redirectUri.trim(),
     });
   }
 
@@ -21,7 +26,10 @@ class AniListOAuthService {
       port: port,
     );
     try {
-      final Uri uri = buildImplicitAuthUri(clientId: clientId);
+      final Uri uri = buildImplicitAuthUri(
+        clientId: clientId,
+        redirectUri: 'http://localhost:$port/',
+      );
       final bool launched = await launchUrl(
         uri,
         mode: LaunchMode.externalApplication,
