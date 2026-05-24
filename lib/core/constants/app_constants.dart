@@ -1,6 +1,6 @@
 abstract final class AppConstants {
   static const String appName = 'MiruShin';
-  static const String appVersion = '1.0.0+1';
+  static const String appVersion = '1.0.1+2';
   static const String githubProjectUrl = 'https://github.com/emp0ry/MiruShin';
   static const String githubLatestReleaseUrl =
       'https://github.com/emp0ry/MiruShin/releases/latest';
