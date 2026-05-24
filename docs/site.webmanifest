@@ -3,8 +3,8 @@
   "short_name": "MiruShin",
   "start_url": "./",
   "display": "standalone",
-  "background_color": "#06090d",
-  "theme_color": "#0a0f15",
+  "background_color": "#070711",
+  "theme_color": "#120b24",
   "icons": [
     {
       "src": "assets/logo.ico",
