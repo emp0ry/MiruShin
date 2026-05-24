@@ -29,7 +29,7 @@ jobs:
       - name: Install Linux build deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
+          sudo apt-get install -y --no-install-recommends \
             clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev \
             libfuse2 libglib2.0-0 libsecret-1-dev libmpv-dev python3-pil
 
@@ -105,8 +105,9 @@ jobs:
           EOAPP
 
           mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+          ICON_PATH="AppDir/usr/share/icons/hicolor/256x256/apps/${LINUX_APP_ID}.png"
           if [ -f "linux/runner/resources/logo.png" ]; then
-            python3 -c 'from PIL import Image; Image.open("linux/runner/resources/logo.png").resize((256, 256), Image.LANCZOS).save("AppDir/usr/share/icons/hicolor/256x256/apps/${LINUX_APP_ID}.png")'
+            python3 -c "from PIL import Image; Image.open('linux/runner/resources/logo.png').resize((256, 256), Image.LANCZOS).save('$ICON_PATH')"
           else
             echo "ERROR: linux/runner/resources/logo.png not found"
             exit 1
@@ -119,7 +120,7 @@ jobs:
             --appdir AppDir \
             --executable "$APP_BIN" \
             --desktop-file "AppDir/usr/share/applications/${LINUX_APP_ID}.desktop" \
-            --icon-file "AppDir/usr/share/icons/hicolor/256x256/apps/${LINUX_APP_ID}.png" \
+            --icon-file "$ICON_PATH" \
             --plugin gtk \
             --output appimage
 
