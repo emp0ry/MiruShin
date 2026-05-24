@@ -48,10 +48,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   static const MethodChannel _windowChannel = MethodChannel('mirushin/window');
   static const String _nextEpisodeSignal = 'next_episode';
   static const String _nextEpisodeFullscreenSignal = 'next_episode_fullscreen';
+  static const Duration _spaceHoldSpeedDelay = Duration(milliseconds: 260);
 
   Timer? _hideTimer;
   Timer? _autoNextTimer;
   Timer? _wakelockTimer;
+  Timer? _spaceHoldTimer;
   StreamSubscription<bool>? _pipSub;
   StreamSubscription<NativePlayerEvent>? _nativePlayerSub;
   bool _inPipMode = false;
@@ -65,6 +67,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   bool _exitingPlayer = false;
   bool _allowRoutePop = false;
   bool _isFullscreen = false;
+  bool _spacePressed = false;
+  bool _spaceTemporarySpeedActive = false;
   late final bool _isMobile;
   late final PlaybackController _playbackNotifier;
 
@@ -223,6 +227,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     unawaited(WakelockPlus.disable());
     _hideTimer?.cancel();
     _autoNextTimer?.cancel();
+    _cancelSpaceHold(restoreSpeed: true);
     _playbackNotifier.setNextEpisodeHandler(null);
     unawaited(_stopPlayback());
     _playerFocusNode.dispose();
@@ -356,6 +361,50 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     unawaited(_setFullscreen(!_isFullscreen));
   }
 
+  void _cancelSpaceHold({required bool restoreSpeed}) {
+    _spaceHoldTimer?.cancel();
+    _spaceHoldTimer = null;
+    _spacePressed = false;
+    final bool wasTemporarySpeed = _spaceTemporarySpeedActive;
+    _spaceTemporarySpeedActive = false;
+    if (restoreSpeed && wasTemporarySpeed) {
+      unawaited(_playbackNotifier.endTemporarySpeed());
+    }
+  }
+
+  KeyEventResult _handleSpaceKeyEvent(
+    KeyEvent event,
+    PlaybackController notifier,
+  ) {
+    if (event is KeyRepeatEvent) {
+      return KeyEventResult.handled;
+    }
+
+    if (event is KeyDownEvent) {
+      if (_spacePressed) return KeyEventResult.handled;
+      _spacePressed = true;
+      _spaceTemporarySpeedActive = false;
+      _spaceHoldTimer?.cancel();
+      _spaceHoldTimer = Timer(_spaceHoldSpeedDelay, () {
+        if (!mounted || !_spacePressed) return;
+        _spaceTemporarySpeedActive = true;
+        unawaited(notifier.beginTemporarySpeed());
+      });
+      return KeyEventResult.handled;
+    }
+
+    if (event is KeyUpEvent) {
+      final bool wasTemporarySpeed = _spaceTemporarySpeedActive;
+      _cancelSpaceHold(restoreSpeed: wasTemporarySpeed);
+      if (!wasTemporarySpeed) {
+        unawaited(notifier.togglePlay());
+      }
+      return KeyEventResult.handled;
+    }
+
+    return KeyEventResult.ignored;
+  }
+
   Future<void> _setFullscreen(bool fullscreen) async {
     if (mounted && _isFullscreen != fullscreen) {
       setState(() => _isFullscreen = fullscreen);
@@ -383,7 +432,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     PlaybackState state,
     PlayerSettings settings,
   ) {
-    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+    if (event is! KeyDownEvent &&
+        event is! KeyRepeatEvent &&
+        event is! KeyUpEvent) {
       return KeyEventResult.ignored;
     }
 
@@ -392,8 +443,15 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       playbackControllerProvider.notifier,
     );
 
-    if (key == LogicalKeyboardKey.space ||
-        key == LogicalKeyboardKey.mediaPlayPause) {
+    if (key == LogicalKeyboardKey.space) {
+      return _handleSpaceKeyEvent(event, notifier);
+    }
+    if (event is KeyUpEvent) {
+      return KeyEventResult.ignored;
+    }
+
+    if (key == LogicalKeyboardKey.mediaPlayPause) {
+      if (event is! KeyDownEvent) return KeyEventResult.handled;
       unawaited(notifier.togglePlay());
       return KeyEventResult.handled;
     }
@@ -578,6 +636,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
             focusNode: _playerFocusNode,
             autofocus: true,
             canRequestFocus: true,
+            onFocusChange: (bool hasFocus) {
+              if (!hasFocus) _cancelSpaceHold(restoreSpeed: true);
+            },
             onKeyEvent: (FocusNode node, KeyEvent event) => _nativePipActive
                 ? KeyEventResult.handled
                 : _handlePlayerKeyEvent(event, state, settings),

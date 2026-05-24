@@ -115,6 +115,7 @@ class PlaybackController extends Notifier<PlaybackState> {
   static const Duration _seekSettleMinHold = Duration(milliseconds: 700);
   static const Duration _seekSettleTimeout = Duration(milliseconds: 5000);
   static const Duration _seekSettleTolerance = Duration(milliseconds: 1200);
+  static const double _temporaryPlaybackSpeedBoost = 1.0;
 
   Timer? _progressTimer;
   Timer? _undoTimer;
@@ -132,6 +133,7 @@ class PlaybackController extends Notifier<PlaybackState> {
   Duration? _settlingSeekTarget;
   DateTime? _settlingSeekUntil;
   DateTime? _settlingSeekEarliestClear;
+  int _temporarySpeedHolds = 0;
   final Set<String> _syncedToAnilist = <String>{};
 
   void Function()? _nextEpisodeHandler;
@@ -460,7 +462,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       }
       final PlayerSettings settings =
           ref.read(playerSettingsProvider).value ?? const PlayerSettings();
-      await engine.setPlaybackSpeed(settings.playbackSpeed);
+      await engine.setPlaybackSpeed(_effectivePlaybackSpeed(settings));
       await engine.setVolume(settings.volume);
       if (autoplay) await engine.play();
       if (generation != _playbackGeneration) {
@@ -560,6 +562,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     unawaited(MediaSessionService.clearNowPlaying());
     unawaited(DiscordRpcService.clearActivity());
     _playbackGeneration++;
+    _temporarySpeedHolds = 0;
     _progressTimer?.cancel();
     _undoTimer?.cancel();
     _clearInteractiveSeek();
@@ -907,9 +910,39 @@ class PlaybackController extends Notifier<PlaybackState> {
   }
 
   Future<void> setSpeed(double speed) async {
-    await state.engine?.setPlaybackSpeed(speed);
     await ref.read(playerSettingsProvider.notifier).setSpeed(speed);
+    final PlayerSettings settings =
+        ref.read(playerSettingsProvider).value ?? const PlayerSettings();
+    await state.engine?.setPlaybackSpeed(_effectivePlaybackSpeed(settings));
     state = state.copyWith();
+    _updateMediaSession();
+  }
+
+  Future<void> beginTemporarySpeed() async {
+    final PlayerEngine? engine = state.engine;
+    if (engine == null) return;
+    _temporarySpeedHolds += 1;
+    final PlayerSettings settings =
+        ref.read(playerSettingsProvider).value ?? const PlayerSettings();
+    await engine.setPlaybackSpeed(_effectivePlaybackSpeed(settings));
+    state = state.copyWith();
+    _updateMediaSession();
+  }
+
+  Future<void> endTemporarySpeed() async {
+    if (_temporarySpeedHolds <= 0) return;
+    _temporarySpeedHolds -= 1;
+    if (_temporarySpeedHolds > 0) return;
+    final PlayerSettings settings =
+        ref.read(playerSettingsProvider).value ?? const PlayerSettings();
+    await state.engine?.setPlaybackSpeed(settings.playbackSpeed);
+    state = state.copyWith();
+    _updateMediaSession();
+  }
+
+  double _effectivePlaybackSpeed(PlayerSettings settings) {
+    if (_temporarySpeedHolds <= 0) return settings.playbackSpeed;
+    return settings.playbackSpeed + _temporaryPlaybackSpeedBoost;
   }
 
   Future<void> setVolume(double volume) async {

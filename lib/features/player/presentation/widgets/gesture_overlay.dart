@@ -35,10 +35,16 @@ class _GestureOverlayState extends ConsumerState<GestureOverlay> {
   double _vAccum = 0;
   double _vStartVolume = 1.0;
   bool _vRight = false;
+  bool _temporarySpeedActive = false;
 
   @override
   void dispose() {
     _chipTimer?.cancel();
+    if (_temporarySpeedActive) {
+      unawaited(
+        ref.read(playbackControllerProvider.notifier).endTemporarySpeed(),
+      );
+    }
     super.dispose();
   }
 
@@ -68,11 +74,30 @@ class _GestureOverlayState extends ConsumerState<GestureOverlay> {
     });
   }
 
+  void _startTemporarySpeed() {
+    if (_temporarySpeedActive) return;
+    _temporarySpeedActive = true;
+    unawaited(
+      ref.read(playbackControllerProvider.notifier).beginTemporarySpeed(),
+    );
+  }
+
+  void _endTemporarySpeed() {
+    if (!_temporarySpeedActive) return;
+    _temporarySpeedActive = false;
+    unawaited(
+      ref.read(playbackControllerProvider.notifier).endTemporarySpeed(),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: widget.isMobile ? widget.onTap : widget.onTogglePlay,
+      onLongPressStart: (_) => _startTemporarySpeed(),
+      onLongPressEnd: (_) => _endTemporarySpeed(),
+      onLongPressCancel: _endTemporarySpeed,
       onDoubleTap: widget.isMobile ? null : widget.onToggleFullscreen,
       onDoubleTapDown: widget.isMobile
           ? (TapDownDetails details) {
