@@ -132,19 +132,14 @@ class DiscordRpcService {
     final String posterUrl = _normalizedMediaUrl(presence.posterUrl);
     final String largeImage = posterUrl.isNotEmpty
         ? posterUrl
-        : AppConstants.discordRpcLogoAssetKey;
-
-    final String hoverText = _truncate(
-      state.isEmpty ? details : '$details • $state',
-      128,
-    );
+        : AppConstants.discordRpcLogoImageUrl;
 
     final _DiscordActivityTimestamps? timestamps = presence.isPlaying
         ? _buildTimestamps(presence.position, presence.duration)
         : null;
 
     return _DiscordActivity(
-      name: AppConstants.appName,
+      name: details,
       type: 3,
       details: details,
       detailsUrl: mediaUrl.isEmpty ? null : mediaUrl,
@@ -153,20 +148,20 @@ class DiscordRpcService {
       timestamps: timestamps,
       assets: _DiscordActivityAssets(
         largeImage: largeImage,
-        largeText: hoverText,
-        largeUrl: mediaUrl.isEmpty ? null : mediaUrl,
-        smallImage: AppConstants.discordRpcLogoAssetKey,
+        largeText: details,
+        largeUrl: AppConstants.appWebsiteUrl,
+        smallImage: AppConstants.discordRpcLogoImageUrl,
         smallText: AppConstants.appName,
         smallUrl: AppConstants.appWebsiteUrl,
       ),
       buttons: <_DiscordActivityButton>[
-        _DiscordActivityButton(
-          label: _viewButtonLabel(presence.mediaType),
-          url: mediaUrl.isEmpty ? _fallbackMediaUrl(presence) : mediaUrl,
+        const _DiscordActivityButton(
+          label: 'Visit Website',
+          url: AppConstants.appWebsiteUrl,
         ),
         const _DiscordActivityButton(
           label: 'Download MiruShin',
-          url: AppConstants.appWebsiteUrl,
+          url: AppConstants.githubLatestReleaseUrl,
         ),
       ],
     );
@@ -197,9 +192,6 @@ class DiscordRpcService {
       return presence.mediaType == MediaType.anime ? 'Anime' : 'TV Show';
     }
 
-    if (presence.seasonNumber > 1) {
-      return 'Season ${presence.seasonNumber} • $episode';
-    }
     return episode;
   }
 
@@ -219,24 +211,6 @@ class DiscordRpcService {
       return episodeNumber.round().toString();
     }
     return episodeNumber.toString();
-  }
-
-  static String _viewButtonLabel(MediaType mediaType) {
-    return switch (mediaType) {
-      MediaType.movie => 'View Movie',
-      MediaType.series => 'View TV Show',
-      MediaType.anime => 'View Anime',
-    };
-  }
-
-  static String _fallbackMediaUrl(DiscordRpcPresence presence) {
-    final String query = Uri.encodeComponent(presence.title.trim());
-    return switch (presence.mediaType) {
-      MediaType.movie =>
-        'https://www.themoviedb.org/search/movie?query=$query',
-      MediaType.series || MediaType.anime =>
-        'https://www.themoviedb.org/search/tv?query=$query',
-    };
   }
 
   static String _normalizedMediaUrl(String? raw) {
