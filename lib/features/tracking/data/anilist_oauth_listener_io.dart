@@ -7,9 +7,9 @@ import 'package:flutter/foundation.dart';
 import '../../../shared/models/anilist_models.dart';
 
 class AniListOAuthListener {
-  AniListOAuthListener(this._server, this._completer);
+  AniListOAuthListener(this._servers, this._completer);
 
-  final HttpServer _server;
+  final List<HttpServer> _servers;
   final Completer<AniListOAuthResult?> _completer;
 
   Future<AniListOAuthResult?> wait() {
@@ -23,28 +23,42 @@ class AniListOAuthListener {
     if (!_completer.isCompleted) {
       _completer.complete(null);
     }
-    try {
-      await _server.close(force: true);
-    } catch (_) {
-      // Best-effort cleanup.
+    for (final HttpServer server in _servers) {
+      try {
+        await server.close(force: true);
+      } catch (_) {
+        // Best-effort cleanup.
+      }
     }
   }
 }
 
+// Ensures only one desktop listener is alive at a time.
 AniListOAuthListener? _activeListener;
 
 Future<AniListOAuthListener> startAniListOAuthListener({
   required int port,
 }) async {
+  // Cancel any previous listener before rebinding the port.
   final AniListOAuthListener? previous = _activeListener;
   _activeListener = null;
   await previous?.cancel();
 
-  final HttpServer server = await _bindLocalhostServer(port);
+  final List<HttpServer> servers = await _bindOAuthServers(port);
   final Completer<AniListOAuthResult?> completer =
       Completer<AniListOAuthResult?>();
 
-  server.listen((HttpRequest request) async {
+  Future<void> closeServers() async {
+    for (final HttpServer server in servers) {
+      try {
+        await server.close(force: true);
+      } catch (_) {
+        // Best-effort cleanup.
+      }
+    }
+  }
+
+  Future<void> handleRequest(HttpRequest request) async {
     if (request.uri.path == '/') {
       request.response.headers.contentType = ContentType.html;
       request.response.write(_fragmentCapturePage);
@@ -81,47 +95,81 @@ Future<AniListOAuthListener> startAniListOAuthListener({
           ),
         );
         _activeListener = null;
-        try {
-          await server.close(force: true);
-        } catch (_) {
-          // Best-effort cleanup.
-        }
+        await closeServers();
       }
       return;
     }
 
     request.response.statusCode = 404;
     await request.response.close();
-  });
+  }
 
-  final AniListOAuthListener listener = AniListOAuthListener(server, completer);
+  for (final HttpServer server in servers) {
+    server.listen(handleRequest);
+  }
+
+  final AniListOAuthListener listener = AniListOAuthListener(
+    servers,
+    completer,
+  );
   _activeListener = listener;
   return listener;
 }
 
-Future<HttpServer> _bindLocalhostServer(int port) async {
-  Object? lastError;
-  for (final InternetAddress address in <InternetAddress>[
-    InternetAddress.loopbackIPv4,
-    InternetAddress.loopbackIPv6,
-  ]) {
+Future<List<HttpServer>> _bindOAuthServers(int port) async {
+  if (!Platform.isLinux) {
     try {
-      return await HttpServer.bind(
-        address,
-        port,
-        v6Only: address.type == InternetAddressType.IPv6,
-        shared: true,
-      );
+      return <HttpServer>[
+        await HttpServer.bind(
+          InternetAddress.loopbackIPv6,
+          port,
+          v6Only: false,
+          shared: true,
+        ),
+      ];
     } catch (error) {
-      lastError = error;
       if (kDebugMode) {
-        debugPrint(
-          '[AniList OAuth] Failed to bind ${address.address}:$port: $error',
-        );
+        debugPrint('[AniList OAuth] Failed to bind localhost:$port: $error');
       }
+      rethrow;
     }
   }
-  throw lastError ?? StateError('Failed to bind localhost:$port');
+
+  final List<HttpServer> servers = <HttpServer>[];
+  Object? lastError;
+
+  try {
+    servers.add(
+      await HttpServer.bind(InternetAddress.loopbackIPv4, port, shared: true),
+    );
+  } catch (error) {
+    lastError = error;
+    if (kDebugMode) {
+      debugPrint('[AniList OAuth] Failed to bind 127.0.0.1:$port: $error');
+    }
+  }
+
+  try {
+    servers.add(
+      await HttpServer.bind(
+        InternetAddress.loopbackIPv6,
+        port,
+        v6Only: true,
+        shared: true,
+      ),
+    );
+  } catch (error) {
+    lastError = error;
+    if (kDebugMode) {
+      debugPrint('[AniList OAuth] Failed to bind [::1]:$port: $error');
+    }
+  }
+
+  if (servers.isEmpty) {
+    throw lastError ?? StateError('Failed to bind localhost:$port');
+  }
+
+  return servers;
 }
 
 const String _fragmentCapturePage = '''

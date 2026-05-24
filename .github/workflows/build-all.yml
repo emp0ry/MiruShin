@@ -174,9 +174,10 @@ jobs:
             --plugin gtk \
             --output appimage
 
-          APPIMAGE_OUT=$(find . -maxdepth 1 -type f -name '*.AppImage' | head -n 1)
+          APPIMAGE_OUT=$(find . -maxdepth 1 -type f -name '*.AppImage' ! -name 'linuxdeploy-x86_64.AppImage' | head -n 1)
           if [ -z "$APPIMAGE_OUT" ]; then
             echo "ERROR: AppImage was not created"
+            ls -la . || true
             exit 1
           fi
           FINAL="${APP_NAME}-linux-v${VERSION}.AppImage"
@@ -193,7 +194,7 @@ jobs:
             ${{ steps.tgz.outputs.tgz_path }}
 
   build-windows:
-    runs-on: windows-latest
+    runs-on: windows-2025-vs2026
     steps:
       - name: Checkout
         uses: actions/checkout@v5
