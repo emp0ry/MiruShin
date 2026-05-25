@@ -5,14 +5,12 @@
 <h1 align="center">MiruShin</h1>
 
 <p align="center">
-  AnimeShin-inspired Flutter media hub for discovery, tracking, source selection, and playback.
-</p>
-
-<p align="center">
   <img alt="Flutter" src="https://img.shields.io/badge/Flutter-stable-02569B?logo=flutter&logoColor=white">
   <img alt="Dart" src="https://img.shields.io/badge/Dart-3.11%2B-0175C2?logo=dart&logoColor=white">
   <img alt="Platforms" src="https://img.shields.io/badge/Platforms-Android%20%7C%20iOS%20%7C%20Windows%20%7C%20macOS-111827">
   <img alt="Catalogs" src="https://img.shields.io/badge/Catalogs-TMDB%20%7C%20AniList-16A34A">
+  <img alt="Latest release downloads" src="https://img.shields.io/github/downloads/emp0ry/MiruShin/latest/total?label=Latest%20downloads&logo=github">
+  <img alt="License" src="https://img.shields.io/github/license/emp0ry/MiruShin?color=8B5CF6">
 </p>
 
 MiruShin takes the familiar feel of AnimeShin and pushes it further with a cleaner Flutter architecture, a modular feature layout, real Sora module support, cross-platform playback, and deeper AniList profile flows.
@@ -117,6 +115,7 @@ For information on how to get Sora addons, please join the [Sora Discord](https:
 
 ## Legal
 
+- [License](LICENSE)
 - [Privacy Policy](PRIVACY_POLICY.md)
 - [Legal Notice](LEGAL.md)
 
