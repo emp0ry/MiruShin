@@ -5,12 +5,19 @@
 <h1 align="center">MiruShin</h1>
 
 <p align="center">
+  <a href="https://github.com/emp0ry/MiruShin/releases/latest">
+    <img src="https://img.shields.io/github/v/release/emp0ry/MiruShin?logo=github&color=5865F2" alt="Latest Release">
+  </a>
   <img alt="Flutter" src="https://img.shields.io/badge/Flutter-stable-02569B?logo=flutter&logoColor=white">
   <img alt="Dart" src="https://img.shields.io/badge/Dart-3.11%2B-0175C2?logo=dart&logoColor=white">
   <img alt="Platforms" src="https://img.shields.io/badge/Platforms-Android%20%7C%20iOS%20%7C%20Windows%20%7C%20macOS-111827">
   <img alt="Catalogs" src="https://img.shields.io/badge/Catalogs-TMDB%20%7C%20AniList-16A34A">
-  <img alt="Latest release downloads" src="https://img.shields.io/github/downloads/emp0ry/MiruShin/latest/total?label=Latest%20downloads&logo=github">
-  <img alt="License" src="https://img.shields.io/github/license/emp0ry/MiruShin?color=8B5CF6">
+  <a href="https://github.com/emp0ry/MiruShin/releases/latest">
+    <img alt="Total downloads" src="https://img.shields.io/github/downloads/emp0ry/MiruShin/total?color=ff6d00&label=Total%20Downloads">
+  </a>
+  <a href="LICENSE">
+    <img alt="License: GPL-3.0" src="https://img.shields.io/github/license/emp0ry/MiruShin?color=8B5CF6">
+  </a>
 </p>
 
 MiruShin takes the familiar feel of AnimeShin and pushes it further with a cleaner Flutter architecture, a modular feature layout, real Sora module support, cross-platform playback, and deeper AniList profile flows.
