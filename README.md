@@ -20,9 +20,12 @@
   </a>
 </p>
 
+<p align="center">
 MiruShin takes the familiar feel of AnimeShin and pushes it further with a cleaner Flutter architecture, a modular feature layout, real Sora module support, cross-platform playback, and deeper AniList profile flows.
-
+</p>
+<p align="center">
 It can switch between TMDB-driven discovery and AniList-driven catalog views, then carry that context into your library, watch flow, and player experience from a single codebase.
+</p>
 
 ## Highlights
 
