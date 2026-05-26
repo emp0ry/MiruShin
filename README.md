@@ -13,7 +13,7 @@
   </a>
   <img alt="Flutter" src="https://img.shields.io/badge/Flutter-stable-02569B?logo=flutter&logoColor=white">
   <img alt="Dart" src="https://img.shields.io/badge/Dart-3.11%2B-0175C2?logo=dart&logoColor=white">
-  <img alt="Platforms" src="https://img.shields.io/badge/Platforms-Android%20%7C%20iOS%20%7C%20Windows%20%7C%20macOS-111827">
+  <img alt="Platforms" src="https://img.shields.io/badge/Platforms-Android%20%7C%20iOS%20%7C%20Windows%20%7C%20macOS%20%7C%20Linux-111827">
   <img alt="Catalogs" src="https://img.shields.io/badge/Catalogs-TMDB%20%7C%20AniList-16A34A">
   <a href="LICENSE">
     <img alt="License: GPL-3.0" src="https://img.shields.io/badge/License-GPL--3.0-8B5CF6">
@@ -68,7 +68,7 @@ flutter pub get
 flutter run
 ```
 
-You can also run a specific target with commands like `flutter run -d macos`, `flutter run -d windows`, or `flutter run -d android`.
+You can also run a specific target with commands like `flutter run -d macos`, `flutter run -d windows`, `flutter run -d linux`, or `flutter run -d android`.
 
 ## First-Time Setup
 

@@ -48,7 +48,7 @@ class SettingsPage extends ConsumerWidget {
             SectionHeader(
               title: context.t('Settings'),
               subtitle:
-                  '${context.t('App version')} ${AppConstants.appVersion}',
+                  '${context.t('App version')} ${AppConstants.appVersion.split('+').first}',
             ),
             const SizedBox(height: AppSpacing.lg),
             _AccountSection(placeholderOnly: !showAniListProfileUi),
