@@ -87,18 +87,21 @@ Future<AniListOAuthResult?> _loginOnWeb(
   String clientId,
 ) async {
   final Uri authUri = oauthService.buildImplicitAuthUri(clientId: clientId);
-  final TextEditingController tokenController = TextEditingController();
+  String rawInput = '';
   String? errorText;
-  try {
-    return showDialog<AniListOAuthResult>(
-      context: context,
-      builder: (BuildContext dialogContext) {
-        return StatefulBuilder(
-          builder: (BuildContext ctx, StateSetter setState) {
-            return AlertDialog(
-              title: Text(ctx.t('Login with AniList')),
-              content: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 560),
+  return showDialog<AniListOAuthResult>(
+    context: context,
+    builder: (BuildContext dialogContext) {
+      return StatefulBuilder(
+        builder: (BuildContext ctx, StateSetter setState) {
+          return AlertDialog(
+            title: Text(ctx.t('Login with AniList')),
+            content: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: 560,
+                maxHeight: MediaQuery.sizeOf(ctx).height * 0.55,
+              ),
+              child: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -110,9 +113,9 @@ Future<AniListOAuthResult?> _loginOnWeb(
                     ),
                     const SizedBox(height: AppSpacing.lg),
                     TextField(
-                      controller: tokenController,
                       minLines: 1,
-                      maxLines: 3,
+                      maxLines: 4,
+                      onChanged: (String value) => rawInput = value,
                       decoration: InputDecoration(
                         labelText: ctx.t('AniList access token'),
                         errorText: errorText,
@@ -121,44 +124,38 @@ Future<AniListOAuthResult?> _loginOnWeb(
                   ],
                 ),
               ),
-              actions: <Widget>[
-                TextButton(
-                  onPressed: () => Navigator.of(dialogContext).pop(),
-                  child: Text(ctx.t('Cancel')),
-                ),
-                OutlinedButton.icon(
-                  onPressed: () =>
-                      launchUrl(authUri, mode: LaunchMode.externalApplication),
-                  icon: const Icon(Icons.open_in_new_rounded),
-                  label: Text(ctx.t('Open AniList')),
-                ),
-                FilledButton.icon(
-                  onPressed: () {
-                    final AniListOAuthResult? result = _parseToken(
-                      tokenController.text,
-                    );
-                    if (result == null) {
-                      setState(() {
-                        errorText = ctx.t(
-                          'Paste a valid AniList access token.',
-                        );
-                      });
-                      return;
-                    }
-                    Navigator.of(dialogContext).pop(result);
-                  },
-                  icon: const Icon(Icons.check_rounded),
-                  label: Text(ctx.t('Connect account')),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-  } finally {
-    tokenController.dispose();
-  }
+            ),
+            actions: <Widget>[
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: Text(ctx.t('Cancel')),
+              ),
+              OutlinedButton.icon(
+                onPressed: () =>
+                    launchUrl(authUri, mode: LaunchMode.externalApplication),
+                icon: const Icon(Icons.open_in_new_rounded),
+                label: Text(ctx.t('Open AniList')),
+              ),
+              FilledButton.icon(
+                onPressed: () {
+                  final AniListOAuthResult? result = _parseToken(rawInput);
+                  if (result == null) {
+                    setState(() {
+                      errorText = ctx.t('Paste a valid AniList access token.');
+                    });
+                    return;
+                  }
+                  Navigator.of(dialogContext).pop(result);
+                },
+                icon: const Icon(Icons.check_rounded),
+                label: Text(ctx.t('Connect account')),
+              ),
+            ],
+          );
+        },
+      );
+    },
+  );
 }
 
 AniListOAuthResult? _parseToken(String rawInput) {

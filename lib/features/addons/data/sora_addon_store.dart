@@ -569,17 +569,22 @@ class SoraAddonStore {
 
   Future<String> _fetchText(Uri uri, {Uri? referer}) async {
     final Uri requestUri = _proxiedUri(uri);
-    final Response<String> response = await _dio.getUri<String>(
-      requestUri,
-      options: Options(
-        responseType: ResponseType.plain,
-        headers: <String, String>{
-          if (!kIsWeb && referer != null) 'Referer': referer.toString(),
-          if (!kIsWeb) 'User-Agent': _defaultUserAgent,
-          'Accept': 'application/json,text/plain,*/*',
-        },
-      ),
-    );
+    final Response<String> response;
+    try {
+      response = await _dio.getUri<String>(
+        requestUri,
+        options: Options(
+          responseType: ResponseType.plain,
+          headers: <String, String>{
+            if (!kIsWeb && referer != null) 'Referer': referer.toString(),
+            if (!kIsWeb) 'User-Agent': _defaultUserAgent,
+            'Accept': 'application/json,text/plain,*/*',
+          },
+        ),
+      );
+    } on DioException catch (error) {
+      throw SoraAddonException(_friendlyError(error));
+    }
     final int? statusCode = response.statusCode;
     if (statusCode != null && (statusCode < 200 || statusCode >= 300)) {
       throw SoraAddonException('Request failed with HTTP $statusCode.');
@@ -690,10 +695,23 @@ class SoraAddonStore {
     if (error is DioException) {
       final int? statusCode = error.response?.statusCode;
       if (statusCode != null) {
-        return 'HTTP $statusCode while updating addon.';
+        return 'HTTP $statusCode while fetching addon.';
+      }
+      if (kIsWeb && _looksLikeBrowserNetworkBlock(error)) {
+        return 'Browser could not fetch this addon URL. This is usually CORS: configure Settings > API Connections > Sora web proxy URL, or host the addon with Access-Control-Allow-Origin enabled.';
       }
       return error.message ?? 'Network request failed.';
     }
     return error.toString();
+  }
+
+  bool _looksLikeBrowserNetworkBlock(DioException error) {
+    final String message = (error.message ?? '').toLowerCase();
+    return error.type == DioExceptionType.connectionError ||
+        error.type == DioExceptionType.unknown ||
+        message.contains('xmlhttprequest') ||
+        message.contains('failed to fetch') ||
+        message.contains('network layer') ||
+        message.contains('connection errored');
   }
 }

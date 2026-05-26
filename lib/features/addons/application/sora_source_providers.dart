@@ -1133,7 +1133,28 @@ String _friendlyError(Object error) {
   if (error is SoraAddonException) {
     return error.message;
   }
+  if (kIsWeb && _looksLikeBrowserNetworkBlock(error)) {
+    return 'Browser blocked this source request. Configure Settings > API Connections > Sora web proxy URL, or use a source that allows browser CORS requests.';
+  }
   return error.toString();
+}
+
+bool _looksLikeBrowserNetworkBlock(Object error) {
+  if (error is DioException) {
+    final String message = (error.message ?? '').toLowerCase();
+    return error.type == DioExceptionType.connectionError ||
+        error.type == DioExceptionType.unknown ||
+        message.contains('xmlhttprequest') ||
+        message.contains('failed to fetch') ||
+        message.contains('network layer') ||
+        message.contains('connection errored');
+  }
+  final String message = error.toString().toLowerCase();
+  return message.contains('xmlhttprequest') ||
+      message.contains('failed to fetch') ||
+      message.contains('network layer') ||
+      message.contains('connection errored') ||
+      message.contains('cors');
 }
 
 void _debugPrintTitleVariants(

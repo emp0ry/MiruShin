@@ -111,7 +111,7 @@ endforeach(bundled_library)
 # flutter_js exposes the Linux bridge library through a mismatched variable
 # name in its plugin CMake file, so bundle it explicitly here.
 set(FLUTTER_JS_BRIDGE
-  "${CMAKE_CURRENT_SOURCE_DIR}/flutter/ephemeral/.plugin_symlinks/flutter_js/shared/libquickjs_c_bridge_plugin.so")
+  "${CMAKE_CURRENT_SOURCE_DIR}/flutter/ephemeral/.plugin_symlinks/flutter_js/linux/shared/libquickjs_c_bridge_plugin.so")
 if(EXISTS "${FLUTTER_JS_BRIDGE}")
   install(FILES "${FLUTTER_JS_BRIDGE}"
     DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"

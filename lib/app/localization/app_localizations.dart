@@ -140,6 +140,7 @@ _localizedValues = <String, Map<String, String>>{
     'Account': 'Account',
     'Profile': 'Profile',
     'Sign in': 'Sign in',
+    'Open': 'Open',
     'Appearance': 'Appearance',
     'Theme mode': 'Theme mode',
     'System': 'System',
@@ -182,6 +183,9 @@ _localizedValues = <String, Map<String, String>>{
     'AniList mobile redirect': 'AniList mobile redirect',
     'AniList desktop redirect': 'AniList desktop redirect',
     'AniList account': 'AniList account',
+    'AniList Settings': 'AniList Settings',
+    'Open AniList profile content settings, list preferences, and MiruShin sync options.':
+        'Open AniList profile content settings, list preferences, and MiruShin sync options.',
     'Connected': 'Connected',
     'Not connected': 'Not connected',
     'Login with AniList': 'Login with AniList',
@@ -383,6 +387,7 @@ _localizedValues = <String, Map<String, String>>{
     'Profile': 'Профиль',
     'Sign in': 'Войти',
     'Sign out': 'Выйти',
+    'Open': 'Открыть',
     'Export': 'Экспорт',
     'Import': 'Импорт',
     'Export (MyAnimeList)': 'Экспорт (MyAnimeList)',
@@ -398,6 +403,8 @@ _localizedValues = <String, Map<String, String>>{
     'Statistics': 'Статистика',
     'Reviews': 'Обзоры',
     'AniList Settings': 'Настройки AniList',
+    'Open AniList profile content settings, list preferences, and MiruShin sync options.':
+        'Открыть настройки контента профиля AniList, списков и синхронизации MiruShin.',
     'Profile is only available while the AniList catalog is active.':
         'Профиль доступен только при активном каталоге AniList.',
     'AniList not connected': 'AniList не подключён',
@@ -600,6 +607,7 @@ _localizedValues = <String, Map<String, String>>{
     'Profile': 'プロフィール',
     'Sign in': 'サインイン',
     'Sign out': 'サインアウト',
+    'Open': '開く',
     'Export': 'エクスポート',
     'Import': 'インポート',
     'Export (MyAnimeList)': 'エクスポート (MyAnimeList)',
@@ -615,6 +623,8 @@ _localizedValues = <String, Map<String, String>>{
     'Statistics': '統計',
     'Reviews': 'レビュー',
     'AniList Settings': 'AniList設定',
+    'Open AniList profile content settings, list preferences, and MiruShin sync options.':
+        'AniListプロフィールのコンテンツ設定、リスト設定、MiruShin同期オプションを開きます。',
     'Profile is only available while the AniList catalog is active.':
         'プロフィールはAniListカタログが有効なときだけ利用できます。',
     'AniList not connected': 'AniList未接続',

@@ -6,6 +6,7 @@
 #include <gdk/gdkx.h>
 #endif
 
+#include <cstdlib>
 #include "flutter/generated_plugin_registrant.h"
 
 struct _MyApplication {
@@ -40,14 +41,19 @@ gchar* window_geometry_path() {
                           nullptr);
 }
 
-void set_window_icon(GtkWindow* window) {
+gchar* executable_directory() {
   g_autofree gchar* executable_path =
       g_file_read_link("/proc/self/exe", nullptr);
   if (executable_path == nullptr) {
-    return;
+    return nullptr;
   }
+  return g_path_get_dirname(executable_path);
+}
 
-  g_autofree gchar* executable_dir = g_path_get_dirname(executable_path);
+void set_window_icon(GtkWindow* window) {
+  g_autofree gchar* executable_dir = executable_directory();
+  if (executable_dir == nullptr) return;
+
   g_autofree gchar* icon_path =
       g_build_filename(executable_dir, "data", "logo.png", nullptr);
   if (!g_file_test(icon_path, G_FILE_TEST_EXISTS)) {
@@ -56,6 +62,33 @@ void set_window_icon(GtkWindow* window) {
 
   g_autoptr(GError) error = nullptr;
   gtk_window_set_icon_from_file(window, icon_path, &error);
+}
+
+void configure_quickjs_bridge_library() {
+  g_autofree gchar* executable_dir = executable_directory();
+  if (executable_dir == nullptr) {
+    return;
+  }
+
+  const gchar* library_name = "libquickjs_c_bridge_plugin.so";
+  g_autofree gchar* bundled_path =
+      g_build_filename(executable_dir, "lib", library_name, nullptr);
+  g_autofree gchar* debug_bundle_path =
+      g_build_filename(executable_dir, "..", "bundle", "lib", library_name,
+                       nullptr);
+  g_autofree gchar* sibling_lib_path =
+      g_build_filename(executable_dir, "..", "lib", library_name, nullptr);
+
+  const gchar* selected_path = bundled_path;
+  if (g_file_test(bundled_path, G_FILE_TEST_EXISTS)) {
+    selected_path = bundled_path;
+  } else if (g_file_test(debug_bundle_path, G_FILE_TEST_EXISTS)) {
+    selected_path = debug_bundle_path;
+  } else if (g_file_test(sibling_lib_path, G_FILE_TEST_EXISTS)) {
+    selected_path = sibling_lib_path;
+  }
+
+  setenv("LIBQUICKJSC_PATH", selected_path, 1);
 }
 
 gboolean load_window_geometry(WindowGeometry* geometry) {
@@ -195,6 +228,8 @@ static void my_application_activate(GApplication* application) {
   g_autoptr(FlDartProject) project = fl_dart_project_new();
   fl_dart_project_set_dart_entrypoint_arguments(
       project, self->dart_entrypoint_arguments);
+
+  configure_quickjs_bridge_library();
 
   FlView* view = fl_view_new(project);
   GdkRGBA background_color;

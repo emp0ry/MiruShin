@@ -3,8 +3,10 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'package:go_router/go_router.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../../../app/app_routes.dart';
 import '../../../app/localization/app_localizations.dart';
 import '../../../app/localization/supported_languages.dart';
 import '../../../app/theme/app_colors.dart';
@@ -51,6 +53,10 @@ class SettingsPage extends ConsumerWidget {
             const SizedBox(height: AppSpacing.lg),
             _AccountSection(placeholderOnly: !showAniListProfileUi),
             const SizedBox(height: AppSpacing.lg),
+            if (showAniListProfileUi && settings.hasAniListSession) ...<Widget>[
+              const _AniListSettingsShortcutSection(),
+              const SizedBox(height: AppSpacing.lg),
+            ],
             _AppearanceSection(settings: settings, controller: controller),
             const SizedBox(height: AppSpacing.lg),
             _LanguageSection(
@@ -71,6 +77,31 @@ class SettingsPage extends ConsumerWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _AniListSettingsShortcutSection extends StatelessWidget {
+  const _AniListSettingsShortcutSection();
+
+  @override
+  Widget build(BuildContext context) {
+    return SettingsSection(
+      title: context.t('AniList Settings'),
+      icon: Icons.tune_rounded,
+      children: <Widget>[
+        SettingsRow(
+          title: context.t('AniList Settings'),
+          subtitle: context.t(
+            'Open AniList profile content settings, list preferences, and MiruShin sync options.',
+          ),
+          trailing: FilledButton.icon(
+            onPressed: () => context.go(AppRoutes.profileSettings),
+            icon: const Icon(Icons.arrow_forward_rounded),
+            label: Text(context.t('Open')),
+          ),
+        ),
+      ],
     );
   }
 }
