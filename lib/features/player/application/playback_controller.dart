@@ -19,7 +19,7 @@ import '../data/discord_rpc_service.dart';
 import '../data/media_session_service.dart';
 import '../domain/player_models.dart';
 import '../engine/player_engine.dart';
-import '../engine/fvp_player_engine.dart';
+import '../engine/player_engine_factory.dart';
 import 'player_settings.dart';
 
 final playbackControllerProvider =
@@ -440,7 +440,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     final String url = quality.isAuto || quality.url.isEmpty
         ? server.url
         : quality.url;
-    final PlayerEngine engine = FvpPlayerEngine(
+    final PlayerEngine engine = createPlayerEngine(
       initialAspectRatio: _safeAspectRatio(preserveAspectRatio),
     );
 

@@ -1,9 +1,10 @@
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../../../core/platform/io_compat.dart' if (dart.library.io) 'dart:io';
 import '../domain/sora_models.dart';
 
 class SoraAddonImportResult {
@@ -37,7 +38,8 @@ class _SoraAddonImportCandidate {
 class SoraAddonStore {
   SoraAddonStore({
     Dio? dio,
-    Future<Directory> Function()? supportDirectoryProvider,
+    Future<dynamic> Function()? supportDirectoryProvider,
+    String? webProxyUrl,
   }) : _dio =
            dio ??
            Dio(
@@ -45,19 +47,23 @@ class SoraAddonStore {
                connectTimeout: const Duration(seconds: 14),
                receiveTimeout: const Duration(seconds: 22),
                followRedirects: true,
-               headers: const <String, String>{
-                 'User-Agent': _defaultUserAgent,
+               headers: <String, String>{
+                 if (!kIsWeb) 'User-Agent': _defaultUserAgent,
                  'Accept': 'application/json,text/plain,*/*',
                },
              ),
            ),
-       _supportDirectoryProvider = supportDirectoryProvider;
+       _supportDirectoryProvider = supportDirectoryProvider,
+       _webProxyUrl =
+           (webProxyUrl ?? const String.fromEnvironment('MIRUSHIN_WEB_PROXY'))
+               .trim();
 
   static const String _defaultUserAgent =
       'MiruShin/1.0 SoraAddonRuntime (+https://github.com/emp0ry)';
 
   final Dio _dio;
-  final Future<Directory> Function()? _supportDirectoryProvider;
+  final Future<dynamic> Function()? _supportDirectoryProvider;
+  final String _webProxyUrl;
 
   Future<List<SoraInstalledAddon>> loadInstalled() async {
     final File registry = await _registryFile();
@@ -562,13 +568,14 @@ class SoraAddonStore {
   }
 
   Future<String> _fetchText(Uri uri, {Uri? referer}) async {
+    final Uri requestUri = _proxiedUri(uri);
     final Response<String> response = await _dio.getUri<String>(
-      uri,
+      requestUri,
       options: Options(
         responseType: ResponseType.plain,
         headers: <String, String>{
-          if (referer != null) 'Referer': referer.toString(),
-          'User-Agent': _defaultUserAgent,
+          if (!kIsWeb && referer != null) 'Referer': referer.toString(),
+          if (!kIsWeb) 'User-Agent': _defaultUserAgent,
           'Accept': 'application/json,text/plain,*/*',
         },
       ),
@@ -578,6 +585,19 @@ class SoraAddonStore {
       throw SoraAddonException('Request failed with HTTP $statusCode.');
     }
     return response.data ?? '';
+  }
+
+  Uri _proxiedUri(Uri uri) {
+    if (!kIsWeb || _webProxyUrl.isEmpty) return uri;
+    final String target = uri.toString();
+    final String proxy = _webProxyUrl;
+    if (proxy.contains('{rawUrl}')) {
+      return Uri.parse(proxy.replaceAll('{rawUrl}', target));
+    }
+    if (proxy.contains('{url}')) {
+      return Uri.parse(proxy.replaceAll('{url}', Uri.encodeComponent(target)));
+    }
+    return Uri.parse('$proxy${Uri.encodeComponent(target)}');
   }
 
   Uri _parseUri(String value, String error) {
@@ -623,8 +643,13 @@ class SoraAddonStore {
   }
 
   Future<Directory> _rootDirectory() async {
-    final Future<Directory> Function()? provider = _supportDirectoryProvider;
-    final Directory base = provider == null
+    final Future<dynamic> Function()? provider = _supportDirectoryProvider;
+    if (kIsWeb && provider == null) {
+      final Directory root = Directory('mirushin_web/sora_addons');
+      await root.create(recursive: true);
+      return root;
+    }
+    final dynamic base = provider == null
         ? await getApplicationSupportDirectory()
         : await provider();
     final Directory root = Directory('${base.path}/sora_addons');

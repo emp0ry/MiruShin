@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart';
@@ -10,6 +9,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../../../core/platform/io_compat.dart' if (dart.library.io) 'dart:io';
 import '../../../shared/models/anilist_models.dart';
 import '../../tracking/data/anilist_api_client.dart';
 
@@ -102,7 +102,7 @@ Future<String?> saveAniListExportPayload(
 
   try {
     if (!kIsWeb && Platform.isIOS) {
-      final Directory tempDir = await getTemporaryDirectory();
+      final dynamic tempDir = await getTemporaryDirectory();
       final String tempPath = p.join(tempDir.path, payload.filename);
       await File(tempPath).writeAsBytes(payload.bytes, flush: true);
       await SharePlus.instance.share(
@@ -143,6 +143,15 @@ Future<String?> saveAniListExportPayload(
     if (location == null) {
       messenger?.showSnackBar(const SnackBar(content: Text('Save cancelled')));
       return null;
+    }
+
+    if (kIsWeb) {
+      await XFile.fromData(
+        payload.bytes,
+        name: payload.filename,
+        mimeType: payload.mimeType,
+      ).saveTo(location.path);
+      return payload.filename;
     }
 
     await File(location.path).writeAsBytes(payload.bytes, flush: true);

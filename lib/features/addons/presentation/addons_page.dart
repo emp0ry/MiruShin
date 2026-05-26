@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:file_selector/file_selector.dart';
@@ -17,6 +16,7 @@ import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_radius.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../app/theme/app_theme_extension.dart';
+import '../../../core/platform/io_compat.dart' if (dart.library.io) 'dart:io';
 import '../../../core/widgets/adaptive_page.dart';
 import '../../../core/widgets/glass_card.dart';
 import '../../../core/widgets/metadata_chip.dart';
@@ -663,7 +663,7 @@ Future<String?> _saveAddonJson(
   Rect shareOrigin,
 ) async {
   if (!kIsWeb && Platform.isIOS) {
-    final Directory tempDir = await getTemporaryDirectory();
+    final dynamic tempDir = await getTemporaryDirectory();
     final String tempPath = p.join(tempDir.path, filename);
     await File(tempPath).writeAsBytes(bytes, flush: true);
     await SharePlus.instance.share(
@@ -690,6 +690,14 @@ Future<String?> _saveAddonJson(
     acceptedTypeGroups: const <XTypeGroup>[_addonsJsonTypeGroup],
   );
   if (location == null) return null;
+  if (kIsWeb) {
+    await XFile.fromData(
+      bytes,
+      name: filename,
+      mimeType: 'application/json',
+    ).saveTo(location.path);
+    return filename;
+  }
   await File(location.path).writeAsBytes(bytes, flush: true);
   return location.path;
 }

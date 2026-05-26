@@ -2,17 +2,25 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../settings/presentation/settings_state.dart';
 import '../data/sora_addon_store.dart';
 import '../data/sora_js_runtime.dart';
 import '../domain/sora_models.dart';
 
 final soraAddonStoreProvider = Provider<SoraAddonStore>((Ref ref) {
-  return SoraAddonStore();
+  return SoraAddonStore(
+    webProxyUrl: ref.watch(
+      settingsProvider.select((SettingsState s) => s.soraWebProxyUrl),
+    ),
+  );
 });
 
 final soraJsRuntimeProvider = Provider<SoraJsRuntime>((Ref ref) {
   final SoraJsRuntime runtime = SoraJsRuntime(
     store: ref.watch(soraAddonStoreProvider),
+    webProxyUrl: ref.watch(
+      settingsProvider.select((SettingsState s) => s.soraWebProxyUrl),
+    ),
   );
   ref.onDispose(runtime.invalidateAll);
   return runtime;

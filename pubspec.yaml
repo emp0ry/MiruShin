@@ -30,6 +30,7 @@ dependencies:
   url_launcher: ^6.3.2
   webview_flutter: ^4.13.1
   flutter_secure_storage: ^10.0.0
+  video_player: ^2.11.1
   fvp: ^0.36.2
   wakelock_plus: ^1.5.2
 

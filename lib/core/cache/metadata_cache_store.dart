@@ -1,11 +1,11 @@
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../platform/io_compat.dart' if (dart.library.io) 'dart:io';
 import '../../features/settings/presentation/settings_state.dart';
 
 final metadataCacheStoreProvider = Provider<MetadataCacheStore>(
@@ -101,11 +101,11 @@ class MetadataCacheStore {
   Future<Directory?> _cacheDirectory() async {
     if (kIsWeb) return null;
     try {
-      final Directory base = await getApplicationSupportDirectory();
+      final dynamic base = await getApplicationSupportDirectory();
       return Directory('${base.path}/$_directoryName');
     } catch (_) {
       try {
-        final Directory base = await getTemporaryDirectory();
+        final dynamic base = await getTemporaryDirectory();
         return Directory('${base.path}/$_directoryName');
       } catch (_) {
         return null;

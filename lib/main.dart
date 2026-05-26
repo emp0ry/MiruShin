@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:fvp/fvp.dart' as fvp;
 
 import 'app/app.dart';
+import 'bootstrap/mirushin_fvp_bootstrap.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -25,15 +25,6 @@ void main() {
       FlutterError.presentError(details);
     }
   };
-  fvp.registerWith(
-    options: const <String, Object>{
-      'fastSeek': false,
-      'player': <String, String>{
-        'buffer': '3000+60000',
-        'demux.buffer.ranges': '8',
-        'demux.buffer.protocols': 'file,http,https',
-      },
-    },
-  );
+  configureMiruShinFvp();
   runApp(const ProviderScope(child: MiruShinApp()));
 }

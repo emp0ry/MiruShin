@@ -38,6 +38,7 @@ class SettingsPreferences {
   static const String anilistScoreFormatKey = 'settings.anilistScoreFormat';
   static const String anilistUserSettingsCacheKey =
       'settings.anilistUserSettingsCache';
+  static const String soraWebProxyUrlKey = 'settings.soraWebProxyUrl';
 
   String? readThemeMode() => _preferences.getString(themeModeKey);
 
@@ -117,6 +118,10 @@ class SettingsPreferences {
 
   String readAniListScoreFormat() =>
       _preferences.getString(anilistScoreFormatKey) ?? 'POINT_10_DECIMAL';
+
+  String readSoraWebProxyUrl() =>
+      _preferences.getString(soraWebProxyUrlKey) ??
+      const String.fromEnvironment('MIRUSHIN_WEB_PROXY');
 
   String? readAniListUserSettingsCache() =>
       _preferences.getString(anilistUserSettingsCacheKey);
@@ -200,6 +205,14 @@ class SettingsPreferences {
 
   Future<void> saveAniListScoreFormat(String value) =>
       _preferences.setString(anilistScoreFormatKey, value);
+
+  Future<void> saveSoraWebProxyUrl(String value) {
+    final String trimmed = value.trim();
+    if (trimmed.isEmpty) {
+      return _preferences.remove(soraWebProxyUrlKey);
+    }
+    return _preferences.setString(soraWebProxyUrlKey, trimmed);
+  }
 
   Future<void> saveAniListUserSettingsCache(String? value) {
     if (value == null || value.trim().isEmpty) {

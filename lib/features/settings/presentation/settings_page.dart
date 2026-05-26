@@ -1,6 +1,5 @@
-import 'dart:io';
-
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
@@ -13,6 +12,7 @@ import '../../../app/theme/app_radius.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../core/constants/app_constants.dart';
 import '../../../core/cache/metadata_cache_store.dart';
+import '../../../core/platform/io_compat.dart' if (dart.library.io) 'dart:io';
 import '../../../core/widgets/adaptive_page.dart';
 import '../../../core/widgets/glass_card.dart';
 import '../../../core/widgets/section_header.dart';
@@ -76,10 +76,7 @@ class SettingsPage extends ConsumerWidget {
 }
 
 class _DiscordRpcSection extends StatelessWidget {
-  const _DiscordRpcSection({
-    required this.settings,
-    required this.controller,
-  });
+  const _DiscordRpcSection({required this.settings, required this.controller});
 
   final SettingsState settings;
   final SettingsController controller;
@@ -93,7 +90,7 @@ class _DiscordRpcSection extends StatelessWidget {
         SettingsRow(
           title: 'Enable Discord Rich Presence',
           subtitle:
-            'Show what you are watching in Discord on desktop. Player Settings can still disable it per player.',
+              'Show what you are watching in Discord on desktop. Player Settings can still disable it per player.',
           trailing: Switch(
             value: settings.discordRpcEnabled,
             onChanged: controller.setDiscordRpcEnabled,
@@ -174,6 +171,19 @@ class _ApiConnectionsSection extends ConsumerWidget {
           ),
         ),
         const Divider(height: AppSpacing.xxl),
+        if (kIsWeb)
+          SettingsRow(
+            title: context.t('Sora web proxy URL'),
+            subtitle: context.t(
+              'Optional CORS proxy for Sora manifest, script, source, and stream requests. Use {url} for the encoded target URL.',
+            ),
+            trailing: _TextSettingField(
+              initialValue: settings.soraWebProxyUrl,
+              hintText: 'https://proxy.example.com/?url={url}',
+              onChanged: controller.setSoraWebProxyUrl,
+            ),
+          ),
+        if (kIsWeb) const Divider(height: AppSpacing.xxl),
         SettingsRow(
           title: context.t('AniList mobile client ID'),
           subtitle:
@@ -869,10 +879,11 @@ String _formatCacheBytes(int bytes) {
 final _imageCacheSizeProvider = FutureProvider.autoDispose<String>((
   Ref ref,
 ) async {
+  if (kIsWeb) return '—';
   try {
-    final Directory tmp = await getTemporaryDirectory();
+    final dynamic tmp = await getTemporaryDirectory();
     int bytes = 0;
-    await for (final FileSystemEntity entity in tmp.list(
+    await for (final dynamic entity in tmp.list(
       recursive: true,
       followLinks: false,
     )) {
@@ -889,8 +900,9 @@ final _imageCacheSizeProvider = FutureProvider.autoDispose<String>((
 final _metadataCacheSizeProvider = FutureProvider.autoDispose<String>((
   Ref ref,
 ) async {
+  if (kIsWeb) return '0 MB';
   try {
-    final Directory base = await getApplicationSupportDirectory();
+    final dynamic base = await getApplicationSupportDirectory();
     final Directory dir = Directory('${base.path}/metadata_cache');
     if (!await dir.exists()) return '0 MB';
     int bytes = 0;
@@ -980,8 +992,8 @@ Future<void> _clearAppCache(BuildContext context, WidgetRef ref) async {
     ..clearLiveImages();
   await DefaultCacheManager().emptyCache();
   try {
-    final Directory tmp = await getTemporaryDirectory();
-    await for (final FileSystemEntity entity in tmp.list(recursive: false)) {
+    final dynamic tmp = await getTemporaryDirectory();
+    await for (final dynamic entity in tmp.list(recursive: false)) {
       try {
         await entity.delete(recursive: true);
       } catch (_) {}

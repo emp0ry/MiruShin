@@ -100,6 +100,7 @@ class SettingsState {
     this.anilistLibraryDefaultPage = AniListLibraryDefaultPage.all,
     this.anilistSavedAccounts = const <AniListSavedAccount>[],
     this.anilistScoreFormat = 'POINT_10_DECIMAL',
+    this.soraWebProxyUrl = const String.fromEnvironment('MIRUSHIN_WEB_PROXY'),
   });
 
   final AppThemeMode themeMode;
@@ -133,6 +134,7 @@ class SettingsState {
   final AniListLibraryDefaultPage anilistLibraryDefaultPage;
   final List<AniListSavedAccount> anilistSavedAccounts;
   final String anilistScoreFormat;
+  final String soraWebProxyUrl;
 
   bool get hasTmdbToken => tmdbReadAccessToken.trim().isNotEmpty;
 
@@ -201,6 +203,7 @@ class SettingsState {
     AniListLibraryDefaultPage? anilistLibraryDefaultPage,
     List<AniListSavedAccount>? anilistSavedAccounts,
     String? anilistScoreFormat,
+    String? soraWebProxyUrl,
     bool clearAppLocale = false,
     bool clearMetadataLocale = false,
     bool clearAniListSession = false,
@@ -254,6 +257,7 @@ class SettingsState {
           anilistLibraryDefaultPage ?? this.anilistLibraryDefaultPage,
       anilistSavedAccounts: anilistSavedAccounts ?? this.anilistSavedAccounts,
       anilistScoreFormat: anilistScoreFormat ?? this.anilistScoreFormat,
+      soraWebProxyUrl: soraWebProxyUrl ?? this.soraWebProxyUrl,
     );
   }
 
@@ -400,6 +404,7 @@ class SettingsController extends Notifier<SettingsState> {
           .map(AniListSavedAccount.fromJson)
           .toList(growable: false),
       anilistScoreFormat: preferences.readAniListScoreFormat(),
+      soraWebProxyUrl: preferences.readSoraWebProxyUrl(),
     );
   }
 
@@ -607,6 +612,13 @@ class SettingsController extends Notifier<SettingsState> {
     state = state.copyWith(anilistScoreFormat: value);
     unawaited(
       _save((SettingsPreferences prefs) => prefs.saveAniListScoreFormat(value)),
+    );
+  }
+
+  void setSoraWebProxyUrl(String value) {
+    state = state.copyWith(soraWebProxyUrl: value.trim());
+    unawaited(
+      _save((SettingsPreferences prefs) => prefs.saveSoraWebProxyUrl(value)),
     );
   }
 
