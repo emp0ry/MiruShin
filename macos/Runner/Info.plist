@@ -14,6 +14,8 @@
 	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>$(PRODUCT_NAME)</string>
+	<key>NSUserNotificationUsageDescription</key>
+	<string>MiruShin can notify you when new anime episodes air.</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

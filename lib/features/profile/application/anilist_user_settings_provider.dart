@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/utils/settings_preferences.dart';
+import '../../notifications/airing_notification_scheduler.dart';
 import '../../settings/presentation/settings_state.dart';
 import '../../tracking/data/anilist_api_client.dart';
 import '../domain/anilist_profile_models.dart';
@@ -129,6 +130,9 @@ class AniListUserSettingsController extends AsyncNotifier<AniListUserSettings> {
       settingsController.setAniListTitleLanguage(draft.titleLanguage);
       settingsController.setAniListShowAdultContent(draft.displayAdultContent);
       settingsController.setAniListScoreFormat(draft.scoreFormat);
+      if (!draft.airingNotifications) {
+        await AiringNotificationScheduler.cancelAll();
+      }
       state = AsyncData<AniListUserSettings>(draft);
       return draft;
     }
@@ -144,6 +148,9 @@ class AniListUserSettingsController extends AsyncNotifier<AniListUserSettings> {
     settingsController.setAniListTitleLanguage(local.titleLanguage);
     settingsController.setAniListShowAdultContent(local.displayAdultContent);
     settingsController.setAniListScoreFormat(local.scoreFormat);
+    if (!local.airingNotifications) {
+      await AiringNotificationScheduler.cancelAll();
+    }
     state = AsyncData<AniListUserSettings>(local);
     return local;
   }

@@ -30,9 +30,11 @@ dependencies:
   url_launcher: ^6.3.2
   webview_flutter: ^4.13.1
   flutter_secure_storage: ^10.0.0
+  flutter_local_notifications: ^21.0.0
   video_player: ^2.11.1
   fvp: ^0.36.2
   wakelock_plus: ^1.5.2
+  timezone: ^0.11.0
 
 dev_dependencies:
   flutter_test:
@@ -48,7 +50,7 @@ flutter_native_splash:
   ios: true
   android: true
   android_12:
-    image: assets/icons/splash.png
+    image: assets/icons/splash_alt.png
     icon_background_color: "#0a0011"
   fullscreen: true
 

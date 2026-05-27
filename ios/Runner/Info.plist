@@ -8,6 +8,8 @@
 		<string>$(DEVELOPMENT_LANGUAGE)</string>
 		<key>CFBundleDisplayName</key>
 		<string>MiruShin</string>
+		<key>NSUserNotificationUsageDescription</key>
+		<string>MiruShin can notify you when new anime episodes air.</string>
 		<key>CFBundleExecutable</key>
 		<string>$(EXECUTABLE_NAME)</string>
 		<key>CFBundleIdentifier</key>

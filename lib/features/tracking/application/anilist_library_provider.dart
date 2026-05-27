@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -7,9 +8,11 @@ import '../../../core/cache/metadata_cache_store.dart';
 import '../../../shared/models/anilist_models.dart';
 import '../../../shared/models/media_item.dart';
 import '../../profile/application/anilist_user_settings_provider.dart';
+import '../../profile/domain/anilist_profile_models.dart';
 import '../../settings/presentation/settings_state.dart';
 import '../data/anilist_api_client.dart';
 import '../../metadata/data/shikimori_client.dart';
+import '../../notifications/airing_notification_scheduler.dart';
 
 final anilistEditQueueProvider = Provider<AniListEditQueue>(
   (Ref ref) => const AniListEditQueue(),
@@ -524,6 +527,21 @@ Future<List<AniListAnimeListFolder>> _maybeEnrichAnimeFoldersWithRussian(
     final List<AniListAnimeListFolder> enriched =
         await _enrichFoldersWithRussian(folders, client);
     await cache.write(cacheKey, _encode(enriched));
+    if (statuses == null) {
+      final bool airingEnabled = ref
+          .read(aniListUserSettingsProvider)
+          .maybeWhen(
+            data: (AniListUserSettings s) => s.airingNotifications,
+            orElse: () => true,
+          );
+      unawaited(
+        AiringNotificationScheduler.syncAnimeList(
+          enriched,
+          enabled: airingEnabled,
+          titleLanguage: 'RUSSIAN',
+        ),
+      );
+    }
     return enriched;
   } catch (_) {
     return cachedOrBase();
@@ -547,10 +565,24 @@ Future<List<AniListAnimeListFolder>> _fetchCollection(
     mediaType,
     requestedTitleLanguage,
   );
+  final bool airingNotificationsEnabled = ref
+      .watch(aniListUserSettingsProvider)
+      .maybeWhen(
+        data: (AniListUserSettings settings) => settings.airingNotifications,
+        orElse: () => true,
+      );
+  if (mediaType == 'ANIME' &&
+      statuses == null &&
+      !airingNotificationsEnabled) {
+    unawaited(AiringNotificationScheduler.cancelAll());
+  }
   final String scope = _collectionScope(statuses);
   final String cacheKey =
       'anilist.library.$mediaType.$scope.$titleLanguage.${viewerId ?? 'viewer'}';
   if (token.isEmpty || viewerId == null) {
+    if (mediaType == 'ANIME' && statuses == null) {
+      unawaited(AiringNotificationScheduler.cancelAll());
+    }
     final Map<String, dynamic>? cached = await cache.read(cacheKey);
     _setAniListLibraryLoadStatus(
       ref,
@@ -603,6 +635,15 @@ Future<List<AniListAnimeListFolder>> _fetchCollection(
     statuses: statuses,
     phase: AniListLibraryLoadPhase.success,
   );
+  if (mediaType == 'ANIME' && statuses == null) {
+    unawaited(
+      AiringNotificationScheduler.syncAnimeList(
+        fetchedFolders!,
+        enabled: airingNotificationsEnabled,
+        titleLanguage: requestedTitleLanguage,
+      ),
+    );
+  }
   return fetchedFolders!;
 }
 

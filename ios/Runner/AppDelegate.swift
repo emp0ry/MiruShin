@@ -204,6 +204,7 @@ final class MiruShinAVPlayerViewController: AVPlayerViewController {
   var didReachEnd = false
   var didSendTerminalEvent = false
   var pipRestoreInFlight = false
+  var didRestoreFromPip = false
   var desiredRate: Float = 1.0
   var programmaticSeekInFlight = false
 
@@ -441,16 +442,25 @@ final class NativePlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
   func playerViewControllerShouldAutomaticallyDismissAtPictureInPictureStart(
     _ playerViewController: AVPlayerViewController
   ) -> Bool {
-    (playerViewController as? MiruShinAVPlayerViewController)?.pipActive = true
+    if let vc = playerViewController as? MiruShinAVPlayerViewController {
+      vc.pipActive = true
+      vc.didRestoreFromPip = false
+    }
     return true
   }
 
   func playerViewControllerWillStartPictureInPicture(_ playerViewController: AVPlayerViewController) {
-    (playerViewController as? MiruShinAVPlayerViewController)?.pipActive = true
+    if let vc = playerViewController as? MiruShinAVPlayerViewController {
+      vc.pipActive = true
+      vc.didRestoreFromPip = false
+    }
   }
 
   func playerViewControllerDidStartPictureInPicture(_ playerViewController: AVPlayerViewController) {
-    (playerViewController as? MiruShinAVPlayerViewController)?.pipActive = true
+    if let vc = playerViewController as? MiruShinAVPlayerViewController {
+      vc.pipActive = true
+      vc.didRestoreFromPip = false
+    }
   }
 
   func playerViewControllerWillStopPictureInPicture(_ playerViewController: AVPlayerViewController) {
@@ -460,10 +470,9 @@ final class NativePlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
   func playerViewControllerDidStopPictureInPicture(_ playerViewController: AVPlayerViewController) {
     guard let vc = playerViewController as? MiruShinAVPlayerViewController else { return }
     vc.pipActive = false
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self, weak vc] in
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self, weak vc] in
       guard let self = self, let vc = vc else { return }
-      if vc.didReachEnd || vc.didSendTerminalEvent || vc.pipRestoreInFlight { return }
-      if vc.presentingViewController != nil && vc.view.window != nil { return }
+      if vc.didReachEnd || vc.didSendTerminalEvent || vc.pipRestoreInFlight || vc.didRestoreFromPip { return }
       self.emitDismissed(vc, wasPlaying: false, pause: true)
       vc.player = nil
     }
@@ -480,7 +489,11 @@ final class NativePlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
     // Don't re-present if the episode already completed during PiP.
     if vc.didReachEnd || vc.didSendTerminalEvent { completionHandler(true); return }
     // Already on screen — nothing to do.
-    if vc.presentingViewController != nil { completionHandler(true); return }
+    if vc.presentingViewController != nil {
+      vc.didRestoreFromPip = true
+      completionHandler(true)
+      return
+    }
 
     guard let root = rootVC() else { completionHandler(false); return }
 
@@ -493,6 +506,7 @@ final class NativePlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         "positionMs": posMs.isFinite ? posMs : 0.0,
         "durationMs": durMs.isFinite ? durMs : 0.0,
       ])
+      vc.didRestoreFromPip = true
       vc.pipRestoreInFlight = false
       completionHandler(true)
     }

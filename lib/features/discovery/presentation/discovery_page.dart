@@ -19,9 +19,11 @@ import '../../catalog/application/catalog_repository.dart';
 import '../../catalog/presentation/catalog_offline_banner.dart';
 import '../../metadata/application/metadata_providers.dart';
 import '../../metadata/data/tmdb_metadata_provider.dart';
+import '../../profile/application/anilist_user_settings_provider.dart';
 import '../../profile/application/anilist_profile_provider.dart';
 import '../../settings/presentation/settings_state.dart';
 import '../../tracking/application/anilist_library_provider.dart';
+import '../../tracking/presentation/anilist_entry_editor.dart';
 import '../../../shared/models/anilist_models.dart';
 import '../../../shared/models/media_item.dart';
 
@@ -555,6 +557,16 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
             context,
           )
         : const <String, String>{};
+    final Map<String, AniListAnimeListEntry> anilistEntryMap =
+        mode == CatalogMode.anilist
+        ? _anilistEntryMap(
+            badgeFoldersAsync.maybeWhen(
+              skipLoadingOnReload: true,
+              data: (List<AniListAnimeListFolder> folders) => folders,
+              orElse: () => const <AniListAnimeListFolder>[],
+            ),
+          )
+        : const <String, AniListAnimeListEntry>{};
     return AdaptivePage(
       child: SingleChildScrollView(
         controller: _scrollController,
@@ -693,15 +705,28 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
               ResponsiveGrid(
                 itemCount: items.length,
                 maxColumns: 6,
-                itemBuilder: (BuildContext context, int index) =>
-                    MediaPosterCard(
-                      item: items[index],
-                      statusBadgeLabel: statusBadges[items[index].id],
-                      onTap: () => context.push(
-                        AppRoutes.mediaDetailsPath(items[index].id),
-                        extra: items[index],
-                      ),
+                itemBuilder: (BuildContext context, int index) {
+                  final MediaItem item = items[index];
+                  final AniListAnimeListEntry? entry = anilistEntryMap[item.id];
+                  return MediaPosterCard(
+                    item: item,
+                    statusBadgeLabel: statusBadges[item.id],
+                    onTap: () => context.push(
+                      AppRoutes.mediaDetailsPath(item.id),
+                      extra: item,
                     ),
+                    onLongPress: entry == null
+                        ? null
+                        : () => unawaited(
+                            _openAniListEntryEditor(context, ref, entry),
+                          ),
+                    onSecondaryTap: entry == null
+                        ? null
+                        : () => unawaited(
+                            _openAniListEntryEditor(context, ref, entry),
+                          ),
+                  );
+                },
               ),
               const SizedBox(height: AppSpacing.xl),
               _DiscoveryFooter(
@@ -734,6 +759,53 @@ Map<String, String> _anilistStatusBadges(
     }
   }
   return badges;
+}
+
+Map<String, AniListAnimeListEntry> _anilistEntryMap(
+  List<AniListAnimeListFolder> folders,
+) {
+  final Map<String, AniListAnimeListEntry> entries =
+      <String, AniListAnimeListEntry>{};
+  for (final AniListAnimeListFolder folder in folders) {
+    for (final AniListAnimeListEntry entry in folder.entries) {
+      entries[entry.mediaItem.id] = entry;
+      final String? anilistId = entry.mediaItem.externalIds['anilist'];
+      if (anilistId != null && anilistId.isNotEmpty) {
+        entries['anilist:$anilistId'] = entry;
+        entries['anilist:manga:$anilistId'] = entry;
+      }
+    }
+  }
+  return entries;
+}
+
+Future<void> _openAniListEntryEditor(
+  BuildContext context,
+  WidgetRef ref,
+  AniListAnimeListEntry entry,
+) async {
+  final AniListEntryEditDraft? draft = await showAniListEntryEditor(
+    context,
+    ref: ref,
+    entry: entry,
+    status: entry.status,
+    progress: entry.progress,
+    score: entry.score,
+    notes: entry.notes,
+    repeat: entry.repeat,
+    scoreFormat: ref.read(aniListEffectiveScoreFormatProvider),
+  );
+  if (draft == null || !context.mounted) return;
+  if (draft.remove) {
+    await deleteAniListEntry(context: context, ref: ref, entry: entry);
+    return;
+  }
+  await saveAniListEntryEdit(
+    context: context,
+    ref: ref,
+    entry: entry,
+    draft: draft,
+  );
 }
 
 class _DiscoveryStatusBar extends StatelessWidget {

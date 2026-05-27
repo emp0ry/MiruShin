@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -21,8 +23,10 @@ import '../../catalog/application/catalog_mode.dart';
 import '../../catalog/presentation/catalog_offline_banner.dart';
 import '../../library/application/local_library_provider.dart';
 import '../../metadata/application/metadata_providers.dart';
+import '../../profile/application/anilist_user_settings_provider.dart';
 import '../../settings/presentation/settings_state.dart';
 import '../../tracking/application/anilist_library_provider.dart';
+import '../../tracking/presentation/anilist_entry_editor.dart';
 import '../../../shared/models/anilist_models.dart';
 import '../../../shared/models/library_item.dart';
 import '../../../shared/models/media_item.dart';
@@ -78,6 +82,10 @@ class BoardPage extends ConsumerWidget {
     final Map<String, String> statusBadges = mode == CatalogMode.anilist
         ? _anilistStatusBadges(anilistFolders, context)
         : const <String, String>{};
+    final Map<String, AniListAnimeListEntry> anilistEntryMap =
+        mode == CatalogMode.anilist
+        ? _anilistEntryMap(anilistFolders)
+        : const <String, AniListAnimeListEntry>{};
     final List<MediaItem> recentlyAdded = mode == CatalogMode.tmdb
         ? ref
               .watch(localLibraryProvider)
@@ -126,6 +134,7 @@ class BoardPage extends ConsumerWidget {
                     ? const <String, double>{}
                     : continueWatchingProgress,
                 statusBadgeMap: statusBadges,
+                anilistEntryMap: anilistEntryMap,
               ),
             ],
             if (rails.recentSeries.isNotEmpty) ...<Widget>[
@@ -144,6 +153,7 @@ class BoardPage extends ConsumerWidget {
                       )
                     : null,
                 statusBadgeMap: statusBadges,
+                anilistEntryMap: anilistEntryMap,
               ),
             ],
             if (rails.topAnime.isNotEmpty) ...<Widget>[
@@ -158,6 +168,7 @@ class BoardPage extends ConsumerWidget {
                   anilistKind: mode == CatalogMode.anilist ? 'anime' : null,
                 ),
                 statusBadgeMap: statusBadges,
+                anilistEntryMap: anilistEntryMap,
               ),
             ],
             const SizedBox(height: AppSpacing.xxl),
@@ -169,6 +180,7 @@ class BoardPage extends ConsumerWidget {
               ),
               items: recentlyAdded,
               statusBadgeMap: statusBadges,
+              anilistEntryMap: anilistEntryMap,
             ),
             const SizedBox(height: AppSpacing.xxl),
           ],
@@ -195,6 +207,53 @@ Map<String, String> _anilistStatusBadges(
     }
   }
   return badges;
+}
+
+Map<String, AniListAnimeListEntry> _anilistEntryMap(
+  List<AniListAnimeListFolder> folders,
+) {
+  final Map<String, AniListAnimeListEntry> entries =
+      <String, AniListAnimeListEntry>{};
+  for (final AniListAnimeListFolder folder in folders) {
+    for (final AniListAnimeListEntry entry in folder.entries) {
+      entries[entry.mediaItem.id] = entry;
+      final String? anilistId = entry.mediaItem.externalIds['anilist'];
+      if (anilistId != null && anilistId.isNotEmpty) {
+        entries['anilist:$anilistId'] = entry;
+        entries['anilist:manga:$anilistId'] = entry;
+      }
+    }
+  }
+  return entries;
+}
+
+Future<void> _openAniListEntryEditor(
+  BuildContext context,
+  WidgetRef ref,
+  AniListAnimeListEntry entry,
+) async {
+  final AniListEntryEditDraft? draft = await showAniListEntryEditor(
+    context,
+    ref: ref,
+    entry: entry,
+    status: entry.status,
+    progress: entry.progress,
+    score: entry.score,
+    notes: entry.notes,
+    repeat: entry.repeat,
+    scoreFormat: ref.read(aniListEffectiveScoreFormatProvider),
+  );
+  if (draft == null || !context.mounted) return;
+  if (draft.remove) {
+    await deleteAniListEntry(context: context, ref: ref, entry: entry);
+    return;
+  }
+  await saveAniListEntryEdit(
+    context: context,
+    ref: ref,
+    entry: entry,
+    draft: draft,
+  );
 }
 
 class _HeroSection extends ConsumerWidget {
@@ -422,6 +481,7 @@ class _MediaSection extends ConsumerWidget {
     this.maxColumns = 5,
     this.progressMap = const <String, double>{},
     this.statusBadgeMap = const <String, String>{},
+    this.anilistEntryMap = const <String, AniListAnimeListEntry>{},
     this.showMoreLocation,
   });
 
@@ -430,6 +490,7 @@ class _MediaSection extends ConsumerWidget {
   final int maxColumns;
   final Map<String, double> progressMap;
   final Map<String, String> statusBadgeMap;
+  final Map<String, AniListAnimeListEntry> anilistEntryMap;
   final String? showMoreLocation;
 
   @override
@@ -475,35 +536,64 @@ class _MediaSection extends ConsumerWidget {
                     itemCount: items.length,
                     separatorBuilder: (_, _) =>
                         const SizedBox(width: AppSpacing.md),
-                    itemBuilder: (BuildContext context, int index) => SizedBox(
-                      width: 172,
-                      child: MediaPosterCard(
-                        item: items[index],
-                        compact: false,
-                        watchProgress: progressMap[items[index].id],
-                        statusBadgeLabel: statusBadgeMap[items[index].id],
-                        onTap: () => context.push(
-                          AppRoutes.mediaDetailsPath(items[index].id),
-                          extra: items[index],
+                    itemBuilder: (BuildContext context, int index) {
+                      final MediaItem item = items[index];
+                      final AniListAnimeListEntry? entry =
+                          anilistEntryMap[item.id];
+                      return SizedBox(
+                        width: 172,
+                        child: MediaPosterCard(
+                          item: item,
+                          compact: false,
+                          watchProgress: progressMap[item.id],
+                          statusBadgeLabel: statusBadgeMap[item.id],
+                          onTap: () => context.push(
+                            AppRoutes.mediaDetailsPath(item.id),
+                            extra: item,
+                          ),
+                          onLongPress: entry == null
+                              ? null
+                              : () => unawaited(
+                                  _openAniListEntryEditor(context, ref, entry),
+                                ),
+                          onSecondaryTap: entry == null
+                              ? null
+                              : () => unawaited(
+                                  _openAniListEntryEditor(context, ref, entry),
+                                ),
                         ),
-                      ),
-                    ),
+                      );
+                    },
                   ),
                 )
               else
                 ResponsiveGrid(
                   itemCount: items.length,
                   maxColumns: maxColumns,
-                  itemBuilder: (BuildContext context, int index) =>
-                      MediaPosterCard(
-                        item: items[index],
-                        watchProgress: progressMap[items[index].id],
-                        statusBadgeLabel: statusBadgeMap[items[index].id],
-                        onTap: () => context.push(
-                          AppRoutes.mediaDetailsPath(items[index].id),
-                          extra: items[index],
-                        ),
+                  itemBuilder: (BuildContext context, int index) {
+                    final MediaItem item = items[index];
+                    final AniListAnimeListEntry? entry =
+                        anilistEntryMap[item.id];
+                    return MediaPosterCard(
+                      item: item,
+                      watchProgress: progressMap[item.id],
+                      statusBadgeLabel: statusBadgeMap[item.id],
+                      onTap: () => context.push(
+                        AppRoutes.mediaDetailsPath(item.id),
+                        extra: item,
                       ),
+                      onLongPress: entry == null
+                          ? null
+                          : () => unawaited(
+                              _openAniListEntryEditor(context, ref, entry),
+                            ),
+                      onSecondaryTap: entry == null
+                          ? null
+                          : () => unawaited(
+                              _openAniListEntryEditor(context, ref, entry),
+                            ),
+                    );
+                  },
                 ),
               if (!compact && onShowMore != null) ...<Widget>[
                 const SizedBox(height: AppSpacing.lg),

@@ -19,6 +19,8 @@ class MediaPosterCard extends ConsumerStatefulWidget {
     this.watchProgress,
     this.statusBadgeLabel,
     this.onTap,
+    this.onLongPress,
+    this.onSecondaryTap,
     super.key,
   });
 
@@ -27,6 +29,8 @@ class MediaPosterCard extends ConsumerStatefulWidget {
   final double? watchProgress;
   final String? statusBadgeLabel;
   final VoidCallback? onTap;
+  final VoidCallback? onLongPress;
+  final VoidCallback? onSecondaryTap;
 
   @override
   ConsumerState<MediaPosterCard> createState() => _MediaPosterCardState();
@@ -51,6 +55,8 @@ class _MediaPosterCardState extends ConsumerState<MediaPosterCard> {
           child: InkWell(
             borderRadius: AppRadius.all(AppRadius.lg),
             onTap: widget.onTap,
+            onLongPress: widget.onLongPress,
+            onSecondaryTap: widget.onSecondaryTap,
             child: ClipRRect(
               borderRadius: AppRadius.all(AppRadius.lg),
               child: Stack(

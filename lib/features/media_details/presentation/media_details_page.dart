@@ -561,29 +561,23 @@ class _AniListInfoPanelState extends State<_AniListInfoPanel> {
               runSpacing: AppSpacing.sm,
               children: <Widget>[
                 ...visibleTags.map(
-                  (t) => Tooltip(
-                    message: '${t.rank}% match',
-                    child: FilterChip(
-                      label: Text(t.name),
-                      selected: false,
-                      onSelected: null,
-                      visualDensity: VisualDensity.compact,
-                    ),
+                  (t) => FilterChip(
+                    label: Text('${t.rank}% ${t.name}'),
+                    selected: false,
+                    onSelected: null,
+                    visualDensity: VisualDensity.compact,
                   ),
                 ),
                 if (spoilerTags.isNotEmpty)
                   ..._spoilersRevealed
                       ? spoilerTags.map(
-                          (t) => Tooltip(
-                            message: '${t.rank}% match',
-                            child: FilterChip(
-                              label: Text(t.name),
-                              selected: false,
-                              onSelected: null,
-                              visualDensity: VisualDensity.compact,
-                              backgroundColor: cs.errorContainer,
-                              labelStyle: TextStyle(color: cs.onErrorContainer),
-                            ),
+                          (t) => FilterChip(
+                            label: Text('${t.rank}% ${t.name}'),
+                            selected: false,
+                            onSelected: null,
+                            visualDensity: VisualDensity.compact,
+                            backgroundColor: cs.errorContainer,
+                            labelStyle: TextStyle(color: cs.onErrorContainer),
                           ),
                         )
                       : <Widget>[
