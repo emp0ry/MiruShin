@@ -1,6 +1,8 @@
+import 'package:package_info_plus/package_info_plus.dart';
+
 abstract final class AppConstants {
   static const String appName = 'MiruShin';
-  static const String appVersion = '1.0.1+2';
+  static String appVersion = '';
   static const String githubProjectUrl = 'https://github.com/emp0ry/MiruShin';
   static const String githubLatestReleaseUrl =
       'https://github.com/emp0ry/MiruShin/releases/latest';
@@ -18,4 +20,15 @@ abstract final class AppConstants {
   static const String aniListRedirectScheme = 'app';
   static const String aniListRedirectHost = 'mirushin';
   static const String aniListRedirectPath = '/auth';
+
+  static Future<void> init() async {
+    try {
+      final PackageInfo info = await PackageInfo.fromPlatform();
+      if (info.version.isNotEmpty) {
+        appVersion = info.buildNumber.isNotEmpty
+            ? '${info.version}+${info.buildNumber}'
+            : info.version;
+      }
+    } catch (_) {}
+  }
 }

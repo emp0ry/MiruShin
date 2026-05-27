@@ -3,9 +3,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'app/app.dart';
 import 'bootstrap/mirushin_fvp_bootstrap.dart';
+import 'core/constants/app_constants.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await AppConstants.init();
   final defaultFlutterError = FlutterError.onError;
   FlutterError.onError = (FlutterErrorDetails details) {
     final String message = details.exceptionAsString();
