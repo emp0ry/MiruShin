@@ -255,7 +255,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   void _scheduleHide() {
     _hideTimer?.cancel();
     _hideTimer = Timer(const Duration(seconds: 4), () {
-      if (mounted) {
+      if (mounted &&
+          ref.read(playbackControllerProvider).seekPreviewPosition == null) {
         ref.read(playbackControllerProvider.notifier).setControlsVisible(false);
       }
     });
@@ -696,7 +697,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                               if (state.error == null)
                                 AnimatedOpacity(
                                   opacity:
-                                      state.controlsVisible && !state.locked
+                                      (state.controlsVisible ||
+                                              state.seekPreviewPosition !=
+                                                  null) &&
+                                          !state.locked
                                       ? 1
                                       : 0,
                                   duration: const Duration(milliseconds: 180),
@@ -1013,7 +1017,10 @@ class _PlayerLoadingIndicator extends StatelessWidget {
     return const SizedBox(
       width: 36,
       height: 36,
-      child: CircularProgressIndicator(strokeWidth: 4),
+      child: CircularProgressIndicator(
+        strokeWidth: 4,
+        color: Colors.white,
+      ),
     );
   }
 }
@@ -1603,6 +1610,7 @@ class _PositionBar extends ConsumerStatefulWidget {
 
 class _PositionBarState extends ConsumerState<_PositionBar> {
   double? _dragValue;
+  Duration? _lastDragPosition;
 
   Duration _positionFromValue(Duration duration, double value) {
     return Duration(milliseconds: (duration.inMilliseconds * value).round());
@@ -1691,104 +1699,173 @@ class _PositionBarState extends ConsumerState<_PositionBar> {
       overlayColor: Colors.white.withValues(alpha: 0.12),
       overlayShape: const RoundSliderOverlayShape(overlayRadius: 10),
     );
-    return SizedBox(
-      height: 10,
-      child: Stack(
-        alignment: Alignment.center,
-        children: <Widget>[
-          if (widget.skipMarkers != null && duration.inMilliseconds > 0)
-            Positioned.fill(
-              child: Padding(
-                // Slider internal track padding = max(overlayRadius, thumbRadius) = max(10, 6) = 10
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-                child: CustomPaint(
-                  painter: _SkipMarkerPainter(
-                    markers: widget.skipMarkers!,
-                    totalMs: duration.inMilliseconds,
+    final bool showBubble = _dragValue != null;
+    final Duration bubblePosition = _lastDragPosition ?? position;
+
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        // Flutter Slider internal horizontal padding = max(overlayRadius, thumbRadius) = max(10, 6) = 10
+        const double thumbHPad = 10.0;
+        final double trackWidth = (constraints.maxWidth - 2 * thumbHPad).clamp(
+          0.0,
+          double.infinity,
+        );
+        final double thumbCenterX = thumbHPad + value * trackWidth;
+        final double bubbleWidth = _SeekPreviewBubble.timecodeWidthFor(
+          context,
+          bubblePosition,
+        );
+        final double bubbleLeft = (thumbCenterX - bubbleWidth / 2).clamp(
+          0.0,
+          (constraints.maxWidth - bubbleWidth).clamp(0.0, double.infinity),
+        );
+        final double bubbleArrowX = (thumbCenterX - bubbleLeft).clamp(
+          8.0,
+          bubbleWidth - 8.0,
+        );
+        return SizedBox(
+          height: 10,
+          child: Stack(
+            clipBehavior: Clip.none,
+            alignment: Alignment.center,
+            children: <Widget>[
+              if (widget.skipMarkers != null && duration.inMilliseconds > 0)
+                Positioned.fill(
+                  child: Padding(
+                    // Slider internal track padding = max(overlayRadius, thumbRadius) = max(10, 6) = 10
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    child: CustomPaint(
+                      painter: _SkipMarkerPainter(
+                        markers: widget.skipMarkers!,
+                        totalMs: duration.inMilliseconds,
+                      ),
+                    ),
+                  ),
+                ),
+              SliderTheme(
+                data: sliderTheme,
+                child: TweenAnimationBuilder<double>(
+                  tween: Tween<double>(end: value),
+                  duration: isInteracting
+                      ? Duration.zero
+                      : const Duration(milliseconds: 140),
+                  curve: Curves.linear,
+                  builder:
+                      (
+                        BuildContext context,
+                        double animatedValue,
+                        Widget? child,
+                      ) {
+                        final double displayedValue = isInteracting
+                            ? value
+                            : animatedValue.clamp(0, 1).toDouble();
+                        return TweenAnimationBuilder<double>(
+                          tween: Tween<double>(end: bufferedValue),
+                          duration: isInteracting
+                              ? Duration.zero
+                              : const Duration(milliseconds: 220),
+                          curve: Curves.easeOutCubic,
+                          builder:
+                              (
+                                BuildContext context,
+                                double animatedBufferedValue,
+                                Widget? child,
+                              ) {
+                                final double displayedBufferedValue =
+                                    animatedBufferedValue
+                                        .clamp(0, 1)
+                                        .toDouble();
+                                return Slider(
+                                  value: displayedValue,
+                                  secondaryTrackValue:
+                                      displayedBufferedValue > displayedValue
+                                      ? displayedBufferedValue
+                                      : null,
+                                  onChangeStart: duration.inMilliseconds <= 0
+                                      ? null
+                                      : (double startValue) {
+                                          final Duration pos =
+                                              _positionFromValue(
+                                                duration,
+                                                startValue,
+                                              );
+                                          setState(() {
+                                            _dragValue = startValue;
+                                            _lastDragPosition = pos;
+                                          });
+                                          final PlaybackController
+                                          notifier = ref.read(
+                                            playbackControllerProvider.notifier,
+                                          );
+                                          notifier.beginSeekPreview();
+                                          notifier.previewSeekTo(pos);
+                                        },
+                                  onChanged: duration.inMilliseconds <= 0
+                                      ? null
+                                      : (double v) {
+                                          final Duration pos =
+                                              _positionFromValue(duration, v);
+                                          setState(() {
+                                            _dragValue = v;
+                                            _lastDragPosition = pos;
+                                          });
+                                          ref
+                                              .read(
+                                                playbackControllerProvider
+                                                    .notifier,
+                                              )
+                                              .previewSeekTo(pos);
+                                        },
+                                  onChangeEnd: duration.inMilliseconds <= 0
+                                      ? null
+                                      : (double v) {
+                                          final Duration pos =
+                                              _positionFromValue(duration, v);
+                                          setState(() {
+                                            _dragValue = null;
+                                            _lastDragPosition = pos;
+                                          });
+                                          final PlaybackController
+                                          notifier = ref.read(
+                                            playbackControllerProvider.notifier,
+                                          );
+                                          notifier.seekTo(pos);
+                                          notifier.endSeekPreview();
+                                        },
+                                );
+                              },
+                        );
+                      },
+                ),
+              ),
+              Positioned(
+                bottom: 16,
+                left: bubbleLeft,
+                child: IgnorePointer(
+                  child: AnimatedOpacity(
+                    opacity: showBubble ? 1.0 : 0.0,
+                    duration: const Duration(milliseconds: 160),
+                    curve: Curves.easeInOut,
+                    child: AnimatedScale(
+                      scale: showBubble ? 1.0 : 0.82,
+                      duration: const Duration(milliseconds: 160),
+                      curve: Curves.easeInOut,
+                      alignment: Alignment.bottomCenter,
+                      child: _SeekPreviewBubble(
+                        position: bubblePosition,
+                        controller: null,
+                        ready: false,
+                        width: bubbleWidth,
+                        arrowX: bubbleArrowX,
+                      ),
+                    ),
                   ),
                 ),
               ),
-            ),
-          SliderTheme(
-            data: sliderTheme,
-            child: TweenAnimationBuilder<double>(
-              tween: Tween<double>(end: value),
-              duration: isInteracting
-                  ? Duration.zero
-                  : const Duration(milliseconds: 140),
-              curve: Curves.linear,
-              builder:
-                  (BuildContext context, double animatedValue, Widget? child) {
-                    final double displayedValue = isInteracting
-                        ? value
-                        : animatedValue.clamp(0, 1).toDouble();
-                    return TweenAnimationBuilder<double>(
-                      tween: Tween<double>(end: bufferedValue),
-                      duration: isInteracting
-                          ? Duration.zero
-                          : const Duration(milliseconds: 220),
-                      curve: Curves.easeOutCubic,
-                      builder:
-                          (
-                            BuildContext context,
-                            double animatedBufferedValue,
-                            Widget? child,
-                          ) {
-                            final double displayedBufferedValue =
-                                animatedBufferedValue.clamp(0, 1).toDouble();
-                            return Slider(
-                              value: displayedValue,
-                              secondaryTrackValue:
-                                  displayedBufferedValue > displayedValue
-                                  ? displayedBufferedValue
-                                  : null,
-                              onChangeStart: duration.inMilliseconds <= 0
-                                  ? null
-                                  : (double startValue) {
-                                      setState(() => _dragValue = startValue);
-                                      ref
-                                          .read(
-                                            playbackControllerProvider.notifier,
-                                          )
-                                          .previewSeekTo(
-                                            _positionFromValue(
-                                              duration,
-                                              startValue,
-                                            ),
-                                          );
-                                    },
-                              onChanged: duration.inMilliseconds <= 0
-                                  ? null
-                                  : (double v) {
-                                      setState(() => _dragValue = v);
-                                      ref
-                                          .read(
-                                            playbackControllerProvider.notifier,
-                                          )
-                                          .previewSeekTo(
-                                            _positionFromValue(duration, v),
-                                          );
-                                    },
-                              onChangeEnd: duration.inMilliseconds <= 0
-                                  ? null
-                                  : (double v) {
-                                      setState(() => _dragValue = null);
-                                      ref
-                                          .read(
-                                            playbackControllerProvider.notifier,
-                                          )
-                                          .seekTo(
-                                            _positionFromValue(duration, v),
-                                          );
-                                    },
-                            );
-                          },
-                    );
-                  },
-            ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -1845,6 +1922,245 @@ class _SkipMarkerPainter extends CustomPainter {
   @override
   bool shouldRepaint(_SkipMarkerPainter old) =>
       old.markers != markers || old.totalMs != totalMs;
+}
+
+class _SeekPreviewBubble extends StatelessWidget {
+  const _SeekPreviewBubble({
+    required this.position,
+    required this.controller,
+    required this.ready,
+    required this.width,
+    required this.arrowX,
+  });
+  final Duration position;
+  final PlayerEngine? controller;
+  final bool ready;
+  final double width;
+  final double arrowX;
+
+  static const double _previewWidth = 160.0;
+  static const EdgeInsets _timecodePadding = EdgeInsets.symmetric(
+    horizontal: 8,
+    vertical: 6,
+  );
+  static const TextStyle _timecodeStyle = TextStyle(
+    color: Colors.white,
+    fontSize: 12,
+    fontWeight: FontWeight.w800,
+    height: 1,
+  );
+
+  static double timecodeWidthFor(BuildContext context, Duration position) {
+    final TextPainter painter = TextPainter(
+      text: TextSpan(text: _format(position), style: _timecodeStyle),
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+      maxLines: 1,
+    )..layout();
+    return (painter.width + _timecodePadding.horizontal + 8).ceilToDouble();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final PlayerEngine? preview = controller;
+    if (preview == null) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Container(
+            width: width,
+            padding: _timecodePadding,
+            decoration: BoxDecoration(
+              color: const Color(0xE8111111),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.18),
+                width: 0.5,
+              ),
+              boxShadow: const <BoxShadow>[
+                BoxShadow(
+                  color: Color(0x60000000),
+                  blurRadius: 12,
+                  offset: Offset(0, 4),
+                ),
+              ],
+            ),
+            child: Text(
+              _format(position),
+              maxLines: 1,
+              softWrap: false,
+              overflow: TextOverflow.visible,
+              textAlign: TextAlign.center,
+              style: _timecodeStyle,
+            ),
+          ),
+          SizedBox(
+            width: width,
+            height: 5,
+            child: CustomPaint(
+              painter: _SeekBubbleArrowPainter(arrowCenterX: arrowX),
+            ),
+          ),
+        ],
+      );
+    }
+
+    final double ar = preview.value.aspectRatio;
+    final double safeAr = (ar > 0.2 && ar < 5.0 && ar.isFinite)
+        ? ar
+        : 16.0 / 9.0;
+    final double previewHeight = (_previewWidth / safeAr).clamp(40.0, 140.0);
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        Container(
+          width: _previewWidth,
+          height: previewHeight,
+          clipBehavior: Clip.hardEdge,
+          decoration: BoxDecoration(
+            color: Colors.black,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: Colors.white.withValues(alpha: 0.18),
+              width: 0.5,
+            ),
+            boxShadow: const <BoxShadow>[
+              BoxShadow(
+                color: Color(0x60000000),
+                blurRadius: 12,
+                offset: Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Stack(
+            fit: StackFit.expand,
+            children: <Widget>[
+              if (!ready)
+                const _SeekPreviewPlaceholder(loading: true)
+              else
+                ValueListenableBuilder<PlayerEngineState>(
+                  valueListenable: preview.state,
+                  builder:
+                      (
+                        BuildContext context,
+                        PlayerEngineState value,
+                        Widget? child,
+                      ) {
+                        if (value.hasError) {
+                          return const _SeekPreviewPlaceholder(loading: false);
+                        }
+                        if (!value.isInitialized) {
+                          return const _SeekPreviewPlaceholder(loading: false);
+                        }
+                        if (!value.hasVideoSurface) {
+                          return const _SeekPreviewPlaceholder(loading: false);
+                        }
+                        return preview.buildVideoSurface(context);
+                      },
+                ),
+              // Time label gradient overlay at bottom
+              Positioned(
+                bottom: 0,
+                left: 0,
+                right: 0,
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(6, 10, 6, 5),
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.bottomCenter,
+                      end: Alignment.topCenter,
+                      colors: <Color>[Color(0xCC000000), Colors.transparent],
+                    ),
+                  ),
+                  child: Text(
+                    _format(position),
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.3,
+                      height: 1,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        SizedBox(
+          width: _previewWidth,
+          height: 5,
+          child: CustomPaint(
+            painter: _SeekBubbleArrowPainter(
+              arrowCenterX: arrowX.clamp(8.0, _previewWidth - 8.0),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  static String _format(Duration d) {
+    final int h = d.inHours;
+    final int m = d.inMinutes.remainder(60);
+    final int s = d.inSeconds.remainder(60);
+    if (h > 0) {
+      return '$h:${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
+    }
+    return '$m:${s.toString().padLeft(2, '0')}';
+  }
+}
+
+class _SeekPreviewPlaceholder extends StatelessWidget {
+  const _SeekPreviewPlaceholder({required this.loading});
+
+  final bool loading;
+
+  @override
+  Widget build(BuildContext context) {
+    return ColoredBox(
+      color: const Color(0xFF080808),
+      child: Center(
+        child: loading
+            ? const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white70,
+                ),
+              )
+            : const Icon(
+                Icons.movie_filter_outlined,
+                size: 22,
+                color: Colors.white38,
+              ),
+      ),
+    );
+  }
+}
+
+class _SeekBubbleArrowPainter extends CustomPainter {
+  const _SeekBubbleArrowPainter({required this.arrowCenterX});
+
+  final double arrowCenterX;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final double centerX = arrowCenterX.clamp(5.0, size.width - 5.0);
+    final Path path = Path()
+      ..moveTo(centerX - 5, 0)
+      ..lineTo(centerX + 5, 0)
+      ..lineTo(centerX, size.height)
+      ..close();
+    canvas.drawPath(path, Paint()..color = const Color(0xE8111111));
+  }
+
+  @override
+  bool shouldRepaint(_SeekBubbleArrowPainter old) =>
+      old.arrowCenterX != arrowCenterX;
 }
 
 class _SubtitleOverlay extends StatefulWidget {

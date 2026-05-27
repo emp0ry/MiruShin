@@ -6,7 +6,7 @@ import '../domain/player_models.dart';
 import 'player_engine.dart';
 
 class VideoPlayerEngine extends PlayerEngine {
-  VideoPlayerEngine({double? initialAspectRatio})
+  VideoPlayerEngine({double? initialAspectRatio, bool previewMode = false})
     : _initialAspectRatio = initialAspectRatio,
       _state = ValueNotifier<PlayerEngineState>(
         PlayerEngineState(
@@ -166,6 +166,7 @@ class VideoPlayerEngine extends PlayerEngine {
       isInitialized: value.isInitialized,
       isPlaying: value.isPlaying,
       isBuffering: value.isBuffering,
+      hasVideoSurface: value.isInitialized,
       hasError: value.hasError,
       errorDescription: value.errorDescription,
     );

@@ -264,6 +264,7 @@ class FvpDirectEngine extends PlayerEngine {
           !initialized ||
           (status.test(mdk.MediaStatus.seeking) && !seekIsBuffered) ||
           (isPlaying && nativeBuffering),
+      hasVideoSurface: _player.textureId.value != null,
       hasError: forceError || _lastError != null,
       errorDescription: _lastError,
     );

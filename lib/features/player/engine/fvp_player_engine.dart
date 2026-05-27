@@ -10,16 +10,22 @@ import 'player_engine.dart';
 const mdk.SeekFlag _vodSeekFlag = mdk.SeekFlag(
   mdk.SeekFlag.fromStart | mdk.SeekFlag.inCache,
 );
+const mdk.SeekFlag _previewSeekFlag = mdk.SeekFlag(
+  mdk.SeekFlag.fromStart | mdk.SeekFlag.keyFrame,
+);
 const Duration _seekVerificationDelay = Duration(milliseconds: 180);
 const Duration _seekAcceptanceTolerance = Duration(milliseconds: 1500);
+const Duration _previewPrepareTimeout = Duration(milliseconds: 1800);
+const Duration _previewTextureTimeout = Duration(milliseconds: 1200);
 
 /// Pure FVP/MDK implementation of MiruShin's PlayerEngine.
 ///
 /// This engine intentionally does not use VideoPlayerController at runtime.
 /// It talks directly to the MDK Player backend exposed by fvp.
 class FvpPlayerEngine extends PlayerEngine {
-  FvpPlayerEngine({double? initialAspectRatio})
+  FvpPlayerEngine({double? initialAspectRatio, bool previewMode = false})
     : _initialAspectRatio = initialAspectRatio,
+      _previewMode = previewMode,
       _state = ValueNotifier<PlayerEngineState>(
         PlayerEngineState(
           aspectRatio: _usableAspectRatio(initialAspectRatio) ?? 16 / 9,
@@ -27,6 +33,7 @@ class FvpPlayerEngine extends PlayerEngine {
       );
 
   final double? _initialAspectRatio;
+  final bool _previewMode;
   final ValueNotifier<PlayerEngineState> _state;
 
   mdk.Player? _player;
@@ -101,11 +108,22 @@ class FvpPlayerEngine extends PlayerEngine {
       final String playbackUrl = remoteUri.toString();
       debugPrint('FVP open direct MDK URL: $playbackUrl');
 
+      player.media = playbackUrl;
+      if (_previewMode) {
+        await _openPreparedPreview(
+          player,
+          startAt: startAt ?? Duration.zero,
+          autoplay: autoplay,
+        );
+        _syncState();
+        return;
+      }
+
       // FVP/MDK direct examples open the main source by setting `media`, then
       // setting playback state, then creating/updating the Flutter texture.
-      // Do not call `prepare()` here: HLS can stay async and prepare may fail
-      // or never complete while the player would otherwise start normally.
-      player.media = playbackUrl;
+      // Do not call `prepare()` for normal playback: HLS can stay async and
+      // prepare may fail or never complete while the player would otherwise
+      // start normally.
       player.state = autoplay
           ? mdk.PlaybackState.playing
           : mdk.PlaybackState.paused;
@@ -129,6 +147,72 @@ class FvpPlayerEngine extends PlayerEngine {
         errorDescription: error.toString(),
       );
       rethrow;
+    }
+  }
+
+  Future<void> _openPreparedPreview(
+    mdk.Player player, {
+    required Duration startAt,
+    required bool autoplay,
+  }) async {
+    _startPositionTimer();
+    try {
+      final int preparedPosition = await player
+          .prepare(position: startAt.inMilliseconds, flags: _previewSeekFlag)
+          .timeout(_previewPrepareTimeout);
+      if (preparedPosition < 0) {
+        throw StateError('FVP preview prepare failed ($preparedPosition).');
+      }
+
+      final int textureResult = await player
+          .updateTexture(width: 320, height: 180)
+          .timeout(_previewTextureTimeout, onTimeout: () => -1);
+      if (textureResult < 0) {
+        unawaited(player.updateTexture(width: 320, height: 180));
+      }
+    } on Object catch (error) {
+      debugPrint('FVP preview prepare fallback: $error');
+      player.state = autoplay
+          ? mdk.PlaybackState.playing
+          : mdk.PlaybackState.paused;
+      unawaited(player.updateTexture(width: 320, height: 180));
+      if (startAt > Duration.zero) {
+        unawaited(_seekPreviewAfterOpen(player, startAt));
+      }
+      _startOpenTimeout();
+      _syncState();
+      return;
+    }
+
+    _opening = false;
+    _openTimeoutTimer?.cancel();
+    _openTimeoutTimer = null;
+
+    if (autoplay) {
+      player.state = mdk.PlaybackState.playing;
+    } else {
+      player.state = mdk.PlaybackState.paused;
+    }
+  }
+
+  Future<void> _seekPreviewAfterOpen(
+    mdk.Player player,
+    Duration position,
+  ) async {
+    await Future<void>.delayed(const Duration(milliseconds: 220));
+    final mdk.Player? active = _player;
+    if (active == null || active != player || !_hasMedia) return;
+
+    try {
+      await _seekWithVerification(
+        active,
+        position.inMilliseconds,
+        flag: _previewSeekFlag,
+        attempts: 2,
+        verificationDelay: const Duration(milliseconds: 120),
+      );
+    } on Object catch (error) {
+      debugPrint('FVP preview delayed seek ignored: $error');
     }
   }
 
@@ -162,6 +246,7 @@ class FvpPlayerEngine extends PlayerEngine {
     await _seekWithVerification(
       player,
       targetMs,
+      flag: _previewMode ? _previewSeekFlag : _vodSeekFlag,
       attempts: 4,
       verificationDelay: _seekVerificationDelay,
     );
@@ -185,6 +270,7 @@ class FvpPlayerEngine extends PlayerEngine {
         if (await _seekWithVerification(
           player,
           targetMs,
+          flag: _vodSeekFlag,
           attempts: 1,
           verificationDelay: const Duration(milliseconds: 120),
         )) {
@@ -201,6 +287,7 @@ class FvpPlayerEngine extends PlayerEngine {
   Future<bool> _seekWithVerification(
     mdk.Player player,
     int targetMs, {
+    required mdk.SeekFlag flag,
     required int attempts,
     required Duration verificationDelay,
   }) async {
@@ -221,7 +308,7 @@ class FvpPlayerEngine extends PlayerEngine {
             : current.isBuffering,
       );
 
-      await active.seek(position: targetMs, flags: _vodSeekFlag);
+      await active.seek(position: targetMs, flags: flag);
       await Future<void>.delayed(verificationDelay);
 
       final mdk.Player? verifyPlayer = _player;
@@ -336,12 +423,24 @@ class FvpPlayerEngine extends PlayerEngine {
   void _configureNetworkAndBuffering(mdk.Player player, PlayerSource source) {
     // Generic playback buffer only. Provider-specific URL cleanup belongs in
     // the addon that creates the stream URL, not in the player engine.
+    final int minBufferMs = _previewMode ? 800 : 8000;
+    final int maxBufferMs = _previewMode ? 8000 : 120000;
     try {
       player.setProperty('demux.buffer.protocols', 'file,http,https');
-      //  player.setProperty('demux.buffer.ranges', '8');
-      player.setBufferRange(min: 8000, max: 120000, drop: false);
+      if (_previewMode) {
+        player.setProperty('demux.buffer.ranges', '2');
+      }
+      player.setBufferRange(
+        min: minBufferMs,
+        max: maxBufferMs,
+        drop: _previewMode,
+      );
     } on Object {
-      player.setBufferRange(min: 8000, max: 120000, drop: false);
+      player.setBufferRange(
+        min: minBufferMs,
+        max: maxBufferMs,
+        drop: _previewMode,
+      );
     }
 
     // CDN servers (and NAT/firewalls) silently close idle TCP connections
@@ -479,6 +578,7 @@ class FvpPlayerEngine extends PlayerEngine {
           !initialized ||
           (status.test(mdk.MediaStatus.seeking) && !seekIsBuffered) ||
           (isPlaying && nativeBuffering),
+      hasVideoSurface: hasTexture,
       hasError: invalid,
       errorDescription: invalid ? status.toString() : null,
     );

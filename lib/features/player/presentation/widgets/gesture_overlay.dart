@@ -164,13 +164,19 @@ class _GestureOverlayState extends ConsumerState<GestureOverlay> {
 
   @override
   Widget build(BuildContext context) {
+    // Long press is disabled when controls are visible so the gesture recognizer
+    // doesn't enter the arena against the seek slider's drag recognizer (which
+    // would cancel the slider drag after 500 ms hold).
+    final bool controlsVisible = ref
+        .watch(playbackControllerProvider)
+        .controlsVisible;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: widget.isMobile ? null : widget.onTogglePlay,
       onTapUp: widget.isMobile ? _handleMobileTap : null,
-      onLongPressStart: (_) => _startTemporarySpeed(),
-      onLongPressEnd: (_) => _endTemporarySpeed(),
-      onLongPressCancel: _endTemporarySpeed,
+      onLongPressStart: controlsVisible ? null : (_) => _startTemporarySpeed(),
+      onLongPressEnd: controlsVisible ? null : (_) => _endTemporarySpeed(),
+      onLongPressCancel: controlsVisible ? null : _endTemporarySpeed,
       onDoubleTap: widget.isMobile ? null : widget.onToggleFullscreen,
       onHorizontalDragStart: (_) => _hAccum = 0,
       onHorizontalDragUpdate: (DragUpdateDetails d) {

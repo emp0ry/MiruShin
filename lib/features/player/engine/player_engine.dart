@@ -34,6 +34,7 @@ class PlayerEngineState {
     this.isInitialized = false,
     this.isPlaying = false,
     this.isBuffering = false,
+    this.hasVideoSurface = false,
     this.hasError = false,
     this.errorDescription,
   });
@@ -48,6 +49,7 @@ class PlayerEngineState {
   final bool isInitialized;
   final bool isPlaying;
   final bool isBuffering;
+  final bool hasVideoSurface;
   final bool hasError;
   final String? errorDescription;
 
@@ -62,6 +64,7 @@ class PlayerEngineState {
     bool? isInitialized,
     bool? isPlaying,
     bool? isBuffering,
+    bool? hasVideoSurface,
     bool? hasError,
     String? errorDescription,
     bool clearError = false,
@@ -77,6 +80,7 @@ class PlayerEngineState {
       isInitialized: isInitialized ?? this.isInitialized,
       isPlaying: isPlaying ?? this.isPlaying,
       isBuffering: isBuffering ?? this.isBuffering,
+      hasVideoSurface: hasVideoSurface ?? this.hasVideoSurface,
       hasError: clearError ? false : hasError ?? this.hasError,
       errorDescription: clearError
           ? null
