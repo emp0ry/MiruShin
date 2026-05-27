@@ -42,6 +42,7 @@ class PlaybackState {
     this.autoNextVisible = false,
     this.seekPreviewPosition,
     this.seekPreviewBufferedEnd,
+    this.temporarySpeedActive = false,
   });
 
   final MediaPlaybackItem? item;
@@ -59,6 +60,7 @@ class PlaybackState {
   final bool autoNextVisible;
   final Duration? seekPreviewPosition;
   final Duration? seekPreviewBufferedEnd;
+  final bool temporarySpeedActive;
 
   PlaybackState copyWith({
     MediaPlaybackItem? item,
@@ -81,6 +83,7 @@ class PlaybackState {
     Duration? seekPreviewBufferedEnd,
     bool clearSeekPreviewPosition = false,
     bool clearSeekPreviewBufferedEnd = false,
+    bool? temporarySpeedActive,
   }) {
     return PlaybackState(
       item: item ?? this.item,
@@ -105,6 +108,7 @@ class PlaybackState {
           clearSeekPreviewPosition || clearSeekPreviewBufferedEnd
           ? null
           : seekPreviewBufferedEnd ?? this.seekPreviewBufferedEnd,
+      temporarySpeedActive: temporarySpeedActive ?? this.temporarySpeedActive,
     );
   }
 }
@@ -201,18 +205,20 @@ class PlaybackController extends Notifier<PlaybackState> {
     final String sub = item.subtitle.isNotEmpty
         ? item.subtitle
         : (item.episodeNumber > 0
-            ? 'Episode ${item.episodeNumber.toInt()}'
-            : '');
-    unawaited(MediaSessionService.updateNowPlaying(
-      title: item.title,
-      subtitle: sub,
-      artworkUrl: item.posterUrl,
-      position: es.position,
-      duration: es.duration,
-      isPlaying: es.isPlaying,
-      playbackRate: es.playbackSpeed,
-      hasNext: _nextEpisodeHandler != null,
-    ));
+              ? 'Episode ${item.episodeNumber.toInt()}'
+              : '');
+    unawaited(
+      MediaSessionService.updateNowPlaying(
+        title: item.title,
+        subtitle: sub,
+        artworkUrl: item.posterUrl,
+        position: es.position,
+        duration: es.duration,
+        isPlaying: es.isPlaying,
+        playbackRate: es.playbackSpeed,
+        hasNext: _nextEpisodeHandler != null,
+      ),
+    );
     unawaited(_updateDiscordRpc(item, es));
   }
 
@@ -634,19 +640,23 @@ class PlaybackController extends Notifier<PlaybackState> {
     final bool saveCompleted = completed || isNearEnd;
 
     for (final String mediaId in _progressMediaIds(item)) {
-      await ref.read(localLibraryProvider.notifier).saveEpisodeProgress(
-        mediaId: mediaId,
-        season: item.seasonNumber,
-        episode: item.episodeNumber,
-        positionSeconds: savePosition,
-        durationSeconds: durationSeconds > 0 ? durationSeconds : null,
-        completed: saveCompleted,
-      );
+      await ref
+          .read(localLibraryProvider.notifier)
+          .saveEpisodeProgress(
+            mediaId: mediaId,
+            season: item.seasonNumber,
+            episode: item.episodeNumber,
+            positionSeconds: savePosition,
+            durationSeconds: durationSeconds > 0 ? durationSeconds : null,
+            completed: saveCompleted,
+          );
     }
 
     if (saveCompleted && durationSeconds > 0) {
-      final double fraction =
-          (positionSeconds / durationSeconds).clamp(0.0, 1.0);
+      final double fraction = (positionSeconds / durationSeconds).clamp(
+        0.0,
+        1.0,
+      );
       if (fraction >= 0.85) {
         final bool syncEnabled =
             (ref.read(playerSettingsProvider).value ?? const PlayerSettings())
@@ -669,7 +679,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     _updateMediaSession();
   }
 
-  Future<void> seekBy(Duration offset) async {
+  Future<void> seekBy(Duration offset, {Duration? flushDelay}) async {
     final PlayerEngine? engine = state.engine;
     if (engine == null || !engine.state.value.isInitialized) return;
     final Duration duration = engine.state.value.duration;
@@ -677,7 +687,11 @@ class PlaybackController extends Notifier<PlaybackState> {
       _seekBaseFor(engine) + offset,
       duration,
     );
-    _queueInteractiveSeek(engine, target, delay: _interactiveSeekDelay);
+    _queueInteractiveSeek(
+      engine,
+      target,
+      delay: flushDelay ?? _interactiveSeekDelay,
+    );
   }
 
   Future<void> seekTo(Duration position) async {
@@ -925,7 +939,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     final PlayerSettings settings =
         ref.read(playerSettingsProvider).value ?? const PlayerSettings();
     await engine.setPlaybackSpeed(_effectivePlaybackSpeed(settings));
-    state = state.copyWith();
+    state = state.copyWith(temporarySpeedActive: true);
     _updateMediaSession();
   }
 
@@ -936,7 +950,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     final PlayerSettings settings =
         ref.read(playerSettingsProvider).value ?? const PlayerSettings();
     await state.engine?.setPlaybackSpeed(settings.playbackSpeed);
-    state = state.copyWith();
+    state = state.copyWith(temporarySpeedActive: false);
     _updateMediaSession();
   }
 
@@ -1279,9 +1293,11 @@ class PlaybackController extends Notifier<PlaybackState> {
 
     // Mark completed when the user finishes the final episode.
     final AniListListStatus targetStatus =
-        (totalEpisodes != null && totalEpisodes > 0 && episodeNumber >= totalEpisodes)
-            ? AniListListStatus.completed
-            : AniListListStatus.current;
+        (totalEpisodes != null &&
+            totalEpisodes > 0 &&
+            episodeNumber >= totalEpisodes)
+        ? AniListListStatus.completed
+        : AniListListStatus.current;
 
     _syncedToAnilist.add(syncKey);
 
@@ -1337,11 +1353,7 @@ class PlaybackController extends Notifier<PlaybackState> {
           );
       ref
           .read(anilistAnimeListProvider.notifier)
-          .updateEntryProgress(
-            anilistId,
-            episodeNumber,
-            status: targetStatus,
-          );
+          .updateEntryProgress(anilistId, episodeNumber, status: targetStatus);
       invalidateAniListAnimePreviewLibraryProvider(ref.invalidate);
     }
   }

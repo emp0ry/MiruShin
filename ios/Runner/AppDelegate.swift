@@ -202,6 +202,8 @@ final class MiruShinAVPlayerViewController: AVPlayerViewController {
   weak var channel: FlutterMethodChannel?
   var pipActive = false
   var didReachEnd = false
+  var didSendTerminalEvent = false
+  var pipRestoreInFlight = false
   var desiredRate: Float = 1.0
   var programmaticSeekInFlight = false
 
@@ -223,11 +225,13 @@ final class MiruShinAVPlayerViewController: AVPlayerViewController {
     super.viewDidDisappear(animated)
     // PiP causes a fake dismissal — ignore it.
     if pipActive { return }
+    if didReachEnd || didSendTerminalEvent { return }
     let actuallyDismissing = isBeingDismissed || view.window == nil
     guard actuallyDismissing, let player = player else { return }
 
     let posMs = CMTimeGetSeconds(player.currentTime()) * 1000.0
     let durMs = CMTimeGetSeconds(player.currentItem?.duration ?? .zero) * 1000.0
+    didSendTerminalEvent = true
     channel?.invokeMethod("dismissed", arguments: [
       "positionMs": posMs.isFinite ? posMs : 0.0,
       "durationMs": durMs.isFinite ? durMs : 0.0,
@@ -381,6 +385,7 @@ final class NativePlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
       // Ignore spurious end signals that fire well before the real end.
       if durMs2.isFinite && durMs2 > 0 && posMs2 < durMs2 - 2000.0 { return }
       vc.didReachEnd = true
+      vc.didSendTerminalEvent = true
       self.channel.invokeMethod("completed", arguments: [
         "positionMs": posMs2.isFinite ? posMs2 : 0.0,
         "durationMs": durMs2.isFinite ? durMs2 : 0.0,
@@ -453,7 +458,15 @@ final class NativePlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
   }
 
   func playerViewControllerDidStopPictureInPicture(_ playerViewController: AVPlayerViewController) {
-    (playerViewController as? MiruShinAVPlayerViewController)?.pipActive = false
+    guard let vc = playerViewController as? MiruShinAVPlayerViewController else { return }
+    vc.pipActive = false
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self, weak vc] in
+      guard let self = self, let vc = vc else { return }
+      if vc.didReachEnd || vc.didSendTerminalEvent || vc.pipRestoreInFlight { return }
+      if vc.presentingViewController != nil && vc.view.window != nil { return }
+      self.emitDismissed(vc, wasPlaying: false, pause: true)
+      vc.player = nil
+    }
   }
 
   // Restore native player UI when user exits PiP (unless episode already ended).
@@ -465,12 +478,13 @@ final class NativePlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
       completionHandler(false); return
     }
     // Don't re-present if the episode already completed during PiP.
-    if vc.didReachEnd { completionHandler(true); return }
+    if vc.didReachEnd || vc.didSendTerminalEvent { completionHandler(true); return }
     // Already on screen — nothing to do.
     if vc.presentingViewController != nil { completionHandler(true); return }
 
     guard let root = rootVC() else { completionHandler(false); return }
 
+    vc.pipRestoreInFlight = true
     root.present(vc, animated: true) { [weak self] in
       guard let self = self else { return }
       let posMs = CMTimeGetSeconds(vc.player?.currentTime() ?? .zero) * 1000.0
@@ -479,7 +493,28 @@ final class NativePlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         "positionMs": posMs.isFinite ? posMs : 0.0,
         "durationMs": durMs.isFinite ? durMs : 0.0,
       ])
+      vc.pipRestoreInFlight = false
       completionHandler(true)
+    }
+  }
+
+  private func emitDismissed(
+    _ vc: MiruShinAVPlayerViewController,
+    wasPlaying: Bool,
+    pause: Bool
+  ) {
+    guard !vc.didReachEnd && !vc.didSendTerminalEvent else { return }
+    if pause { vc.player?.pause() }
+    let posMs = CMTimeGetSeconds(vc.player?.currentTime() ?? .zero) * 1000.0
+    let durMs = CMTimeGetSeconds(vc.player?.currentItem?.duration ?? .zero) * 1000.0
+    vc.didSendTerminalEvent = true
+    channel.invokeMethod("dismissed", arguments: [
+      "positionMs": posMs.isFinite ? posMs : 0.0,
+      "durationMs": durMs.isFinite ? durMs : 0.0,
+      "wasPlaying": wasPlaying,
+    ])
+    if let active = currentVC, active === vc {
+      currentVC = nil
     }
   }
 }

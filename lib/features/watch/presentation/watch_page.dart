@@ -134,7 +134,8 @@ class _WatchPageState extends ConsumerState<WatchPage> {
   String? _activePlayerEpisodeKey;
   bool _playerRouteInFlight = false;
   bool _nextEpisodeInFullscreen = false;
-  bool _isAutoNextPlayback = false;
+  final AutoNextStreamResolutionState _streamResolutionState =
+      AutoNextStreamResolutionState();
   String? _preferredServerTitle;
   String? _preferredVoiceOverLabel;
   DateTime? _lastAutoNextAt;
@@ -228,6 +229,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
       _continueEpisode = null;
       _continueEpisodeMeta = null;
       _continueDisplayNum = 0;
+      _streamResolutionState.clear();
       _session = _session!.copyWith(
         step: WatchStep.pickEpisode,
         source: result,
@@ -257,7 +259,11 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     });
   }
 
-  void _pickEpisode(SoraEpisode episode) {
+  void _pickEpisode(SoraEpisode episode, {bool isAutoNext = false}) {
+    final String? requestKey = _streamRequestKey(_session?.source, episode);
+    if (requestKey != null) {
+      _streamResolutionState.begin(requestKey, autoNext: isAutoNext);
+    }
     setState(() {
       _session = _session!.copyWith(
         step: WatchStep.resolveStream,
@@ -270,13 +276,15 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     _scrollToKey(_streamKey);
   }
 
-  void _onStreamResolved(NormalizedStreamBundle bundle) {
-    if (!mounted || _session?.isResolving != true) {
+  void _onStreamResolved(String requestKey, NormalizedStreamBundle bundle) {
+    if (!mounted ||
+        _session?.isResolving != true ||
+        !_streamResolutionState.isCurrent(requestKey)) {
+      _streamResolutionState.forget(requestKey);
       return;
     }
 
-    final bool isAutoNext = _isAutoNextPlayback;
-    _isAutoNextPlayback = false;
+    final bool isAutoNext = _streamResolutionState.takeAutoNext(requestKey);
 
     NormalizedStreamBundle resolvedBundle = bundle;
     if (isAutoNext) {
@@ -302,12 +310,18 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     }
   }
 
-  void _onStreamError(Object error) {
+  void _onStreamError(String requestKey, Object error) {
     if (!mounted) {
       return;
     }
-    final bool wasAutoNext = _isAutoNextPlayback;
-    _isAutoNextPlayback = false;
+    if (!_streamResolutionState.isCurrent(requestKey)) {
+      _streamResolutionState.forget(requestKey);
+      return;
+    }
+    final bool wasAutoNext = _streamResolutionState.takeAutoNext(requestKey);
+    if (wasAutoNext) {
+      _nextEpisodeInFullscreen = false;
+    }
     setState(() {
       _session = _session!.copyWith(
         // On auto-next failures keep streamReady so the user stays on the
@@ -463,9 +477,10 @@ class _WatchPageState extends ConsumerState<WatchPage> {
       content = await ref.read(soraSourceContentProvider(request).future);
     } on Object catch (error) {
       if (!mounted) return;
+      _nextEpisodeInFullscreen = false;
       setState(() {
         _session = _session?.copyWith(
-          step: WatchStep.pickEpisode,
+          step: WatchStep.streamReady,
           isResolving: false,
           error: error.toString(),
         );
@@ -507,8 +522,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
         SoraStreamRequest(addonId: source.addonId, episode: next),
       ),
     );
-    _isAutoNextPlayback = true;
-    _pickEpisode(next);
+    _pickEpisode(next, isAutoNext: true);
   }
 
   Future<AnimeEpisodeMetadata?> _metadataForAutoNext(
@@ -656,112 +670,111 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     }
 
     final bool showContinueButton =
-        _visibleTab == 1 &&
-        _continueEpisode != null &&
-        _continueDisplayNum > 0;
+        _visibleTab == 1 && _continueEpisode != null && _continueDisplayNum > 0;
 
     return Stack(
       children: <Widget>[
         AdaptivePage(
           child: SingleChildScrollView(
             controller: _scrollController,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            if (loading)
-              const SkeletonBox(height: 360, radius: AppRadius.xxl)
-            else if (item == null)
-              NeutralPlaceholder(
-                title: context.t('Watch unavailable'),
-                message: context.t(
-                  'Could not load details. Check your metadata settings.',
-                ),
-                height: 420,
-                icon: Icons.play_disabled_rounded,
-                action: OutlinedButton.icon(
-                  onPressed: () => context.go(AppRoutes.discovery),
-                  icon: const Icon(Icons.explore_rounded),
-                  label: Text(context.t('Discovery')),
-                ),
-              )
-            else ...<Widget>[
-              _WatchHero(item: _heroDisplayItem(item, session)),
-              const SizedBox(height: AppSpacing.xxl),
-              if (session != null) ...<Widget>[
-                // Step 1 — Season picker (series with multiple seasons)
-                if (session.step == WatchStep.pickSeason)
-                  _SeasonPickerSection(
-                    item: item,
-                    selectedSeason: session.seasonNumber,
-                    loading: loadingSeasonDetails,
-                    onSeasonPicked: _pickSeason,
-                  ),
-
-                // Tab bar (Find Sources / Choose Episode)
-                if (session.step != WatchStep.pickSeason) ...<Widget>[
-                  _WatchTabBar(
-                    selectedTab: _visibleTab,
-                    hasEpisodes: session.source != null,
-                    onTabSelected: (int tab) =>
-                        setState(() => _visibleTab = tab),
-                  ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                if (loading)
+                  const SkeletonBox(height: 360, radius: AppRadius.xxl)
+                else if (item == null)
+                  NeutralPlaceholder(
+                    title: context.t('Watch unavailable'),
+                    message: context.t(
+                      'Could not load details. Check your metadata settings.',
+                    ),
+                    height: 420,
+                    icon: Icons.play_disabled_rounded,
+                    action: OutlinedButton.icon(
+                      onPressed: () => context.go(AppRoutes.discovery),
+                      icon: const Icon(Icons.explore_rounded),
+                      label: Text(context.t('Discovery')),
+                    ),
+                  )
+                else ...<Widget>[
+                  _WatchHero(item: _heroDisplayItem(item, session)),
                   const SizedBox(height: AppSpacing.xxl),
+                  if (session != null) ...<Widget>[
+                    // Step 1 — Season picker (series with multiple seasons)
+                    if (session.step == WatchStep.pickSeason)
+                      _SeasonPickerSection(
+                        item: item,
+                        selectedSeason: session.seasonNumber,
+                        loading: loadingSeasonDetails,
+                        onSeasonPicked: _pickSeason,
+                      ),
+
+                    // Tab bar (Find Sources / Choose Episode)
+                    if (session.step != WatchStep.pickSeason) ...<Widget>[
+                      _WatchTabBar(
+                        selectedTab: _visibleTab,
+                        hasEpisodes: session.source != null,
+                        onTabSelected: (int tab) =>
+                            setState(() => _visibleTab = tab),
+                      ),
+                      const SizedBox(height: AppSpacing.xxl),
+                    ],
+
+                    // Tab 0 — Source search (hidden when on episode tab so searches
+                    // stop after picking a source and restart if the user returns)
+                    if (session.step != WatchStep.pickSeason &&
+                        _visibleTab == 0)
+                      KeyedSubtree(
+                        key: _sourceKey,
+                        child: _SourceSearchSection(
+                          item: _seasonSearchItem(item, session),
+                          selectedHref: session.source?.href,
+                          onSourcePicked: _pickSource,
+                        ),
+                      ),
+
+                    // Tab 1 — Episode picker
+                    if (session.step != WatchStep.pickSeason &&
+                        _visibleTab == 1 &&
+                        session.source != null)
+                      KeyedSubtree(
+                        key: _episodeKey,
+                        child: _EpisodePickerSection(
+                          item: _seasonSearchItem(item, session),
+                          source: session.source!,
+                          selectedEpisodeHref: session.episode?.href,
+                          onEpisodePicked: _pickEpisode,
+                          seasonNumber: session.seasonNumber,
+                          onContinueResolved: _onContinueResolved,
+                        ),
+                      ),
+
+                    // Stream resolving indicator
+                    if (session.isResolving ||
+                        session.step == WatchStep.resolveStream) ...<Widget>[
+                      const SizedBox(height: AppSpacing.xxl),
+                      KeyedSubtree(
+                        key: _streamKey,
+                        child: _StreamResolvingSection(
+                          source: session.source,
+                          episode: session.episode,
+                          onResolved: _onStreamResolved,
+                          onError: _onStreamError,
+                        ),
+                      ),
+                    ],
+
+                    if (session.error != null) ...<Widget>[
+                      const SizedBox(height: AppSpacing.lg),
+                      _ErrorBanner(message: session.error!),
+                    ],
+                  ],
                 ],
-
-                // Tab 0 — Source search (hidden when on episode tab so searches
-                // stop after picking a source and restart if the user returns)
-                if (session.step != WatchStep.pickSeason && _visibleTab == 0)
-                  KeyedSubtree(
-                    key: _sourceKey,
-                    child: _SourceSearchSection(
-                      item: _seasonSearchItem(item, session),
-                      selectedHref: session.source?.href,
-                      onSourcePicked: _pickSource,
-                    ),
-                  ),
-
-                // Tab 1 — Episode picker
-                if (session.step != WatchStep.pickSeason &&
-                    _visibleTab == 1 &&
-                    session.source != null)
-                  KeyedSubtree(
-                    key: _episodeKey,
-                    child: _EpisodePickerSection(
-                      item: _seasonSearchItem(item, session),
-                      source: session.source!,
-                      selectedEpisodeHref: session.episode?.href,
-                      onEpisodePicked: _pickEpisode,
-                      seasonNumber: session.seasonNumber,
-                      onContinueResolved: _onContinueResolved,
-                    ),
-                  ),
-
-                // Stream resolving indicator
-                if (session.isResolving ||
-                    session.step == WatchStep.resolveStream) ...<Widget>[
-                  const SizedBox(height: AppSpacing.xxl),
-                  KeyedSubtree(
-                    key: _streamKey,
-                    child: _StreamResolvingSection(
-                      source: session.source,
-                      episode: session.episode,
-                      onResolved: _onStreamResolved,
-                      onError: _onStreamError,
-                    ),
-                  ),
-                ],
-
-                if (session.error != null) ...<Widget>[
-                  const SizedBox(height: AppSpacing.lg),
-                  _ErrorBanner(message: session.error!),
-                ],
+                const SizedBox(height: AppSpacing.xxl),
               ],
-            ],
-            const SizedBox(height: AppSpacing.xxl),
-          ],
+            ),
+          ),
         ),
-      ),
-    ),
         if (showContinueButton)
           Positioned(
             right: AppSpacing.lg,
@@ -1615,15 +1628,10 @@ class _AddonEmptyRowState extends State<_AddonEmptyRow> {
                         ? AppColors.danger
                         : Theme.of(context).disabledColor,
                   ),
-                  
                 ),
-                
               ],
-              
             ),
-            
           ),
-          
         ),
         TextButton.icon(
           style: TextButton.styleFrom(
@@ -1999,7 +2007,7 @@ class _EpisodePickerSection extends ConsumerStatefulWidget {
   final ValueChanged<SoraEpisode> onEpisodePicked;
   final int seasonNumber;
   final void Function(SoraEpisode?, AnimeEpisodeMetadata?, int)?
-      onContinueResolved;
+  onContinueResolved;
 
   @override
   ConsumerState<_EpisodePickerSection> createState() =>
@@ -2516,6 +2524,11 @@ String _episodeImageUrl({
   return '';
 }
 
+String? _streamRequestKey(SoraSearchResult? source, SoraEpisode? episode) {
+  if (source == null || episode == null) return null;
+  return '${source.addonId}:${episode.href}';
+}
+
 SoraEpisode _episodeForPlayback(
   SoraEpisode episode,
   AnimeEpisodeMetadata? metadata,
@@ -2541,8 +2554,9 @@ class _StreamResolvingSection extends ConsumerWidget {
 
   final SoraSearchResult? source;
   final SoraEpisode? episode;
-  final ValueChanged<NormalizedStreamBundle> onResolved;
-  final ValueChanged<Object> onError;
+  final void Function(String requestKey, NormalizedStreamBundle bundle)
+  onResolved;
+  final void Function(String requestKey, Object error) onError;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -2566,6 +2580,7 @@ class _StreamResolvingSection extends ConsumerWidget {
       addonId: src.addonId,
       episode: ep,
     );
+    final String requestKey = _streamRequestKey(src, ep)!;
 
     final AsyncValue<NormalizedStreamBundle> bundleAsync = ref.watch(
       soraStreamBundleProvider(request),
@@ -2573,10 +2588,14 @@ class _StreamResolvingSection extends ConsumerWidget {
 
     bundleAsync.whenOrNull(
       data: (NormalizedStreamBundle bundle) {
-        WidgetsBinding.instance.addPostFrameCallback((_) => onResolved(bundle));
+        WidgetsBinding.instance.addPostFrameCallback(
+          (_) => onResolved(requestKey, bundle),
+        );
       },
       error: (Object error, _) {
-        WidgetsBinding.instance.addPostFrameCallback((_) => onError(error));
+        WidgetsBinding.instance.addPostFrameCallback(
+          (_) => onError(requestKey, error),
+        );
       },
     );
 
@@ -2633,7 +2652,7 @@ class _StreamReadySheetState extends State<_StreamReadySheet> {
   late int _selectedVoiceOverIndex;
 
   @override
-  void initState() {  
+  void initState() {
     super.initState();
     _selectedIndex = 0;
     _selectedVoiceOverIndex = 0;

@@ -20,7 +20,6 @@ import '../domain/skip_markers_provider.dart';
 import 'widgets/auto_next_overlay.dart';
 import 'widgets/gesture_overlay.dart';
 
-
 ButtonStyle _overlayActionButtonStyle() {
   return FilledButton.styleFrom(
     backgroundColor: Colors.black.withValues(alpha: .85),
@@ -94,8 +93,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     if (_iosNativePipSupported) {
       NativePlayerService.init();
-      _nativePlayerSub =
-          NativePlayerService.events.listen(_handleNativePlayerEvent);
+      _nativePlayerSub = NativePlayerService.events.listen(
+        _handleNativePlayerEvent,
+      );
     }
     _pipSub = ref.read(pipControllerProvider).pipModeStream.listen((inPip) {
       if (!mounted) return;
@@ -121,26 +121,36 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   void _handleNativePlayerEvent(NativePlayerEvent event) {
     if (!mounted) return;
     switch (event) {
-      case NativePlayerDismissed(:final positionMs, :final durationMs, :final wasPlaying):
+      case NativePlayerDismissed(
+        :final positionMs,
+        :final durationMs,
+        :final wasPlaying,
+      ):
         setState(() => _nativePipActive = false);
-        unawaited(_restoreFromNativeDismiss(
-          positionMs: positionMs,
-          durationMs: durationMs,
-          wasPlaying: wasPlaying,
-        ));
+        unawaited(
+          _restoreFromNativeDismiss(
+            positionMs: positionMs,
+            durationMs: durationMs,
+            wasPlaying: wasPlaying,
+          ),
+        );
       case NativePlayerCompleted(:final positionMs, :final durationMs):
         setState(() => _nativePipActive = false);
-        unawaited(_playbackNotifier.saveNativeProgress(
-          positionMs: positionMs,
-          durationMs: durationMs,
-          completed: true,
-        ));
+        unawaited(
+          _playbackNotifier.saveNativeProgress(
+            positionMs: positionMs,
+            durationMs: durationMs,
+            completed: true,
+          ),
+        );
         unawaited(_exitPlayer(playNext: true));
       case NativePlayerPipRestored(:final positionMs, :final durationMs):
-        unawaited(_playbackNotifier.saveNativeProgress(
-          positionMs: positionMs,
-          durationMs: durationMs,
-        ));
+        unawaited(
+          _playbackNotifier.saveNativeProgress(
+            positionMs: positionMs,
+            durationMs: durationMs,
+          ),
+        );
     }
   }
 
@@ -176,13 +186,14 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     final MediaServer? server = s.server;
     if (server == null) return;
     final StreamQuality? quality = s.quality;
-    final String url = quality != null && !quality.isAuto && quality.url.isNotEmpty
+    final String url =
+        quality != null && !quality.isAuto && quality.url.isNotEmpty
         ? quality.url
         : server.url;
     final Map<String, String> headers =
         quality != null && quality.headers.isNotEmpty
-            ? quality.headers
-            : server.headers;
+        ? quality.headers
+        : server.headers;
 
     final SkipMarkers markers = _effectiveSkipMarkers(
       ref.read(skipMarkersProvider).value,
@@ -312,15 +323,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       await Future<void>.delayed(const Duration(milliseconds: 300));
     }
 
-    // When going to next episode from fullscreen, keep the window in fullscreen
-    // so macOS doesn't run an exit + re-enter animation (which leaves the old
-    // Space visible as a "stuck" window behind the new one).
-    if (!playNext || !wasFullscreen) {
-      await Future.any(<Future<void>>[
-        _setFullscreen(false),
-        Future<void>.delayed(const Duration(seconds: 4)),
-      ]);
-    }
+    await Future.any(<Future<void>>[
+      _setFullscreen(false),
+      Future<void>.delayed(const Duration(seconds: 4)),
+    ]);
     await Future.any(<Future<void>>[
       _stopPlayback(),
       Future<void>.delayed(const Duration(seconds: 4)),
@@ -479,9 +485,11 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.keyS) {
-      unawaited(ref
-          .read(playerSettingsProvider.notifier)
-          .setSubtitlesEnabled(!settings.subtitlesEnabled));
+      unawaited(
+        ref
+            .read(playerSettingsProvider.notifier)
+            .setSubtitlesEnabled(!settings.subtitlesEnabled),
+      );
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.keyE) {
@@ -521,10 +529,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       if (_lastPipIsPlaying != nowPlaying) {
         _lastPipIsPlaying = nowPlaying;
         unawaited(
-          ref.read(pipControllerProvider).updateParams(
-            isPlaying: nowPlaying,
-            hasNext: true,
-          ),
+          ref
+              .read(pipControllerProvider)
+              .updateParams(isPlaying: nowPlaying, hasNext: true),
         );
       }
     } else {
@@ -646,118 +653,134 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
               backgroundColor: Colors.black,
               body: ExcludeSemantics(
                 child: Stack(
-                children: <Widget>[
-                  // Player + gesture layer — always present.
-                  MouseRegion(
-                    cursor: state.controlsVisible && !state.locked
-                        ? SystemMouseCursors.basic
-                        : SystemMouseCursors.none,
-                    onHover: (_) => _showControls(),
-                    onExit: (_) => _hideControls(),
-                    child: GestureOverlay(
-                      onTap: _toggleControls,
-                      seekInterval: settings.seekInterval,
-                      isMobile: _isMobile,
-                      onToggleFullscreen: _toggleFullscreen,
-                      onTogglePlay: () => ref
-                          .read(playbackControllerProvider.notifier)
-                          .togglePlay(),
-                      child: Stack(
-                        fit: StackFit.expand,
-                        children: <Widget>[
-                          _VideoSurface(
-                            controller: _exitingPlayer ? null : state.engine,
-                            stretchVertical: settings.verticalStretch,
-                          ),
-                          // Auto-skip always runs (logic widget, no UI).
-                          _AutoSkipWorker(
-                            state: state,
-                            settings: settings,
-                            markers: markers,
-                          ),
-                          // Everything below is hidden in PiP – the window is too
-                          // small to interact with and controls are via PiP actions.
-                          if (!_inPipMode) ...<Widget>[
-                        _SubtitleOverlay(state: state, settings: settings),
-                        if (state.loading &&
-                            !state.controlsVisible &&
-                            state.error == null)
-                          const Center(child: _PlayerLoadingIndicator()),
-                        if (state.error == null)
-                          AnimatedOpacity(
-                            opacity: state.controlsVisible && !state.locked
-                                ? 1
-                                : 0,
-                            duration: const Duration(milliseconds: 180),
-                            child: IgnorePointer(
-                              ignoring: !state.controlsVisible || state.locked,
-                              child: _PlayerChrome(
-                                isFullscreen: _isFullscreen,
-                                isMobile: _isMobile,
-                                onExit: () => unawaited(_exitPlayer()),
-                                onToggleFullscreen: _toggleFullscreen,
-                                onEnterNativePip: _iosNativePipSupported
-                                    ? () => unawaited(_handOffToNativePip())
-                                    : null,
+                  children: <Widget>[
+                    // Player + gesture layer — always present.
+                    MouseRegion(
+                      cursor: state.controlsVisible && !state.locked
+                          ? SystemMouseCursors.basic
+                          : SystemMouseCursors.none,
+                      onHover: (_) => _showControls(),
+                      onExit: (_) => _hideControls(),
+                      child: GestureOverlay(
+                        onTap: _toggleControls,
+                        seekInterval: settings.seekInterval,
+                        isMobile: _isMobile,
+                        onToggleFullscreen: _toggleFullscreen,
+                        onTogglePlay: () => ref
+                            .read(playbackControllerProvider.notifier)
+                            .togglePlay(),
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: <Widget>[
+                            _VideoSurface(
+                              controller: _exitingPlayer ? null : state.engine,
+                              stretchVertical: settings.verticalStretch,
+                            ),
+                            // Auto-skip always runs (logic widget, no UI).
+                            _AutoSkipWorker(
+                              state: state,
+                              settings: settings,
+                              markers: markers,
+                            ),
+                            // Everything below is hidden in PiP – the window is too
+                            // small to interact with and controls are via PiP actions.
+                            if (!_inPipMode) ...<Widget>[
+                              _SubtitleOverlay(
+                                state: state,
+                                settings: settings,
                               ),
-                            ),
-                          ),
-                        if (state.error == null)
-                          _SkipButtons(item: state.item ?? widget.item),
-                        if (state.lastSkippedFrom != null)
-                          Positioned(
-                            right: 24,
-                            bottom: 116,
-                            child: FilledButton.icon(
-                              style: _overlayActionButtonStyle(),
-                              onPressed: ref
-                                  .read(playbackControllerProvider.notifier)
-                                  .undoSkip,
-                              icon: const Icon(Icons.undo_rounded),
-                              label: const Text('Undo skip'),
-                            ),
-                          ),
-                        if (state.autoNextVisible &&
-                            settings.showNextEpisodeButton &&
-                            !settings.autoplayNext)
-                          AutoNextOverlay(
-                            autoProceed: settings.autoplayNext,
-                            showButton: true,
-                            showCountdown: true,
-                            onProceed: () {
-                              ref
-                                  .read(playbackControllerProvider.notifier)
-                                  .dismissAutoNext();
-                              unawaited(_exitPlayer(playNext: true));
-                            },
-                            onCancel: () => ref
-                                .read(playbackControllerProvider.notifier)
-                                .dismissAutoNext(),
-                          ),
-                        if (state.error != null)
-                          _PlayerErrorOverlay(
-                            error: state.error!,
-                            onExit: () => unawaited(_exitPlayer()),
-                          ),
-                      ],
-                    ],
-                  ),
-                ),
-              ),
-                  // Native PiP overlay sits OUTSIDE GestureOverlay so AbsorbPointer
-                  // actually blocks mouse events before they reach it.
-                  if (_nativePipActive)
-                    Positioned.fill(
-                      child: _NativePipOverlay(onCancel: () {}),
+                              if (state.loading &&
+                                  !state.controlsVisible &&
+                                  state.error == null)
+                                const Center(child: _PlayerLoadingIndicator()),
+                              if (state.error == null)
+                                AnimatedOpacity(
+                                  opacity:
+                                      state.controlsVisible && !state.locked
+                                      ? 1
+                                      : 0,
+                                  duration: const Duration(milliseconds: 180),
+                                  child: IgnorePointer(
+                                    ignoring:
+                                        !state.controlsVisible || state.locked,
+                                    child: _PlayerChrome(
+                                      isFullscreen: _isFullscreen,
+                                      isMobile: _isMobile,
+                                      onExit: () => unawaited(_exitPlayer()),
+                                      onToggleFullscreen: _toggleFullscreen,
+                                      onEnterNativePip: _iosNativePipSupported
+                                          ? () =>
+                                                unawaited(_handOffToNativePip())
+                                          : null,
+                                    ),
+                                  ),
+                                ),
+                              if (state.temporarySpeedActive)
+                                _TemporarySpeedBadge(
+                                  speed: settings.playbackSpeed + 1,
+                                  controlsVisible:
+                                      state.controlsVisible && !state.locked,
+                                ),
+                              if (state.error == null)
+                                _SkipButtons(item: state.item ?? widget.item),
+                              if (state.lastSkippedFrom != null)
+                                Positioned(
+                                  right: 24,
+                                  bottom: 116,
+                                  child: FilledButton.icon(
+                                    style: _overlayActionButtonStyle(),
+                                    onPressed: ref
+                                        .read(
+                                          playbackControllerProvider.notifier,
+                                        )
+                                        .undoSkip,
+                                    icon: const Icon(Icons.undo_rounded),
+                                    label: const Text('Undo skip'),
+                                  ),
+                                ),
+                              if (state.autoNextVisible &&
+                                  settings.showNextEpisodeButton &&
+                                  !settings.autoplayNext)
+                                AutoNextOverlay(
+                                  autoProceed: settings.autoplayNext,
+                                  showButton: true,
+                                  showCountdown: true,
+                                  onProceed: () {
+                                    ref
+                                        .read(
+                                          playbackControllerProvider.notifier,
+                                        )
+                                        .dismissAutoNext();
+                                    unawaited(_exitPlayer(playNext: true));
+                                  },
+                                  onCancel: () => ref
+                                      .read(playbackControllerProvider.notifier)
+                                      .dismissAutoNext(),
+                                ),
+                              if (state.error != null)
+                                _PlayerErrorOverlay(
+                                  error: state.error!,
+                                  onExit: () => unawaited(_exitPlayer()),
+                                ),
+                            ],
+                          ],
+                        ),
+                      ),
                     ),
-                ],
+                    // Native PiP overlay sits OUTSIDE GestureOverlay so AbsorbPointer
+                    // actually blocks mouse events before they reach it.
+                    if (_nativePipActive)
+                      Positioned.fill(
+                        child: _NativePipOverlay(onCancel: () {}),
+                      ),
+                  ],
+                ),
               ),
             ),
           ),
         ),
       ),
-    ),
-  );
+    );
   }
 }
 
@@ -961,7 +984,9 @@ class _AutoSkipWorkerState extends ConsumerState<_AutoSkipWorker> {
     _skippedRanges.add(key);
     _skipInFlight = true;
     // ignore: avoid_print
-    print('[DEBUG] auto-skip ($kind): position=$position → target=$target range=$rangeStart-$rangeEnd');
+    print(
+      '[DEBUG] auto-skip ($kind): position=$position → target=$target range=$rangeStart-$rangeEnd',
+    );
     unawaited(_skipTo(target));
     return true;
   }
@@ -991,6 +1016,56 @@ class _PlayerLoadingIndicator extends StatelessWidget {
       child: CircularProgressIndicator(strokeWidth: 4),
     );
   }
+}
+
+class _TemporarySpeedBadge extends StatelessWidget {
+  const _TemporarySpeedBadge({
+    required this.speed,
+    required this.controlsVisible,
+  });
+
+  final double speed;
+  final bool controlsVisible;
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned(
+      top: MediaQuery.paddingOf(context).top + (controlsVisible ? 64 : 22),
+      left: 0,
+      right: 0,
+      child: IgnorePointer(
+        child: Center(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.56),
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              child: Text(
+                _temporarySpeedLabel(speed),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+String _temporarySpeedLabel(double speed) {
+  final String value = speed == speed.roundToDouble()
+      ? speed.toStringAsFixed(0)
+      : speed
+            .toStringAsFixed(2)
+            .replaceFirst(RegExp(r'0+$'), '')
+            .replaceFirst(RegExp(r'\.$'), '');
+  return 'x$value';
 }
 
 class _PlayerChrome extends ConsumerWidget {
@@ -1097,17 +1172,18 @@ class _PlayerChrome extends ConsumerWidget {
                   else if (pipSupported)
                     IconButton(
                       onPressed: () {
-                        final double rawAr =
-                            controller?.value.aspectRatio ?? 0;
+                        final double rawAr = controller?.value.aspectRatio ?? 0;
                         final double ar = rawAr > 0 ? rawAr : 16 / 9;
                         final bool playing =
                             controller?.value.isPlaying ?? true;
                         unawaited(
-                          ref.read(pipControllerProvider).enter(
-                            aspectRatio: ar,
-                            isPlaying: playing,
-                            hasNext: true,
-                          ),
+                          ref
+                              .read(pipControllerProvider)
+                              .enter(
+                                aspectRatio: ar,
+                                isPlaying: playing,
+                                hasNext: true,
+                              ),
                         );
                       },
                       icon: const Icon(
@@ -1147,7 +1223,10 @@ class _PlayerChrome extends ConsumerWidget {
                   const SizedBox(height: 8),
                   Row(
                     children: <Widget>[
-                      _BottomLeftControls(controller: controller, isMobile: isMobile),
+                      _BottomLeftControls(
+                        controller: controller,
+                        isMobile: isMobile,
+                      ),
                       const SizedBox(width: 18),
                       Expanded(
                         child: LayoutBuilder(
@@ -1833,9 +1912,7 @@ class _SubtitleOverlayState extends State<_SubtitleOverlay> {
             fontWeight: FontWeight.w700,
             shadows: widget.settings.subtitleHasBackground
                 ? null
-                : const <Shadow>[
-                    Shadow(offset: Offset(0, 1.5), blurRadius: 4),
-                  ],
+                : const <Shadow>[Shadow(offset: Offset(0, 1.5), blurRadius: 4)],
             backgroundColor: widget.settings.subtitleHasBackground
                 ? Colors.black.withValues(
                     alpha: widget.settings.subtitleBackgroundOpacity,
@@ -2312,9 +2389,7 @@ Future<void> _showSubtitleMenu(BuildContext context, WidgetRef ref) async {
         onTap: () async {
           Navigator.pop(context);
           unawaited(
-            ref
-                .read(playerSettingsProvider.notifier)
-                .setSubtitlesEnabled(true),
+            ref.read(playerSettingsProvider.notifier).setSubtitlesEnabled(true),
           );
           final List<SubtitleCue> cues = await _loadSubtitleCues(track);
           ref
@@ -2528,8 +2603,9 @@ class _SubtitleAppearanceTiles extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final PlayerSettings s =
         ref.watch(playerSettingsProvider).value ?? const PlayerSettings();
-    final PlayerSettingsController ctrl =
-        ref.read(playerSettingsProvider.notifier);
+    final PlayerSettingsController ctrl = ref.read(
+      playerSettingsProvider.notifier,
+    );
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
@@ -2565,29 +2641,31 @@ class _SubtitleAppearanceTiles extends ConsumerWidget {
           title: const Text('Text color'),
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
-            children: _presetColors.map(((String, int) c) {
-              final bool selected = s.subtitleTextColor == c.$2;
-              return Padding(
-                padding: const EdgeInsets.only(left: 6),
-                child: GestureDetector(
-                  onTap: () => ctrl.setSubtitleTextColor(c.$2),
-                  child: Container(
-                    width: 26,
-                    height: 26,
-                    decoration: BoxDecoration(
-                      color: Color(c.$2),
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: selected
-                            ? Theme.of(context).colorScheme.primary
-                            : Colors.white30,
-                        width: 2,
+            children: _presetColors
+                .map(((String, int) c) {
+                  final bool selected = s.subtitleTextColor == c.$2;
+                  return Padding(
+                    padding: const EdgeInsets.only(left: 6),
+                    child: GestureDetector(
+                      onTap: () => ctrl.setSubtitleTextColor(c.$2),
+                      child: Container(
+                        width: 26,
+                        height: 26,
+                        decoration: BoxDecoration(
+                          color: Color(c.$2),
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: selected
+                                ? Theme.of(context).colorScheme.primary
+                                : Colors.white30,
+                            width: 2,
+                          ),
+                        ),
                       ),
                     ),
-                  ),
-                ),
-              );
-            }).toList(growable: false),
+                  );
+                })
+                .toList(growable: false),
           ),
         ),
         SwitchListTile(
@@ -2711,39 +2789,39 @@ class _NativePipOverlay extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Focus(
-        autofocus: true,
-        onKeyEvent: (_, _) => KeyEventResult.handled,
-        child: AbsorbPointer(
-          child: ColoredBox(
-            color: Colors.black,
-            child: Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  const Icon(
-                    Icons.picture_in_picture_alt_rounded,
-                    color: Colors.white54,
-                    size: 48,
+      autofocus: true,
+      onKeyEvent: (_, _) => KeyEventResult.handled,
+      child: AbsorbPointer(
+        child: ColoredBox(
+          color: Colors.black,
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                const Icon(
+                  Icons.picture_in_picture_alt_rounded,
+                  color: Colors.white54,
+                  size: 48,
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'Playing in Picture-in-Picture',
+                  style: TextStyle(color: Colors.white70, fontSize: 16),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Close the PiP window to resume here',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: .4),
+                    fontSize: 13,
                   ),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'Playing in Picture-in-Picture',
-                    style: TextStyle(color: Colors.white70, fontSize: 16),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Close the PiP window to resume here',
-                    style: TextStyle(
-                      color: Colors.white.withValues(alpha: .4),
-                      fontSize: 13,
-                    ),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ),
-      );
+      ),
+    );
   }
 }
 

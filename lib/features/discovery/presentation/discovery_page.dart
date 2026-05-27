@@ -21,6 +21,8 @@ import '../../metadata/application/metadata_providers.dart';
 import '../../metadata/data/tmdb_metadata_provider.dart';
 import '../../profile/application/anilist_profile_provider.dart';
 import '../../settings/presentation/settings_state.dart';
+import '../../tracking/application/anilist_library_provider.dart';
+import '../../../shared/models/anilist_models.dart';
 import '../../../shared/models/media_item.dart';
 
 enum _AniListDiscoveryKind {
@@ -535,6 +537,24 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
       WidgetsBinding.instance.addPostFrameCallback((_) => _reload());
     }
     final List<MediaItem> items = _visibleItems();
+    final AsyncValue<List<AniListAnimeListFolder>> badgeFoldersAsync =
+        mode == CatalogMode.anilist
+        ? (_selectedAniListKind == _AniListDiscoveryKind.manga
+              ? ref.watch(anilistMangaListProvider)
+              : ref.watch(anilistAnimeListProvider))
+        : const AsyncValue<List<AniListAnimeListFolder>>.data(
+            <AniListAnimeListFolder>[],
+          );
+    final Map<String, String> statusBadges = mode == CatalogMode.anilist
+        ? _anilistStatusBadges(
+            badgeFoldersAsync.maybeWhen(
+              skipLoadingOnReload: true,
+              data: (List<AniListAnimeListFolder> folders) => folders,
+              orElse: () => const <AniListAnimeListFolder>[],
+            ),
+            context,
+          )
+        : const <String, String>{};
     return AdaptivePage(
       child: SingleChildScrollView(
         controller: _scrollController,
@@ -676,6 +696,7 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
                 itemBuilder: (BuildContext context, int index) =>
                     MediaPosterCard(
                       item: items[index],
+                      statusBadgeLabel: statusBadges[items[index].id],
                       onTap: () => context.push(
                         AppRoutes.mediaDetailsPath(items[index].id),
                         extra: items[index],
@@ -694,6 +715,25 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
       ),
     );
   }
+}
+
+Map<String, String> _anilistStatusBadges(
+  List<AniListAnimeListFolder> folders,
+  BuildContext context,
+) {
+  final Map<String, String> badges = <String, String>{};
+  for (final AniListAnimeListFolder folder in folders) {
+    for (final AniListAnimeListEntry entry in folder.entries) {
+      final String label = context.t(entry.status.label);
+      badges[entry.mediaItem.id] = label;
+      final String? anilistId = entry.mediaItem.externalIds['anilist'];
+      if (anilistId != null && anilistId.isNotEmpty) {
+        badges['anilist:$anilistId'] = label;
+        badges['anilist:manga:$anilistId'] = label;
+      }
+    }
+  }
+  return badges;
 }
 
 class _DiscoveryStatusBar extends StatelessWidget {
@@ -1335,18 +1375,16 @@ class _TmdbDiscoveryFilterSheetState extends State<_TmdbDiscoveryFilterSheet> {
   List<({int id, String label})> _genresForType(MediaType? type) {
     return switch (type) {
       MediaType.movie => _movieGenres,
-      MediaType.anime => _tvGenres
-          .where((({int id, String label}) g) => g.id != 16)
-          .toList(),
+      MediaType.anime =>
+        _tvGenres.where((({int id, String label}) g) => g.id != 16).toList(),
       MediaType.series => _tvGenres,
       null => <({int id, String label})>[
-          ..._movieGenres,
-          ..._tvGenres.where(
-            (({int id, String label}) g) => _movieGenres.every(
-              (({int id, String label}) m) => m.id != g.id,
-            ),
-          ),
-        ],
+        ..._movieGenres,
+        ..._tvGenres.where(
+          (({int id, String label}) g) =>
+              _movieGenres.every((({int id, String label}) m) => m.id != g.id),
+        ),
+      ],
     };
   }
 
@@ -1358,8 +1396,9 @@ class _TmdbDiscoveryFilterSheetState extends State<_TmdbDiscoveryFilterSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final List<({int id, String label})> genres =
-        _genresForType(widget.selectedType);
+    final List<({int id, String label})> genres = _genresForType(
+      widget.selectedType,
+    );
     final bool showLanguage = widget.selectedType != MediaType.anime;
     final int currentYear = DateTime.now().year;
     final List<int?> years = <int?>[
@@ -1521,9 +1560,8 @@ class _TmdbDiscoveryFilterSheetState extends State<_TmdbDiscoveryFilterSheet> {
               children: <Widget>[
                 Expanded(
                   child: OutlinedButton(
-                    onPressed: () => Navigator.of(
-                      context,
-                    ).pop(const _TmdbDiscoveryFilter()),
+                    onPressed: () =>
+                        Navigator.of(context).pop(const _TmdbDiscoveryFilter()),
                     child: Text(context.t('Reset')),
                   ),
                 ),

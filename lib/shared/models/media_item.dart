@@ -1,3 +1,5 @@
+import '../utils/media_status_formatter.dart';
+
 enum MediaType { movie, series, anime }
 
 extension MediaTypeLabel on MediaType {
@@ -113,7 +115,7 @@ class MediaItem {
     if (episodeCount != null) {
       return '$episodeCount episodes';
     }
-    return statusLabel;
+    return mediaStatusOrFallback(statusLabel);
   }
 
   Map<String, dynamic> toJson() {

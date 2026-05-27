@@ -21,6 +21,7 @@ import '../../../core/widgets/page_back_button.dart';
 import '../../../core/widgets/section_header.dart';
 import '../../../shared/models/anilist_models.dart';
 import '../../../shared/models/media_item.dart';
+import '../../../shared/utils/media_status_formatter.dart';
 import '../../catalog/application/catalog_mode.dart';
 import '../../metadata/application/metadata_providers.dart';
 import '../../player/application/player_settings.dart';
@@ -2048,7 +2049,7 @@ class _ActivityTileState extends ConsumerState<_ActivityTile> {
         ? item.text
         : [
             if (item.statusLabel != null && item.statusLabel!.isNotEmpty)
-              context.t(item.statusLabel!),
+              context.t(mediaStatusOrFallback(item.statusLabel!)),
             if (item.progressLabel != null && item.progressLabel!.isNotEmpty)
               item.progressLabel,
             item.media?.title,
@@ -2241,7 +2242,7 @@ class _MiniMediaRow extends StatelessWidget {
                 Text(item.title, style: Theme.of(context).textTheme.titleSmall),
                 const SizedBox(height: AppSpacing.xs),
                 Text(
-                  item.statusLabel,
+                  mediaStatusOrFallback(item.statusLabel),
                   style: Theme.of(
                     context,
                   ).textTheme.bodySmall?.copyWith(color: AppColors.textMuted),

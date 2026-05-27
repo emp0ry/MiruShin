@@ -11,6 +11,7 @@ import '../../../shared/models/anilist_models.dart';
 import '../../settings/presentation/settings_state.dart';
 import '../application/anilist_library_provider.dart';
 import '../data/anilist_api_client.dart';
+import 'anilist_favorite_button.dart';
 
 // ─── Draft model ─────────────────────────────────────────────────────────────
 
@@ -67,6 +68,7 @@ bool _isMangaEntry(AniListAnimeListEntry entry) {
 
 Future<AniListEntryEditDraft?> showAniListEntryEditor(
   BuildContext context, {
+  required WidgetRef ref,
   required AniListAnimeListEntry entry,
   required AniListListStatus status,
   required int progress,
@@ -147,12 +149,19 @@ Future<AniListEntryEditDraft?> showAniListEntryEditor(
                           ),
                         ),
                         const SizedBox(height: AppSpacing.md),
-                        Text(
-                          entry.mediaItem.title,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.titleMedium
-                              ?.copyWith(fontWeight: FontWeight.w700),
+                        Row(
+                          children: <Widget>[
+                            Expanded(
+                              child: Text(
+                                entry.mediaItem.title,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.titleMedium
+                                    ?.copyWith(fontWeight: FontWeight.w700),
+                              ),
+                            ),
+                            AniListFavoriteButton(item: entry.mediaItem),
+                          ],
                         ),
                         const SizedBox(height: AppSpacing.md),
                         DropdownButtonFormField<AniListListStatus>(
@@ -177,6 +186,7 @@ Future<AniListEntryEditDraft?> showAniListEntryEditor(
                         ),
                         const SizedBox(height: AppSpacing.md),
                         Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: <Widget>[
                             Expanded(
                               child: TextField(
@@ -198,12 +208,15 @@ Future<AniListEntryEditDraft?> showAniListEntryEditor(
                               ),
                             ),
                             const SizedBox(width: AppSpacing.sm),
-                            AniListStepperButtons(
-                              onMinus: () => setSheetState(
-                                () => setProgress(draftProgress - 1),
-                              ),
-                              onPlus: () => setSheetState(
-                                () => setProgress(draftProgress + 1),
+                            Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: AniListStepperButtons(
+                                onMinus: () => setSheetState(
+                                  () => setProgress(draftProgress - 1),
+                                ),
+                                onPlus: () => setSheetState(
+                                  () => setProgress(draftProgress + 1),
+                                ),
                               ),
                             ),
                           ],

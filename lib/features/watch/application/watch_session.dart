@@ -86,10 +86,49 @@ class WatchSession {
   }
 }
 
+class AutoNextStreamResolutionState {
+  String? _activeKey;
+  final Set<String> _autoNextKeys = <String>{};
+
+  String? get activeKey => _activeKey;
+
+  void begin(String key, {required bool autoNext}) {
+    _activeKey = key;
+    if (autoNext) {
+      _autoNextKeys.add(key);
+    } else {
+      _autoNextKeys.remove(key);
+    }
+  }
+
+  void clear() {
+    _activeKey = null;
+  }
+
+  bool isCurrent(String key) => key == _activeKey;
+
+  bool takeAutoNext(String key) {
+    final bool autoNext = _autoNextKeys.remove(key);
+    if (isCurrent(key)) {
+      _activeKey = null;
+    }
+    return autoNext;
+  }
+
+  void forget(String key) {
+    _autoNextKeys.remove(key);
+    if (isCurrent(key)) {
+      _activeKey = null;
+    }
+  }
+}
+
 bool _skipSeasonPicker(MediaItem item) {
   if (item.type == MediaType.movie) return true;
   // AniList IDs are individual seasons — skip the franchise season picker.
-  if (item.type == MediaType.anime && item.id.startsWith('anilist:')) return true;
+  if (item.type == MediaType.anime && item.id.startsWith('anilist:')) {
+    return true;
+  }
   // No season data yet → show picker while details load.
   if (item.seasons.isEmpty) return false;
   final List<MediaSeason> nonSpecial = _regularSeasons(item);

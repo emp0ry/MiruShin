@@ -23,6 +23,7 @@ import '../../../core/widgets/skeleton_box.dart';
 import '../../../shared/models/anilist_models.dart';
 import '../../../shared/models/library_item.dart';
 import '../../../shared/models/media_item.dart';
+import '../../../shared/utils/media_status_formatter.dart';
 import '../../catalog/application/catalog_mode.dart';
 import '../../catalog/presentation/catalog_offline_banner.dart';
 import '../../library/application/local_library_provider.dart';
@@ -34,6 +35,7 @@ import '../../tracking/application/anilist_library_provider.dart';
 import '../../settings/presentation/settings_state.dart';
 import '../../tracking/data/anilist_api_client.dart';
 import '../../tracking/presentation/anilist_entry_editor.dart';
+import '../../tracking/presentation/anilist_favorite_button.dart';
 
 class MediaDetailsPage extends ConsumerWidget {
   const MediaDetailsPage({required this.id, this.initialItem, super.key});
@@ -225,6 +227,7 @@ class _OverviewPanel extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final CatalogMode mode = ref.watch(catalogModeProvider);
+    final String statusLabel = humanReadableMediaStatus(item.statusLabel);
     return GlassCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -248,7 +251,7 @@ class _OverviewPanel extends ConsumerWidget {
                 MetadataChip(label: 'AniList ${item.externalIds['anilist']}'),
               if (mode != CatalogMode.anilist)
                 MetadataChip(label: context.t(item.type.labelKey)),
-              MetadataChip(label: item.statusLabel),
+              if (statusLabel.isNotEmpty) MetadataChip(label: statusLabel),
             ],
           ),
           if (item.genres.isNotEmpty) ...<Widget>[
@@ -315,14 +318,7 @@ class _AniListInfoPanelState extends State<_AniListInfoPanel> {
     _ => s,
   };
 
-  static String _fmtStatus(String s) => switch (s.toUpperCase()) {
-    'FINISHED' => 'Finished',
-    'RELEASING' => 'Airing',
-    'NOT_YET_RELEASED' => 'Not Yet Released',
-    'CANCELLED' => 'Cancelled',
-    'HIATUS' => 'On Hiatus',
-    _ => s,
-  };
+  static String _fmtStatus(String s) => mediaStatusOrFallback(s);
 
   static String _fmtCountry(String c) => switch (c.toUpperCase()) {
     'JP' => 'Japan',
@@ -348,48 +344,48 @@ class _AniListInfoPanelState extends State<_AniListInfoPanel> {
     // Info rows
     final List<({IconData icon, String label, String value})> infoRows =
         <({IconData icon, String label, String value})>[
-      if (_ext['anilist_country'] != null)
-        (
-          icon: Icons.flag_outlined,
-          label: 'Origin',
-          value: _fmtCountry(_ext['anilist_country']!),
-        ),
-      if (_ext['anilist_source'] != null)
-        (
-          icon: Icons.auto_stories_outlined,
-          label: 'Source',
-          value: _fmtSource(_ext['anilist_source']!),
-        ),
-      if (_ext['anilist_season'] != null)
-        (
-          icon: Icons.wb_sunny_outlined,
-          label: 'Season',
-          value: [
-            _fmtSeason(_ext['anilist_season']!),
-            if (_ext['anilist_season_year'] != null)
-              _ext['anilist_season_year']!,
-          ].join(' '),
-        ),
-      if (widget.item.statusLabel.isNotEmpty &&
-          widget.item.statusLabel != 'AniList')
-        (
-          icon: Icons.live_tv_outlined,
-          label: 'Status',
-          value: _fmtStatus(widget.item.statusLabel),
-        ),
-      if (_ext['anilist_start_date'] != null)
-        (
-          icon: Icons.calendar_month_outlined,
-          label: 'Released',
-          value: _ext['anilist_start_date']!,
-        ),
-      if (_ext['anilist_end_date'] != null)
-        (
-          icon: Icons.event_available_outlined,
-          label: 'Ended',
-          value: _ext['anilist_end_date']!,
-        ),
-    ];
+          if (_ext['anilist_country'] != null)
+            (
+              icon: Icons.flag_outlined,
+              label: 'Origin',
+              value: _fmtCountry(_ext['anilist_country']!),
+            ),
+          if (_ext['anilist_source'] != null)
+            (
+              icon: Icons.auto_stories_outlined,
+              label: 'Source',
+              value: _fmtSource(_ext['anilist_source']!),
+            ),
+          if (_ext['anilist_season'] != null)
+            (
+              icon: Icons.wb_sunny_outlined,
+              label: 'Season',
+              value: [
+                _fmtSeason(_ext['anilist_season']!),
+                if (_ext['anilist_season_year'] != null)
+                  _ext['anilist_season_year']!,
+              ].join(' '),
+            ),
+          if (widget.item.statusLabel.isNotEmpty &&
+              widget.item.statusLabel != 'AniList')
+            (
+              icon: Icons.live_tv_outlined,
+              label: 'Status',
+              value: _fmtStatus(widget.item.statusLabel),
+            ),
+          if (_ext['anilist_start_date'] != null)
+            (
+              icon: Icons.calendar_month_outlined,
+              label: 'Released',
+              value: _ext['anilist_start_date']!,
+            ),
+          if (_ext['anilist_end_date'] != null)
+            (
+              icon: Icons.event_available_outlined,
+              label: 'Ended',
+              value: _ext['anilist_end_date']!,
+            ),
+        ];
 
     // Studios / producers
     final List<({String name, bool isStudio})> studios =
@@ -403,16 +399,14 @@ class _AniListInfoPanelState extends State<_AniListInfoPanel> {
         studios.add((name: name, isStudio: parts.last == '1'));
       }
     }
-    final List<String> animationStudios =
-        studios
-            .where((s) => s.isStudio)
-            .map((s) => s.name)
-            .toList(growable: false);
-    final List<String> producers =
-        studios
-            .where((s) => !s.isStudio)
-            .map((s) => s.name)
-            .toList(growable: false);
+    final List<String> animationStudios = studios
+        .where((s) => s.isStudio)
+        .map((s) => s.name)
+        .toList(growable: false);
+    final List<String> producers = studios
+        .where((s) => !s.isStudio)
+        .map((s) => s.name)
+        .toList(growable: false);
 
     // Tags
     final List<({String name, int rank, bool spoiler})> tags =
@@ -430,10 +424,12 @@ class _AniListInfoPanelState extends State<_AniListInfoPanel> {
       }
       tags.sort((a, b) => b.rank.compareTo(a.rank));
     }
-    final List<({String name, int rank, bool spoiler})> visibleTags =
-        tags.where((t) => !t.spoiler).toList(growable: false);
-    final List<({String name, int rank, bool spoiler})> spoilerTags =
-        tags.where((t) => t.spoiler).toList(growable: false);
+    final List<({String name, int rank, bool spoiler})> visibleTags = tags
+        .where((t) => !t.spoiler)
+        .toList(growable: false);
+    final List<({String name, int rank, bool spoiler})> spoilerTags = tags
+        .where((t) => t.spoiler)
+        .toList(growable: false);
 
     return GlassCard(
       child: Column(
@@ -447,7 +443,11 @@ class _AniListInfoPanelState extends State<_AniListInfoPanel> {
             Row(
               children: <Widget>[
                 if (_ext['anilist_popularity'] != null) ...<Widget>[
-                  Icon(Icons.people_outline_rounded, size: 18, color: cs.primary),
+                  Icon(
+                    Icons.people_outline_rounded,
+                    size: 18,
+                    color: cs.primary,
+                  ),
                   const SizedBox(width: AppSpacing.xs),
                   Text(
                     _fmtNum(_ext['anilist_popularity']!),
@@ -520,7 +520,10 @@ class _AniListInfoPanelState extends State<_AniListInfoPanel> {
               children: animationStudios
                   .map(
                     (s) => Chip(
-                      avatar: const Icon(Icons.movie_creation_outlined, size: 14),
+                      avatar: const Icon(
+                        Icons.movie_creation_outlined,
+                        size: 14,
+                      ),
                       label: Text(s),
                       visualDensity: VisualDensity.compact,
                     ),
@@ -585,7 +588,10 @@ class _AniListInfoPanelState extends State<_AniListInfoPanel> {
                         )
                       : <Widget>[
                           ActionChip(
-                            avatar: const Icon(Icons.visibility_off_outlined, size: 14),
+                            avatar: const Icon(
+                              Icons.visibility_off_outlined,
+                              size: 14,
+                            ),
                             label: Text(
                               '${spoilerTags.length} ${context.t('spoiler tags')}',
                             ),
@@ -689,6 +695,18 @@ class _DetailsHero extends ConsumerWidget {
                       left: AppSpacing.md,
                       child: PageBackButton(
                         onPressed: () => _goBackFromDetails(context),
+                      ),
+                    ),
+                    Positioned(
+                      top: AppSpacing.md,
+                      right: AppSpacing.md,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.34),
+                          borderRadius: AppRadius.all(AppRadius.lg),
+                          border: Border.all(color: Colors.white24),
+                        ),
+                        child: AniListFavoriteButton(item: item, onImage: true),
                       ),
                     ),
 
@@ -1064,9 +1082,7 @@ class _ActionPanel extends ConsumerWidget {
             }
           },
           icon: Icon(
-            inLibrary
-                ? Icons.tune_rounded
-                : Icons.playlist_add_rounded,
+            inLibrary ? Icons.tune_rounded : Icons.playlist_add_rounded,
           ),
           label: Text(
             inLibrary ? context.t('Edit') : context.t('Add to Library'),
@@ -1108,6 +1124,7 @@ class _ActionPanel extends ConsumerWidget {
     final String scoreFormat = ref.read(aniListEffectiveScoreFormatProvider);
     final AniListEntryEditDraft? draft = await showAniListEntryEditor(
       context,
+      ref: ref,
       entry: entry,
       status: entry.status,
       progress: entry.progress,
@@ -1394,6 +1411,7 @@ class _SeasonsPanel extends ConsumerWidget {
               );
               final AniListEntryEditDraft? draft = await showAniListEntryEditor(
                 context,
+                ref: ref,
                 entry: entry,
                 status: entry.status,
                 progress: entry.progress,

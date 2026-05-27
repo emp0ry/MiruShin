@@ -17,6 +17,7 @@ import '../../../core/widgets/neutral_placeholder.dart';
 import '../../../shared/models/anilist_models.dart';
 import '../../../shared/models/library_item.dart';
 import '../../../shared/models/media_item.dart';
+import '../../../shared/utils/media_status_formatter.dart';
 import '../../catalog/application/catalog_mode.dart';
 import '../../catalog/application/catalog_status.dart';
 import '../../catalog/presentation/catalog_offline_banner.dart';
@@ -1911,6 +1912,7 @@ class _CollectionTileState extends ConsumerState<_CollectionTile> {
     final String scoreFormat = ref.read(aniListEffectiveScoreFormatProvider);
     final AniListEntryEditDraft? draft = await showAniListEntryEditor(
       context,
+      ref: ref,
       entry: widget.entry,
       status: _status,
       progress: _progress,
@@ -2316,16 +2318,7 @@ bool _matchesFlag(AniListAnimeListEntry entry, _LibraryFlag flag) {
 }
 
 String _humanizeMediaStatus(String raw) {
-  final String value = raw.trim();
-  if (value.isEmpty || value == 'AniList') return '';
-  return switch (value.toUpperCase()) {
-    'RELEASING' => 'Releasing',
-    'FINISHED' => 'Finished',
-    'NOT_YET_RELEASED' => 'Coming Soon',
-    'CANCELLED' => 'Cancelled',
-    'HIATUS' => 'On Hiatus',
-    _ => value,
-  };
+  return humanReadableMediaStatus(raw);
 }
 
 String? _nextAiringLabel({
@@ -2415,6 +2408,7 @@ class _GridCell extends ConsumerWidget {
     Future<void> openEditor() async {
       final AniListEntryEditDraft? draft = await showAniListEntryEditor(
         context,
+        ref: ref,
         entry: entry,
         status: entry.status,
         progress: entry.progress,
@@ -2812,13 +2806,9 @@ class _LocalLibraryViewState extends State<_LocalLibraryView> {
       case _Sort.updatedOldest:
         list.sort((a, b) => a.updatedAt.compareTo(b.updatedAt));
       case _Sort.avgScoreHigh:
-        list.sort(
-          (a, b) => b.mediaItem.rating.compareTo(a.mediaItem.rating),
-        );
+        list.sort((a, b) => b.mediaItem.rating.compareTo(a.mediaItem.rating));
       case _Sort.avgScoreLow:
-        list.sort(
-          (a, b) => a.mediaItem.rating.compareTo(b.mediaItem.rating),
-        );
+        list.sort((a, b) => a.mediaItem.rating.compareTo(b.mediaItem.rating));
       default:
         break;
     }
@@ -2969,8 +2959,7 @@ class _LocalLibraryViewState extends State<_LocalLibraryView> {
                     child: ChoiceChip(
                       label: Text(s.label),
                       selected: _selectedStatus == s,
-                      onSelected: (_) =>
-                          setState(() => _selectedStatus = s),
+                      onSelected: (_) => setState(() => _selectedStatus = s),
                     ),
                   ),
                 ),
@@ -2980,11 +2969,7 @@ class _LocalLibraryViewState extends State<_LocalLibraryView> {
 
         // ── Content ───────────────────────────────────────────────────────
         if (items.isEmpty)
-          const Expanded(
-            child: Center(
-              child: Text('No results'),
-            ),
-          )
+          const Expanded(child: Center(child: Text('No results')))
         else if (_isGrid)
           Expanded(
             child: GridView.builder(
@@ -3132,8 +3117,7 @@ class _LocalTileState extends ConsumerState<_LocalTile> {
                       ? CachedNetworkImage(
                           imageUrl: media.posterUrl,
                           fit: BoxFit.cover,
-                          errorWidget: (_, _, _) =>
-                              _CoverFallback(media.title),
+                          errorWidget: (_, _, _) => _CoverFallback(media.title),
                         )
                       : _CoverFallback(media.title),
                 ),
@@ -3166,8 +3150,7 @@ class _LocalTileState extends ConsumerState<_LocalTile> {
                                   vertical: 4,
                                 ),
                                 minimumSize: const Size(72, 32),
-                                tapTargetSize:
-                                    MaterialTapTargetSize.shrinkWrap,
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                                 textStyle: const TextStyle(
                                   fontSize: 13,
                                   fontWeight: FontWeight.bold,

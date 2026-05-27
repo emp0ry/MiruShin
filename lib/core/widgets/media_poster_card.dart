@@ -17,6 +17,7 @@ class MediaPosterCard extends ConsumerStatefulWidget {
     required this.item,
     this.compact = false,
     this.watchProgress,
+    this.statusBadgeLabel,
     this.onTap,
     super.key,
   });
@@ -24,6 +25,7 @@ class MediaPosterCard extends ConsumerStatefulWidget {
   final MediaItem item;
   final bool compact;
   final double? watchProgress;
+  final String? statusBadgeLabel;
   final VoidCallback? onTap;
 
   @override
@@ -86,6 +88,14 @@ class _MediaPosterCardState extends ConsumerState<MediaPosterCard> {
                       bottom: 0,
                       child: _ProgressBar(progress: widget.watchProgress!),
                     ),
+                  if (widget.statusBadgeLabel?.trim().isNotEmpty == true)
+                    Positioned(
+                      left: AppSpacing.sm,
+                      top: AppSpacing.sm,
+                      child: _PosterStatusBadge(
+                        label: widget.statusBadgeLabel!.trim(),
+                      ),
+                    ),
                   Positioned(
                     left: AppSpacing.md,
                     right: AppSpacing.md,
@@ -134,6 +144,38 @@ class _MediaPosterCardState extends ConsumerState<MediaPosterCard> {
                 ],
               ),
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PosterStatusBadge extends StatelessWidget {
+  const _PosterStatusBadge({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.62),
+        borderRadius: AppRadius.all(AppRadius.sm),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.sm,
+          vertical: AppSpacing.xs,
+        ),
+        child: Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.labelSmall?.copyWith(
+            color: Colors.white,
+            fontWeight: FontWeight.w700,
           ),
         ),
       ),

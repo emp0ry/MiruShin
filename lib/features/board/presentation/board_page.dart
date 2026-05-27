@@ -75,6 +75,9 @@ class BoardPage extends ConsumerWidget {
             1.0,
           ),
     };
+    final Map<String, String> statusBadges = mode == CatalogMode.anilist
+        ? _anilistStatusBadges(anilistFolders, context)
+        : const <String, String>{};
     final List<MediaItem> recentlyAdded = mode == CatalogMode.tmdb
         ? ref
               .watch(localLibraryProvider)
@@ -122,6 +125,7 @@ class BoardPage extends ConsumerWidget {
                 progressMap: mode == CatalogMode.tmdb
                     ? const <String, double>{}
                     : continueWatchingProgress,
+                statusBadgeMap: statusBadges,
               ),
             ],
             if (rails.recentSeries.isNotEmpty) ...<Widget>[
@@ -139,6 +143,7 @@ class BoardPage extends ConsumerWidget {
                         anilistKind: 'anime',
                       )
                     : null,
+                statusBadgeMap: statusBadges,
               ),
             ],
             if (rails.topAnime.isNotEmpty) ...<Widget>[
@@ -152,6 +157,7 @@ class BoardPage extends ConsumerWidget {
                   filter: mode == CatalogMode.tmdb ? 'Popular' : 'Top Rated',
                   anilistKind: mode == CatalogMode.anilist ? 'anime' : null,
                 ),
+                statusBadgeMap: statusBadges,
               ),
             ],
             const SizedBox(height: AppSpacing.xxl),
@@ -162,6 +168,7 @@ class BoardPage extends ConsumerWidget {
                     : 'AniList Library',
               ),
               items: recentlyAdded,
+              statusBadgeMap: statusBadges,
             ),
             const SizedBox(height: AppSpacing.xxl),
           ],
@@ -169,6 +176,25 @@ class BoardPage extends ConsumerWidget {
       ),
     );
   }
+}
+
+Map<String, String> _anilistStatusBadges(
+  List<AniListAnimeListFolder> folders,
+  BuildContext context,
+) {
+  final Map<String, String> badges = <String, String>{};
+  for (final AniListAnimeListFolder folder in folders) {
+    for (final AniListAnimeListEntry entry in folder.entries) {
+      final String label = context.t(entry.status.label);
+      badges[entry.mediaItem.id] = label;
+      final String? anilistId = entry.mediaItem.externalIds['anilist'];
+      if (anilistId != null && anilistId.isNotEmpty) {
+        badges['anilist:$anilistId'] = label;
+        badges['anilist:manga:$anilistId'] = label;
+      }
+    }
+  }
+  return badges;
 }
 
 class _HeroSection extends ConsumerWidget {
@@ -395,6 +421,7 @@ class _MediaSection extends ConsumerWidget {
     required this.items,
     this.maxColumns = 5,
     this.progressMap = const <String, double>{},
+    this.statusBadgeMap = const <String, String>{},
     this.showMoreLocation,
   });
 
@@ -402,6 +429,7 @@ class _MediaSection extends ConsumerWidget {
   final List<MediaItem> items;
   final int maxColumns;
   final Map<String, double> progressMap;
+  final Map<String, String> statusBadgeMap;
   final String? showMoreLocation;
 
   @override
@@ -453,6 +481,7 @@ class _MediaSection extends ConsumerWidget {
                         item: items[index],
                         compact: false,
                         watchProgress: progressMap[items[index].id],
+                        statusBadgeLabel: statusBadgeMap[items[index].id],
                         onTap: () => context.push(
                           AppRoutes.mediaDetailsPath(items[index].id),
                           extra: items[index],
@@ -469,6 +498,7 @@ class _MediaSection extends ConsumerWidget {
                       MediaPosterCard(
                         item: items[index],
                         watchProgress: progressMap[items[index].id],
+                        statusBadgeLabel: statusBadgeMap[items[index].id],
                         onTap: () => context.push(
                           AppRoutes.mediaDetailsPath(items[index].id),
                           extra: items[index],

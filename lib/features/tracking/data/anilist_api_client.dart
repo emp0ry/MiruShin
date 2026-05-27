@@ -371,6 +371,24 @@ class AniListApiClient {
     return item;
   }
 
+  Future<bool?> fetchMediaFavouriteStatus(int mediaId) async {
+    final Map<String, dynamic> data = await _post(
+      r'''
+      query MediaFavouriteStatus($id: Int) {
+        Media(id: $id) {
+          isFavourite
+        }
+      }
+      ''',
+      <String, dynamic>{'id': mediaId},
+      authenticated: true,
+    );
+    final Object? media = data['Media'];
+    if (media is! Map<String, dynamic>) return null;
+    final Object? value = media['isFavourite'];
+    return value is bool ? value : null;
+  }
+
   // ─── Russian / Shikimori helpers ─────────────────────────────────────────────
 
   static bool _hasCyrillic(String text) => RegExp(r'[а-яёА-ЯЁ]').hasMatch(text);
@@ -885,6 +903,7 @@ class AniListApiClient {
                 type
                 title { romaji english native userPreferred }
                 coverImage { extraLarge large }
+                isFavourite
                 siteUrl
               }
             }
@@ -896,6 +915,7 @@ class AniListApiClient {
                 type
                 title { romaji english native userPreferred }
                 coverImage { extraLarge large }
+                isFavourite
                 siteUrl
               }
             }
@@ -1448,6 +1468,30 @@ class AniListApiClient {
       <String, dynamic>{'id': entryId},
       authenticated: true,
     );
+  }
+
+  Future<bool?> toggleFavouriteMedia({
+    required int mediaId,
+    required bool isManga,
+  }) async {
+    await _post(
+      r'''
+      mutation ToggleFavorite($anime: Int, $manga: Int) {
+        ToggleFavourite(animeId: $anime, mangaId: $manga) {
+          __typename
+        }
+      }
+      ''',
+      isManga
+          ? <String, dynamic>{'manga': mediaId}
+          : <String, dynamic>{'anime': mediaId},
+      authenticated: true,
+    );
+    try {
+      return await fetchMediaFavouriteStatus(mediaId);
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<List<CalendarItem>> getAiringSchedule({
@@ -2199,12 +2243,12 @@ class AniListApiClient {
     // Build full start/end date strings
     final Map<String, dynamic>? startDateMap =
         json['startDate'] is Map<String, dynamic>
-            ? json['startDate'] as Map<String, dynamic>
-            : null;
+        ? json['startDate'] as Map<String, dynamic>
+        : null;
     final Map<String, dynamic>? endDateMap =
         json['endDate'] is Map<String, dynamic>
-            ? json['endDate'] as Map<String, dynamic>
-            : null;
+        ? json['endDate'] as Map<String, dynamic>
+        : null;
     String buildDate(Map<String, dynamic>? d) {
       if (d == null) return '';
       final int y = _int(d['year']);
@@ -2215,16 +2259,17 @@ class AniListApiClient {
       if (dy == 0) return '$y-${m.toString().padLeft(2, '0')}';
       return '$y-${m.toString().padLeft(2, '0')}-${dy.toString().padLeft(2, '0')}';
     }
+
     final String startDate = buildDate(startDateMap);
     final String endDate = buildDate(endDateMap);
 
     // Studios: "name:1" = animation studio, "name:0" = producer
-    final Object? studioNodesRaw =
-        json['studios'] is Map<String, dynamic>
-            ? (json['studios'] as Map<String, dynamic>)['nodes']
-            : null;
-    final List<dynamic> studioNodes =
-        studioNodesRaw is List ? studioNodesRaw : <dynamic>[];
+    final Object? studioNodesRaw = json['studios'] is Map<String, dynamic>
+        ? (json['studios'] as Map<String, dynamic>)['nodes']
+        : null;
+    final List<dynamic> studioNodes = studioNodesRaw is List
+        ? studioNodesRaw
+        : <dynamic>[];
     final StringBuffer studioBuf = StringBuffer();
     for (final dynamic node in studioNodes) {
       if (node is! Map<String, dynamic>) continue;
@@ -2236,8 +2281,9 @@ class AniListApiClient {
     }
 
     // Tags: "name:rank:generalSpoiler:mediaSpoiler"
-    final List<dynamic> tagList =
-        json['tags'] is List ? json['tags'] as List<dynamic> : <dynamic>[];
+    final List<dynamic> tagList = json['tags'] is List
+        ? json['tags'] as List<dynamic>
+        : <dynamic>[];
     final StringBuffer tagBuf = StringBuffer();
     for (final dynamic tag in tagList) {
       if (tag is! Map<String, dynamic>) continue;
@@ -2280,6 +2326,8 @@ class AniListApiClient {
         if (seasonYear > 0) 'anilist_season_year': seasonYear.toString(),
         if (country.isNotEmpty) 'anilist_country': country,
         if (format.isNotEmpty) 'anilist_format': format,
+        if (json['isFavourite'] is bool)
+          'anilist_is_favourite': (json['isFavourite'] == true).toString(),
         if (popularity > 0) 'anilist_popularity': popularity.toString(),
         if (favourites > 0) 'anilist_favourites': favourites.toString(),
         if (startDate.isNotEmpty) 'anilist_start_date': startDate,
@@ -2731,6 +2779,7 @@ class AniListApiClient {
     volumes
     duration
     status
+    isFavourite
     startDate { year }
     siteUrl
   ''';
@@ -2751,6 +2800,7 @@ class AniListApiClient {
     volumes
     duration
     status
+    isFavourite
     startDate { year }
     siteUrl
   ''';
@@ -2772,6 +2822,7 @@ class AniListApiClient {
     volumes
     duration
     status
+    isFavourite
     source
     season
     seasonYear

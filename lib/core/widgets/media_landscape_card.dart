@@ -9,6 +9,7 @@ import '../../app/theme/app_spacing.dart';
 import '../../app/theme/app_theme_extension.dart';
 import '../../features/catalog/application/catalog_mode.dart';
 import '../../shared/models/media_item.dart';
+import '../../shared/utils/media_status_formatter.dart';
 import 'metadata_chip.dart';
 import 'skeleton_box.dart';
 
@@ -22,6 +23,7 @@ class MediaLandscapeCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final CatalogMode mode = ref.watch(catalogModeProvider);
     final AppThemeExtension palette = AppThemeExtension.of(context);
+    final String statusLabel = humanReadableMediaStatus(item.statusLabel);
     return InkWell(
       borderRadius: AppRadius.all(AppRadius.lg),
       onTap: onTap,
@@ -91,7 +93,8 @@ class MediaLandscapeCard extends ConsumerWidget {
                             label: context.t(item.type.labelKey),
                             onImage: true,
                           ),
-                        MetadataChip(label: item.statusLabel, onImage: true),
+                        if (statusLabel.isNotEmpty)
+                          MetadataChip(label: statusLabel, onImage: true),
                         if (item.rating > 0 && item.rating <= 10)
                           MetadataChip(
                             icon: Icons.star_rounded,
