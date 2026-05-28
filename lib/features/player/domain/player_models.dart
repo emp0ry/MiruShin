@@ -73,6 +73,7 @@ class SubtitleTrack {
     required this.url,
     this.language = '',
     this.format = SubtitleFormat.unknown,
+    this.headers = const <String, String>{},
   });
 
   final String id;
@@ -80,6 +81,7 @@ class SubtitleTrack {
   final String url;
   final String language;
   final SubtitleFormat format;
+  final Map<String, String> headers;
 }
 
 class SubtitleCue {
@@ -433,6 +435,7 @@ class MediaPlaybackItem {
             url: s.url,
             language: s.language,
             format: _subtitleFormat(s.url),
+            headers: s.headers,
           ),
         )
         .toList(growable: false);

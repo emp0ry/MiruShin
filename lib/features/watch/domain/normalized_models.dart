@@ -171,11 +171,13 @@ class NormalizedSubtitle {
     required this.url,
     required this.language,
     required this.label,
+    this.headers = const <String, String>{},
   });
 
   final String url;
   final String language;
   final String label;
+  final Map<String, String> headers;
 }
 
 class NormalizedStreamBundle {

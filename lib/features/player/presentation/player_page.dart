@@ -2719,7 +2719,12 @@ Future<void> _showSubtitleMenu(BuildContext context, WidgetRef ref) async {
 
 Future<List<SubtitleCue>> _loadSubtitleCues(SubtitleTrack track) async {
   try {
-    final Response<String> response = await Dio().get<String>(track.url);
+    final Response<String> response = await Dio().get<String>(
+      track.url,
+      options: track.headers.isNotEmpty
+          ? Options(headers: track.headers)
+          : null,
+    );
     return const SubtitleParser().parse(response.data ?? '');
   } on Object {
     return const <SubtitleCue>[];

@@ -192,6 +192,23 @@ class FvpDirectEngine extends PlayerEngine {
     } catch (_) {
       // Ignore unsupported backend options.
     }
+
+    try {
+      _player.setProperty('avformat.strict', 'experimental');
+      _player.setProperty('avformat.safe', '0');
+      _player.setProperty('avformat.extension_picky', '0');
+      _player.setProperty('avformat.allowed_segment_extensions', 'ALL');
+    } catch (_) {
+      // Not all MDK builds expose avformat properties — safe to ignore.
+    }
+
+    try {
+      _player.setProperty('avio.reconnect', '1');
+      _player.setProperty('avio.reconnect_streamed', '1');
+      _player.setProperty('avio.reconnect_delay_max', '5');
+    } catch (_) {
+      // Older MDK builds may not expose all avio properties — safe to ignore.
+    }
   }
 
   void _startStateTimer() {

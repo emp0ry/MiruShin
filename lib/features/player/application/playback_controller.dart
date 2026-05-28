@@ -165,6 +165,7 @@ class PlaybackController extends Notifier<PlaybackState> {
   Timer? _seekSettleTimer;
   int _retryCount = 0;
   int _playbackGeneration = 0;
+  final Set<String> _autoFallbackTriedServers = <String>{};
   int _seekPreviewGeneration = 0;
   int _manualSeekEpoch = 0;
   Duration _resumeGuardPosition = Duration.zero;
@@ -471,7 +472,11 @@ class PlaybackController extends Notifier<PlaybackState> {
     VoiceOverTrack? voiceover,
     SubtitleTrack? subtitle,
     double? preserveAspectRatio,
+    bool isAutoFallback = false,
   }) async {
+    if (!isAutoFallback) {
+      _autoFallbackTriedServers.clear();
+    }
     final int generation = ++_playbackGeneration;
     _clearInteractiveSeek();
     unawaited(_disposeSeekPreviewEngine());
@@ -594,6 +599,29 @@ class PlaybackController extends Notifier<PlaybackState> {
     }
   }
 
+  bool _tryAutoFallbackServer() {
+    final MediaPlaybackItem? item = state.item;
+    final MediaServer? current = state.server;
+    if (item == null || current == null) return false;
+    _autoFallbackTriedServers.add(current.id);
+    final Iterable<MediaServer> untried = item.servers.where(
+      (MediaServer s) => !_autoFallbackTriedServers.contains(s.id),
+    );
+    if (untried.isEmpty) return false;
+    final MediaServer next = untried.first;
+    unawaited(
+      _open(
+        item: item,
+        server: next,
+        quality: _initialQuality(next),
+        position: _currentPositionFor(state.engine),
+        autoplay: true,
+        isAutoFallback: true,
+      ),
+    );
+    return true;
+  }
+
   void _watchEngineErrors(PlayerEngine engine, int generation) {
     late void Function() listener;
     listener = () {
@@ -603,6 +631,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       }
       if (engine.state.value.hasError && state.error == null) {
         engine.removeListener(listener);
+        if (_tryAutoFallbackServer()) return;
         state = state.copyWith(
           error: PlayerError(
             title: 'Playback error',
@@ -1653,7 +1682,12 @@ class PlaybackController extends Notifier<PlaybackState> {
 
   Future<List<SubtitleCue>> _loadSubtitleCues(SubtitleTrack track) async {
     try {
-      final Response<String> response = await Dio().get<String>(track.url);
+      final Response<String> response = await Dio().get<String>(
+        track.url,
+        options: track.headers.isNotEmpty
+            ? Options(headers: track.headers)
+            : null,
+      );
       return const SubtitleParser().parse(response.data ?? '');
     } on Object {
       return const <SubtitleCue>[];

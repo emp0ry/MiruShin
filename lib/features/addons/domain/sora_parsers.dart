@@ -286,7 +286,12 @@ NormalizedStreamBundle parseSoraStreamBundle(
     for (final SoraSubtitle s in c.subtitles) {
       if (seenUrls.add(s.url)) {
         subtitles.add(
-          NormalizedSubtitle(url: s.url, language: s.language, label: s.label),
+          NormalizedSubtitle(
+            url: s.url,
+            language: s.language,
+            label: s.label,
+            headers: s.headers,
+          ),
         );
       }
     }
@@ -671,58 +676,106 @@ Map<String, String> _headers(Object? value) {
 List<SoraSubtitle> _subtitles(Map<String, dynamic> json) {
   final Object? value =
       json['subtitles'] ?? json['subtitle'] ?? json['subs'] ?? json['tracks'];
+
+  // Top-level headers for a bare string subtitle URL (e.g. BingeBox subtitlesHeaders).
+  final Map<String, String> topLevelHeaders =
+      _headers(json['subtitlesHeaders'] ?? json['subtitleHeaders']);
+
+  List<SoraSubtitle> primary = const <SoraSubtitle>[];
+
   if (value == null) {
-    return const <SoraSubtitle>[];
-  }
-  if (value is String) {
-    return <SoraSubtitle>[
-      SoraSubtitle(url: value, language: '', label: 'Subtitle'),
-    ];
-  }
-  if (value is! List) {
+    primary = const <SoraSubtitle>[];
+  } else if (value is String) {
+    final String url = value.trim();
+    primary = url.isEmpty
+        ? const <SoraSubtitle>[]
+        : <SoraSubtitle>[
+            SoraSubtitle(
+              url: url,
+              language: '',
+              label: 'Subtitle',
+              headers: topLevelHeaders,
+            ),
+          ];
+  } else if (value is! List) {
     final Map<String, dynamic> map = _map(value);
     final String url = _string(
       map['url'],
       fallback: _string(map['file'], fallback: _string(map['src'])),
     );
-    if (url.isEmpty) {
-      return const <SoraSubtitle>[];
-    }
-    return <SoraSubtitle>[
-      SoraSubtitle(
-        url: url,
-        language: _string(map['language'], fallback: _string(map['lang'])),
-        label: _string(
-          map['label'],
-          fallback: _string(map['title'], fallback: 'Subtitle'),
-        ),
-      ),
-    ];
+    primary = url.isEmpty
+        ? const <SoraSubtitle>[]
+        : <SoraSubtitle>[
+            SoraSubtitle(
+              url: url,
+              language: _string(map['language'], fallback: _string(map['lang'])),
+              label: _string(
+                map['label'],
+                fallback: _string(map['title'], fallback: 'Subtitle'),
+              ),
+              headers: _headers(map['headers']),
+            ),
+          ];
+  } else {
+    primary = value
+        .map<SoraSubtitle?>((Object? item) {
+          if (item is String) {
+            final String url = item.trim();
+            return url.isEmpty
+                ? null
+                : SoraSubtitle(url: url, language: '', label: 'Subtitle');
+          }
+          final Map<String, dynamic> map = _map(item);
+          final String url = _string(
+            map['url'],
+            fallback: _string(map['file'], fallback: _string(map['src'])),
+          );
+          if (url.isEmpty) return null;
+          return SoraSubtitle(
+            url: url,
+            language: _string(map['language'], fallback: _string(map['lang'])),
+            label: _string(
+              map['label'],
+              fallback: _string(map['title'], fallback: 'Subtitle'),
+            ),
+            headers: _headers(map['headers']),
+          );
+        })
+        .whereType<SoraSubtitle>()
+        .toList(growable: false);
   }
-  return value
-      .map<SoraSubtitle?>((Object? item) {
-        if (item is String) {
-          return SoraSubtitle(url: item, language: '', label: 'Subtitle');
-        }
-        final Map<String, dynamic> map = _map(item);
-        final String url = _string(
-          map['url'],
-          fallback: _string(map['file'], fallback: _string(map['src'])),
-        );
-        if (url.isEmpty) {
-          return null;
-        }
-        return SoraSubtitle(
-          url: url,
-          language: _string(map['language'], fallback: _string(map['lang'])),
-          label: _string(
-            map['label'],
-            fallback: _string(map['title'], fallback: 'Subtitle'),
-          ),
-        );
-      })
-      .whereType<SoraSubtitle>()
-      .toList(growable: false);
+
+  // Merge allSubtitles array (rich per-track list with headers) alongside any
+  // primary tracks already parsed from the default subtitle key.
+  final Object? allSubs = json['allSubtitles'];
+  if (allSubs is List && allSubs.isNotEmpty) {
+    final Set<String> seen = <String>{
+      for (final SoraSubtitle s in primary) s.url,
+    };
+    final List<SoraSubtitle> extras = allSubs
+        .map<SoraSubtitle?>((Object? item) {
+          final Map<String, dynamic> map = _map(item);
+          final String url = _string(map['url'],
+              fallback: _string(map['file'], fallback: _string(map['src'])));
+          if (url.isEmpty || !seen.add(url)) return null;
+          return SoraSubtitle(
+            url: url,
+            language: _string(map['language'], fallback: _string(map['lang'])),
+            label: _string(
+              map['label'],
+              fallback: _string(map['title'], fallback: 'Subtitle'),
+            ),
+            headers: _headers(map['headers']),
+          );
+        })
+        .whereType<SoraSubtitle>()
+        .toList(growable: false);
+    if (extras.isNotEmpty) {
+      return <SoraSubtitle>[...primary, ...extras];
+    }
+  }
+
+  return primary;
 }
 
 List<String> _stringList(Object? value) {

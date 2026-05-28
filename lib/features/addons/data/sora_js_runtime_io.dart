@@ -247,7 +247,7 @@ class SoraJsRuntime {
       globalThis.__miruSoraModules = globalThis.__miruSoraModules || {};
       (function() {
         const module = { exports: {} };
-        const exports = module.exports;
+        var exports = module.exports;
         const global = globalThis;
         $moduleSource
         const exported = module.exports || {};
@@ -335,12 +335,28 @@ class SoraJsRuntime {
     });
     runtime.onMessage('MiruSoraDelay', (dynamic args) async {
       final Map<String, dynamic> payload = _asMap(args);
-      final int milliseconds = _int(
+      final int ms = _int(
         payload['milliseconds'],
         fallback: 16,
-      ).clamp(0, 250).toInt();
-      await Future<void>.delayed(Duration(milliseconds: milliseconds));
+      ).clamp(0, 60000).toInt();
+      final _LoadedSoraModule? module = _loaded[addon.id];
+      if (module == null || module._disposed) return 'cancelled';
+      final Completer<void> c = Completer<void>();
+      module._delayCompleters.add(c);
+      try {
+        await Future.any(<Future<void>>[
+          Future<void>.delayed(Duration(milliseconds: ms)),
+          c.future,
+        ]);
+      } finally {
+        module._delayCompleters.remove(c);
+        if (!c.isCompleted) c.complete();
+      }
       return 'true';
+    });
+    runtime.onMessage('MiruSoraNetworkFetch', (dynamic args) async {
+      final Map<String, dynamic> payload = _asMap(args);
+      return _networkFetch(addon, payload);
     });
     runtime.evaluate(_bridgeScript(addon));
   }
@@ -384,7 +400,7 @@ class SoraJsRuntime {
             method: method,
             responseType: ResponseType.plain,
             headers: headers,
-            receiveTimeout: searchCall ? const Duration(seconds: 10) : null,
+            receiveTimeout: searchCall ? const Duration(seconds: 10) : const Duration(seconds: 20),
             followRedirects: true,
             validateStatus: (_) => true,
           ),
@@ -393,10 +409,148 @@ class SoraJsRuntime {
       } finally {
         module?.unregisterCancelToken(cancelToken);
       }
-      return _truncateBody(addon, response.data ?? '');
+      final Map<String, dynamic> responseHeaders = <String, dynamic>{};
+      response.headers.forEach((String name, List<String> values) {
+        if (values.isEmpty) return;
+        // Multi-value headers (e.g. Set-Cookie) are returned as arrays so JS
+        // modules can parse individual entries without splitting on ", ".
+        responseHeaders[name] = values.length == 1 ? values.first : values;
+      });
+      return jsonEncode(<String, dynamic>{
+        '__miruResponse': true,
+        'status': response.statusCode ?? 0,
+        'headers': responseHeaders,
+        'body': _truncateBody(addon, response.data ?? ''),
+      });
     } on Object catch (error) {
-      return '{"error":${jsonEncode(error.toString())}}';
+      return jsonEncode(<String, dynamic>{
+        '__miruResponse': true,
+        'status': 0,
+        'headers': <String, dynamic>{},
+        'body': '',
+        'error': error.toString(),
+      });
     }
+  }
+
+  Future<String> _networkFetch(
+    SoraInstalledAddon addon,
+    Map<String, dynamic> payload,
+  ) async {
+    final String originalUrl = _string(payload['url']);
+    final Set<String> requests = <String>{};
+    try {
+      final Uri uri = _resolveUrl(originalUrl, addon.manifest.baseUrl);
+      requests.add(uri.toString());
+      final String htmlContent = _string(payload['htmlContent']);
+      final String body;
+      Uri responseUri = uri;
+      if (htmlContent.isNotEmpty) {
+        body = htmlContent;
+      } else {
+        final int timeoutSec = _int(payload['timeoutSeconds'], fallback: 7).clamp(1, 30).toInt();
+        final Map<String, String> headers = <String, String>{
+          'User-Agent': _userAgent,
+          'Accept': 'text/html,application/xhtml+xml,application/json,text/plain,*/*',
+          'Accept-Language': _acceptLanguage(addon.manifest.language),
+          ..._stringMap(payload['headers']),
+        };
+        final _LoadedSoraModule? module = _loaded[addon.id];
+        final CancelToken cancelToken = CancelToken();
+        module?.registerCancelToken(cancelToken);
+        final Response<String> response;
+        try {
+          response = await _dio.requestUri<String>(
+            uri,
+            options: Options(
+              method: 'GET',
+              responseType: ResponseType.plain,
+              headers: headers,
+              receiveTimeout: Duration(seconds: timeoutSec),
+              followRedirects: true,
+              validateStatus: (_) => true,
+            ),
+            cancelToken: cancelToken,
+          );
+        } finally {
+          module?.unregisterCancelToken(cancelToken);
+        }
+        responseUri = response.realUri;
+        requests.add(responseUri.toString());
+        body = response.data ?? '';
+      }
+      for (final String u in _extractNetworkUrls(body, responseUri)) {
+        requests.add(u);
+      }
+      final String cutoff = _string(payload['cutoff']).toLowerCase();
+      final String cutoffUrl = cutoff.isEmpty
+          ? ''
+          : requests.firstWhere(
+              (String r) => r.toLowerCase().contains(cutoff),
+              orElse: () => '',
+            );
+      return jsonEncode(<String, Object?>{
+        'originalUrl': originalUrl,
+        'requests': requests.toList(),
+        'html': _bool(payload['returnHTML']) ? body : null,
+        'cookies': null,
+        'success': true,
+        'cutoffTriggered': cutoffUrl.isNotEmpty,
+        'cutoffUrl': cutoffUrl.isEmpty ? null : cutoffUrl,
+        'htmlCaptured': _bool(payload['returnHTML']),
+        'cookiesCaptured': false,
+        'elementsClicked': const <String>[],
+        'waitResults': const <String, bool>{},
+      });
+    } on Object catch (error) {
+      return jsonEncode(<String, Object?>{
+        'originalUrl': originalUrl,
+        'requests': requests.toList(),
+        'html': null,
+        'cookies': null,
+        'success': false,
+        'error': error.toString(),
+        'cutoffTriggered': false,
+        'cutoffUrl': null,
+        'htmlCaptured': false,
+        'cookiesCaptured': false,
+        'elementsClicked': const <String>[],
+        'waitResults': const <String, bool>{},
+      });
+    }
+  }
+
+  Iterable<String> _extractNetworkUrls(String body, Uri baseUri) sync* {
+    // Un-escape JSON/HTML encodings so embedded URLs are parseable.
+    final String normalized = body
+        .replaceAll(r'\/', '/')
+        .replaceAllMapped(
+          RegExp(r'\\u([0-9A-Fa-f]{4})'),
+          (Match m) => String.fromCharCode(int.parse(m.group(1)!, radix: 16)),
+        )
+        .replaceAll('&amp;', '&');
+    for (final RegExpMatch match in RegExp(
+      r'''https?://[^\s"'<>\\]+''',
+      caseSensitive: false,
+    ).allMatches(normalized)) {
+      final String? raw = match.group(0);
+      if (raw == null) continue;
+      final String cleaned = raw.replaceAll(RegExp(r'[,;)\]\}]+$'), '').trim();
+      if (cleaned.isEmpty) continue;
+      final Uri? parsed = Uri.tryParse(cleaned);
+      if (parsed != null && parsed.hasScheme) yield parsed.toString();
+    }
+  }
+
+  bool _bool(Object? value, {bool fallback = false}) {
+    if (value is bool) return value;
+    if (value is num) return value != 0;
+    if (value is String) {
+      final String lower = value.trim().toLowerCase();
+      if (lower == 'true' || lower == '1') return true;
+      if (lower == 'false' || lower == '0') return false;
+    }
+    return fallback;
   }
 
   String _bridgeScript(SoraInstalledAddon addon) {
@@ -416,7 +570,7 @@ class SoraJsRuntime {
       }
 
       async function __miruSoraDelay(milliseconds) {
-        const bounded = Math.max(0, Math.min(Number(milliseconds) || 0, 250));
+        const bounded = Math.max(0, Math.min(Number(milliseconds) || 0, 60000));
         await sendMessage(
           'MiruSoraDelay',
           JSON.stringify({ milliseconds: bounded })
@@ -427,12 +581,12 @@ class SoraJsRuntime {
         const deadline = Date.now() + Math.max(0, Number(timeoutMs) || 0);
         while (globalThis.__miruSoraPendingTasks.size > 0 && Date.now() < deadline) {
           const pending = Array.from(globalThis.__miruSoraPendingTasks);
-          await Promise.race([
-            Promise.all(pending.map(function(task) {
+          if (pending.length === 0) break;
+          await Promise.race(
+            pending.map(function(task) {
               return Promise.resolve(task).then(function() {}, function() {});
-            })),
-            __miruSoraDelay(25)
-          ]);
+            })
+          );
         }
         return globalThis.__miruSoraPendingTasks.size;
       };
@@ -479,12 +633,23 @@ class SoraJsRuntime {
           };
         }
         const raw = await sendMessage('MiruSoraHttpFetch', JSON.stringify(payload));
+        let status = 200, responseHeaders = {}, responseBody = typeof raw === 'string' ? raw : '';
+        try {
+          if (typeof raw === 'string') {
+            const parsed = JSON.parse(raw);
+            if (parsed && parsed.__miruResponse === true) {
+              status = typeof parsed.status === 'number' ? (parsed.status || 0) : 200;
+              responseHeaders = parsed.headers || {};
+              responseBody = typeof parsed.body === 'string' ? parsed.body : '';
+            }
+          }
+        } catch (_) {}
         return {
-          ok: true,
-          status: 200,
+          ok: status >= 200 && status < 300,
+          status: status,
           url: String(payload.url || url),
-          headers: {},
-          body: typeof raw === 'string' ? raw : ''
+          headers: responseHeaders,
+          body: responseBody
         };
       }
 
@@ -562,6 +727,100 @@ class SoraJsRuntime {
         }
         return output;
       };
+
+      if (typeof globalThis.setTimeout !== 'function') {
+        globalThis.__miruSoraTimerSeq = 1;
+        globalThis.__miruSoraTimers = {};
+        globalThis.setTimeout = function(callback, delay) {
+          const args = Array.prototype.slice.call(arguments, 2);
+          const id = globalThis.__miruSoraTimerSeq++;
+          globalThis.__miruSoraTimers[id] = true;
+          const task = __miruSoraDelay(Math.max(0, Math.min(Number(delay) || 0, 60000))).then(function() {
+            if (!globalThis.__miruSoraTimers[id]) return;
+            delete globalThis.__miruSoraTimers[id];
+            try { callback.apply(globalThis, args); } catch (_) {}
+          });
+          __miruSoraTrackPromise(task);
+          return id;
+        };
+        globalThis.clearTimeout = function(id) {
+          delete globalThis.__miruSoraTimers[id];
+        };
+        globalThis.setInterval = function() { return 0; };
+        globalThis.clearInterval = function() {};
+      }
+
+      globalThis.Buffer = globalThis.Buffer || {
+        from: function(data, encoding) {
+          const enc = String(encoding || '').toLowerCase();
+          let binary = String(data == null ? '' : data);
+          if (enc === 'base64' || enc === 'base64url') {
+            if (enc === 'base64url') {
+              binary = binary.replace(/-/g, '+').replace(/_/g, '/');
+            }
+            try { binary = atob(binary); } catch (_) { binary = ''; }
+          }
+          return {
+            _data: binary,
+            toString: function(outputEncoding) {
+              const out = String(outputEncoding || 'utf-8').toLowerCase();
+              if (out === 'binary' || out === 'latin1') return this._data;
+              try {
+                return decodeURIComponent(
+                  Array.prototype.map.call(this._data, function(ch) {
+                    return '%' + ('00' + ch.charCodeAt(0).toString(16)).slice(-2);
+                  }).join('')
+                );
+              } catch (_) { return this._data; }
+            },
+            length: binary.length
+          };
+        },
+        isBuffer: function() { return false; },
+        concat: function(bufs) {
+          const result = (bufs || []).map(function(b) {
+            return b && typeof b._data === 'string' ? b._data : String(b == null ? '' : b);
+          }).join('');
+          return {
+            _data: result,
+            toString: function(enc) {
+              return globalThis.Buffer.from(result).toString(enc);
+            },
+            length: result.length
+          };
+        }
+      };
+
+      function __miruSoraNormalizeNetworkFetch(url, timeoutOrOptions, headers, cutoff) {
+        let options = {};
+        if (timeoutOrOptions && typeof timeoutOrOptions === 'object' && !Array.isArray(timeoutOrOptions)) {
+          options = timeoutOrOptions;
+        } else {
+          options = { timeoutSeconds: timeoutOrOptions, headers: headers || {}, cutoff: cutoff || '' };
+        }
+        return {
+          url: String(url),
+          timeoutSeconds: Math.max(1, Math.min(Number(options.timeoutSeconds) || 7, 30)),
+          headers: __miruSoraHeaders(options.headers || {}),
+          cutoff: options.cutoff == null ? '' : String(options.cutoff),
+          returnHTML: !!options.returnHTML,
+          htmlContent: options.htmlContent == null ? '' : String(options.htmlContent)
+        };
+      }
+
+      globalThis.networkFetch = globalThis.networkFetch || function(url, timeoutOrOptions, headers, cutoff) {
+        const task = (async function() {
+          const payload = __miruSoraNormalizeNetworkFetch(url, timeoutOrOptions, headers, cutoff);
+          const raw = await sendMessage('MiruSoraNetworkFetch', JSON.stringify(payload));
+          try {
+            return JSON.parse(typeof raw === 'string' ? raw : '{}');
+          } catch (_) {
+            return { originalUrl: String(url), requests: [], html: null, cookies: null, success: false };
+          }
+        })();
+        return __miruSoraTrackPromise(task);
+      };
+      globalThis.networkFetchSimple = globalThis.networkFetchSimple || globalThis.networkFetch;
 
       const __miruOriginalConsole = globalThis.console || {};
       globalThis.console = {
@@ -700,6 +959,14 @@ class _LoadedSoraModule {
   String? activeFunctionName;
   bool _disposed = false;
   final Set<CancelToken> _cancelTokens = <CancelToken>{};
+  final List<Completer<void>> _delayCompleters = <Completer<void>>[];
+
+  void cancelPendingDelays() {
+    for (final Completer<void> c in _delayCompleters.toList()) {
+      if (!c.isCompleted) c.complete();
+    }
+    _delayCompleters.clear();
+  }
 
   bool get isSearchCall {
     final String name = activeFunctionName ?? '';
@@ -751,6 +1018,10 @@ class _LoadedSoraModule {
 
   Future<void> dispose() async {
     if (_disposed) return;
+
+    // Short-circuit any pending setTimeout/delay promises so the drain
+    // loop can finish quickly instead of waiting for multi-second timers.
+    cancelPendingDelays();
 
     // Let pending JavaScriptCore promise/sendMessage callbacks unwind before
     // tearing down the native context. Disposing immediately after promise

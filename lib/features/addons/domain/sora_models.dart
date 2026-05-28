@@ -467,14 +467,21 @@ class SoraSubtitle {
     required this.url,
     required this.language,
     required this.label,
+    this.headers = const <String, String>{},
   });
 
   final String url;
   final String language;
   final String label;
+  final Map<String, String> headers;
 
   Map<String, dynamic> toJson() {
-    return <String, dynamic>{'url': url, 'language': language, 'label': label};
+    return <String, dynamic>{
+      'url': url,
+      'language': language,
+      'label': label,
+      if (headers.isNotEmpty) 'headers': headers,
+    };
   }
 }
 
