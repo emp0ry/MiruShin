@@ -517,11 +517,76 @@ class _ProfileFeedPageState extends ConsumerState<ProfileFeedPage> {
   }
 }
 
-class ProfileFavouritesPage extends ConsumerWidget {
+class ProfileFavouritesPage extends ConsumerStatefulWidget {
   const ProfileFavouritesPage({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ProfileFavouritesPage> createState() =>
+      _ProfileFavouritesPageState();
+}
+
+class _ProfileFavouritesPageState
+    extends ConsumerState<ProfileFavouritesPage> {
+  final Map<AniListFavouriteKind, List<MediaItem>> _items =
+      <AniListFavouriteKind, List<MediaItem>>{};
+  final Map<AniListFavouriteKind, int> _pages =
+      <AniListFavouriteKind, int>{};
+  final Map<AniListFavouriteKind, bool> _loading =
+      <AniListFavouriteKind, bool>{};
+  final Map<AniListFavouriteKind, bool> _hasMore =
+      <AniListFavouriteKind, bool>{};
+
+  int? _viewerId;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _viewerId = ref.read(aniListViewerIdProvider);
+      if (_viewerId != null) {
+        for (final AniListFavouriteKind kind in AniListFavouriteKind.values) {
+          _loadFavourites(kind, 1, reset: true);
+        }
+      }
+    });
+  }
+
+  Future<void> _loadFavourites(
+    AniListFavouriteKind kind,
+    int page, {
+    bool reset = false,
+  }) async {
+    final int? userId = _viewerId;
+    if (userId == null || !mounted) return;
+    setState(() {
+      _loading[kind] = true;
+      if (reset) {
+        _items[kind] = <MediaItem>[];
+        _pages[kind] = 0;
+        _hasMore[kind] = true;
+      }
+    });
+    try {
+      final AniListPagedChunk<MediaItem> chunk = await ref
+          .read(aniListProfileClientProvider)
+          .fetchFavouritePage(userId: userId, kind: kind, page: page);
+      if (!mounted) return;
+      setState(() {
+        _items[kind] = <MediaItem>[
+          ...(_items[kind] ?? <MediaItem>[]),
+          ...chunk.items,
+        ];
+        _pages[kind] = page;
+        _hasMore[kind] = chunk.hasNextPage;
+        _loading[kind] = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loading[kind] = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final int? viewerId = ref.watch(aniListViewerIdProvider);
     if (viewerId == null) {
       return const _SignedOutProfilePage(title: 'Favourites');
@@ -533,15 +598,16 @@ class ProfileFavouritesPage extends ConsumerWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: AniListFavouriteKind.values
             .map((AniListFavouriteKind kind) {
-              final AsyncValue<AniListPagedChunk<MediaItem>> asyncItems = ref
-                  .watch(
-                    aniListFavouritesProvider(
-                      AniListFavouriteQuery(userId: viewerId, kind: kind),
-                    ),
-                  );
               return Padding(
                 padding: const EdgeInsets.only(bottom: AppSpacing.xl),
-                child: _FavouriteSection(kind: kind, asyncItems: asyncItems),
+                child: _FavouriteSection(
+                  kind: kind,
+                  items: _items[kind] ?? const <MediaItem>[],
+                  loading: _loading[kind] ?? false,
+                  hasMore: _hasMore[kind] ?? true,
+                  onLoadMore: () =>
+                      _loadFavourites(kind, (_pages[kind] ?? 0) + 1),
+                ),
               );
             })
             .toList(growable: false),
@@ -2257,10 +2323,19 @@ class _MiniMediaRow extends StatelessWidget {
 }
 
 class _FavouriteSection extends StatelessWidget {
-  const _FavouriteSection({required this.kind, required this.asyncItems});
+  const _FavouriteSection({
+    required this.kind,
+    required this.items,
+    required this.loading,
+    required this.hasMore,
+    required this.onLoadMore,
+  });
 
   final AniListFavouriteKind kind;
-  final AsyncValue<AniListPagedChunk<MediaItem>> asyncItems;
+  final List<MediaItem> items;
+  final bool loading;
+  final bool hasMore;
+  final VoidCallback onLoadMore;
 
   @override
   Widget build(BuildContext context) {
@@ -2268,28 +2343,43 @@ class _FavouriteSection extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
         SectionHeader(title: kind.label),
-        asyncItems.when(
-          data: (AniListPagedChunk<MediaItem> chunk) {
-            if (chunk.items.isEmpty) {
-              return Text(
-                _emptyKindMessage(context, kind.label),
-                style: Theme.of(context).textTheme.bodyMedium,
-              );
-            }
-            return ResponsiveGrid(
-              itemCount: chunk.items.length,
-              minItemWidth: 150,
-              maxColumns: 5,
-              childAspectRatio: 0.72,
-              itemBuilder: (BuildContext context, int index) {
-                return _FavouriteCard(item: chunk.items[index]);
-              },
-            );
-          },
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (Object error, StackTrace stackTrace) =>
-              _ErrorPlaceholder(message: error.toString()),
-        ),
+        if (loading && items.isEmpty)
+          const Center(child: CircularProgressIndicator())
+        else if (items.isEmpty)
+          Text(
+            _emptyKindMessage(context, kind.label),
+            style: Theme.of(context).textTheme.bodyMedium,
+          )
+        else
+          Column(
+            children: <Widget>[
+              ResponsiveGrid(
+                itemCount: items.length,
+                minItemWidth: 150,
+                maxColumns: 5,
+                childAspectRatio: 0.72,
+                itemBuilder: (BuildContext context, int index) {
+                  return _FavouriteCard(item: items[index]);
+                },
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              Center(
+                child: loading
+                    ? const SizedBox(
+                        width: 24,
+                        height: 24,
+                        child: CircularProgressIndicator(strokeWidth: 3),
+                      )
+                    : hasMore
+                    ? OutlinedButton.icon(
+                        onPressed: onLoadMore,
+                        icon: const Icon(Icons.expand_more_rounded),
+                        label: Text(context.t('Load more')),
+                      )
+                    : const SizedBox.shrink(),
+              ),
+            ],
+          ),
       ],
     );
   }
