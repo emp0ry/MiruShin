@@ -49,7 +49,7 @@ jobs:
           if (-not (Test-Path $sourceDir)) { throw "Source folder not found: $sourceDir" }
 
           $version = "${{ steps.ver.outputs.version }}"
-          $zipFile = "${{ env.APP_NAME }}-windows-v$version.zip"
+          $zipFile = "${{ env.APP_NAME }}-windows-v$version-portable.zip"
 
           if (Test-Path $zipFile) { Remove-Item $zipFile -Force }
 
