@@ -109,11 +109,43 @@ jobs:
 
           "zip_path=$zipFile" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - name: Upload Windows artifact
+      - name: Build Inno Setup installer
+        id: installer
+        shell: pwsh
+        run: |
+          $iscc = $null
+          $candidates = @(
+            "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+            "C:\Program Files (x86)\Inno Setup 5\ISCC.exe"
+          )
+          foreach ($c in $candidates) {
+            if (Test-Path $c) { $iscc = $c; break }
+          }
+          if (-not $iscc) {
+            choco install innosetup --no-progress -y
+            $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          }
+
+          $version  = "${{ steps.ver.outputs.version }}"
+          $sourceDir = (Resolve-Path "build/windows/x64/runner/Release").Path
+
+          & "$iscc" `
+            "/DMyAppVersion=$version" `
+            "/DMySourceDir=$sourceDir" `
+            "windows\installer\mirushin.iss"
+
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup compilation failed (exit $LASTEXITCODE)" }
+
+          $exeFile = "${{ env.APP_NAME }}-windows-v$version-setup.exe"
+          "installer_path=$exeFile" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Upload Windows artifacts
         uses: actions/upload-artifact@v6
         with:
           name: MiruShin-windows
-          path: ${{ steps.zip.outputs.zip_path }}
+          path: |
+            ${{ steps.zip.outputs.zip_path }}
+            ${{ steps.installer.outputs.installer_path }}
 
   build-macos-ios:
     runs-on: macos-latest

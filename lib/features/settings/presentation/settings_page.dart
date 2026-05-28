@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:go_router/go_router.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../app/app_routes.dart';
 import '../../../app/localization/app_localizations.dart';
@@ -28,6 +29,7 @@ import '../../player/domain/player_models.dart';
 import '../../../shared/models/anilist_models.dart';
 import '../../tracking/application/anilist_library_provider.dart';
 import '../../tracking/application/anilist_login_flow.dart';
+import '../application/update_checker_provider.dart';
 import 'settings_state.dart';
 import 'widgets/settings_widgets.dart';
 
@@ -49,6 +51,7 @@ class SettingsPage extends ConsumerWidget {
               title: context.t('Settings'),
             ),
             const SizedBox(height: AppSpacing.lg),
+            const _UpdateSection(),
             _AccountSection(placeholderOnly: !showAniListProfileUi),
             const SizedBox(height: AppSpacing.lg),
             if (showAniListProfileUi && settings.hasAniListSession) ...<Widget>[
@@ -75,6 +78,46 @@ class SettingsPage extends ConsumerWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _UpdateSection extends ConsumerWidget {
+  const _UpdateSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final AsyncValue<UpdateInfo?> update = ref.watch(updateCheckerProvider);
+    return update.when(
+      data: (UpdateInfo? info) {
+        if (info == null || !info.hasUpdate) return const SizedBox.shrink();
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            SettingsSection(
+              title: context.t('Update available'),
+              icon: Icons.system_update_alt_rounded,
+              children: <Widget>[
+                SettingsRow(
+                  title: context.t('New version available'),
+                  subtitle: info.tagName,
+                  trailing: FilledButton.icon(
+                    onPressed: () => launchUrl(
+                      Uri.parse(info.releaseUrl),
+                      mode: LaunchMode.externalApplication,
+                    ),
+                    icon: const Icon(Icons.download_rounded),
+                    label: Text(context.t('Download')),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.lg),
+          ],
+        );
+      },
+      loading: () => const SizedBox.shrink(),
+      error: (_, _) => const SizedBox.shrink(),
     );
   }
 }
