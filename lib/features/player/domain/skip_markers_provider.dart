@@ -34,14 +34,18 @@ final skipMarkersProvider = FutureProvider.autoDispose<SkipMarkers>((
   if (item == null) return const SkipMarkers();
 
   final SkipMarkers addonMarkers = item.skipMarkers;
+  final PlayerSettings settings =
+      ref.watch(playerSettingsProvider).value ?? const PlayerSettings();
+  final bool useAniSkip = settings.useAniSkip;
+  final SkipMarkersSource source = settings.skipMarkersSource;
 
-  // If addon provided both OP and ED, no remote lookup needed.
-  if (addonMarkers.hasOpening && addonMarkers.hasEnding) {
+  // When addon is the primary source and already has both markers, skip remote.
+  if (source == SkipMarkersSource.addon &&
+      addonMarkers.hasOpening &&
+      addonMarkers.hasEnding) {
     return addonMarkers;
   }
 
-  final bool useAniSkip =
-      ref.watch(playerSettingsProvider).value?.useAniSkip ?? true;
   if (!useAniSkip) return addonMarkers;
 
   final int? malId = await _resolveMalId(ref, item);
@@ -75,12 +79,14 @@ final skipMarkersProvider = FutureProvider.autoDispose<SkipMarkers>((
         endingStart: sec(timeskips.endingStart),
         endingEnd: sec(timeskips.endingEnd),
       );
-      // Fill missing fields from Anira.
       remoteMarkers = remoteMarkers.withFallback(aniraMarkers);
     }
   }
 
-  // Addon markers take priority per field; remote fills the rest.
+  // Primary source wins per field; the other fills any gaps.
+  if (source == SkipMarkersSource.mirushin) {
+    return remoteMarkers.withFallback(addonMarkers);
+  }
   return addonMarkers.withFallback(remoteMarkers);
 });
 

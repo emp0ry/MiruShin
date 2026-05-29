@@ -101,6 +101,8 @@ class SubtitleCue {
   }
 }
 
+enum SkipMarkersSource { addon, mirushin }
+
 class SkipMarkers {
   const SkipMarkers({
     this.openingStart,
@@ -205,6 +207,7 @@ class PlayerSettings {
     this.autoSkipOpening = false,
     this.autoSkipEnding = false,
     this.useAniSkip = true,
+    this.skipMarkersSource = SkipMarkersSource.addon,
     this.autoplayNext = true,
     this.discordRpcEnabled = true,
     this.autoAnilistSync = true,
@@ -232,6 +235,7 @@ class PlayerSettings {
   final bool autoSkipOpening;
   final bool autoSkipEnding;
   final bool useAniSkip;
+  final SkipMarkersSource skipMarkersSource;
   final bool autoplayNext;
   final bool discordRpcEnabled;
   final bool autoAnilistSync;
@@ -259,6 +263,7 @@ class PlayerSettings {
     bool? autoSkipOpening,
     bool? autoSkipEnding,
     bool? useAniSkip,
+    SkipMarkersSource? skipMarkersSource,
     bool? autoplayNext,
     bool? discordRpcEnabled,
     bool? autoAnilistSync,
@@ -291,6 +296,7 @@ class PlayerSettings {
       autoSkipOpening: autoSkipOpening ?? this.autoSkipOpening,
       autoSkipEnding: autoSkipEnding ?? this.autoSkipEnding,
       useAniSkip: useAniSkip ?? this.useAniSkip,
+      skipMarkersSource: skipMarkersSource ?? this.skipMarkersSource,
       autoplayNext: autoplayNext ?? this.autoplayNext,
       discordRpcEnabled: discordRpcEnabled ?? this.discordRpcEnabled,
       autoAnilistSync: autoAnilistSync ?? this.autoAnilistSync,
@@ -320,6 +326,7 @@ class PlayerSettings {
     'autoSkipOpening': autoSkipOpening,
     'autoSkipEnding': autoSkipEnding,
     'useAniSkip': useAniSkip,
+    'skipMarkersSource': skipMarkersSource.name,
     'autoplayNext': autoplayNext,
     'discordRpcEnabled': discordRpcEnabled,
     'autoAnilistSync': autoAnilistSync,
@@ -362,6 +369,10 @@ class PlayerSettings {
       autoSkipOpening: json['autoSkipOpening'] as bool? ?? false,
       autoSkipEnding: json['autoSkipEnding'] as bool? ?? false,
       useAniSkip: json['useAniSkip'] as bool? ?? true,
+      skipMarkersSource: SkipMarkersSource.values.firstWhere(
+        (SkipMarkersSource s) => s.name == json['skipMarkersSource'],
+        orElse: () => SkipMarkersSource.addon,
+      ),
       autoplayNext: json['autoplayNext'] as bool? ?? true,
       discordRpcEnabled: json['discordRpcEnabled'] as bool? ?? true,
       autoAnilistSync: json['autoAnilistSync'] as bool? ?? true,

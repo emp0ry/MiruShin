@@ -117,6 +117,11 @@ class PlayerSettingsController extends AsyncNotifier<PlayerSettings> {
     await _update(current.copyWith(useAniSkip: value));
   }
 
+  Future<void> setSkipMarkersSource(SkipMarkersSource value) async {
+    final PlayerSettings current = state.value ?? const PlayerSettings();
+    await _update(current.copyWith(skipMarkersSource: value));
+  }
+
   Future<void> setAutoSkipOpening(bool value) async {
     final PlayerSettings current = state.value ?? const PlayerSettings();
     await _update(current.copyWith(autoSkipOpening: value));

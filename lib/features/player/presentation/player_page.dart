@@ -2809,6 +2809,55 @@ class _PlayerSettingsTiles extends ConsumerWidget {
           onChanged: (bool value) =>
               ref.read(playerSettingsProvider.notifier).setUseAniSkip(value),
         ),
+        if (settings.useAniSkip)
+          ListTile(
+            leading: const Icon(Icons.source_rounded),
+            title: const Text('Skip marks source'),
+            subtitle: Text(
+              settings.skipMarkersSource == SkipMarkersSource.addon
+                  ? 'Addon'
+                  : 'MiruShin (AniSkip & Anira)',
+            ),
+            onTap: () async {
+              final SkipMarkersSource? picked =
+                  await showDialog<SkipMarkersSource>(
+                context: context,
+                builder: (BuildContext context) => SimpleDialog(
+                  title: const Text('Primary skip marks source'),
+                  children: <Widget>[
+                    RadioGroup<SkipMarkersSource>(
+                      groupValue: settings.skipMarkersSource,
+                      onChanged: (SkipMarkersSource? v) =>
+                          Navigator.pop(context, v),
+                      child: Column(
+                        children: <Widget>[
+                          RadioListTile<SkipMarkersSource>(
+                            value: SkipMarkersSource.addon,
+                            title: const Text('Addon'),
+                            subtitle: const Text(
+                              'Addon data takes priority; AniSkip & Anira fill gaps',
+                            ),
+                          ),
+                          RadioListTile<SkipMarkersSource>(
+                            value: SkipMarkersSource.mirushin,
+                            title: const Text('MiruShin'),
+                            subtitle: const Text(
+                              'AniSkip & Anira take priority; addon fills gaps',
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              );
+              if (picked != null) {
+                await ref
+                    .read(playerSettingsProvider.notifier)
+                    .setSkipMarkersSource(picked);
+              }
+            },
+          ),
         SwitchListTile(
           value: settings.autoSkipOpening,
           secondary: const Icon(Icons.skip_next_rounded),
