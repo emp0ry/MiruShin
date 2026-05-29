@@ -252,7 +252,7 @@ final class MiruShinAVPlayerViewController: AVPlayerViewController {
 final class NativePlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
   private let channel: FlutterMethodChannel
   private weak var appDelegate: AppDelegate?
-  private weak var currentVC: MiruShinAVPlayerViewController?
+  private var currentVC: MiruShinAVPlayerViewController?
 
   init(channel: FlutterMethodChannel, appDelegate: AppDelegate) {
     self.channel = channel
@@ -470,8 +470,8 @@ final class NativePlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
   func playerViewControllerDidStopPictureInPicture(_ playerViewController: AVPlayerViewController) {
     guard let vc = playerViewController as? MiruShinAVPlayerViewController else { return }
     vc.pipActive = false
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self, weak vc] in
-      guard let self = self, let vc = vc else { return }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self, vc] in
+      guard let self = self else { return }
       if vc.didReachEnd || vc.didSendTerminalEvent || vc.pipRestoreInFlight || vc.didRestoreFromPip { return }
       self.emitDismissed(vc, wasPlaying: false, pause: true)
       vc.player = nil
