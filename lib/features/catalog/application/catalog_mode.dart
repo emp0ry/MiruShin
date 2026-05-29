@@ -32,7 +32,7 @@ class CatalogModeController extends Notifier<CatalogMode> {
       _loading = true;
       unawaited(_load());
     }
-    return CatalogMode.tmdb;
+    return CatalogMode.anilist;
   }
 
   Future<void> toggle() => setMode(state.toggled);
@@ -49,7 +49,7 @@ class CatalogModeController extends Notifier<CatalogMode> {
     final String? raw = prefs.getString(_key);
     final CatalogMode loaded = CatalogMode.values.firstWhere(
       (CatalogMode mode) => mode.name == raw,
-      orElse: () => CatalogMode.tmdb,
+      orElse: () => CatalogMode.anilist,
     );
     if (state != loaded) {
       state = loaded;
