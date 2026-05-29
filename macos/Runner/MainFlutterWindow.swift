@@ -268,12 +268,12 @@ final class NativeMacPlayerCoordinator: NSObject, NSWindowDelegate, AVPictureInP
     // Small source window: AVPlayerLayer needs a real on-screen window with
     // rendered content before isPictureInPicturePossible becomes true.
     // Position it in the bottom-right so it's briefly visible while buffering.
-    let winW: CGFloat = 320
-    let winH: CGFloat = 180
+    let winW: CGFloat = 1
+    let winH: CGFloat = 1
     let origin: NSPoint
     if let screen = NSScreen.main {
       let vf = screen.visibleFrame
-      origin = NSPoint(x: vf.maxX - winW - 16, y: vf.minY + 16)
+      origin = NSPoint(x: vf.maxX - winW, y: vf.minY + winH)
     } else {
       origin = .zero
     }
