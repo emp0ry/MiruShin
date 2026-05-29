@@ -17,8 +17,8 @@ import '../features/watch/domain/normalized_models.dart';
 import '../features/watch/presentation/watch_page.dart';
 import '../shared/models/media_item.dart';
 
-final GoRouter appRouter = GoRouter(
-  initialLocation: AppRoutes.board,
+GoRouter buildAppRouter(String initialLocation) => GoRouter(
+  initialLocation: initialLocation,
   routes: <RouteBase>[
     GoRoute(
       path: '/',

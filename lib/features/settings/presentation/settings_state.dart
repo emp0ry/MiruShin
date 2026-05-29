@@ -16,6 +16,26 @@ final settingsProvider = NotifierProvider<SettingsController, SettingsState>(
 
 enum AppThemeMode { system, dark, light, oled }
 
+enum AppStartupPage {
+  board('/board', 'Board'),
+  discovery('/discovery', 'Discovery'),
+  library('/library', 'Library'),
+  calendar('/calendar', 'Calendar'),
+  addons('/addons', 'Addons');
+
+  const AppStartupPage(this.route, this.label);
+
+  final String route;
+  final String label;
+
+  static AppStartupPage fromName(String? name) {
+    return AppStartupPage.values.firstWhere(
+      (AppStartupPage p) => p.name == name,
+      orElse: () => AppStartupPage.board,
+    );
+  }
+}
+
 enum AniListLibraryDefaultPage {
   all(null, 'All'),
   current(AniListListStatus.current, 'Watching'),
@@ -101,6 +121,7 @@ class SettingsState {
     this.anilistSavedAccounts = const <AniListSavedAccount>[],
     this.anilistScoreFormat = 'POINT_10_DECIMAL',
     this.soraWebProxyUrl = const String.fromEnvironment('MIRUSHIN_WEB_PROXY'),
+    this.startupPage = AppStartupPage.board,
   });
 
   final AppThemeMode themeMode;
@@ -135,6 +156,7 @@ class SettingsState {
   final List<AniListSavedAccount> anilistSavedAccounts;
   final String anilistScoreFormat;
   final String soraWebProxyUrl;
+  final AppStartupPage startupPage;
 
   bool get hasTmdbToken => tmdbReadAccessToken.trim().isNotEmpty;
 
@@ -204,6 +226,7 @@ class SettingsState {
     List<AniListSavedAccount>? anilistSavedAccounts,
     String? anilistScoreFormat,
     String? soraWebProxyUrl,
+    AppStartupPage? startupPage,
     bool clearAppLocale = false,
     bool clearMetadataLocale = false,
     bool clearAniListSession = false,
@@ -258,6 +281,7 @@ class SettingsState {
       anilistSavedAccounts: anilistSavedAccounts ?? this.anilistSavedAccounts,
       anilistScoreFormat: anilistScoreFormat ?? this.anilistScoreFormat,
       soraWebProxyUrl: soraWebProxyUrl ?? this.soraWebProxyUrl,
+      startupPage: startupPage ?? this.startupPage,
     );
   }
 
@@ -405,6 +429,7 @@ class SettingsController extends Notifier<SettingsState> {
           .toList(growable: false),
       anilistScoreFormat: preferences.readAniListScoreFormat(),
       soraWebProxyUrl: preferences.readSoraWebProxyUrl(),
+      startupPage: AppStartupPage.fromName(preferences.readStartupPage()),
     );
   }
 
@@ -612,6 +637,13 @@ class SettingsController extends Notifier<SettingsState> {
     state = state.copyWith(anilistScoreFormat: value);
     unawaited(
       _save((SettingsPreferences prefs) => prefs.saveAniListScoreFormat(value)),
+    );
+  }
+
+  void setStartupPage(AppStartupPage value) {
+    state = state.copyWith(startupPage: value);
+    unawaited(
+      _save((SettingsPreferences prefs) => prefs.saveStartupPage(value.name)),
     );
   }
 

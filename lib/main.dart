@@ -1,13 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app/app.dart';
 import 'bootstrap/mirushin_fvp_bootstrap.dart';
 import 'core/constants/app_constants.dart';
+import 'core/utils/settings_preferences.dart';
+import 'features/settings/presentation/settings_state.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await AppConstants.init();
+  final SharedPreferences prefs = await SharedPreferences.getInstance();
+  final String initialRoute = AppStartupPage.fromName(
+    prefs.getString(SettingsPreferences.startupPageKey),
+  ).route;
   final defaultFlutterError = FlutterError.onError;
   FlutterError.onError = (FlutterErrorDetails details) {
     final String message = details.exceptionAsString();
@@ -28,5 +35,5 @@ Future<void> main() async {
     }
   };
   configureMiruShinFvp();
-  runApp(const ProviderScope(child: MiruShinApp()));
+  runApp(ProviderScope(child: MiruShinApp(initialRoute: initialRoute)));
 }

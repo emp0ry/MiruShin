@@ -751,6 +751,23 @@ class _AppearanceSection extends StatelessWidget {
             ),
           ),
         ),
+        SettingsRow(
+          title: context.t('Startup page'),
+          trailing: DropdownButton<AppStartupPage>(
+            value: settings.startupPage,
+            items: AppStartupPage.values
+                .map(
+                  (AppStartupPage page) => DropdownMenuItem<AppStartupPage>(
+                    value: page,
+                    child: Text(page.label),
+                  ),
+                )
+                .toList(),
+            onChanged: (AppStartupPage? value) {
+              if (value != null) controller.setStartupPage(value);
+            },
+          ),
+        ),
       ],
     );
   }

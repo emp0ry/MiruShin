@@ -4,9 +4,11 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../core/constants/app_constants.dart';
 import '../features/addons/application/sora_addons_provider.dart';
+import 'app_routes.dart';
 import '../features/profile/application/anilist_user_settings_provider.dart';
 import '../features/settings/presentation/settings_state.dart';
 import '../features/tracking/application/anilist_library_provider.dart';
@@ -15,13 +17,23 @@ import 'router.dart';
 import 'theme/app_theme.dart';
 
 class MiruShinApp extends ConsumerStatefulWidget {
-  const MiruShinApp({super.key});
+  const MiruShinApp({super.key, this.initialRoute = AppRoutes.board});
+
+  final String initialRoute;
 
   @override
   ConsumerState<MiruShinApp> createState() => _MiruShinAppState();
 }
 
 class _MiruShinAppState extends ConsumerState<MiruShinApp> {
+  late final GoRouter _router;
+
+  @override
+  void initState() {
+    super.initState();
+    _router = buildAppRouter(widget.initialRoute);
+  }
+
   @override
   Widget build(BuildContext context) {
     final SettingsState settings = ref.watch(settingsProvider);
@@ -53,7 +65,7 @@ class _MiruShinAppState extends ConsumerState<MiruShinApp> {
         GlobalCupertinoLocalizations.delegate,
       ],
       scrollBehavior: _MouseDragScrollBehavior(),
-      routerConfig: appRouter,
+      routerConfig: _router,
     );
   }
 }
