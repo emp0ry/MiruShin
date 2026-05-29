@@ -1470,7 +1470,7 @@ class AniListApiClient {
     );
   }
 
-  Future<bool?> toggleFavouriteMedia({
+  Future<void> toggleFavouriteMedia({
     required int mediaId,
     required bool isManga,
   }) async {
@@ -1487,11 +1487,6 @@ class AniListApiClient {
           : <String, dynamic>{'anime': mediaId},
       authenticated: true,
     );
-    try {
-      return await fetchMediaFavouriteStatus(mediaId);
-    } catch (_) {
-      return null;
-    }
   }
 
   Future<List<CalendarItem>> getAiringSchedule({

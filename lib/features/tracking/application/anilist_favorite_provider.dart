@@ -35,10 +35,12 @@ class AniListFavoriteController extends Notifier<Map<int, bool>> {
     final SettingsState settings = ref.read(settingsProvider);
     final String token = settings.anilistAccessToken.trim();
     try {
-      final bool? actual = await AniListApiClient(
+      await AniListApiClient(
         accessToken: token,
       ).toggleFavouriteMedia(mediaId: mediaId, isManga: isManga);
-      state = <int, bool>{...state, mediaId: actual ?? next};
+      // Keep the optimistic value (next). Do not re-read from the API here —
+      // AniList often returns the pre-toggle state immediately after the
+      // mutation, which would silently revert the visual update.
       if (isManga) {
         invalidateAniListMangaLibraryProviders(ref.invalidate);
       } else {
