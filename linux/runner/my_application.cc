@@ -211,6 +211,84 @@ static void window_method_call_handler(FlMethodChannel* channel,
         fl_method_success_response_new(result_val);
     fl_method_call_respond(method_call, FL_METHOD_RESPONSE(response), nullptr);
 
+  } else if (strcmp(method, "getWindowRect") == 0) {
+    gint x = 0, y = 0, w = 0, h = 0;
+    gtk_window_get_position(window, &x, &y);
+    gtk_window_get_size(window, &w, &h);
+    g_autoptr(FlValue) rect = fl_value_new_map();
+    fl_value_set_string_take(rect, "x", fl_value_new_int(x));
+    fl_value_set_string_take(rect, "y", fl_value_new_int(y));
+    fl_value_set_string_take(rect, "width", fl_value_new_int(w));
+    fl_value_set_string_take(rect, "height", fl_value_new_int(h));
+    g_autoptr(FlMethodSuccessResponse) response =
+        fl_method_success_response_new(rect);
+    fl_method_call_respond(method_call, FL_METHOD_RESPONSE(response), nullptr);
+
+  } else if (strcmp(method, "setWindowSize") == 0) {
+    FlValue* args = fl_method_call_get_args(method_call);
+    FlValue* w_val = fl_value_lookup_string(args, "width");
+    FlValue* h_val = fl_value_lookup_string(args, "height");
+    if (w_val == nullptr || h_val == nullptr) {
+      g_autoptr(FlMethodErrorResponse) err =
+          fl_method_error_response_new("bad_args", "width and height required",
+                                      nullptr);
+      fl_method_call_respond(method_call, FL_METHOD_RESPONSE(err), nullptr);
+      return;
+    }
+    gint w = (gint)fl_value_get_int(w_val);
+    gint h = (gint)fl_value_get_int(h_val);
+    gtk_window_unmaximize(window);
+    gtk_window_resize(window, w, h);
+    g_autoptr(FlMethodSuccessResponse) response =
+        fl_method_success_response_new(nullptr);
+    fl_method_call_respond(method_call, FL_METHOD_RESPONSE(response), nullptr);
+
+  } else if (strcmp(method, "setWindowRect") == 0) {
+    FlValue* args = fl_method_call_get_args(method_call);
+    FlValue* x_val = fl_value_lookup_string(args, "x");
+    FlValue* y_val = fl_value_lookup_string(args, "y");
+    FlValue* w_val = fl_value_lookup_string(args, "width");
+    FlValue* h_val = fl_value_lookup_string(args, "height");
+    if (x_val && y_val) {
+      gtk_window_move(window, (gint)fl_value_get_int(x_val),
+                      (gint)fl_value_get_int(y_val));
+    }
+    if (w_val && h_val) {
+      gtk_window_resize(window, (gint)fl_value_get_int(w_val),
+                        (gint)fl_value_get_int(h_val));
+    }
+    g_autoptr(FlMethodSuccessResponse) response =
+        fl_method_success_response_new(nullptr);
+    fl_method_call_respond(method_call, FL_METHOD_RESPONSE(response), nullptr);
+
+  } else if (strcmp(method, "moveToCorner") == 0) {
+    GdkDisplay* display = gdk_display_get_default();
+    GdkMonitor* monitor = gdk_display_get_primary_monitor(display);
+    GdkRectangle workarea;
+    gdk_monitor_get_workarea(monitor, &workarea);
+    gint w = 0, h = 0;
+    gtk_window_get_size(window, &w, &h);
+    gtk_window_move(window, workarea.x + workarea.width - w - 16,
+                    workarea.y + workarea.height - h - 16);
+    g_autoptr(FlMethodSuccessResponse) response =
+        fl_method_success_response_new(nullptr);
+    fl_method_call_respond(method_call, FL_METHOD_RESPONSE(response), nullptr);
+
+  } else if (strcmp(method, "setAlwaysOnTop") == 0) {
+    FlValue* args = fl_method_call_get_args(method_call);
+    if (fl_value_get_type(args) != FL_VALUE_TYPE_BOOL) {
+      g_autoptr(FlMethodErrorResponse) err =
+          fl_method_error_response_new("bad_args",
+                                      "setAlwaysOnTop expects a bool",
+                                      nullptr);
+      fl_method_call_respond(method_call, FL_METHOD_RESPONSE(err), nullptr);
+      return;
+    }
+    gtk_window_set_keep_above(window, fl_value_get_bool(args));
+    g_autoptr(FlMethodSuccessResponse) response =
+        fl_method_success_response_new(nullptr);
+    fl_method_call_respond(method_call, FL_METHOD_RESPONSE(response), nullptr);
+
   } else {
     g_autoptr(FlMethodNotImplementedResponse) response =
         fl_method_not_implemented_response_new();

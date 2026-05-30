@@ -10,6 +10,7 @@ import '../application/playback_controller.dart';
 import '../application/player_settings.dart';
 import '../data/cast_controller.dart';
 import '../data/discord_rpc_service.dart';
+import '../data/desktop_pip_service.dart';
 import '../data/native_player_service.dart';
 import '../data/pip_controller.dart';
 import '../data/subtitle_parser.dart';
@@ -55,8 +56,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   Timer? _spaceHoldTimer;
   StreamSubscription<bool>? _pipSub;
   StreamSubscription<NativePlayerEvent>? _nativePlayerSub;
+  StreamSubscription<bool>? _desktopPipSub;
   bool _inPipMode = false;
   bool _nativePipActive = false;
+  bool _desktopPipActive = false;
   bool? _lastPipIsPlaying;
   late final bool _iosNativePipSupported;
   final FocusNode _playerFocusNode = FocusNode(
@@ -96,6 +99,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       _nativePlayerSub = NativePlayerService.events.listen(
         _handleNativePlayerEvent,
       );
+    }
+    if (DesktopPipService.isSupported) {
+      _desktopPipSub = DesktopPipService.events.listen((active) {
+        if (!mounted) return;
+        setState(() => _desktopPipActive = active);
+      });
     }
     _pipSub = ref.read(pipControllerProvider).pipModeStream.listen((inPip) {
       if (!mounted) return;
@@ -230,10 +239,23 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     }
   }
 
+  Future<void> _toggleDesktopPip() async {
+    if (_desktopPipActive) {
+      await DesktopPipService.exit();
+    } else {
+      // Exit fullscreen first — an always-on-top fullscreen window conflicts
+      // with the PiP always-on-top flag on Windows.
+      if (_isFullscreen) await _setFullscreen(false);
+      await DesktopPipService.enter();
+    }
+  }
+
   @override
   void dispose() {
     _nativePlayerSub?.cancel();
     _pipSub?.cancel();
+    _desktopPipSub?.cancel();
+    if (DesktopPipService.isActive) unawaited(DesktopPipService.exit());
     _wakelockTimer?.cancel();
     unawaited(WakelockPlus.disable());
     _hideTimer?.cancel();
@@ -317,8 +339,14 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     _hideTimer?.cancel();
     _autoNextTimer?.cancel();
 
-    // When in PiP and going to the next episode, bring the app to the
-    // foreground first so navigation and the new player open normally.
+    // Exit desktop PiP so the window restores before navigating away.
+    if (_desktopPipActive) {
+      await DesktopPipService.exit();
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+    }
+
+    // When in Android/iOS PiP and going to the next episode, bring the app to
+    // the foreground first so navigation and the new player open normally.
     if (_inPipMode && playNext) {
       await ref.read(pipControllerProvider).bringToForeground();
       await Future<void>.delayed(const Duration(milliseconds: 300));
@@ -713,9 +741,13 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                                       onExit: () => unawaited(_exitPlayer()),
                                       onToggleFullscreen: _toggleFullscreen,
                                       onEnterNativePip: _iosNativePipSupported
-                                          ? () =>
-                                                unawaited(_handOffToNativePip())
-                                          : null,
+                                          ? () => unawaited(
+                                              _handOffToNativePip())
+                                          : DesktopPipService.isSupported
+                                              ? () => unawaited(
+                                                  _toggleDesktopPip())
+                                              : null,
+                                      desktopPipActive: _desktopPipActive,
                                     ),
                                   ),
                                 ),
@@ -1082,6 +1114,7 @@ class _PlayerChrome extends ConsumerWidget {
     required this.onExit,
     required this.onToggleFullscreen,
     this.onEnterNativePip,
+    this.desktopPipActive = false,
   });
 
   final bool isFullscreen;
@@ -1089,6 +1122,7 @@ class _PlayerChrome extends ConsumerWidget {
   final VoidCallback onExit;
   final VoidCallback onToggleFullscreen;
   final VoidCallback? onEnterNativePip;
+  final bool desktopPipActive;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1169,11 +1203,17 @@ class _PlayerChrome extends ConsumerWidget {
                   ],
                   if (onEnterNativePip != null)
                     IconButton(
-                      tooltip: 'Picture in Picture',
+                      tooltip: desktopPipActive
+                          ? 'Exit Picture in Picture'
+                          : 'Picture in Picture',
                       onPressed: onEnterNativePip,
-                      icon: const Icon(
-                        Icons.picture_in_picture_alt_rounded,
-                        color: Colors.white,
+                      icon: Icon(
+                        desktopPipActive
+                            ? Icons.picture_in_picture_rounded
+                            : Icons.picture_in_picture_alt_rounded,
+                        color: desktopPipActive
+                            ? Colors.lightBlueAccent
+                            : Colors.white,
                       ),
                     )
                   else if (pipSupported)

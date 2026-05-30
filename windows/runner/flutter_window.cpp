@@ -96,6 +96,105 @@ void FlutterWindow::SetupWindowChannel() {
           return;
         }
 
+        // ── PiP / window-management helpers ──────────────────────────────
+
+        if (call.method_name() == "getWindowRect") {
+          RECT wr{};
+          GetWindowRect(hwnd, &wr);
+          flutter::EncodableMap map;
+          map[flutter::EncodableValue("x")] =
+              flutter::EncodableValue(static_cast<int>(wr.left));
+          map[flutter::EncodableValue("y")] =
+              flutter::EncodableValue(static_cast<int>(wr.top));
+          map[flutter::EncodableValue("width")] =
+              flutter::EncodableValue(static_cast<int>(wr.right - wr.left));
+          map[flutter::EncodableValue("height")] =
+              flutter::EncodableValue(static_cast<int>(wr.bottom - wr.top));
+          result->Success(flutter::EncodableValue(map));
+          return;
+        }
+
+        if (call.method_name() == "setWindowSize") {
+          const auto* map =
+              std::get_if<flutter::EncodableMap>(call.arguments());
+          if (!map) {
+            result->Error("bad_args", "setWindowSize expects a map");
+            return;
+          }
+          auto w_it = map->find(flutter::EncodableValue("width"));
+          auto h_it = map->find(flutter::EncodableValue("height"));
+          if (w_it == map->end() || h_it == map->end()) {
+            result->Error("bad_args", "width and height required");
+            return;
+          }
+          int w = std::get<int>(w_it->second);
+          int h = std::get<int>(h_it->second);
+          // Restore from maximised state so SetWindowPos takes effect.
+          if (IsZoomed(hwnd)) {
+            ShowWindow(hwnd, SW_RESTORE);
+          }
+          SetWindowPos(hwnd, nullptr, 0, 0, w, h,
+                       SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+          result->Success();
+          return;
+        }
+
+        if (call.method_name() == "setWindowRect") {
+          const auto* map =
+              std::get_if<flutter::EncodableMap>(call.arguments());
+          if (!map) {
+            result->Error("bad_args", "setWindowRect expects a map");
+            return;
+          }
+          auto x_it = map->find(flutter::EncodableValue("x"));
+          auto y_it = map->find(flutter::EncodableValue("y"));
+          auto w_it = map->find(flutter::EncodableValue("width"));
+          auto h_it = map->find(flutter::EncodableValue("height"));
+          if (x_it == map->end() || y_it == map->end() ||
+              w_it == map->end() || h_it == map->end()) {
+            result->Error("bad_args", "x, y, width and height required");
+            return;
+          }
+          int x = std::get<int>(x_it->second);
+          int y = std::get<int>(y_it->second);
+          int w = std::get<int>(w_it->second);
+          int h = std::get<int>(h_it->second);
+          SetWindowPos(hwnd, nullptr, x, y, w, h,
+                       SWP_NOZORDER | SWP_NOACTIVATE);
+          result->Success();
+          return;
+        }
+
+        if (call.method_name() == "moveToCorner") {
+          HMONITOR mon =
+              MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
+          MONITORINFO mi{sizeof(mi)};
+          GetMonitorInfo(mon, &mi);
+          RECT wr{};
+          GetWindowRect(hwnd, &wr);
+          int w = wr.right - wr.left;
+          int h = wr.bottom - wr.top;
+          int x = mi.rcWork.right - w - 16;
+          int y = mi.rcWork.bottom - h - 16;
+          SetWindowPos(hwnd, nullptr, x, y, 0, 0,
+                       SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+          result->Success();
+          return;
+        }
+
+        if (call.method_name() == "setAlwaysOnTop") {
+          const bool* on_top = std::get_if<bool>(call.arguments());
+          if (!on_top) {
+            result->Error("bad_args", "setAlwaysOnTop expects a bool");
+            return;
+          }
+          SetWindowPos(hwnd, *on_top ? HWND_TOPMOST : HWND_NOTOPMOST,
+                       0, 0, 0, 0,
+                       SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+          result->Success();
+          return;
+        }
+
         result->NotImplemented();
       });
 
