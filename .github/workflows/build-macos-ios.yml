@@ -27,6 +27,25 @@ jobs:
       - name: Flutter pub get
         run: flutter pub get
 
+      - name: Pre-cache mdk SDK (bypass unreliable SourceForge nightly)
+        run: |
+          set -e
+          MDK_SF_URL="https://sourceforge.net/projects/mdk-sdk/files/nightly/mdk-sdk-apple.tar.xz"
+          MDK_GH_URL="https://github.com/wang-bin/mdk-sdk/releases/latest/download/mdk-sdk-apple.tar.xz"
+          # CocoaPods caches HTTP pod downloads keyed by MD5({:http=>"url"}).
+          # Pre-populate the cache with the GitHub binary so pod install never
+          # touches SourceForge.
+          CACHE_HASH=$(ruby -rdigest -e 'puts Digest::MD5.hexdigest({:http=>ARGV[0]}.to_s)' "$MDK_SF_URL")
+          CACHE_DIR="$HOME/Library/Caches/CocoaPods/Pods/External/mdk/$CACHE_HASH"
+          if [ ! -d "$CACHE_DIR" ]; then
+            echo "Downloading mdk SDK from GitHub releases..."
+            mkdir -p "$CACHE_DIR"
+            curl -fL "$MDK_GH_URL" -o /tmp/mdk-sdk-apple.tar.xz
+            tar xf /tmp/mdk-sdk-apple.tar.xz -C "$CACHE_DIR"
+            rm -f /tmp/mdk-sdk-apple.tar.xz
+            echo "Cached at $CACHE_DIR"
+          fi
+
       - name: Prepare iOS no-codesign config
         shell: bash
         run: |
