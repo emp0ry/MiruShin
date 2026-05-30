@@ -15,6 +15,7 @@ using namespace MDK_NS;
 #endif
 
 #include <algorithm>
+#include <cctype>
 #include <iostream>
 #include <string>
 #include <utility>
@@ -268,7 +269,9 @@ void PipPlayer::SetupMdkPlayer(
     const std::string& v = kv.second;
 
     std::string lk = k;
-    std::transform(lk.begin(), lk.end(), lk.begin(), ::tolower);
+    std::transform(lk.begin(), lk.end(), lk.begin(), [](unsigned char c) {
+      return static_cast<char>(std::tolower(c));
+    });
 
     if (lk == "user-agent") {
       user_agent = v;
@@ -342,9 +345,9 @@ void PipPlayer::SetupMdkPlayer(
   }
 
   if (was_playing) {
-    player.setState(PlaybackState::Playing);
+    player.set(PlaybackState::Playing);
   } else {
-    player.setState(PlaybackState::Paused);
+    player.set(PlaybackState::Paused);
   }
 #endif  // MIRUSHIN_PIP_WIN32
 }
@@ -427,7 +430,7 @@ void PipPlayer::Cleanup() {
       Player p(player_api_);
       p.setRenderCallback(nullptr);
       p.setVideoSurfaceSize(-1, -1);
-      p.setState(PlaybackState::Stopped);
+      p.set(PlaybackState::Stopped);
     }
 
     mdkPlayerAPI_delete(&player_api_);
