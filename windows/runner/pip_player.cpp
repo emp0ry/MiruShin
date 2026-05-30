@@ -1,42 +1,68 @@
 // Floating PiP window for Windows.
-// Uses the mdk C++ Player API (same as the fvp plugin) with a D3D11 swap
-// chain so each rendered frame is presented directly to the HWND — no Flutter
-// texture involved.
+// Uses the MDK C++ Player API, same as the fvp plugin, with a D3D11 swap
+// chain so each rendered frame is presented directly to the HWND.
+
 #include "pip_player.h"
 
+#include <d3d10.h>
 #include <d3d11.h>
 #include <dxgi.h>
 
-// MDK headers are on the include path only when the mdk-sdk has been
-// downloaded by the fvp plugin CMake step.  Guard everything behind the
-// CMake-defined symbol so the file compiles (as an empty stub) even when the
-// SDK is absent.
 #ifdef MIRUSHIN_PIP_WIN32
 #include "mdk/Player.h"
 #include "mdk/RenderAPI.h"
 using namespace MDK_NS;
 #endif
 
-#include <wrl/client.h>
 #include <algorithm>
 #include <iostream>
 #include <string>
+#include <utility>
+#include <wrl/client.h>
 
 using Microsoft::WRL::ComPtr;
 
 namespace pip {
 
-// ── helpers ─────────────────────────────────────────────────────────────────
+// ── Helpers ─────────────────────────────────────────────────────────────────
 
 static std::wstring Utf8ToWide(const std::string& s) {
-  if (s.empty()) return {};
-  int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
-  std::wstring ws(n, L'\0');
-  MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, ws.data(), n);
+  if (s.empty()) {
+    return {};
+  }
+
+  int n = MultiByteToWideChar(
+      CP_UTF8,
+      0,
+      s.c_str(),
+      -1,
+      nullptr,
+      0
+  );
+
+  if (n <= 0) {
+    return {};
+  }
+
+  std::wstring ws(static_cast<size_t>(n), L'\0');
+
+  MultiByteToWideChar(
+      CP_UTF8,
+      0,
+      s.c_str(),
+      -1,
+      ws.data(),
+      n
+  );
+
+  if (!ws.empty() && ws.back() == L'\0') {
+    ws.pop_back();
+  }
+
   return ws;
 }
 
-// ── PipPlayer ────────────────────────────────────────────────────────────────
+// ── PipPlayer ───────────────────────────────────────────────────────────────
 
 PipPlayer::PipPlayer() = default;
 
@@ -47,7 +73,11 @@ PipPlayer::~PipPlayer() {
 // static
 ATOM PipPlayer::RegisterClass() {
   static ATOM cls = 0;
-  if (cls) return cls;
+
+  if (cls) {
+    return cls;
+  }
+
   WNDCLASSEXW wc{};
   wc.cbSize = sizeof(wc);
   wc.style = CS_HREDRAW | CS_VREDRAW;
@@ -56,16 +86,21 @@ ATOM PipPlayer::RegisterClass() {
   wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
   wc.hbrBackground = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
   wc.lpszClassName = L"MiruShinPipWindow";
+
   cls = RegisterClassExW(&wc);
   return cls;
 }
 
-bool PipPlayer::CreateWindow(const std::wstring& title) {
+bool PipPlayer::CreatePipWindow(const std::wstring& title) {
   RegisterClass();
 
   // Position in the bottom-right of the primary work area.
   MONITORINFO mi{sizeof(mi)};
-  GetMonitorInfo(MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY), &mi);
+  GetMonitorInfo(
+      MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY),
+      &mi
+  );
+
   int x = mi.rcWork.right - width_ - 16;
   int y = mi.rcWork.bottom - height_ - 16;
 
@@ -74,32 +109,58 @@ bool PipPlayer::CreateWindow(const std::wstring& title) {
       L"MiruShinPipWindow",
       title.empty() ? L"MiruShin PiP" : title.c_str(),
       WS_OVERLAPPEDWINDOW,
-      x, y, width_, height_,
-      nullptr, nullptr,
+      x,
+      y,
+      width_,
+      height_,
+      nullptr,
+      nullptr,
       GetModuleHandleW(nullptr),
-      this);
+      this
+  );
 
   return hwnd_ != nullptr;
 }
 
 bool PipPlayer::SetupD3D11() {
   HRESULT hr = D3D11CreateDevice(
-      nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
-      D3D11_CREATE_DEVICE_BGRA_SUPPORT, nullptr, 0,
-      D3D11_SDK_VERSION, &device_, nullptr, &ctx_);
-  if (FAILED(hr)) return false;
+      nullptr,
+      D3D_DRIVER_TYPE_HARDWARE,
+      nullptr,
+      D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+      nullptr,
+      0,
+      D3D11_SDK_VERSION,
+      &device_,
+      nullptr,
+      &ctx_
+  );
+
+  if (FAILED(hr)) {
+    return false;
+  }
 
   // Enable multi-thread protection so MDK can render from its own thread.
   ComPtr<ID3D10Multithread> mt;
-  if (SUCCEEDED(device_.As(&mt))) mt->SetMultithreadProtected(TRUE);
+  if (SUCCEEDED(device_.As(&mt))) {
+    mt->SetMultithreadProtected(TRUE);
+  }
 
   // Create a swap chain for the PiP HWND.
   ComPtr<IDXGIDevice> dxgi_dev;
-  device_.As(&dxgi_dev);
+  if (FAILED(device_.As(&dxgi_dev))) {
+    return false;
+  }
+
   ComPtr<IDXGIAdapter> adapter;
-  dxgi_dev->GetAdapter(&adapter);
+  if (FAILED(dxgi_dev->GetAdapter(&adapter))) {
+    return false;
+  }
+
   ComPtr<IDXGIFactory> factory;
-  adapter->GetParent(IID_PPV_ARGS(&factory));
+  if (FAILED(adapter->GetParent(IID_PPV_ARGS(&factory)))) {
+    return false;
+  }
 
   DXGI_SWAP_CHAIN_DESC scd{};
   scd.BufferDesc.Width = static_cast<UINT>(width_);
@@ -113,49 +174,73 @@ bool PipPlayer::SetupD3D11() {
   scd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
 
   hr = factory->CreateSwapChain(device_.Get(), &scd, &swap_chain_);
-  if (FAILED(hr)) return false;
+  if (FAILED(hr)) {
+    return false;
+  }
 
   // Block ALT+ENTER fullscreen toggle on the swap chain.
   factory->MakeWindowAssociation(hwnd_, DXGI_MWA_NO_ALT_ENTER);
 
   // Create the render target view from the back buffer.
   ComPtr<ID3D11Texture2D> back;
-  swap_chain_->GetBuffer(0, IID_PPV_ARGS(&back));
-  device_->CreateRenderTargetView(back.Get(), nullptr, &rtv_);
+  if (FAILED(swap_chain_->GetBuffer(0, IID_PPV_ARGS(&back)))) {
+    return false;
+  }
+
+  hr = device_->CreateRenderTargetView(back.Get(), nullptr, &rtv_);
+  if (FAILED(hr)) {
+    return false;
+  }
 
   return rtv_ != nullptr;
 }
 
 void PipPlayer::ResizeSwapChain(int w, int h) {
-  if (!swap_chain_) return;
+  if (!swap_chain_) {
+    return;
+  }
+
   width_ = w;
   height_ = h;
 
   // Release the RTV before resizing.
   rtv_.Reset();
-  if (player_api_) {
-#ifdef MIRUSHIN_PIP_WIN32
-    Player p(player_api_);
-    p.setVideoSurfaceSize(-1, -1);  // release render target
-#endif
-  }
 
-  swap_chain_->ResizeBuffers(0, static_cast<UINT>(w), static_cast<UINT>(h),
-                             DXGI_FORMAT_UNKNOWN, 0);
+#ifdef MIRUSHIN_PIP_WIN32
+  if (player_api_) {
+    Player p(player_api_);
+    p.setVideoSurfaceSize(-1, -1);
+  }
+#endif
+
+  swap_chain_->ResizeBuffers(
+      0,
+      static_cast<UINT>(w),
+      static_cast<UINT>(h),
+      DXGI_FORMAT_UNKNOWN,
+      0
+  );
 
   ComPtr<ID3D11Texture2D> back;
-  swap_chain_->GetBuffer(0, IID_PPV_ARGS(&back));
-  device_->CreateRenderTargetView(back.Get(), nullptr, &rtv_);
+  if (FAILED(swap_chain_->GetBuffer(0, IID_PPV_ARGS(&back)))) {
+    return;
+  }
 
-  if (player_api_ && rtv_) {
+  if (FAILED(device_->CreateRenderTargetView(back.Get(), nullptr, &rtv_))) {
+    return;
+  }
+
 #ifdef MIRUSHIN_PIP_WIN32
+  if (player_api_ && rtv_) {
     Player p(player_api_);
+
     D3D11RenderAPI ra{};
     ra.rtv = rtv_.Get();
+
     p.setRenderAPI(&ra);
     p.setVideoSurfaceSize(w, h);
-#endif
   }
+#endif
 }
 
 void PipPlayer::SetupMdkPlayer(
@@ -166,6 +251,11 @@ void PipPlayer::SetupMdkPlayer(
     bool was_playing) {
 #ifdef MIRUSHIN_PIP_WIN32
   player_api_ = mdkPlayerAPI_new();
+
+  if (!player_api_) {
+    return;
+  }
+
   Player player(player_api_);
 
   // Apply HTTP headers the same way fvp_player_engine.dart does.
@@ -173,9 +263,13 @@ void PipPlayer::SetupMdkPlayer(
   std::string referer;
   std::string avio_headers;
 
-  for (auto& [k, v] : headers) {
+  for (const auto& kv : headers) {
+    const std::string& k = kv.first;
+    const std::string& v = kv.second;
+
     std::string lk = k;
     std::transform(lk.begin(), lk.end(), lk.begin(), ::tolower);
+
     if (lk == "user-agent") {
       user_agent = v;
     } else if (lk == "referer" || lk == "referrer") {
@@ -184,18 +278,25 @@ void PipPlayer::SetupMdkPlayer(
       avio_headers += k + ": " + v + "\r\n";
     }
   }
+
   if (user_agent.empty()) {
     user_agent =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 "
         "Safari/537.36 MiruShin/1.0";
   }
-  player.setProperty("avio.user_agent", user_agent.c_str());
-  if (!referer.empty()) player.setProperty("avio.referer", referer.c_str());
-  if (!avio_headers.empty())
-    player.setProperty("avio.headers", avio_headers.c_str());
 
-  // Streaming reconnect (mirrors fvp_player_engine.dart).
+  player.setProperty("avio.user_agent", user_agent.c_str());
+
+  if (!referer.empty()) {
+    player.setProperty("avio.referer", referer.c_str());
+  }
+
+  if (!avio_headers.empty()) {
+    player.setProperty("avio.headers", avio_headers.c_str());
+  }
+
+  // Streaming reconnect.
   player.setProperty("avio.reconnect", "1");
   player.setProperty("avio.reconnect_streamed", "1");
   player.setProperty("avio.reconnect_delay_max", "5");
@@ -205,34 +306,46 @@ void PipPlayer::SetupMdkPlayer(
   // Hook up D3D11 render API.
   D3D11RenderAPI ra{};
   ra.rtv = rtv_.Get();
+
   player.setRenderAPI(&ra);
   player.setVideoSurfaceSize(width_, height_);
 
   // When MDK has decoded a new frame, blit it to the swap chain.
   player.setRenderCallback([this](void*) {
-    if (!player_api_ || !swap_chain_) return;
+    if (!player_api_ || !swap_chain_) {
+      return;
+    }
+
     Player p(player_api_);
     p.renderVideo();
+
     swap_chain_->Present(0, 0);
   });
 
   // Detect end-of-media.
   player.onMediaStatus([this](MediaStatus old_st, MediaStatus new_st) -> bool {
     if ((new_st & MediaStatus::End) == MediaStatus::End) {
-      // Post to the window thread so we don't call Dart APIs from MDK thread.
-      PostMessage(hwnd_, WM_APP + 1, 0, 0);
+      // Post to the window thread so we do not call Dart APIs from MDK thread.
+      if (hwnd_) {
+        PostMessage(hwnd_, WM_APP + 1, 0, 0);
+      }
     }
+
     return true;
   });
 
   player.setMedia(url.c_str());
   player.setPlaybackRate(playback_rate);
-  if (position_ms > 0)
+
+  if (position_ms > 0) {
     player.seek(position_ms, SeekFlag::FromStart | SeekFlag::InCache);
-  if (was_playing)
+  }
+
+  if (was_playing) {
     player.setState(PlaybackState::Playing);
-  else
+  } else {
     player.setState(PlaybackState::Paused);
+  }
 #endif  // MIRUSHIN_PIP_WIN32
 }
 
@@ -245,30 +358,53 @@ bool PipPlayer::Open(
     const std::wstring& title,
     DismissCallback on_dismiss,
     CompletedCallback on_complete) {
-  if (hwnd_) return false;
+  if (hwnd_) {
+    return false;
+  }
 
   on_dismiss_ = std::move(on_dismiss);
   on_complete_ = std::move(on_complete);
   dismissed_ = false;
 
 #ifndef MIRUSHIN_PIP_WIN32
-  // mdk-sdk not available — PiP is a no-op at runtime.
+  // mdk-sdk not available: PiP is a no-op at runtime.
   return false;
 #else
-  if (!CreateWindow(title)) return false;
-  if (!SetupD3D11()) { DestroyWindow(hwnd_); hwnd_ = nullptr; return false; }
-  SetupMdkPlayer(url, headers, position_ms, playback_rate, was_playing);
+  if (!CreatePipWindow(title)) {
+    return false;
+  }
+
+  if (!SetupD3D11()) {
+    DestroyWindow(hwnd_);
+    hwnd_ = nullptr;
+    return false;
+  }
+
+  SetupMdkPlayer(
+      url,
+      headers,
+      position_ms,
+      playback_rate,
+      was_playing
+  );
+
   ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
   UpdateWindow(hwnd_);
+
   return true;
 #endif
 }
 
 void PipPlayer::Dismiss(bool was_playing) {
-  if (dismissed_) return;
+  if (dismissed_) {
+    return;
+  }
+
   dismissed_ = true;
 
   DismissedArgs args{};
+  args.was_playing = was_playing;
+
 #ifdef MIRUSHIN_PIP_WIN32
   if (player_api_) {
     Player p(player_api_);
@@ -276,11 +412,12 @@ void PipPlayer::Dismiss(bool was_playing) {
     args.duration_ms = p.mediaInfo().duration;
   }
 #endif
-  args.was_playing = was_playing;
 
   Cleanup();
 
-  if (on_dismiss_) on_dismiss_(args);
+  if (on_dismiss_) {
+    on_dismiss_(args);
+  }
 }
 
 void PipPlayer::Cleanup() {
@@ -292,10 +429,12 @@ void PipPlayer::Cleanup() {
       p.setVideoSurfaceSize(-1, -1);
       p.setState(PlaybackState::Stopped);
     }
+
     mdkPlayerAPI_delete(&player_api_);
     player_api_ = nullptr;
   }
 #endif
+
   rtv_.Reset();
   swap_chain_.Reset();
   ctx_.Reset();
@@ -308,31 +447,49 @@ void PipPlayer::Cleanup() {
 }
 
 void PipPlayer::Close() {
-  if (!hwnd_) return;
-  dismissed_ = true;  // suppress callback on explicit close
+  if (!hwnd_) {
+    return;
+  }
+
+  // Suppress callback on explicit close from native service.
+  dismissed_ = true;
   Cleanup();
 }
 
-// ── Win32 message handling ───────────────────────────────────────────────────
+// ── Win32 message handling ──────────────────────────────────────────────────
 
 // static
-LRESULT CALLBACK PipPlayer::WndProc(HWND hwnd, UINT msg, WPARAM wp,
+LRESULT CALLBACK PipPlayer::WndProc(HWND hwnd,
+                                    UINT msg,
+                                    WPARAM wp,
                                     LPARAM lp) noexcept {
   PipPlayer* self = nullptr;
+
   if (msg == WM_NCCREATE) {
     auto* cs = reinterpret_cast<CREATESTRUCTW*>(lp);
     self = static_cast<PipPlayer*>(cs->lpCreateParams);
-    SetWindowLongPtrW(hwnd, GWLP_USERDATA,
-                      reinterpret_cast<LONG_PTR>(self));
+
+    SetWindowLongPtrW(
+        hwnd,
+        GWLP_USERDATA,
+        reinterpret_cast<LONG_PTR>(self)
+    );
   } else {
     self = reinterpret_cast<PipPlayer*>(
-        GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+        GetWindowLongPtrW(hwnd, GWLP_USERDATA)
+    );
   }
-  if (self) return self->HandleMessage(hwnd, msg, wp, lp);
+
+  if (self) {
+    return self->HandleMessage(hwnd, msg, wp, lp);
+  }
+
   return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
-LRESULT PipPlayer::HandleMessage(HWND hwnd, UINT msg, WPARAM wp,
+LRESULT PipPlayer::HandleMessage(HWND hwnd,
+                                 UINT msg,
+                                 WPARAM wp,
                                  LPARAM lp) noexcept {
   switch (msg) {
     case WM_CLOSE:
@@ -343,13 +500,18 @@ LRESULT PipPlayer::HandleMessage(HWND hwnd, UINT msg, WPARAM wp,
       if (wp != SIZE_MINIMIZED) {
         int w = LOWORD(lp);
         int h = HIWORD(lp);
-        if (w > 0 && h > 0) ResizeSwapChain(w, h);
+
+        if (w > 0 && h > 0) {
+          ResizeSwapChain(w, h);
+        }
       }
       return 0;
 
-    case WM_APP + 1:  // end-of-media posted by MDK callback
+    case WM_APP + 1: {
+      // End-of-media posted by MDK callback.
       if (on_complete_) {
         DismissedArgs args{};
+
 #ifdef MIRUSHIN_PIP_WIN32
         if (player_api_) {
           Player p(player_api_);
@@ -357,19 +519,27 @@ LRESULT PipPlayer::HandleMessage(HWND hwnd, UINT msg, WPARAM wp,
           args.duration_ms = p.mediaInfo().duration;
         }
 #endif
+
         dismissed_ = true;
         Cleanup();
+
         on_complete_(args);
       }
+
       return 0;
+    }
 
     case WM_KEYDOWN:
-      if (wp == VK_ESCAPE) { Dismiss(/*was_playing=*/true); return 0; }
+      if (wp == VK_ESCAPE) {
+        Dismiss(/*was_playing=*/true);
+        return 0;
+      }
       break;
 
     default:
       break;
   }
+
   return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
