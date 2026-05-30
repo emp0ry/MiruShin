@@ -4,6 +4,10 @@
 # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
 
+# Override mdk pod source: SourceForge nightly is unreliable in CI environments.
+# Using the stable GitHub release instead.
+$mdk_source_url = ENV.fetch('MDK_SDK_URL', 'https://github.com/wang-bin/mdk-sdk/releases/latest/download/mdk-sdk-apple.tar.xz')
+
 project 'Runner', {
   'Debug' => :debug,
   'Profile' => :release,
@@ -30,6 +34,7 @@ flutter_ios_podfile_setup
 target 'Runner' do
   use_frameworks!
 
+  pod 'mdk', :http => $mdk_source_url
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
   target 'RunnerTests' do
     inherit! :search_paths
