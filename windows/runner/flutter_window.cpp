@@ -27,6 +27,7 @@ bool FlutterWindow::OnCreate() {
   }
   RegisterPlugins(flutter_controller_->engine());
   SetupWindowChannel();
+  SetupPipChannel();
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -201,7 +202,137 @@ void FlutterWindow::SetupWindowChannel() {
   window_channel_ = std::move(channel);
 }
 
+void FlutterWindow::SetupPipChannel() {
+  auto channel =
+      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+          flutter_controller_->engine()->messenger(),
+          "mirushin/native_player",
+          &flutter::StandardMethodCodec::GetInstance());
+
+  channel->SetMethodCallHandler(
+      [this](
+          const flutter::MethodCall<flutter::EncodableValue>& call,
+          std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>
+              result) {
+        if (call.method_name() == "present") {
+          const auto* args =
+              std::get_if<flutter::EncodableMap>(call.arguments());
+          if (!args) {
+            result->Error("bad_args", "present expects a map");
+            return;
+          }
+
+          auto str = [&](const char* key) -> std::string {
+            auto it = args->find(flutter::EncodableValue(key));
+            if (it == args->end()) return {};
+            const auto* s = std::get_if<std::string>(&it->second);
+            return s ? *s : std::string{};
+          };
+          auto dbl = [&](const char* key) -> double {
+            auto it = args->find(flutter::EncodableValue(key));
+            if (it == args->end()) return 0.0;
+            const auto* d = std::get_if<double>(&it->second);
+            return d ? *d : 0.0;
+          };
+          auto boolean = [&](const char* key) -> bool {
+            auto it = args->find(flutter::EncodableValue(key));
+            if (it == args->end()) return false;
+            const auto* b = std::get_if<bool>(&it->second);
+            return b ? *b : false;
+          };
+
+          // Parse headers map.
+          std::map<std::string, std::string> headers;
+          {
+            auto it =
+                args->find(flutter::EncodableValue("headers"));
+            if (it != args->end()) {
+              const auto* hmap =
+                  std::get_if<flutter::EncodableMap>(&it->second);
+              if (hmap) {
+                for (auto& [k, v] : *hmap) {
+                  const auto* ks = std::get_if<std::string>(&k);
+                  const auto* vs = std::get_if<std::string>(&v);
+                  if (ks && vs) headers[*ks] = *vs;
+                }
+              }
+            }
+          }
+
+          const std::string url = str("url");
+          const int64_t pos_ms =
+              static_cast<int64_t>(dbl("positionMs"));
+          const float rate =
+              static_cast<float>(dbl("playbackRate"));
+          const bool was_playing = boolean("wasPlaying");
+          const std::wstring title =
+              [&]() -> std::wstring {
+            std::string t = str("title");
+            int n = MultiByteToWideChar(CP_UTF8, 0, t.c_str(), -1,
+                                        nullptr, 0);
+            std::wstring ws(n, L'\0');
+            MultiByteToWideChar(CP_UTF8, 0, t.c_str(), -1, ws.data(), n);
+            return ws;
+          }();
+
+          if (pip_player_ && pip_player_->IsOpen()) {
+            pip_player_->Close();
+          }
+          pip_player_ = std::make_unique<pip::PipPlayer>();
+
+          // Capture the channel pointer for callbacks.
+          auto* ch = pip_channel_.get();
+
+          bool ok = pip_player_->Open(
+              url, headers, pos_ms, rate, was_playing, title,
+              /*on_dismiss=*/[ch](pip::DismissedArgs a) {
+                if (!ch) return;
+                flutter::EncodableMap ev;
+                ev[flutter::EncodableValue("positionMs")] =
+                    flutter::EncodableValue(
+                        static_cast<double>(a.position_ms));
+                ev[flutter::EncodableValue("durationMs")] =
+                    flutter::EncodableValue(
+                        static_cast<double>(a.duration_ms));
+                ev[flutter::EncodableValue("wasPlaying")] =
+                    flutter::EncodableValue(a.was_playing);
+                ch->InvokeMethod(
+                    "dismissed",
+                    std::make_unique<flutter::EncodableValue>(ev));
+              },
+              /*on_complete=*/[ch](pip::DismissedArgs a) {
+                if (!ch) return;
+                flutter::EncodableMap ev;
+                ev[flutter::EncodableValue("positionMs")] =
+                    flutter::EncodableValue(
+                        static_cast<double>(a.position_ms));
+                ev[flutter::EncodableValue("durationMs")] =
+                    flutter::EncodableValue(
+                        static_cast<double>(a.duration_ms));
+                ch->InvokeMethod(
+                    "completed",
+                    std::make_unique<flutter::EncodableValue>(ev));
+              });
+
+          if (ok) {
+            result->Success();
+          } else {
+            result->Error("pip_failed",
+                          "Failed to open PiP window (mdk-sdk unavailable "
+                          "or D3D11 error)");
+          }
+          return;
+        }
+
+        result->NotImplemented();
+      });
+
+  pip_channel_ = std::move(channel);
+}
+
 void FlutterWindow::OnDestroy() {
+  pip_channel_ = nullptr;
+  if (pip_player_) { pip_player_->Close(); pip_player_ = nullptr; }
   window_channel_ = nullptr;
   if (flutter_controller_) {
     flutter_controller_ = nullptr;

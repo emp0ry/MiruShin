@@ -9,6 +9,7 @@ project(runner LANGUAGES CXX)
 add_executable(${BINARY_NAME}
   "main.cc"
   "my_application.cc"
+  "pip_player.cc"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
 )
 
@@ -24,3 +25,31 @@ target_link_libraries(${BINARY_NAME} PRIVATE flutter)
 target_link_libraries(${BINARY_NAME} PRIVATE PkgConfig::GTK)
 
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
+
+# ── Desktop PiP: reuse the mdk-sdk downloaded by the fvp plugin ────────────
+set(_mdk_sdk
+  "${CMAKE_SOURCE_DIR}/flutter/ephemeral/.plugin_symlinks/fvp/linux/mdk-sdk")
+if(EXISTS "${_mdk_sdk}/include/mdk/Player.h")
+  message(STATUS "MiruShin: mdk-sdk found — enabling Linux desktop PiP")
+  target_include_directories(${BINARY_NAME} PRIVATE "${_mdk_sdk}/include")
+  target_compile_definitions(${BINARY_NAME} PRIVATE MIRUSHIN_PIP_LINUX)
+  # epoxy is already required by fvp on Linux.
+  find_package(PkgConfig QUIET)
+  if(PKG_CONFIG_FOUND)
+    pkg_check_modules(EPOXY QUIET epoxy)
+    if(EPOXY_FOUND)
+      target_link_libraries(${BINARY_NAME} PRIVATE ${EPOXY_LIBRARIES})
+      target_include_directories(${BINARY_NAME} PRIVATE ${EPOXY_INCLUDE_DIRS})
+    endif()
+  endif()
+  if(TARGET mdk)
+    target_link_libraries(${BINARY_NAME} PRIVATE mdk)
+  else()
+    file(GLOB _mdk_lib "${_mdk_sdk}/lib/*.so" "${_mdk_sdk}/lib/x64/*.so")
+    if(_mdk_lib)
+      target_link_libraries(${BINARY_NAME} PRIVATE ${_mdk_lib})
+    endif()
+  endif()
+else()
+  message(STATUS "MiruShin: mdk-sdk not yet downloaded — PiP stub only")
+endif()

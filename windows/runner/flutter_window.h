@@ -9,6 +9,7 @@
 
 #include <memory>
 
+#include "pip_player.h"
 #include "win32_window.h"
 
 // A window that does nothing but host a Flutter view.
@@ -34,9 +35,18 @@ class FlutterWindow : public Win32Window {
   // The Flutter instance hosted by this window.
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;
 
-  // mirushin/window method channel for fullscreen management.
+  void SetupPipChannel();
+
+  // mirushin/window method channel for fullscreen / window management.
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
       window_channel_;
+
+  // mirushin/native_player method channel for desktop PiP.
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
+      pip_channel_;
+
+  // Desktop PiP player instance (at most one at a time).
+  std::unique_ptr<pip::PipPlayer> pip_player_;
 
   // Fullscreen state and saved window geometry for restore.
   bool is_fullscreen_ = false;

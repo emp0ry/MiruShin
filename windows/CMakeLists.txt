@@ -61,6 +61,34 @@ add_subdirectory("runner")
 # them to the application.
 include(flutter/generated_plugins.cmake)
 
+# ── Desktop PiP: reuse the mdk-sdk downloaded by the fvp plugin ────────────
+# fvp_setup_deps() runs during the fvp add_subdirectory above and downloads
+# mdk-sdk into the fvp plugin's windows/ source directory.
+if(TARGET fvp_plugin)
+  get_target_property(_fvp_src "${CMAKE_CURRENT_SOURCE_DIR}/flutter/ephemeral/.plugin_symlinks/fvp/windows" SOURCE_DIR)
+  set(_mdk_sdk "${CMAKE_CURRENT_SOURCE_DIR}/flutter/ephemeral/.plugin_symlinks/fvp/windows/mdk-sdk")
+  if(EXISTS "${_mdk_sdk}/include/mdk/Player.h")
+    message(STATUS "MiruShin: mdk-sdk found — enabling Windows desktop PiP")
+    target_sources(${BINARY_NAME} PRIVATE "runner/pip_player.cpp")
+    target_include_directories(${BINARY_NAME} PRIVATE "${_mdk_sdk}/include")
+    target_compile_definitions(${BINARY_NAME} PRIVATE MIRUSHIN_PIP_WIN32)
+    if(TARGET mdk)
+      target_link_libraries(${BINARY_NAME} PRIVATE mdk)
+    else()
+      file(GLOB _mdk_lib "${_mdk_sdk}/lib/x64/*.lib" "${_mdk_sdk}/lib/*.lib")
+      if(_mdk_lib)
+        target_link_libraries(${BINARY_NAME} PRIVATE ${_mdk_lib})
+      endif()
+    endif()
+    target_link_libraries(${BINARY_NAME} PRIVATE d3d11 dxgi)
+  else()
+    message(STATUS "MiruShin: mdk-sdk not yet downloaded — PiP stub only (run flutter build first)")
+    target_sources(${BINARY_NAME} PRIVATE "runner/pip_player.cpp")
+  endif()
+else()
+  target_sources(${BINARY_NAME} PRIVATE "runner/pip_player.cpp")
+endif()
+
 
 # === Installation ===
 # Support files are copied into place next to the executable, so that it can

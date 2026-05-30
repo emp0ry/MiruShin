@@ -8,11 +8,14 @@
 
 #include <cstdlib>
 #include "flutter/generated_plugin_registrant.h"
+#include "pip_player.h"
 
 struct _MyApplication {
   GtkApplication parent_instance;
   char** dart_entrypoint_arguments;
   FlMethodChannel* window_channel;
+  FlMethodChannel* pip_channel;
+  pip::PipPlayer* pip_player;
 };
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
@@ -385,6 +388,116 @@ static void my_application_activate(GApplication* application) {
       window,
       nullptr);
 
+  // PiP channel (desktop Picture-in-Picture via native floating window)
+  self->pip_channel = fl_method_channel_new(
+      fl_engine_get_binary_messenger(fl_view_get_engine(view)),
+      "mirushin/native_player",
+      FL_METHOD_CODEC(codec));
+  fl_method_channel_set_method_call_handler(
+      self->pip_channel,
+      [](FlMethodChannel* channel, FlMethodCall* call, gpointer user_data) {
+        MyApplication* self = MY_APPLICATION(user_data);
+        const gchar* method = fl_method_call_get_name(call);
+
+        if (strcmp(method, "present") == 0) {
+          FlValue* args = fl_method_call_get_args(call);
+
+          auto str_val = [&](const char* key) -> std::string {
+            FlValue* v = fl_value_lookup_string(args, key);
+            if (!v || fl_value_get_type(v) != FL_VALUE_TYPE_STRING) return {};
+            return fl_value_get_string(v);
+          };
+          auto dbl_val = [&](const char* key) -> double {
+            FlValue* v = fl_value_lookup_string(args, key);
+            if (!v || fl_value_get_type(v) != FL_VALUE_TYPE_FLOAT) return 0.0;
+            return fl_value_get_float(v);
+          };
+          auto bool_val = [&](const char* key) -> bool {
+            FlValue* v = fl_value_lookup_string(args, key);
+            if (!v || fl_value_get_type(v) != FL_VALUE_TYPE_BOOL) return false;
+            return fl_value_get_bool(v);
+          };
+
+          // Parse headers map.
+          std::map<std::string, std::string> headers;
+          FlValue* hval = fl_value_lookup_string(args, "headers");
+          if (hval && fl_value_get_type(hval) == FL_VALUE_TYPE_MAP) {
+            for (size_t i = 0; i < fl_value_get_length(hval); i++) {
+              FlValue* k = fl_value_get_map_key(hval, i);
+              FlValue* v = fl_value_get_map_value(hval, i);
+              if (k && v &&
+                  fl_value_get_type(k) == FL_VALUE_TYPE_STRING &&
+                  fl_value_get_type(v) == FL_VALUE_TYPE_STRING) {
+                headers[fl_value_get_string(k)] = fl_value_get_string(v);
+              }
+            }
+          }
+
+          std::string url = str_val("url");
+          int64_t pos_ms = static_cast<int64_t>(dbl_val("positionMs"));
+          float rate = static_cast<float>(dbl_val("playbackRate"));
+          bool was_playing = bool_val("wasPlaying");
+          std::string title = str_val("title");
+
+          if (self->pip_player) {
+            self->pip_player->Close();
+            delete self->pip_player;
+            self->pip_player = nullptr;
+          }
+          self->pip_player = new pip::PipPlayer();
+
+          FlMethodChannel* ch = self->pip_channel;
+
+          bool ok = self->pip_player->Open(
+              url, headers, pos_ms, rate, was_playing, title,
+              /*on_dismiss=*/[ch](pip::DismissedArgs a) {
+                g_autoptr(FlValue) ev = fl_value_new_map();
+                fl_value_set_string_take(
+                    ev, "positionMs",
+                    fl_value_new_float(static_cast<double>(a.position_ms)));
+                fl_value_set_string_take(
+                    ev, "durationMs",
+                    fl_value_new_float(static_cast<double>(a.duration_ms)));
+                fl_value_set_string_take(ev, "wasPlaying",
+                                         fl_value_new_bool(a.was_playing));
+                fl_method_channel_invoke_method(ch, "dismissed", ev,
+                                               nullptr, nullptr, nullptr);
+              },
+              /*on_complete=*/[ch](pip::DismissedArgs a) {
+                g_autoptr(FlValue) ev = fl_value_new_map();
+                fl_value_set_string_take(
+                    ev, "positionMs",
+                    fl_value_new_float(static_cast<double>(a.position_ms)));
+                fl_value_set_string_take(
+                    ev, "durationMs",
+                    fl_value_new_float(static_cast<double>(a.duration_ms)));
+                fl_method_channel_invoke_method(ch, "completed", ev,
+                                               nullptr, nullptr, nullptr);
+              });
+
+          if (ok) {
+            g_autoptr(FlMethodSuccessResponse) resp =
+                fl_method_success_response_new(nullptr);
+            fl_method_call_respond(call, FL_METHOD_RESPONSE(resp), nullptr);
+          } else {
+            g_autoptr(FlMethodErrorResponse) resp =
+                fl_method_error_response_new(
+                    "pip_failed",
+                    "Failed to open PiP window (mdk-sdk unavailable or "
+                    "GL error)",
+                    nullptr);
+            fl_method_call_respond(call, FL_METHOD_RESPONSE(resp), nullptr);
+          }
+          return;
+        }
+
+        g_autoptr(FlMethodNotImplementedResponse) resp =
+            fl_method_not_implemented_response_new();
+        fl_method_call_respond(call, FL_METHOD_RESPONSE(resp), nullptr);
+      },
+      self,
+      nullptr);
+
   gtk_widget_grab_focus(GTK_WIDGET(view));
 }
 
@@ -432,6 +545,12 @@ static void my_application_dispose(GObject* object) {
   MyApplication* self = MY_APPLICATION(object);
   g_clear_pointer(&self->dart_entrypoint_arguments, g_strfreev);
   g_clear_object(&self->window_channel);
+  g_clear_object(&self->pip_channel);
+  if (self->pip_player) {
+    self->pip_player->Close();
+    delete self->pip_player;
+    self->pip_player = nullptr;
+  }
   G_OBJECT_CLASS(my_application_parent_class)->dispose(object);
 }
 
