@@ -13,9 +13,15 @@ import 'player_engine.dart';
 const Duration _openTimeout = Duration(seconds: 90);
 const Duration _stateTick = Duration(milliseconds: 120);
 const Duration _startupSettleTimeout = Duration(seconds: 60);
+// When playing through the local proxy AND a direct fallback is still available,
+// only give the proxy a short window to deliver the first frame. If it can't,
+// we switch to direct immediately instead of stalling on the full 60s timeout
+// (the proxy can fetch the playlist yet fail on segments from a different CDN
+// host, which otherwise wastes a minute before falling back).
+const Duration _proxyStartupSettleTimeout = Duration(seconds: 8);
 const Duration _startupPollInterval = Duration(milliseconds: 250);
 const Duration _startupActionDelay = Duration(milliseconds: 750);
-const Duration _proxyStallFallbackDelay = Duration(seconds: 15);
+const Duration _proxyStallFallbackDelay = Duration(seconds: 10);
 const Duration _tinyHlsDurationLimit = Duration(seconds: 30);
 
 // MPV buffer config mirrors FVP's _bufferConfigFor() logic.
@@ -402,7 +408,16 @@ class MediaKitPlayerEngine extends PlayerEngine {
     required Duration requestedStartAt,
     required double targetPlaybackSpeed,
   }) async {
-    final bool ready = await _waitForStableStartup(player, generation);
+    // If we can still bail to direct, only wait the short proxy window so a
+    // segment-level proxy failure does not cost the full settle timeout.
+    final Duration settleTimeout = _canRetryDirectAfterProxy(player)
+        ? _proxyStartupSettleTimeout
+        : _startupSettleTimeout;
+    final bool ready = await _waitForStableStartup(
+      player,
+      generation,
+      timeout: settleTimeout,
+    );
     if (!_isActivePlayer(player, generation)) return;
 
     if (!ready) {
@@ -451,8 +466,12 @@ class MediaKitPlayerEngine extends PlayerEngine {
     _syncState();
   }
 
-  Future<bool> _waitForStableStartup(mk.Player player, int generation) async {
-    final DateTime deadline = DateTime.now().add(_startupSettleTimeout);
+  Future<bool> _waitForStableStartup(
+    mk.Player player,
+    int generation, {
+    Duration timeout = _startupSettleTimeout,
+  }) async {
+    final DateTime deadline = DateTime.now().add(timeout);
     Duration lastPosition = player.state.position;
     int stableTicks = 0;
 
