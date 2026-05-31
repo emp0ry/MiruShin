@@ -11,6 +11,7 @@ using namespace MDK_NS;
 #endif
 
 #include <gdk/gdkx.h>
+#include <cctype>
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -43,10 +44,9 @@ void PipPlayer::OnRealize(GtkGLArea* area, gpointer data) {
 
   // Use MDK OpenGL render API; fbo=0 means MDK renders to whatever FBO is
   // currently bound (GtkGLArea manages its own offscreen FBO).
-  GLRenderAPI ra{};
-  ra.fbo = 0;
+  self->render_api_.fbo = 0;
   Player p(self->player_api_);
-  p.setRenderAPI(&ra);
+  p.setRenderAPI(&self->render_api_);
   gint w = gtk_widget_get_allocated_width(GTK_WIDGET(area));
   gint h = gtk_widget_get_allocated_height(GTK_WIDGET(area));
   p.setVideoSurfaceSize(w > 0 ? w : self->width_,
@@ -64,10 +64,9 @@ gboolean PipPlayer::OnRender(GtkGLArea* area, GdkGLContext*, gpointer data) {
   GLint fbo = 0;
   glGetIntegerv(GL_FRAMEBUFFER_BINDING, &fbo);
 
-  GLRenderAPI ra{};
-  ra.fbo = static_cast<unsigned>(fbo);
+  self->render_api_.fbo = static_cast<unsigned>(fbo);
   Player p(self->player_api_);
-  p.setRenderAPI(&ra);
+  p.setRenderAPI(&self->render_api_);
   p.renderVideo();
   return TRUE;
 #else
@@ -78,6 +77,7 @@ gboolean PipPlayer::OnRender(GtkGLArea* area, GdkGLContext*, gpointer data) {
 // static — GLib idle callback, posted from MDK's thread when EOF fires.
 gboolean PipPlayer::OnEndOfMedia(gpointer data) {
   auto* self = static_cast<PipPlayer*>(data);
+  self->eof_source_id_ = 0;
   if (self->dismissed_) return G_SOURCE_REMOVE;
   if (self->on_complete_) {
     DismissedArgs args{};
@@ -105,6 +105,7 @@ void PipPlayer::SetupMdkPlayer(
     bool was_playing) {
 #ifdef MIRUSHIN_PIP_LINUX
   player_api_ = mdkPlayerAPI_new();
+  if (!player_api_) return;
   Player player(player_api_);
 
   // Apply HTTP headers (mirrors fvp_player_engine.dart).
@@ -112,7 +113,9 @@ void PipPlayer::SetupMdkPlayer(
   std::string referer;
   std::string avio_headers;
 
-  for (auto& [k, v] : headers) {
+  for (const auto& kv : headers) {
+    const std::string& k = kv.first;
+    const std::string& v = kv.second;
     std::string lk = k;
     for (auto& c : lk) c = static_cast<char>(std::tolower(c));
     if (lk == "user-agent") {
@@ -140,20 +143,30 @@ void PipPlayer::SetupMdkPlayer(
   player.setProperty("avformat.safe", "0");
 
   // When MDK has a new frame, ask GtkGLArea to redraw via the GTK main thread.
-  // Capture `this` (not the raw gl_area_ pointer) so that the idle callback
-  // can check the current gl_area_ value — which Cleanup() nulls before
-  // destroying the widget, preventing use-after-free.
+  // Keep a temporary reference to the GL area for the idle callback so a frame
+  // posted just before Cleanup() cannot dereference a destroyed widget or this.
   player.setRenderCallback([this](void*) {
-    if (!gl_area_) return;
-    g_idle_add(
+    GtkGLArea* area = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(widget_mutex_);
+      area = gl_area_;
+      if (!area) return;
+      g_object_ref(area);
+    }
+    g_idle_add_full(
+        G_PRIORITY_DEFAULT_IDLE,
         [](gpointer p) -> gboolean {
-          auto* self = static_cast<PipPlayer*>(p);
-          if (self->gl_area_) {
-            gtk_gl_area_queue_render(self->gl_area_);
+          auto* area = GTK_GL_AREA(p);
+          GtkWidget* widget = GTK_WIDGET(area);
+          if (gtk_widget_get_realized(widget)) {
+            gtk_gl_area_queue_render(area);
           }
           return G_SOURCE_REMOVE;
         },
-        this);
+        area,
+        [](gpointer p) {
+          g_object_unref(p);
+        });
   });
 
   // Detect end-of-media.
@@ -162,7 +175,7 @@ void PipPlayer::SetupMdkPlayer(
         if ((new_st & MediaStatus::End) == MediaStatus::End &&
             !eof_posted_) {
           eof_posted_ = true;
-          g_idle_add(OnEndOfMedia, this);
+          eof_source_id_ = g_idle_add(OnEndOfMedia, this);
         }
         return true;
       });
@@ -229,6 +242,10 @@ bool PipPlayer::Open(
   // MDK player is set up after the GL area is realized (realize signal fires
   // synchronously inside gtk_widget_show_all on X11).
   SetupMdkPlayer(url, headers, position_ms, playback_rate, was_playing);
+  if (!player_api_) {
+    Cleanup();
+    return false;
+  }
 
   return true;
 #endif
@@ -256,10 +273,12 @@ void PipPlayer::Dismiss(bool was_playing) {
 void PipPlayer::Cleanup() {
 #ifdef MIRUSHIN_PIP_LINUX
   if (player_api_) {
-    // Null gl_area_ BEFORE stopping MDK so that any in-flight render callbacks
-    // or GTK idle callbacks queued by the render callback see nullptr and bail
-    // out, preventing use-after-free when the GTK widget is destroyed below.
-    gl_area_ = nullptr;
+    // Null gl_area_ BEFORE stopping MDK so in-flight render callbacks bail out
+    // before the GTK widget is destroyed below.
+    {
+      std::lock_guard<std::mutex> lock(widget_mutex_);
+      gl_area_ = nullptr;
+    }
     {
       Player p(player_api_);
       p.setRenderCallback(nullptr);
@@ -269,14 +288,27 @@ void PipPlayer::Cleanup() {
     mdkPlayerAPI_delete(&player_api_);
     player_api_ = nullptr;
   } else {
+    std::lock_guard<std::mutex> lock(widget_mutex_);
     gl_area_ = nullptr;
   }
 #else
-  gl_area_ = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(widget_mutex_);
+    gl_area_ = nullptr;
+  }
 #endif
-  if (window_) {
-    gtk_widget_destroy(window_);
+  if (eof_source_id_ != 0) {
+    g_source_remove(eof_source_id_);
+    eof_source_id_ = 0;
+  }
+  GtkWidget* window = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(widget_mutex_);
+    window = window_;
     window_ = nullptr;
+  }
+  if (window) {
+    gtk_widget_destroy(window);
   }
 }
 

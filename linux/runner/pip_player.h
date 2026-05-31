@@ -5,9 +5,20 @@
 #include <gtk/gtk.h>
 #include <functional>
 #include <map>
+#include <mutex>
 #include <string>
 
+#ifdef MIRUSHIN_PIP_LINUX
+#include "mdk/RenderAPI.h"
+#endif
+
 struct mdkPlayerAPI;
+
+#if defined(__clang__) || defined(__GNUC__)
+#define MIRUSHIN_UNUSED_PRIVATE_FIELD __attribute__((unused))
+#else
+#define MIRUSHIN_UNUSED_PRIVATE_FIELD
+#endif
 
 namespace pip {
 
@@ -62,16 +73,24 @@ class PipPlayer {
   GtkWidget* window_ = nullptr;
   GtkGLArea* gl_area_ = nullptr;
 
-  mdkPlayerAPI* player_api_ = nullptr;
-  int width_ = 640;
-  int height_ = 360;
+  mdkPlayerAPI* player_api_ MIRUSHIN_UNUSED_PRIVATE_FIELD = nullptr;
+  int width_ MIRUSHIN_UNUSED_PRIVATE_FIELD = 640;
+  int height_ MIRUSHIN_UNUSED_PRIVATE_FIELD = 360;
+
+#ifdef MIRUSHIN_PIP_LINUX
+  MDK_NS::GLRenderAPI render_api_ MIRUSHIN_UNUSED_PRIVATE_FIELD;
+#endif
 
   DismissCallback on_dismiss_;
   CompletedCallback on_complete_;
+  std::mutex widget_mutex_;
   bool dismissed_ = false;
   bool eof_posted_ = false;
+  guint eof_source_id_ = 0;
 };
 
 }  // namespace pip
+
+#undef MIRUSHIN_UNUSED_PRIVATE_FIELD
 
 #endif  // RUNNER_PIP_PLAYER_H_

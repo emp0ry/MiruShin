@@ -7,12 +7,19 @@
 #include <dxgi.h>
 #include <wrl/client.h>
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <mutex>
 #include <string>
 
-// Forward-declare the MDK C struct so we don't pull in mdk headers here.
+#ifdef MIRUSHIN_PIP_WIN32
+#include "mdk/RenderAPI.h"
+#endif
+
+// Forward-declare the MDK C struct; the heavy C++ render API is included only
+// when the build has the SDK and enables native Windows PiP.
 struct mdkPlayerAPI;
 
 namespace pip {
@@ -86,8 +93,15 @@ class PipPlayer {
   Microsoft::WRL::ComPtr<IDXGISwapChain> swap_chain_;
   Microsoft::WRL::ComPtr<ID3D11RenderTargetView> rtv_;
 
+#ifdef MIRUSHIN_PIP_WIN32
+  MDK_NS::D3D11RenderAPI render_api_;
+#endif
+
   // Newer MDK headers return const mdkPlayerAPI*.
   const mdkPlayerAPI* player_api_ = nullptr;
+  std::mutex render_mutex_;
+  std::atomic_bool closing_{false};
+  std::atomic_bool eof_posted_{false};
 
   DismissCallback on_dismiss_;
   CompletedCallback on_complete_;

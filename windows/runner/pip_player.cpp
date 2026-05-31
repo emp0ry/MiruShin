@@ -201,6 +201,11 @@ void PipPlayer::ResizeSwapChain(int w, int h) {
     return;
   }
 
+  std::lock_guard<std::mutex> lock(render_mutex_);
+  if (closing_ || !swap_chain_) {
+    return;
+  }
+
   width_ = w;
   height_ = h;
 
@@ -219,13 +224,11 @@ void PipPlayer::ResizeSwapChain(int w, int h) {
   // Release the RTV before resizing (MDK is not rendering at this point).
   rtv_.Reset();
 
-  swap_chain_->ResizeBuffers(
-      0,
-      static_cast<UINT>(w),
-      static_cast<UINT>(h),
-      DXGI_FORMAT_UNKNOWN,
-      0
-  );
+  HRESULT hr = swap_chain_->ResizeBuffers(
+      0, static_cast<UINT>(w), static_cast<UINT>(h), DXGI_FORMAT_UNKNOWN, 0);
+  if (FAILED(hr)) {
+    return;
+  }
 
   ComPtr<ID3D11Texture2D> back;
   if (FAILED(swap_chain_->GetBuffer(0, IID_PPV_ARGS(&back)))) {
@@ -240,10 +243,10 @@ void PipPlayer::ResizeSwapChain(int w, int h) {
   if (player_api_ && rtv_) {
     Player p(player_api_);
 
-    D3D11RenderAPI ra{};
-    ra.rtv = rtv_.Get();
+    render_api_.context = ctx_.Get();
+    render_api_.rtv = rtv_.Get();
 
-    p.setRenderAPI(&ra);
+    p.setRenderAPI(&render_api_);
     p.setVideoSurfaceSize(w, h);
   }
 #endif
@@ -256,6 +259,10 @@ void PipPlayer::SetupMdkPlayer(
     float playback_rate,
     bool was_playing) {
 #ifdef MIRUSHIN_PIP_WIN32
+  if (!rtv_) {
+    return;
+  }
+
   player_api_ = mdkPlayerAPI_new();
 
   if (!player_api_) {
@@ -312,11 +319,13 @@ void PipPlayer::SetupMdkPlayer(
   player.setProperty("avformat.safe", "0");
 
   // Hook up D3D11 render API.
-  D3D11RenderAPI ra{};
-  ra.rtv = rtv_.Get();
-
-  player.setRenderAPI(&ra);
-  player.setVideoSurfaceSize(width_, height_);
+  {
+    std::lock_guard<std::mutex> lock(render_mutex_);
+    render_api_.context = ctx_.Get();
+    render_api_.rtv = rtv_.Get();
+    player.setRenderAPI(&render_api_);
+    player.setVideoSurfaceSize(width_, height_);
+  }
 
   // When MDK has decoded a new frame, blit it to the swap chain.
   // Check rtv_ in addition to swap_chain_ because ResizeSwapChain temporarily
@@ -325,7 +334,13 @@ void PipPlayer::SetupMdkPlayer(
   // MDK's render thread can still fire once after that, so a null-check here
   // is the last line of defence.
   player.setRenderCallback([this](void*) {
-    if (!player_api_ || !swap_chain_ || !rtv_) {
+    if (closing_) {
+      return;
+    }
+
+    std::unique_lock<std::mutex> lock(render_mutex_, std::try_to_lock);
+    if (!lock.owns_lock() || closing_ || !player_api_ || !swap_chain_ ||
+        !rtv_) {
       return;
     }
 
@@ -336,16 +351,17 @@ void PipPlayer::SetupMdkPlayer(
   });
 
   // Detect end-of-media.
-  player.onMediaStatus([this](MediaStatus old_st, MediaStatus new_st) -> bool {
-    if ((new_st & MediaStatus::End) == MediaStatus::End) {
-      // Post to the window thread so we do not call Dart APIs from MDK thread.
-      if (hwnd_) {
-        PostMessage(hwnd_, WM_APP + 1, 0, 0);
-      }
-    }
+  player.onMediaStatus(
+      [this](MediaStatus /*old_st*/, MediaStatus new_st) -> bool {
+        if ((new_st & MediaStatus::End) == MediaStatus::End) {
+          // Post to the window thread so we do not call Dart APIs from MDK thread.
+          if (!closing_ && hwnd_ && !eof_posted_.exchange(true)) {
+            PostMessage(hwnd_, WM_APP + 1, 0, 0);
+          }
+        }
 
-    return true;
-  });
+        return true;
+      });
 
   player.setMedia(url.c_str());
   player.setPlaybackRate(playback_rate);
@@ -378,6 +394,8 @@ bool PipPlayer::Open(
   on_dismiss_ = std::move(on_dismiss);
   on_complete_ = std::move(on_complete);
   dismissed_ = false;
+  closing_ = false;
+  eof_posted_ = false;
 
 #ifndef MIRUSHIN_PIP_WIN32
   // mdk-sdk not available: PiP is a no-op at runtime.
@@ -388,8 +406,7 @@ bool PipPlayer::Open(
   }
 
   if (!SetupD3D11()) {
-    DestroyWindow(hwnd_);
-    hwnd_ = nullptr;
+    Cleanup();
     return false;
   }
 
@@ -400,6 +417,11 @@ bool PipPlayer::Open(
       playback_rate,
       was_playing
   );
+
+  if (!player_api_) {
+    Cleanup();
+    return false;
+  }
 
   ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
   UpdateWindow(hwnd_);
@@ -419,10 +441,13 @@ void PipPlayer::Dismiss(bool was_playing) {
   args.was_playing = was_playing;
 
 #ifdef MIRUSHIN_PIP_WIN32
-  if (player_api_) {
-    Player p(player_api_);
-    args.position_ms = p.position();
-    args.duration_ms = p.mediaInfo().duration;
+  {
+    std::lock_guard<std::mutex> lock(render_mutex_);
+    if (player_api_) {
+      Player p(player_api_);
+      args.position_ms = p.position();
+      args.duration_ms = p.mediaInfo().duration;
+    }
   }
 #endif
 
@@ -434,28 +459,40 @@ void PipPlayer::Dismiss(bool was_playing) {
 }
 
 void PipPlayer::Cleanup() {
+  closing_ = true;
+
 #ifdef MIRUSHIN_PIP_WIN32
-  if (player_api_) {
-    {
+  {
+    std::lock_guard<std::mutex> lock(render_mutex_);
+    if (player_api_) {
       Player p(player_api_);
       p.setRenderCallback(nullptr);
       p.setVideoSurfaceSize(-1, -1);
       p.set(PlaybackState::Stopped);
+
+      mdkPlayerAPI_delete(&player_api_);
+      player_api_ = nullptr;
     }
+    render_api_.context = nullptr;
+    render_api_.rtv = nullptr;
 
-    mdkPlayerAPI_delete(&player_api_);
-    player_api_ = nullptr;
+    rtv_.Reset();
+    swap_chain_.Reset();
+    ctx_.Reset();
+    device_.Reset();
   }
-#endif
-
+#else
   rtv_.Reset();
   swap_chain_.Reset();
   ctx_.Reset();
   device_.Reset();
+#endif
 
   if (hwnd_) {
-    DestroyWindow(hwnd_);
+    HWND hwnd = hwnd_;
     hwnd_ = nullptr;
+    SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+    DestroyWindow(hwnd);
   }
 }
 
@@ -526,10 +563,13 @@ LRESULT PipPlayer::HandleMessage(HWND hwnd,
         DismissedArgs args{};
 
 #ifdef MIRUSHIN_PIP_WIN32
-        if (player_api_) {
-          Player p(player_api_);
-          args.position_ms = p.position();
-          args.duration_ms = p.mediaInfo().duration;
+        {
+          std::lock_guard<std::mutex> lock(render_mutex_);
+          if (player_api_) {
+            Player p(player_api_);
+            args.position_ms = p.position();
+            args.duration_ms = p.mediaInfo().duration;
+          }
         }
 #endif
 
