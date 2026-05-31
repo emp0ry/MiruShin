@@ -60,6 +60,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   bool _nativePipActive = false;
   bool? _lastPipIsPlaying;
   late final bool _nativePipSupported;
+  // Windows/Linux mini-player PiP (shrinks the main window, keeps the same mpv
+  // engine running) instead of the native AVPlayer PiP used on iOS/macOS.
+  late final bool _windowPipSupported;
   final FocusNode _playerFocusNode = FocusNode(
     debugLabel: 'MiruShinPlayerFocus',
   );
@@ -87,6 +90,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         (defaultTargetPlatform == TargetPlatform.android ||
             defaultTargetPlatform == TargetPlatform.iOS);
     _nativePipSupported = NativePlayerService.isSupported;
+    _windowPipSupported =
+        !kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.windows ||
+            defaultTargetPlatform == TargetPlatform.linux);
     _playbackNotifier = ref.read(playbackControllerProvider.notifier);
     _playbackNotifier.setNextEpisodeHandler(
       () => unawaited(_exitPlayer(playNext: true)),
@@ -172,6 +179,26 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         await _playbackNotifier.togglePlay();
       }
     }
+  }
+
+  // Enter the Windows/Linux mini-player: the DesktopPipController shrinks the
+  // main window and flips _inPipMode via pipModeStream. The mpv engine keeps
+  // playing — no handoff to a second engine.
+  Future<void> _enterWindowPip() async {
+    final PlayerEngine? engine = ref.read(playbackControllerProvider).engine;
+    final double aspectRatio = (engine?.value.aspectRatio ?? 0) > 0
+        ? engine!.value.aspectRatio
+        : 16 / 9;
+    await ref.read(pipControllerProvider).enter(
+          aspectRatio: aspectRatio,
+          isPlaying: engine?.value.isPlaying ?? true,
+          hasNext: true,
+        );
+  }
+
+  // Restore the main window from the mini-player back to its previous size.
+  Future<void> _exitWindowPip() async {
+    await ref.read(pipControllerProvider).bringToForeground();
   }
 
   Future<void> _handOffToNativePip() async {
@@ -325,11 +352,14 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     _hideTimer?.cancel();
     _autoNextTimer?.cancel();
 
-    // When in PiP and going to the next episode, bring the app to the
-    // foreground first so navigation and the new player open normally.
-    if (_inPipMode && playNext) {
+    // When leaving the player while in PiP, restore the window / bring the app
+    // to the foreground first so the window is not stranded in its shrunken
+    // always-on-top state and navigation opens normally.
+    if (_inPipMode) {
       await ref.read(pipControllerProvider).bringToForeground();
-      await Future<void>.delayed(const Duration(milliseconds: 300));
+      if (playNext) {
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+      }
     }
 
     await Future.any(<Future<void>>[
@@ -723,6 +753,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                                       onEnterNativePip: _nativePipSupported
                                           ? () =>
                                                 unawaited(_handOffToNativePip())
+                                          : _windowPipSupported
+                                          ? () => unawaited(_enterWindowPip())
                                           : null,
                                     ),
                                   ),
@@ -775,6 +807,18 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                                   onExit: () => unawaited(_exitPlayer()),
                                 ),
                             ],
+                            // Mini-player controls (Windows/Linux PiP): a small
+                            // always-visible strip so the user can play/pause
+                            // and restore the window from the shrunken state.
+                            if (_inPipMode && _windowPipSupported)
+                              _WindowPipOverlay(
+                                isPlaying:
+                                    state.engine?.value.isPlaying ?? false,
+                                onTogglePlay: () => ref
+                                    .read(playbackControllerProvider.notifier)
+                                    .togglePlay(),
+                                onExpand: () => unawaited(_exitWindowPip()),
+                              ),
                           ],
                         ),
                       ),
@@ -3249,6 +3293,66 @@ class _NativePipOverlay extends StatelessWidget {
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+// Compact control strip for the Windows/Linux mini-player (PiP). The window is
+// small and the full chrome is hidden, so this gives just enough to toggle
+// playback and expand back to the normal window.
+class _WindowPipOverlay extends StatelessWidget {
+  const _WindowPipOverlay({
+    required this.isPlaying,
+    required this.onTogglePlay,
+    required this.onExpand,
+  });
+
+  final bool isPlaying;
+  final VoidCallback onTogglePlay;
+  final VoidCallback onExpand;
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned(
+      top: 6,
+      right: 6,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          _MiniButton(
+            icon: isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+            onPressed: onTogglePlay,
+          ),
+          const SizedBox(width: 6),
+          _MiniButton(
+            icon: Icons.fullscreen_rounded,
+            onPressed: onExpand,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MiniButton extends StatelessWidget {
+  const _MiniButton({required this.icon, required this.onPressed});
+
+  final IconData icon;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.black.withValues(alpha: .55),
+      shape: const CircleBorder(),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onPressed,
+        child: Padding(
+          padding: const EdgeInsets.all(6),
+          child: Icon(icon, color: Colors.white, size: 20),
         ),
       ),
     );

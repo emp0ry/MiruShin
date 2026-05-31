@@ -48,12 +48,15 @@ class NativePlayerService {
       StreamController<NativePlayerEvent>.broadcast();
   static Stream<NativePlayerEvent> get events => _eventCtrl.stream;
 
+  // iOS/macOS use the OS-native AVPlayer PiP, which reuses a single player and
+  // is rock solid. Windows/Linux used to spin up a *second* MDK video engine in
+  // a floating window, which collided with the main mpv decoder on the GPU and
+  // crashed; those platforms now use the window-resize mini-player in
+  // DesktopPipController instead, so they are intentionally excluded here.
   static bool get isSupported =>
       !kIsWeb &&
       (defaultTargetPlatform == TargetPlatform.iOS ||
-          defaultTargetPlatform == TargetPlatform.macOS ||
-          defaultTargetPlatform == TargetPlatform.windows ||
-          defaultTargetPlatform == TargetPlatform.linux);
+          defaultTargetPlatform == TargetPlatform.macOS);
 
   static void init() {
     _ch.setMethodCallHandler(_handleCall);
