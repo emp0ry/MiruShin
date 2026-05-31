@@ -26,18 +26,33 @@ class SoraJsRuntime {
       'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 '
       '(KHTML, like Gecko) Chrome/124.0 Safari/537.36 MiruShin/1.0';
 
-  static const int _maxLoadedModules = 1;
   static const int _maxSearchBodyBytes = 96 * 1024;
   // Episode APIs can include many voiceover/player entries in one JSON body.
   static const int _maxBodyBytes = 8 * 1024 * 1024;
   static const int _callDrainTimeoutMs = 900;
-  static const int _disposeDrainTimeoutMs = 1200;
 
   final SoraAddonStore _store;
   final Dio _dio;
   final Map<String, _LoadedSoraModule> _loaded = <String, _LoadedSoraModule>{};
   final List<String> _loadOrder = <String>[];
   Future<void> _jsTail = Future<void>.value();
+
+  // Single shared QuickJS/JavaScriptCore context for all addon modules.
+  // Created lazily on first use. Never disposed during normal operation —
+  // creating and destroying per-addon contexts caused SIGSEGV in QuickJS on
+  // Linux (the dispose path races with pending promise callbacks).
+  JavascriptRuntime? _sharedRuntime;
+
+  JavascriptRuntime _runtime() {
+    final JavascriptRuntime? existing = _sharedRuntime;
+    if (existing != null) return existing;
+    final JavascriptRuntime rt = getJavascriptRuntime(xhr: false);
+    _installSharedBridge(rt);
+    _sharedRuntime = rt;
+    return rt;
+  }
+
+  // ── Public API ─────────────────────────────────────────────────────────────
 
   Future<List<SoraSearchResult>> searchResults({
     required SoraInstalledAddon addon,
@@ -148,12 +163,14 @@ class SoraJsRuntime {
   }) => extractStreams(addon: addon, episode: episode, voiceover: voiceover);
 
   void invalidate(String addonId) {
-    unawaited(_serialized<void>(() async => await _dispose(addonId)));
+    unawaited(_serialized<void>(() async => _removeModule(addonId)));
   }
 
   void invalidateAll() {
-    unawaited(_serialized<void>(() async => await _disposeAll()));
+    unawaited(_serialized<void>(() async => _removeAllModules()));
   }
+
+  // ── Internal queue ────────────────────────────────────────────────────────
 
   Future<T> _serialized<T>(Future<T> Function() action) async {
     final Future<void> previous = _jsTail;
@@ -169,19 +186,37 @@ class SoraJsRuntime {
     }
   }
 
-  Future<void> _dispose(String addonId) async {
+  // ── Module lifecycle ──────────────────────────────────────────────────────
+
+  void _removeModule(String addonId) {
     _loadOrder.remove(addonId);
     final _LoadedSoraModule? module = _loaded.remove(addonId);
-    await module?.dispose();
+    module?.cancelPendingDelays();
+    module?.cancelPendingFetches();
+    module?._disposed = true;
+    // Remove from the shared JS namespace so the old code is GC'd.
+    try {
+      _sharedRuntime?.evaluate(
+        'if(globalThis.__miruSoraModules)'
+        ' delete globalThis.__miruSoraModules[${jsonEncode(addonId)}];',
+      );
+    } catch (_) {}
   }
 
-  Future<void> _disposeAll() async {
+  void _removeAllModules() {
     for (final _LoadedSoraModule module in _loaded.values) {
-      await module.dispose();
+      module.cancelPendingDelays();
+      module.cancelPendingFetches();
+      module._disposed = true;
     }
     _loaded.clear();
     _loadOrder.clear();
+    try {
+      _sharedRuntime?.evaluate('globalThis.__miruSoraModules = {};');
+    } catch (_) {}
   }
+
+  // ── JS call ───────────────────────────────────────────────────────────────
 
   Future<Object?> _call({
     required SoraInstalledAddon addon,
@@ -190,13 +225,24 @@ class SoraJsRuntime {
     bool required = true,
   }) async {
     final _LoadedSoraModule module = await _load(addon);
+    final JavascriptRuntime rt = _runtime();
+
+    // Set per-call addon context so message-bridge handlers know which addon
+    // is active. Safe because all JS calls are serialized.
+    rt.evaluate(
+      'globalThis.__miruCurrentAddonId=${jsonEncode(addon.id)};'
+      'globalThis.__miruSoraBaseUrl=${jsonEncode(addon.manifest.baseUrl)};'
+      'globalThis.__miruSoraSearchBaseUrl=${jsonEncode(addon.manifest.searchBaseUrl)};',
+    );
+
     final String argsJson = jsonEncode(args);
     for (final String functionName in functionNames) {
       module.activeFunctionName = functionName;
       final String expression =
           '''
         (async () => {
-          const module = globalThis.__miruSoraModules[${jsonEncode(addon.id)}];
+          globalThis.__miruCurrentAddonId = ${jsonEncode(addon.id)};
+          const module = globalThis.__miruSoraModules && globalThis.__miruSoraModules[${jsonEncode(addon.id)}];
           const fn = module && module[${jsonEncode(functionName)}];
           if (typeof fn !== 'function') return { "__miruMissingFunction": true };
           const args = $argsJson;
@@ -208,10 +254,8 @@ class SoraJsRuntime {
         })()
       ''';
       try {
-        final JsEvalResult initial = module.runtime.evaluate(expression);
-        final JsEvalResult resolved = await module.runtime.handlePromise(
-          initial,
-        );
+        final JsEvalResult initial = rt.evaluate(expression);
+        final JsEvalResult resolved = await rt.handlePromise(initial);
         final Object? decoded = decodeSoraPayload(resolved.stringResult);
         if (_isMissingFunction(decoded)) {
           continue;
@@ -236,11 +280,11 @@ class SoraJsRuntime {
       _loadOrder.add(addon.id);
       return cached;
     }
-    await _dispose(addon.id);
+    // Remove any stale version of this module (script changed).
+    _removeModule(addon.id);
+
     final String source = await _store.readScript(addon);
-    final JavascriptRuntime runtime = getJavascriptRuntime(xhr: false);
-    final List<String> logs = <String>[];
-    _installBridge(runtime, addon, logs);
+    final JavascriptRuntime rt = _runtime();
     final String moduleSource = _prepareModuleSource(source);
     final String wrapper =
         '''
@@ -292,54 +336,65 @@ class SoraJsRuntime {
         };
       })();
     ''';
-    final JsEvalResult result = runtime.evaluate(
+    final JsEvalResult result = rt.evaluate(
       wrapper,
       sourceUrl: addon.scriptPath,
     );
     if (result.isError) {
-      runtime.dispose();
       throw SoraAddonException(
         'Failed to load ${addon.manifest.sourceName}: ${result.stringResult}',
       );
     }
     final _LoadedSoraModule loaded = _LoadedSoraModule(
-      runtime: runtime,
+      addon: addon,
       scriptPath: addon.scriptPath,
-      logs: logs,
+      logs: <String>[],
     );
     _loaded[addon.id] = loaded;
     _loadOrder.add(addon.id);
-    while (_loaded.length > _maxLoadedModules) {
-      await _dispose(_loadOrder.first);
-    }
     return loaded;
   }
 
-  void _installBridge(
-    JavascriptRuntime runtime,
-    SoraInstalledAddon addon,
-    List<String> logs,
-  ) {
+  // ── Shared bridge (installed once per runtime) ────────────────────────────
+
+  void _installSharedBridge(JavascriptRuntime runtime) {
     runtime.onMessage('MiruSoraLog', (dynamic args) {
-      final String message = args is List
-          ? args.join(' ')
-          : args?.toString() ?? '';
+      final Map<String, dynamic> payload = _asMap(args);
+      final String addonId = _string(payload['__addonId']);
+      final dynamic msgs = payload['messages'];
+      final String message = msgs is List
+          ? msgs.join(' ')
+          : msgs?.toString() ?? '';
       if (message.trim().isNotEmpty) {
-        logs.add(message);
+        _loaded[addonId]?.logs.add(message);
       }
       return null;
     });
+
     runtime.onMessage('MiruSoraHttpFetch', (dynamic args) async {
       final Map<String, dynamic> payload = _asMap(args);
-      return _httpFetchBody(addon, payload);
+      final String addonId = _string(payload['__addonId']);
+      final _LoadedSoraModule? module = _loaded[addonId];
+      if (module == null || module._disposed) {
+        return jsonEncode(<String, dynamic>{
+          '__miruResponse': true,
+          'status': 0,
+          'headers': <String, dynamic>{},
+          'body': '',
+          'error': 'addon disposed',
+        });
+      }
+      return _httpFetchBody(module.addon, payload);
     });
+
     runtime.onMessage('MiruSoraDelay', (dynamic args) async {
       final Map<String, dynamic> payload = _asMap(args);
+      final String addonId = _string(payload['__addonId']);
       final int ms = _int(
         payload['milliseconds'],
         fallback: 16,
       ).clamp(0, 60000).toInt();
-      final _LoadedSoraModule? module = _loaded[addon.id];
+      final _LoadedSoraModule? module = _loaded[addonId];
       if (module == null || module._disposed) return 'cancelled';
       final Completer<void> c = Completer<void>();
       module._delayCompleters.add(c);
@@ -354,12 +409,34 @@ class SoraJsRuntime {
       }
       return 'true';
     });
+
     runtime.onMessage('MiruSoraNetworkFetch', (dynamic args) async {
       final Map<String, dynamic> payload = _asMap(args);
-      return _networkFetch(addon, payload);
+      final String addonId = _string(payload['__addonId']);
+      final _LoadedSoraModule? module = _loaded[addonId];
+      if (module == null || module._disposed) {
+        return jsonEncode(<String, Object?>{
+          'originalUrl': _string(payload['url']),
+          'requests': <String>[],
+          'html': null,
+          'cookies': null,
+          'success': false,
+          'error': 'addon disposed',
+          'cutoffTriggered': false,
+          'cutoffUrl': null,
+          'htmlCaptured': false,
+          'cookiesCaptured': false,
+          'elementsClicked': <String>[],
+          'waitResults': <String, bool>{},
+        });
+      }
+      return _networkFetch(module.addon, payload);
     });
-    runtime.evaluate(_bridgeScript(addon));
+
+    runtime.evaluate(_bridgeScript());
   }
+
+  // ── HTTP helpers ──────────────────────────────────────────────────────────
 
   Future<String> _httpFetchBody(
     SoraInstalledAddon addon,
@@ -400,7 +477,9 @@ class SoraJsRuntime {
             method: method,
             responseType: ResponseType.plain,
             headers: headers,
-            receiveTimeout: searchCall ? const Duration(seconds: 10) : const Duration(seconds: 20),
+            receiveTimeout: searchCall
+                ? const Duration(seconds: 10)
+                : const Duration(seconds: 20),
             followRedirects: true,
             validateStatus: (_) => true,
           ),
@@ -412,8 +491,6 @@ class SoraJsRuntime {
       final Map<String, dynamic> responseHeaders = <String, dynamic>{};
       response.headers.forEach((String name, List<String> values) {
         if (values.isEmpty) return;
-        // Multi-value headers (e.g. Set-Cookie) are returned as arrays so JS
-        // modules can parse individual entries without splitting on ", ".
         responseHeaders[name] = values.length == 1 ? values.first : values;
       });
       return jsonEncode(<String, dynamic>{
@@ -448,10 +525,12 @@ class SoraJsRuntime {
       if (htmlContent.isNotEmpty) {
         body = htmlContent;
       } else {
-        final int timeoutSec = _int(payload['timeoutSeconds'], fallback: 7).clamp(1, 30).toInt();
+        final int timeoutSec =
+            _int(payload['timeoutSeconds'], fallback: 7).clamp(1, 30).toInt();
         final Map<String, String> headers = <String, String>{
           'User-Agent': _userAgent,
-          'Accept': 'text/html,application/xhtml+xml,application/json,text/plain,*/*',
+          'Accept':
+              'text/html,application/xhtml+xml,application/json,text/plain,*/*',
           'Accept-Language': _acceptLanguage(addon.manifest.language),
           ..._stringMap(payload['headers']),
         };
@@ -521,7 +600,6 @@ class SoraJsRuntime {
   }
 
   Iterable<String> _extractNetworkUrls(String body, Uri baseUri) sync* {
-    // Un-escape JSON/HTML encodings so embedded URLs are parseable.
     final String normalized = body
         .replaceAll(r'\/', '/')
         .replaceAllMapped(
@@ -553,10 +631,18 @@ class SoraJsRuntime {
     return fallback;
   }
 
-  String _bridgeScript(SoraInstalledAddon addon) {
-    return '''
-      globalThis.__miruSoraBaseUrl = ${jsonEncode(addon.manifest.baseUrl)};
-      globalThis.__miruSoraSearchBaseUrl = ${jsonEncode(addon.manifest.searchBaseUrl)};
+  // ── Bridge script (installed once on the shared runtime) ─────────────────
+  //
+  // Key difference from the old per-module bridge: every sendMessage call
+  // includes `__addonId: globalThis.__miruCurrentAddonId` so the Dart-side
+  // handler can route to the correct addon's cancel tokens / logs without
+  // needing a separate JavascriptRuntime per addon.
+
+  String _bridgeScript() {
+    return r'''
+      globalThis.__miruSoraBaseUrl = '';
+      globalThis.__miruSoraSearchBaseUrl = '';
+      globalThis.__miruCurrentAddonId = '';
       globalThis.__miruSoraPendingTasks = globalThis.__miruSoraPendingTasks || new Set();
 
       function __miruSoraTrackPromise(promise) {
@@ -573,7 +659,7 @@ class SoraJsRuntime {
         const bounded = Math.max(0, Math.min(Number(milliseconds) || 0, 60000));
         await sendMessage(
           'MiruSoraDelay',
-          JSON.stringify({ milliseconds: bounded })
+          JSON.stringify({ milliseconds: bounded, __addonId: globalThis.__miruCurrentAddonId })
         );
       }
 
@@ -632,7 +718,8 @@ class SoraJsRuntime {
             body: ''
           };
         }
-        const raw = await sendMessage('MiruSoraHttpFetch', JSON.stringify(payload));
+        const msgPayload = Object.assign({}, payload, { __addonId: globalThis.__miruCurrentAddonId });
+        const raw = await sendMessage('MiruSoraHttpFetch', JSON.stringify(msgPayload));
         let status = 200, responseHeaders = {}, responseBody = typeof raw === 'string' ? raw : '';
         try {
           if (typeof raw === 'string') {
@@ -657,7 +744,7 @@ class SoraJsRuntime {
         const requestUrl = String(payload && payload.url ? payload.url : '');
         const requestMethod = String(payload && payload.method ? payload.method : 'GET').toUpperCase();
         return requestMethod === 'POST' &&
-          /\\/\\/[^/]*supabase\\.co\\/rest\\/v1\\/app_logs(?:\\?|\$|\\/)/i.test(requestUrl);
+          /\/\/[^/]*supabase\.co\/rest\/v1\/app_logs(?:\?|$|\/)/i.test(requestUrl);
       }
 
       globalThis.fetchv2 = function(url, headers, method, body) {
@@ -700,7 +787,7 @@ class SoraJsRuntime {
 
       globalThis.atob = globalThis.atob || function(value) {
         const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
-        let str = String(value).replace(/=+\$/, '');
+        let str = String(value).replace(/=+$/, '');
         let output = '';
         if (str.length % 4 == 1) throw new Error('Invalid base64 string');
         for (let bc = 0, bs, buffer, idx = 0;
@@ -735,6 +822,7 @@ class SoraJsRuntime {
           const args = Array.prototype.slice.call(arguments, 2);
           const id = globalThis.__miruSoraTimerSeq++;
           globalThis.__miruSoraTimers[id] = true;
+          const capturedAddonId = globalThis.__miruCurrentAddonId;
           const task = __miruSoraDelay(Math.max(0, Math.min(Number(delay) || 0, 60000))).then(function() {
             if (!globalThis.__miruSoraTimers[id]) return;
             delete globalThis.__miruSoraTimers[id];
@@ -804,7 +892,8 @@ class SoraJsRuntime {
           headers: __miruSoraHeaders(options.headers || {}),
           cutoff: options.cutoff == null ? '' : String(options.cutoff),
           returnHTML: !!options.returnHTML,
-          htmlContent: options.htmlContent == null ? '' : String(options.htmlContent)
+          htmlContent: options.htmlContent == null ? '' : String(options.htmlContent),
+          __addonId: globalThis.__miruCurrentAddonId
         };
       }
 
@@ -825,20 +914,31 @@ class SoraJsRuntime {
       const __miruOriginalConsole = globalThis.console || {};
       globalThis.console = {
         log: function() {
-          sendMessage('MiruSoraLog', JSON.stringify(Array.prototype.slice.call(arguments)));
+          sendMessage('MiruSoraLog', JSON.stringify({
+            messages: Array.prototype.slice.call(arguments),
+            __addonId: globalThis.__miruCurrentAddonId
+          }));
           if (__miruOriginalConsole.log) __miruOriginalConsole.log.apply(null, arguments);
         },
         warn: function() {
-          sendMessage('MiruSoraLog', JSON.stringify(Array.prototype.slice.call(arguments)));
+          sendMessage('MiruSoraLog', JSON.stringify({
+            messages: Array.prototype.slice.call(arguments),
+            __addonId: globalThis.__miruCurrentAddonId
+          }));
           if (__miruOriginalConsole.warn) __miruOriginalConsole.warn.apply(null, arguments);
         },
         error: function() {
-          sendMessage('MiruSoraLog', JSON.stringify(Array.prototype.slice.call(arguments)));
+          sendMessage('MiruSoraLog', JSON.stringify({
+            messages: Array.prototype.slice.call(arguments),
+            __addonId: globalThis.__miruCurrentAddonId
+          }));
           if (__miruOriginalConsole.error) __miruOriginalConsole.error.apply(null, arguments);
         }
       };
     ''';
   }
+
+  // ── Module source preparation ─────────────────────────────────────────────
 
   String _prepareModuleSource(String source) {
     return source
@@ -855,6 +955,8 @@ class SoraJsRuntime {
           (Match match) => '${match.group(1)} ',
         );
   }
+
+  // ── Utilities ─────────────────────────────────────────────────────────────
 
   bool _isMissingFunction(Object? decoded) {
     if (decoded is Map<String, dynamic>) {
@@ -948,12 +1050,12 @@ class SoraJsRuntime {
 
 class _LoadedSoraModule {
   _LoadedSoraModule({
-    required this.runtime,
+    required this.addon,
     required this.scriptPath,
     required this.logs,
   });
 
-  final JavascriptRuntime runtime;
+  final SoraInstalledAddon addon;
   final String scriptPath;
   final List<String> logs;
   String? activeFunctionName;
@@ -992,49 +1094,5 @@ class _LoadedSoraModule {
       }
     }
     _cancelTokens.clear();
-  }
-
-  Future<int> drainPendingTasks({required int timeoutMs}) async {
-    if (_disposed) return 0;
-    try {
-      final JsEvalResult initial = runtime.evaluate('''
-          globalThis.__miruSoraDrainPendingTasks
-            ? globalThis.__miruSoraDrainPendingTasks($timeoutMs)
-            : 0
-        ''');
-      if (!initial.isError) {
-        final JsEvalResult resolved = await runtime
-            .handlePromise(initial)
-            .timeout(Duration(milliseconds: timeoutMs + 250));
-        return int.tryParse(resolved.stringResult) ?? 0;
-      }
-    } on TimeoutException {
-      return _cancelTokens.isEmpty ? 0 : _cancelTokens.length;
-    } on Object {
-      // Best-effort cleanup: addon JS can be malformed or already torn down.
-    }
-    return 0;
-  }
-
-  Future<void> dispose() async {
-    if (_disposed) return;
-
-    // Short-circuit any pending setTimeout/delay promises so the drain
-    // loop can finish quickly instead of waiting for multi-second timers.
-    cancelPendingDelays();
-
-    // Let pending JavaScriptCore promise/sendMessage callbacks unwind before
-    // tearing down the native context. Disposing immediately after promise
-    // resolution is crash-prone with flutter_js on macOS.
-    final int pending = await drainPendingTasks(
-      timeoutMs: SoraJsRuntime._disposeDrainTimeoutMs,
-    );
-    if (pending > 0) {
-      cancelPendingFetches();
-      await drainPendingTasks(timeoutMs: 250);
-    }
-    await Future<void>.delayed(Duration.zero);
-    _disposed = true;
-    runtime.dispose();
   }
 }
