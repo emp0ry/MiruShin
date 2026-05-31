@@ -139,15 +139,21 @@ void PipPlayer::SetupMdkPlayer(
   player.setProperty("avformat.strict", "experimental");
   player.setProperty("avformat.safe", "0");
 
-  // When MDK has a new frame, ask GtkGLArea to redraw.
-  GtkGLArea* area = gl_area_;
-  player.setRenderCallback([area](void*) {
-    if (area) {
-      // Queue a render on the GTK main thread.
-      g_idle_add_once(
-          [](gpointer p) { gtk_gl_area_queue_render(GTK_GL_AREA(p)); },
-          area);
-    }
+  // When MDK has a new frame, ask GtkGLArea to redraw via the GTK main thread.
+  // Capture `this` (not the raw gl_area_ pointer) so that the idle callback
+  // can check the current gl_area_ value — which Cleanup() nulls before
+  // destroying the widget, preventing use-after-free.
+  player.setRenderCallback([this](void*) {
+    if (!gl_area_) return;
+    g_idle_add(
+        [](gpointer p) -> gboolean {
+          auto* self = static_cast<PipPlayer*>(p);
+          if (self->gl_area_) {
+            gtk_gl_area_queue_render(self->gl_area_);
+          }
+          return G_SOURCE_REMOVE;
+        },
+        this);
   });
 
   // Detect end-of-media.
@@ -166,9 +172,9 @@ void PipPlayer::SetupMdkPlayer(
   if (position_ms > 0)
     player.seek(position_ms, SeekFlag::FromStart | SeekFlag::InCache);
   if (was_playing)
-    player.setState(PlaybackState::Playing);
+    player.set(PlaybackState::Playing);
   else
-    player.setState(PlaybackState::Paused);
+    player.set(PlaybackState::Paused);
 #endif
 }
 
@@ -250,17 +256,24 @@ void PipPlayer::Dismiss(bool was_playing) {
 void PipPlayer::Cleanup() {
 #ifdef MIRUSHIN_PIP_LINUX
   if (player_api_) {
+    // Null gl_area_ BEFORE stopping MDK so that any in-flight render callbacks
+    // or GTK idle callbacks queued by the render callback see nullptr and bail
+    // out, preventing use-after-free when the GTK widget is destroyed below.
+    gl_area_ = nullptr;
     {
       Player p(player_api_);
       p.setRenderCallback(nullptr);
       p.setVideoSurfaceSize(-1, -1);
-      p.setState(PlaybackState::Stopped);
+      p.set(PlaybackState::Stopped);
     }
     mdkPlayerAPI_delete(&player_api_);
     player_api_ = nullptr;
+  } else {
+    gl_area_ = nullptr;
   }
-#endif
+#else
   gl_area_ = nullptr;
+#endif
   if (window_) {
     gtk_widget_destroy(window_);
     window_ = nullptr;

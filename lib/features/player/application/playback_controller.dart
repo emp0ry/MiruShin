@@ -501,8 +501,11 @@ class PlaybackController extends Notifier<PlaybackState> {
     final String url = quality.isAuto || quality.url.isEmpty
         ? server.url
         : quality.url;
+    final PlayerSettings settings =
+        ref.read(playerSettingsProvider).value ?? const PlayerSettings();
     final PlayerEngine engine = createPlayerEngine(
       initialAspectRatio: _safeAspectRatio(preserveAspectRatio),
+      backend: settings.playerBackend,
     );
 
     try {
@@ -521,8 +524,6 @@ class PlaybackController extends Notifier<PlaybackState> {
         await engine.dispose();
         return;
       }
-      final PlayerSettings settings =
-          ref.read(playerSettingsProvider).value ?? const PlayerSettings();
       await engine.setPlaybackSpeed(_effectivePlaybackSpeed(settings));
       await engine.setVolume(settings.volume);
       if (autoplay) await engine.play();
@@ -1034,9 +1035,12 @@ class PlaybackController extends Notifier<PlaybackState> {
     }
 
     final PlayerEngine? mainEngine = state.engine;
+    final PlayerSettings settings =
+        ref.read(playerSettingsProvider).value ?? const PlayerSettings();
     final PlayerEngine previewEngine = createPlayerEngine(
       initialAspectRatio: _safeAspectRatio(mainEngine?.state.value.aspectRatio),
       previewMode: true,
+      backend: settings.playerBackend,
     );
     _seekPreviewEngine = previewEngine;
     _seekPreviewSourceKey = previewSource.key;
@@ -1834,14 +1838,23 @@ class PlaybackController extends Notifier<PlaybackState> {
         ? engine.state.value.duration.inSeconds
         : null;
 
+    // Never treat very short reported durations as completion. Fragile HLS
+    // streams can briefly expose a 4-10 second media duration while the real
+    // playlist is still being parsed. Saving that as completed breaks resume
+    // and can trigger auto-next incorrectly.
+    final bool hasReliableCompletionDuration =
+        durationSeconds != null && durationSeconds >= 120;
+
     // Save position=0 with completed=true when near the end.
     // This resets the resume point to 0:00 (start fresh next time) while
     // keeping isWatched=true via the completed flag.
     final bool isNearEnd =
-        durationSeconds != null &&
-        durationSeconds > 0 &&
-        position.inSeconds >= durationSeconds - 20;
+        hasReliableCompletionDuration &&
+        position.inSeconds >= durationSeconds! - 20;
     final int savePosition = isNearEnd ? 0 : position.inSeconds;
+    final int? savedDurationSeconds = hasReliableCompletionDuration
+        ? durationSeconds!
+        : null;
 
     for (final String mediaId in _progressMediaIds(item)) {
       await ref
@@ -1851,13 +1864,13 @@ class PlaybackController extends Notifier<PlaybackState> {
             season: item.seasonNumber,
             episode: item.episodeNumber,
             positionSeconds: savePosition,
-            durationSeconds: durationSeconds,
+            durationSeconds: savedDurationSeconds,
             completed: isNearEnd,
           );
     }
 
-    if (durationSeconds != null && durationSeconds > 0) {
-      final double fraction = (position.inSeconds / durationSeconds).clamp(
+    if (hasReliableCompletionDuration) {
+      final double fraction = (position.inSeconds / durationSeconds!).clamp(
         0.0,
         1.0,
       );

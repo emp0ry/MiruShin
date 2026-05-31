@@ -60,6 +60,8 @@ class SettingsPage extends ConsumerWidget {
             ],
             _AppearanceSection(settings: settings, controller: controller),
             const SizedBox(height: AppSpacing.lg),
+            const _PlayerEngineSection(),
+            const SizedBox(height: AppSpacing.lg),
             _LanguageSection(
               settings: settings,
               controller: controller,
@@ -870,6 +872,46 @@ class _ThemeModeOption extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+
+class _PlayerEngineSection extends ConsumerWidget {
+  const _PlayerEngineSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final PlayerSettings settings =
+        ref.watch(playerSettingsProvider).value ?? const PlayerSettings();
+    final PlayerSettingsController controller = ref.read(
+      playerSettingsProvider.notifier,
+    );
+    return SettingsSection(
+      title: context.t('Player'),
+      icon: Icons.smart_display_rounded,
+      children: <Widget>[
+        SettingsRow(
+          title: context.t('Playback engine'),
+          subtitle: '${context.t(settings.playerBackend.description)} ${context.t('Applies on the next stream open.')}',
+          trailing: DropdownButton<PlayerBackend>(
+            value: settings.playerBackend,
+            items: PlayerBackend.values
+                .map(
+                  (PlayerBackend backend) => DropdownMenuItem<PlayerBackend>(
+                    value: backend,
+                    child: Text(context.t(backend.title)),
+                  ),
+                )
+                .toList(growable: false),
+            onChanged: (PlayerBackend? value) {
+              if (value != null) {
+                controller.setPlayerBackend(value);
+              }
+            },
+          ),
+        ),
+      ],
     );
   }
 }

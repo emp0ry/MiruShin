@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:fvp/mdk.dart' as mdk;
 
+import '../domain/player_models.dart';
 import 'player_engine.dart';
 
 const mdk.SeekFlag _vodSeekFlag = mdk.SeekFlag(
@@ -17,6 +18,11 @@ const Duration _seekVerificationDelay = Duration(milliseconds: 180);
 const Duration _seekAcceptanceTolerance = Duration(milliseconds: 1500);
 const Duration _previewPrepareTimeout = Duration(milliseconds: 1800);
 const Duration _previewTextureTimeout = Duration(milliseconds: 1200);
+const Duration _startupRetryDelay = Duration(seconds: 45);
+const int _startupRetryLimit = 0;
+const Duration _fragileHlsSmallResumeThreshold = Duration(seconds: 30);
+const Duration _firstFramePollInterval = Duration(milliseconds: 250);
+const int _firstFramePollAttempts = 120;
 
 /// Pure FVP/MDK implementation of MiruShin's PlayerEngine.
 ///
@@ -42,6 +48,7 @@ class FvpPlayerEngine extends PlayerEngine {
   StreamSubscription<dynamic>? _mediaStatusSubscription;
   Timer? _positionTimer;
   Timer? _openTimeoutTimer;
+  Timer? _startupRetryTimer;
   bool _opening = false;
   bool _hasMedia = false;
   // Stores errors set by the open-timeout so _syncState() doesn't silently
@@ -49,6 +56,12 @@ class FvpPlayerEngine extends PlayerEngine {
   String? _lastError;
   double _volume = 1;
   double _playbackSpeed = 1;
+  PlayerSource? _currentSource;
+  Duration _currentStartAt = Duration.zero;
+  bool _currentAutoplay = true;
+  int _openGeneration = 0;
+  int _startupRetryCount = 0;
+  bool _preserveStartupRetryCount = false;
   List<PlayerBufferedRange> _lastBufferedRanges = const <PlayerBufferedRange>[];
 
   @override
@@ -83,15 +96,25 @@ class FvpPlayerEngine extends PlayerEngine {
     Duration? startAt,
     bool autoplay = true,
   }) async {
+    final bool preserveRetryCount = _preserveStartupRetryCount;
+    _preserveStartupRetryCount = false;
+    if (!preserveRetryCount) {
+      _startupRetryCount = 0;
+    }
+
     await _disposePlayerOnly();
+    final int openGeneration = ++_openGeneration;
 
     final mdk.Player player = mdk.Player();
     _player = player;
     _volume = _state.value.volume;
     _playbackSpeed = _state.value.playbackSpeed;
+    _currentSource = source;
+    _currentStartAt = startAt ?? Duration.zero;
+    _currentAutoplay = autoplay;
     _lastError = null;
 
-    _configureNetworkAndBuffering(player, source);
+    _configureNetworkAndBuffering(player, source, playbackSpeed: _playbackSpeed);
     _attachListeners(player);
 
     try {
@@ -104,8 +127,13 @@ class FvpPlayerEngine extends PlayerEngine {
         clearError: true,
       );
 
+      final double targetPlaybackSpeed = _playbackSpeed;
+
       player.volume = _volume;
-      player.playbackRate = _playbackSpeed;
+      // Always start the native backend at 1.0x. Some HLS/TS streams stall
+      // during startup if playback begins at 1.25x or higher before first
+      // frames/timestamps are ready. The saved speed is applied after startup.
+      player.playbackRate = 1.0;
 
       final Uri remoteUri = Uri.parse(source.url);
       _applyDirectMdkHeaders(player, remoteUri, source.headers);
@@ -138,10 +166,28 @@ class FvpPlayerEngine extends PlayerEngine {
 
       _startPositionTimer();
       _startOpenTimeout();
+      _scheduleStartupRetry(openGeneration);
 
-      final Duration initialPosition = startAt ?? Duration.zero;
-      if (initialPosition > Duration.zero) {
-        unawaited(_seekAfterOpen(initialPosition));
+      final bool fragileHls = _isFragileHls(playbackUrl);
+      final Duration requestedInitialPosition = startAt ?? Duration.zero;
+      final Duration initialPosition = fragileHls
+          ? _safeFragileHlsStartupPosition(requestedInitialPosition)
+          : requestedInitialPosition;
+
+      if (fragileHls) {
+        if (initialPosition > Duration.zero) {
+          unawaited(_seekAfterFirstFrame(player, initialPosition));
+        }
+        if (targetPlaybackSpeed != 1.0) {
+          unawaited(_applySpeedAfterFirstFrame(player, targetPlaybackSpeed));
+        }
+      } else {
+        if (initialPosition > Duration.zero) {
+          unawaited(_seekAfterOpen(initialPosition));
+        }
+        if (targetPlaybackSpeed != 1.0) {
+          unawaited(_applySpeedAfterStartup(player, targetPlaybackSpeed));
+        }
       }
 
       _syncState();
@@ -152,6 +198,67 @@ class FvpPlayerEngine extends PlayerEngine {
       );
       rethrow;
     }
+  }
+
+  bool _isFragileHls(String url) {
+    final String lower = url.toLowerCase();
+    return lower.contains('solodcdn.com') ||
+        lower.contains(':hls:manifest.m3u8') ||
+        lower.contains('.mp4:hls:');
+  }
+
+  Duration _safeFragileHlsStartupPosition(Duration position) {
+    if (position < _fragileHlsSmallResumeThreshold) {
+      return Duration.zero;
+    }
+    return position;
+  }
+
+  void _scheduleStartupRetry(int generation) {
+    _startupRetryTimer?.cancel();
+    _startupRetryTimer = Timer(_startupRetryDelay, () {
+      if (generation != _openGeneration) return;
+      if (!_opening || !_hasMedia || _lastError != null) return;
+
+      final mdk.Player? player = _player;
+      if (player == null) return;
+      if (_hasStartupContent(player)) return;
+      if (_startupRetryCount >= _startupRetryLimit) return;
+
+      _startupRetryCount += 1;
+      debugPrint(
+        'FVP startup retry $_startupRetryCount/$_startupRetryLimit: '
+        'stream did not produce frames within ${_startupRetryDelay.inSeconds}s.',
+      );
+      unawaited(_retryOpenCurrentSource());
+    });
+  }
+
+  bool _hasStartupContent(mdk.Player player) {
+    final mdk.MediaStatus status = player.mediaStatus;
+    final mdk.MediaInfo info = player.mediaInfo;
+    final Size videoSize = _videoSize(info);
+    return player.position > 0 ||
+        info.duration > 0 ||
+        player.textureId.value != null ||
+        videoSize.width > 0 ||
+        videoSize.height > 0 ||
+        player.buffered() > 0 ||
+        status.test(mdk.MediaStatus.prepared) ||
+        status.test(mdk.MediaStatus.loaded);
+  }
+
+  Future<void> _retryOpenCurrentSource() async {
+    final PlayerSource? source = _currentSource;
+    if (source == null) return;
+
+    final Duration position = _state.value.position > Duration.zero
+        ? _state.value.position
+        : _currentStartAt;
+    final bool autoplay = _currentAutoplay;
+
+    _preserveStartupRetryCount = true;
+    await open(source, startAt: position, autoplay: autoplay);
   }
 
   Future<void> _openPreparedPreview(
@@ -288,6 +395,107 @@ class FvpPlayerEngine extends PlayerEngine {
     }
   }
 
+  Future<void> _applySpeedAfterStartup(
+    mdk.Player player,
+    double speed,
+  ) async {
+    // Keep native startup at 1.0x, then apply the saved speed after the stream
+    // has real media state. This fixes HLS streams that start at 1x but stall
+    // when opened directly at 1.25x or higher.
+    for (int attempt = 0; attempt < 60; attempt += 1) {
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+
+      final mdk.Player? active = _player;
+      if (active == null || active != player || !_hasMedia) return;
+
+      final bool ready = _hasStartupContent(active);
+
+      if (ready) {
+        break;
+      }
+    }
+
+    final mdk.Player? active = _player;
+    if (active == null || active != player || !_hasMedia) return;
+
+    final PlayerSource? source = _currentSource;
+    if (source != null) {
+      _configureNetworkAndBuffering(
+        active,
+        source,
+        playbackSpeed: speed,
+      );
+    }
+
+    active.playbackRate = speed;
+    _syncState();
+  }
+
+
+  Future<bool> _waitForFirstFrame(mdk.Player player) async {
+    for (int attempt = 0; attempt < _firstFramePollAttempts; attempt += 1) {
+      await Future<void>.delayed(_firstFramePollInterval);
+
+      final mdk.Player? active = _player;
+      if (active == null || active != player || !_hasMedia) return false;
+
+      final mdk.MediaInfo info = active.mediaInfo;
+      final Size videoSize = _videoSize(info);
+      final bool hasVideoSize = videoSize.width > 0 && videoSize.height > 0;
+      final bool hasPlaybackClock = active.position > 0;
+      final bool hasDemuxedMedia = info.duration > 0 || active.buffered() > 0;
+
+      if (hasVideoSize && (hasPlaybackClock || hasDemuxedMedia)) {
+        await Future<void>.delayed(const Duration(milliseconds: 900));
+        return true;
+      }
+    }
+    return false;
+  }
+
+  Future<void> _seekAfterFirstFrame(
+    mdk.Player player,
+    Duration position,
+  ) async {
+    final bool ready = await _waitForFirstFrame(player);
+    if (!ready) return;
+
+    final mdk.Player? active = _player;
+    if (active == null || active != player || !_hasMedia) return;
+
+    try {
+      await _seekWithVerification(
+        active,
+        position.inMilliseconds,
+        flag: _vodSeekFlag,
+        attempts: 3,
+        verificationDelay: _seekVerificationDelay,
+      );
+    } on Object catch (error) {
+      debugPrint('FVP fragile HLS delayed seek failed: $error');
+    }
+    _syncState();
+  }
+
+  Future<void> _applySpeedAfterFirstFrame(
+    mdk.Player player,
+    double speed,
+  ) async {
+    final bool ready = await _waitForFirstFrame(player);
+    if (!ready) return;
+
+    final mdk.Player? active = _player;
+    if (active == null || active != player || !_hasMedia) return;
+
+    final PlayerSource? source = _currentSource;
+    if (source != null) {
+      _configureNetworkAndBuffering(active, source, playbackSpeed: speed);
+    }
+    active.playbackRate = speed;
+    _syncState();
+  }
+
+
   Future<bool> _seekWithVerification(
     mdk.Player player,
     int targetMs, {
@@ -353,10 +561,19 @@ class FvpPlayerEngine extends PlayerEngine {
 
   @override
   Future<void> setPlaybackSpeed(double speed) async {
-    _playbackSpeed = speed;
+    final double safeSpeed = speed.clamp(0.25, 3.0).toDouble();
+    _playbackSpeed = safeSpeed;
     final mdk.Player? player = _player;
+    final PlayerSource? source = _currentSource;
     if (player != null) {
-      player.playbackRate = speed;
+      if (source != null) {
+        _configureNetworkAndBuffering(
+          player,
+          source,
+          playbackSpeed: safeSpeed,
+        );
+      }
+      player.playbackRate = safeSpeed;
     }
     _syncState();
   }
@@ -400,7 +617,7 @@ class FvpPlayerEngine extends PlayerEngine {
 
     // Many CDNs validate that Origin matches the Referer host.
     // Derive Origin from Referer when not already set by the addon.
-    final String? referer = headers['Referer'];
+    final String? referer = headers[HttpHeaders.refererHeader];
     if (referer != null && referer.isNotEmpty && !headers.containsKey('Origin')) {
       final Uri? refUri = Uri.tryParse(referer);
       if (refUri != null && refUri.hasScheme && refUri.host.isNotEmpty) {
@@ -447,51 +664,99 @@ class FvpPlayerEngine extends PlayerEngine {
     return name;
   }
 
-  void _configureNetworkAndBuffering(mdk.Player player, PlayerSource source) {
-    // Generic playback buffer only. Provider-specific URL cleanup belongs in
-    // the addon that creates the stream URL, not in the player engine.
-    final int minBufferMs = _previewMode ? 800 : 8000;
-    final int maxBufferMs = _previewMode ? 8000 : 120000;
+  ({int min, int max, String ranges}) _bufferConfigFor({
+    required bool previewMode,
+    required bool isHls,
+    required bool isNetwork,
+    required double speed,
+  }) {
+    if (previewMode) {
+      return (min: 500, max: 8000, ranges: '2');
+    }
+
+    // MPV-like FVP profile: start fast with a small minimum buffer, but allow
+    // a large read-ahead cache. This helps streams that only continue loading
+    // well when the playback pressure is low, without forcing visible pauses.
+    if (isHls) {
+      if (speed <= 1.0) {
+        return (min: 1500, max: 300000, ranges: '24');
+      }
+      if (speed <= 1.5) {
+        return (min: 3000, max: 360000, ranges: '28');
+      }
+      if (speed <= 2.0) {
+        return (min: 6000, max: 420000, ranges: '32');
+      }
+      return (min: 12000, max: 480000, ranges: '40');
+    }
+
+    if (isNetwork) {
+      if (speed <= 1.0) {
+        return (min: 2000, max: 180000, ranges: '12');
+      }
+      if (speed <= 1.5) {
+        return (min: 4000, max: 240000, ranges: '16');
+      }
+      if (speed <= 2.0) {
+        return (min: 8000, max: 300000, ranges: '20');
+      }
+      return (min: 12000, max: 360000, ranges: '24');
+    }
+
+    return (min: 1000, max: 60000, ranges: '4');
+  }
+
+  void _configureNetworkAndBuffering(
+    mdk.Player player,
+    PlayerSource source, {
+    double playbackSpeed = 1.0,
+  }) {
+    final String url = source.url.toLowerCase();
+    final bool isNetwork =
+        url.startsWith('http://') || url.startsWith('https://');
+    final bool isHls =
+        source.streamType == StreamType.hls || url.contains('.m3u8') || url.contains(':hls:');
+    final config = _bufferConfigFor(
+      previewMode: _previewMode,
+      isHls: isHls,
+      isNetwork: isNetwork,
+      speed: playbackSpeed,
+    );
+
     try {
       player.setProperty('demux.buffer.protocols', 'file,http,https');
-      if (_previewMode) {
-        player.setProperty('demux.buffer.ranges', '2');
-      }
+      player.setProperty('demux.buffer.ranges', config.ranges);
       player.setBufferRange(
-        min: minBufferMs,
-        max: maxBufferMs,
+        min: config.min,
+        max: config.max,
         drop: _previewMode,
       );
     } on Object {
       player.setBufferRange(
-        min: minBufferMs,
-        max: maxBufferMs,
+        min: config.min,
+        max: config.max,
         drop: _previewMode,
       );
     }
 
-    // Relax format-detection strictness so non-standard HLS/MP4 streams
-    // (custom segment extensions, non-spec container quirks) don't get rejected.
     try {
       player.setProperty('avformat.strict', 'experimental');
       player.setProperty('avformat.safe', '0');
       player.setProperty('avformat.extension_picky', '0');
       player.setProperty('avformat.allowed_segment_extensions', 'ALL');
+      player.setProperty('avformat.protocol_whitelist', 'file,http,https,tcp,tls,crypto');
     } on Object {
       // Not all MDK builds expose avformat properties — safe to ignore.
     }
 
-    // CDN servers (and NAT/firewalls) silently close idle TCP connections
-    // after ~60-120 seconds. Without reconnect options, FFmpeg's HLS demuxer
-    // enters a broken recovery path on resume that skips to the next segment
-    // boundary instead of retrying the current one. These options make FFmpeg
-    // silently re-open the connection and retry the segment from scratch.
     try {
       player.setProperty('avio.reconnect', '1');
       player.setProperty('avio.reconnect_streamed', '1');
+      player.setProperty('avio.reconnect_at_eof', '1');
       player.setProperty('avio.reconnect_delay_max', '5');
+      player.setProperty('avio.rw_timeout', '15000000');
     } on Object {
-      // Older MDK builds may not expose all avio properties - safe to ignore.
+      // Older MDK builds may not expose all avio properties — safe to ignore.
     }
   }
 
@@ -515,12 +780,12 @@ class FvpPlayerEngine extends PlayerEngine {
 
   void _startOpenTimeout() {
     _openTimeoutTimer?.cancel();
-    _openTimeoutTimer = Timer(const Duration(seconds: 30), () {
+    _openTimeoutTimer = Timer(const Duration(seconds: 90), () {
       if (!_opening) return;
       final PlayerEngineState current = _state.value;
       if (current.hasError) return;
       _lastError =
-          'The stream did not start within 30 seconds. '
+          'The stream did not start within 90 seconds. '
           'The source may be unavailable or require different headers.';
       _state.value = current.copyWith(
         isBuffering: false,
@@ -587,6 +852,8 @@ class FvpPlayerEngine extends PlayerEngine {
       _opening = false;
       _openTimeoutTimer?.cancel();
       _openTimeoutTimer = null;
+      _startupRetryTimer?.cancel();
+      _startupRetryTimer = null;
     }
 
     final List<PlayerBufferedRange> nativeBufferedRanges = _bufferedRanges(
@@ -682,6 +949,10 @@ class FvpPlayerEngine extends PlayerEngine {
       // Fall back to buffered duration below.
     }
 
+    if (bufferedRanges.isNotEmpty) {
+      return bufferedRanges;
+    }
+
     final int bufferedMs = player.buffered();
     if (bufferedMs > 0) {
       final int positionMs = player.position.clamp(0, 1 << 62).toInt();
@@ -717,13 +988,17 @@ class FvpPlayerEngine extends PlayerEngine {
   }
 
   Future<void> _disposePlayerOnly() async {
+    _openGeneration += 1;
     _positionTimer?.cancel();
     _positionTimer = null;
     _openTimeoutTimer?.cancel();
     _openTimeoutTimer = null;
+    _startupRetryTimer?.cancel();
+    _startupRetryTimer = null;
     _opening = false;
     _hasMedia = false;
     _lastError = null;
+    _currentSource = null;
     _lastBufferedRanges = const <PlayerBufferedRange>[];
     await _eventSubscription?.cancel();
     await _stateSubscription?.cancel();

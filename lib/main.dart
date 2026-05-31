@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app/app.dart';
 import 'bootstrap/mirushin_fvp_bootstrap.dart';
+import 'bootstrap/mirushin_media_kit_bootstrap.dart';
 import 'core/constants/app_constants.dart';
 import 'core/utils/settings_preferences.dart';
 import 'features/settings/presentation/settings_state.dart';
@@ -34,6 +35,7 @@ Future<void> main() async {
       FlutterError.presentError(details);
     }
   };
+  configureMiruShinMediaKit();
   configureMiruShinFvp();
   runApp(ProviderScope(child: MiruShinApp(initialRoute: initialRoute)));
 }

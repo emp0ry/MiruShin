@@ -2801,6 +2801,43 @@ class _PlayerSettingsTiles extends ConsumerWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
+        ListTile(
+          leading: const Icon(Icons.smart_display_rounded),
+          title: const Text('Player engine'),
+          subtitle: Text('${settings.playerBackend.title} · applies on next stream open'),
+          onTap: () async {
+            final PlayerBackend? picked = await showDialog<PlayerBackend>(
+              context: context,
+              builder: (BuildContext context) => SimpleDialog(
+                title: const Text('Player engine'),
+                children: <Widget>[
+                  RadioGroup<PlayerBackend>(
+                    groupValue: settings.playerBackend,
+                    onChanged: (PlayerBackend? value) =>
+                        Navigator.pop(context, value),
+                    child: Column(
+                      children: PlayerBackend.values
+                          .map(
+                            (PlayerBackend backend) =>
+                                RadioListTile<PlayerBackend>(
+                              value: backend,
+                              title: Text(backend.title),
+                              subtitle: Text(backend.description),
+                            ),
+                          )
+                          .toList(growable: false),
+                    ),
+                  ),
+                ],
+              ),
+            );
+            if (picked != null) {
+              await ref
+                  .read(playerSettingsProvider.notifier)
+                  .setPlayerBackend(picked);
+            }
+          },
+        ),
         SwitchListTile(
           value: settings.useAniSkip,
           secondary: const Icon(Icons.av_timer_rounded),

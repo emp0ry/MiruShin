@@ -33,6 +33,9 @@ dependencies:
   flutter_local_notifications: ^21.0.0
   video_player: ^2.11.1
   fvp: ^0.36.2
+  media_kit: ^1.2.6
+  media_kit_video: ^2.0.1
+  media_kit_libs_video: ^1.0.7
   wakelock_plus: ^1.5.2
   timezone: ^0.11.0
   package_info_plus: ^9.0.1

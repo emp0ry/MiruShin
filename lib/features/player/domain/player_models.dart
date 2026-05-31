@@ -4,6 +4,37 @@ import '../../watch/domain/normalized_models.dart';
 
 enum StreamType { mp4, hls, dash, unknown }
 
+/// Native playback engine used by PlayerEngineFactory.
+///
+/// Auto uses MediaKit on native platforms and VideoPlayer on web. FVP stays
+/// available as a fallback for devices/streams where it behaves better.
+enum PlayerBackend { auto, mpv, fvp }
+
+extension PlayerBackendLabel on PlayerBackend {
+  String get title {
+    switch (this) {
+      case PlayerBackend.auto:
+        return 'Auto';
+      case PlayerBackend.mpv:
+        return 'MPV / MediaKit';
+      case PlayerBackend.fvp:
+        return 'FVP / MDK';
+    }
+  }
+
+  String get description {
+    switch (this) {
+      case PlayerBackend.auto:
+        return 'Recommended. Uses MPV / MediaKit on native platforms.';
+      case PlayerBackend.mpv:
+        return 'MPV-like backend. Best for HLS, buffering, subtitles and speed.';
+      case PlayerBackend.fvp:
+        return 'Legacy FVP / MDK backend with improved buffering fallback.';
+    }
+  }
+}
+
+
 StreamType streamTypeFrom(String s) {
   switch (s.toUpperCase()) {
     case 'HLS':
@@ -212,6 +243,7 @@ class PlayerSettings {
     this.discordRpcEnabled = true,
     this.autoAnilistSync = true,
     this.debugStreamInfo = false,
+    this.playerBackend = PlayerBackend.auto,
   });
 
   final Duration seekInterval;
@@ -240,6 +272,7 @@ class PlayerSettings {
   final bool discordRpcEnabled;
   final bool autoAnilistSync;
   final bool debugStreamInfo;
+  final PlayerBackend playerBackend;
 
   PlayerSettings copyWith({
     Duration? seekInterval,
@@ -268,6 +301,7 @@ class PlayerSettings {
     bool? discordRpcEnabled,
     bool? autoAnilistSync,
     bool? debugStreamInfo,
+    PlayerBackend? playerBackend,
   }) {
     return PlayerSettings(
       seekInterval: seekInterval ?? this.seekInterval,
@@ -301,6 +335,7 @@ class PlayerSettings {
       discordRpcEnabled: discordRpcEnabled ?? this.discordRpcEnabled,
       autoAnilistSync: autoAnilistSync ?? this.autoAnilistSync,
       debugStreamInfo: debugStreamInfo ?? this.debugStreamInfo,
+      playerBackend: playerBackend ?? this.playerBackend,
     );
   }
 
@@ -331,6 +366,7 @@ class PlayerSettings {
     'discordRpcEnabled': discordRpcEnabled,
     'autoAnilistSync': autoAnilistSync,
     'debugStreamInfo': debugStreamInfo,
+    'playerBackend': playerBackend.name,
   };
 
   factory PlayerSettings.fromJson(Map<String, Object?> json) {
@@ -377,6 +413,10 @@ class PlayerSettings {
       discordRpcEnabled: json['discordRpcEnabled'] as bool? ?? true,
       autoAnilistSync: json['autoAnilistSync'] as bool? ?? true,
       debugStreamInfo: json['debugStreamInfo'] as bool? ?? false,
+      playerBackend: PlayerBackend.values.firstWhere(
+        (PlayerBackend value) => value.name == json['playerBackend'],
+        orElse: () => PlayerBackend.auto,
+      ),
     );
   }
 }

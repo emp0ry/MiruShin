@@ -204,15 +204,20 @@ void PipPlayer::ResizeSwapChain(int w, int h) {
   width_ = w;
   height_ = h;
 
-  // Release the RTV before resizing.
-  rtv_.Reset();
-
 #ifdef MIRUSHIN_PIP_WIN32
+  // Signal MDK to stop rendering BEFORE releasing the RTV.  MDK's render
+  // thread holds a reference to the RTV via the D3D11RenderAPI; if we reset
+  // it while a renderVideo() call is in flight the callback writes to freed
+  // memory and crashes.  setVideoSurfaceSize(-1,-1) flushes the render thread
+  // before returning, making the RTV safe to release.
   if (player_api_) {
     Player p(player_api_);
     p.setVideoSurfaceSize(-1, -1);
   }
 #endif
+
+  // Release the RTV before resizing (MDK is not rendering at this point).
+  rtv_.Reset();
 
   swap_chain_->ResizeBuffers(
       0,
@@ -314,8 +319,13 @@ void PipPlayer::SetupMdkPlayer(
   player.setVideoSurfaceSize(width_, height_);
 
   // When MDK has decoded a new frame, blit it to the swap chain.
+  // Check rtv_ in addition to swap_chain_ because ResizeSwapChain temporarily
+  // releases the RTV before recreating it — rendering against a null RTV
+  // would crash. setVideoSurfaceSize(-1,-1) is called before rtv_.Reset() but
+  // MDK's render thread can still fire once after that, so a null-check here
+  // is the last line of defence.
   player.setRenderCallback([this](void*) {
-    if (!player_api_ || !swap_chain_) {
+    if (!player_api_ || !swap_chain_ || !rtv_) {
       return;
     }
 
