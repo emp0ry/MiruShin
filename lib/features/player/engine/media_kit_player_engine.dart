@@ -15,6 +15,7 @@ const Duration _stateTick = Duration(milliseconds: 120);
 const Duration _startupSettleTimeout = Duration(seconds: 60);
 const Duration _startupPollInterval = Duration(milliseconds: 250);
 const Duration _startupActionDelay = Duration(milliseconds: 750);
+const Duration _proxyStallFallbackDelay = Duration(seconds: 15);
 const Duration _tinyHlsDurationLimit = Duration(seconds: 30);
 
 // MPV buffer config mirrors FVP's _bufferConfigFor() logic.
@@ -79,8 +80,9 @@ class MediaKitPlayerEngine extends PlayerEngine {
   final List<StreamSubscription<dynamic>> _subscriptions =
       <StreamSubscription<dynamic>>[];
 
-  // Local HLS proxy — only used (and started) for network HLS streams.
-  // Preview mode never uses the proxy to keep resource usage minimal.
+  // Local HTTP/HLS proxy for network playback. HLS playlists use /m3u8 and
+  // direct media URLs use /media so headers, retries, and Range handling stay
+  // consistent across providers. Preview mode skips it to stay lightweight.
   final LocalHlsProxy _proxy = LocalHlsProxy();
 
   bool _opening = false;
@@ -89,6 +91,18 @@ class MediaKitPlayerEngine extends PlayerEngine {
   double _volume = 1;
   double _playbackSpeed = 1;
   PlayerSource? _currentSource;
+  String? _nativePlaybackUrl;
+  Map<String, String> _nativePlaybackHeaders = const <String, String>{};
+  String? _directPlaybackUrl;
+  Map<String, String> _currentOpenHeaders = const <String, String>{};
+  Duration _currentRequestedStartAt = Duration.zero;
+  double _currentTargetPlaybackSpeed = 1;
+  bool _currentAutoplay = true;
+  bool _usingProxy = false;
+  bool _directFallbackTried = false;
+  bool _directFallbackInProgress = false;
+  Duration _lastProxyProgressPosition = Duration.zero;
+  DateTime? _proxyStallStartedAt;
   int _openGeneration = 0;
   Size _lastVideoSize = Size.zero;
   Duration _lastReliableDuration = Duration.zero;
@@ -96,6 +110,12 @@ class MediaKitPlayerEngine extends PlayerEngine {
 
   @override
   ValueListenable<PlayerEngineState> get state => _state;
+
+  @override
+  String? get nativePlaybackUrl => _nativePlaybackUrl;
+
+  @override
+  Map<String, String> get nativePlaybackHeaders => _nativePlaybackHeaders;
 
   @override
   void addListener(VoidCallback listener) => _state.addListener(listener);
@@ -164,6 +184,14 @@ class MediaKitPlayerEngine extends PlayerEngine {
       );
 
       final double targetPlaybackSpeed = _playbackSpeed;
+      _currentRequestedStartAt = startAt ?? Duration.zero;
+      _currentTargetPlaybackSpeed = targetPlaybackSpeed;
+      _currentAutoplay = autoplay;
+      _directFallbackTried = false;
+      _directFallbackInProgress = false;
+      _usingProxy = false;
+      _lastProxyProgressPosition = Duration.zero;
+      _proxyStallStartedAt = null;
 
       await player.setVolume((_volume * 100).clamp(0.0, 100.0).toDouble());
       // Always start the native backend at 1.0x. Some HLS/TS streams
@@ -179,15 +207,15 @@ class MediaKitPlayerEngine extends PlayerEngine {
         remoteUri,
         source.headers,
       );
+      _directPlaybackUrl = remoteUri.toString();
+      _currentOpenHeaders = headers;
 
-      // For HLS network streams use the local proxy so MPV doesn't hammer the
-      // CDN directly. The proxy rewrites playlist + segment URLs to loopback,
-      // retries failed segment connections, and reuses persistent connections.
-      // Preview mode skips it to keep lightweight preview decoders cheap.
-      final bool useProxy =
-          !_previewMode &&
-          _isHlsLikeSource(source) &&
-          _isNetworkUrl(source.url);
+      // For network streams use the local proxy so MPV/FFmpeg always gets a
+      // localhost URL while the proxy handles CDN headers, retries, Range, and
+      // HLS playlist rewrites. Preview mode skips it to keep decoders cheap.
+      final bool isNetwork = _isNetworkUrl(source.url);
+      final bool isHls = _isHlsLikeSource(source);
+      final bool useProxy = !_previewMode && isNetwork;
 
       String playbackUrl = remoteUri.toString();
       if (useProxy) {
@@ -195,7 +223,10 @@ class MediaKitPlayerEngine extends PlayerEngine {
           // Restart proxy on each open so stale CDN headers are not reused.
           await _proxy.stop();
           await _proxy.start();
-          playbackUrl = _proxy.playlistUrl(remoteUri, headers: headers);
+          playbackUrl = isHls
+              ? _proxy.playlistUrl(remoteUri, headers: headers)
+              : _proxy.mediaUrl(remoteUri, headers: headers);
+          _usingProxy = true;
           debugPrint('MediaKit open via proxy: $playbackUrl');
         } on Object catch (proxyErr) {
           // Proxy failed to start — fall back to direct CDN access.
@@ -209,6 +240,8 @@ class MediaKitPlayerEngine extends PlayerEngine {
         unawaited(_proxy.stop());
         debugPrint('MediaKit open direct: $playbackUrl');
       }
+      _nativePlaybackUrl = playbackUrl;
+      _nativePlaybackHeaders = headers;
 
       await player.open(
         mk.Media(playbackUrl, httpHeaders: headers),
@@ -373,6 +406,13 @@ class MediaKitPlayerEngine extends PlayerEngine {
     if (!_isActivePlayer(player, generation)) return;
 
     if (!ready) {
+      if (_canRetryDirectAfterProxy(player)) {
+        await _retryDirectAfterProxyIssue(
+          player,
+          reason: 'proxy stream did not settle',
+        );
+        return;
+      }
       // Slow CDN stream — skip seek to avoid breaking loading.
       // PlaybackController._reinforceInitialSeek retries once initialised.
       debugPrint(
@@ -451,6 +491,130 @@ class MediaKitPlayerEngine extends PlayerEngine {
     return generation == _openGeneration && _player == player && _hasMedia;
   }
 
+  bool _canRetryDirectAfterProxy(mk.Player player) {
+    return _player == player &&
+        _hasMedia &&
+        _usingProxy &&
+        !_directFallbackTried &&
+        !_directFallbackInProgress &&
+        !_requiresPinnedProxy(_directPlaybackUrl) &&
+        (_directPlaybackUrl?.isNotEmpty ?? false);
+  }
+
+  bool _shouldRetryDirectAfterProxyError(mk.Player player) {
+    if (!_canRetryDirectAfterProxy(player)) return false;
+
+    final mk.PlayerState native = player.state;
+    if (_hasStartupContent(native) ||
+        _lastReliableDuration > Duration.zero ||
+        _lastBufferedRanges.isNotEmpty) {
+      return false;
+    }
+
+    return true;
+  }
+
+  Future<void> _retryDirectAfterProxyIssue(
+    mk.Player player, {
+    required String reason,
+  }) async {
+    if (!_canRetryDirectAfterProxy(player)) return;
+
+    final String directUrl = _directPlaybackUrl!;
+    final Map<String, String> headers = _currentOpenHeaders;
+    final Duration requestedStartAt = player.state.position > Duration.zero
+        ? player.state.position
+        : _currentRequestedStartAt;
+    final bool shouldPlay = player.state.playing || _currentAutoplay;
+
+    _directFallbackTried = true;
+    _directFallbackInProgress = true;
+    _usingProxy = false;
+    _proxyStallStartedAt = null;
+    final int generation = ++_openGeneration;
+
+    debugPrint('MediaKit: $reason; retrying direct before source fallback.');
+
+    _lastError = null;
+    _opening = true;
+    _hasMedia = true;
+    _state.value = _state.value.copyWith(
+      isBuffering: true,
+      isInitialized: false,
+      hasError: false,
+      clearError: true,
+    );
+    _startOpenTimeout();
+
+    try {
+      await _proxy.stop();
+      _nativePlaybackUrl = directUrl;
+      _nativePlaybackHeaders = headers;
+      await player.setRate(1.0);
+      await player.open(
+        mk.Media(directUrl, httpHeaders: headers),
+        play: shouldPlay,
+      );
+      _directFallbackInProgress = false;
+
+      unawaited(
+        _finishStartupAfterOpen(
+          player,
+          generation,
+          requestedStartAt: requestedStartAt,
+          targetPlaybackSpeed: _currentTargetPlaybackSpeed,
+        ),
+      );
+      _syncState();
+    } on Object catch (error) {
+      _directFallbackInProgress = false;
+      if (!_isActivePlayer(player, generation)) return;
+      _lastError = 'Direct retry failed after proxy issue: $error';
+      _syncState();
+    }
+  }
+
+  void _watchProxyStall(
+    mk.Player player, {
+    required mk.PlayerState native,
+    required Duration position,
+    required bool initialized,
+  }) {
+    if (!_canRetryDirectAfterProxy(player)) {
+      _proxyStallStartedAt = null;
+      _lastProxyProgressPosition = position;
+      return;
+    }
+
+    final bool moved =
+        (position - _lastProxyProgressPosition).abs() >
+        const Duration(milliseconds: 500);
+    if (moved) {
+      _lastProxyProgressPosition = position;
+      _proxyStallStartedAt = null;
+      return;
+    }
+
+    if (!initialized || !native.playing || !native.buffering) {
+      _lastProxyProgressPosition = position;
+      _proxyStallStartedAt = null;
+      return;
+    }
+
+    final DateTime now = DateTime.now();
+    final DateTime startedAt = _proxyStallStartedAt ?? now;
+    _proxyStallStartedAt = startedAt;
+    if (now.difference(startedAt) >= _proxyStallFallbackDelay) {
+      _proxyStallStartedAt = null;
+      unawaited(
+        _retryDirectAfterProxyIssue(
+          player,
+          reason: 'proxy stalled while buffering',
+        ),
+      );
+    }
+  }
+
   Future<void> _safeStartupSeek(mk.Player player, Duration requested) async {
     if (requested <= Duration.zero) return;
 
@@ -486,6 +650,23 @@ class MediaKitPlayerEngine extends PlayerEngine {
     listen<int?>(player.stream.height);
     _subscriptions.add(
       player.stream.error.listen((String error) {
+        if (_directFallbackInProgress) return;
+        if (_shouldRetryDirectAfterProxyError(player)) {
+          unawaited(
+            _retryDirectAfterProxyIssue(
+              player,
+              reason: 'proxy stream error: $error',
+            ),
+          );
+          return;
+        }
+        if (_canRetryDirectAfterProxy(player)) {
+          debugPrint(
+            'MediaKit: transient proxy stream error after startup; '
+            'keeping proxy active: $error',
+          );
+          return;
+        }
         _lastError = error;
         _syncState();
       }),
@@ -562,6 +743,13 @@ class MediaKitPlayerEngine extends PlayerEngine {
       if (!_opening) return;
       final PlayerEngineState current = _state.value;
       if (current.hasError) return;
+      final mk.Player? player = _player;
+      if (player != null && _canRetryDirectAfterProxy(player)) {
+        unawaited(
+          _retryDirectAfterProxyIssue(player, reason: 'proxy open timeout'),
+        );
+        return;
+      }
       _lastError =
           'The stream did not start within 90 seconds. The source may be unavailable or require different headers.';
       _state.value = current.copyWith(
@@ -628,6 +816,13 @@ class MediaKitPlayerEngine extends PlayerEngine {
       hasError: hasError,
       errorDescription: _lastError,
     );
+
+    _watchProxyStall(
+      player,
+      native: native,
+      position: position,
+      initialized: initialized,
+    );
   }
 
   List<PlayerBufferedRange> _bufferedRanges({
@@ -668,6 +863,11 @@ class MediaKitPlayerEngine extends PlayerEngine {
     );
     headers.putIfAbsent(HttpHeaders.acceptHeader, () => '*/*');
 
+    if (_isOkCdnHost(uri.host)) {
+      headers.remove('Origin');
+      return headers;
+    }
+
     final String? referer = headers[HttpHeaders.refererHeader];
     if (referer != null &&
         referer.isNotEmpty &&
@@ -679,6 +879,21 @@ class MediaKitPlayerEngine extends PlayerEngine {
     }
 
     return headers;
+  }
+
+  bool _requiresPinnedProxy(String? url) {
+    if (url == null || url.isEmpty) return false;
+    final Uri? uri = Uri.tryParse(url);
+    if (uri == null || !_isOkCdnHost(uri.host)) return false;
+    return (uri.queryParameters['urls']?.trim().isNotEmpty ?? false);
+  }
+
+  bool _isOkCdnHost(String host) {
+    final String lower = host.toLowerCase();
+    return lower == 'okcdn.ru' ||
+        lower.endsWith('.okcdn.ru') ||
+        lower == 'mycdn.me' ||
+        lower.endsWith('.mycdn.me');
   }
 
   String _canonicalHeaderName(String name) {
@@ -724,6 +939,18 @@ class MediaKitPlayerEngine extends PlayerEngine {
     _hasMedia = false;
     _lastError = null;
     _currentSource = null;
+    _nativePlaybackUrl = null;
+    _nativePlaybackHeaders = const <String, String>{};
+    _directPlaybackUrl = null;
+    _currentOpenHeaders = const <String, String>{};
+    _currentRequestedStartAt = Duration.zero;
+    _currentTargetPlaybackSpeed = 1;
+    _currentAutoplay = true;
+    _usingProxy = false;
+    _directFallbackTried = false;
+    _directFallbackInProgress = false;
+    _lastProxyProgressPosition = Duration.zero;
+    _proxyStallStartedAt = null;
     _lastBufferedRanges = const <PlayerBufferedRange>[];
     _lastVideoSize = Size.zero;
     _lastReliableDuration = Duration.zero;

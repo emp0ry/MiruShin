@@ -6,8 +6,8 @@ enum StreamType { mp4, hls, dash, unknown }
 
 /// Native playback engine used by PlayerEngineFactory.
 ///
-/// Auto uses MediaKit on native platforms and VideoPlayer on web. FVP stays
-/// available as a fallback for devices/streams where it behaves better.
+/// Auto uses MediaKit first on native platforms, retries direct when the local
+/// proxy fails, then falls back to FVP before trying the next source.
 enum PlayerBackend { auto, mpv, fvp }
 
 extension PlayerBackendLabel on PlayerBackend {
@@ -25,7 +25,7 @@ extension PlayerBackendLabel on PlayerBackend {
   String get description {
     switch (this) {
       case PlayerBackend.auto:
-        return 'Recommended. Uses MPV / MediaKit on native platforms.';
+        return 'Recommended. Tries MPV with proxy, MPV direct, then FVP.';
       case PlayerBackend.mpv:
         return 'MPV-like backend. Best for HLS, buffering, subtitles and speed.';
       case PlayerBackend.fvp:
@@ -33,7 +33,6 @@ extension PlayerBackendLabel on PlayerBackend {
     }
   }
 }
-
 
 StreamType streamTypeFrom(String s) {
   switch (s.toUpperCase()) {

@@ -94,6 +94,14 @@ abstract class PlayerEngine implements Listenable {
 
   PlayerEngineState get value => state.value;
 
+  /// URL that native desktop PiP should use when taking over playback.
+  ///
+  /// Backends that proxy or transform the source can expose their effective
+  /// playback URL here. The default keeps older engines on their original URL.
+  String? get nativePlaybackUrl => null;
+
+  Map<String, String> get nativePlaybackHeaders => const <String, String>{};
+
   Widget buildVideoSurface(BuildContext context);
 
   Future<void> open(PlayerSource source, {Duration? startAt, bool autoplay});

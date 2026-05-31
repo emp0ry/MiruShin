@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 
@@ -12,8 +13,14 @@ const int _kPlaylistRetries = 3;
 const int _kSegmentRetries = 4;
 const int _kRetryBackoffBaseMs = 150;
 const Duration _kIdleReset = Duration(seconds: 40);
+const int _kBufferedSegmentLimitBytes = 32 * 1024 * 1024;
+const List<String> _kHttp11Protocols = <String>['http/1.1'];
 
-/// Local HLS proxy that sits between MPV and the upstream CDN.
+class _SegmentBufferTooLarge implements Exception {
+  const _SegmentBufferTooLarge();
+}
+
+/// Local HTTP/HLS proxy that sits between MPV/native PiP and the upstream CDN.
 ///
 /// Why it helps vs. MPV fetching directly:
 ///  - Retries failed segment connections before bytes are sent downstream.
@@ -23,13 +30,14 @@ const Duration _kIdleReset = Duration(seconds: 40);
 ///  - Resets the connection after long idle to avoid stale keep-alive sockets.
 ///
 /// Architecture: one `LocalHlsProxy` instance per `MediaKitPlayerEngine`.
-/// The engine calls `start()` / `stop()` around each HLS stream open.
+/// The engine calls `start()` / `stop()` around each network stream open.
 class LocalHlsProxy {
   HttpServer? _server;
   int? _port;
   HttpClient? _httpClient;
   DateTime? _lastRequestAt;
   Map<String, String> _forwardHeaders = <String, String>{};
+  bool _stopping = false;
 
   bool get isRunning => _server != null;
 
@@ -43,6 +51,7 @@ class LocalHlsProxy {
 
   Future<void> start() async {
     if (_server != null) return;
+    _stopping = false;
     _httpClient ??= _makeClient();
     _server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     _port = _server!.port;
@@ -52,6 +61,8 @@ class LocalHlsProxy {
 
   Future<void> stop() async {
     final HttpServer? s = _server;
+    final bool hadResources = s != null || _httpClient != null;
+    _stopping = true;
     _server = null;
     _port = null;
     _forwardHeaders = <String, String>{};
@@ -60,7 +71,9 @@ class LocalHlsProxy {
       await s?.close(force: true);
     } catch (_) {}
     _destroyClient();
-    debugPrint('HlsProxy: stopped');
+    if (hadResources) {
+      debugPrint('HlsProxy: stopped');
+    }
   }
 
   // ── Public URL builder ────────────────────────────────────────────────────
@@ -80,6 +93,22 @@ class LocalHlsProxy {
     return '$_base/m3u8?u=$u&h=$h';
   }
 
+  /// Returns the proxied URL for a direct network media resource.
+  ///
+  /// Direct URLs do not need playlist rewriting, but still need the same
+  /// header forwarding, connection retrying, and Range support as HLS segments.
+  String mediaUrl(
+    Uri remoteUrl, {
+    Map<String, String> headers = const <String, String>{},
+  }) {
+    final String u = Uri.encodeQueryComponent(remoteUrl.toString());
+    if (headers.isEmpty) {
+      return '$_base/media?u=$u';
+    }
+    final String h = Uri.encodeQueryComponent(jsonEncode(headers));
+    return '$_base/media?u=$u&h=$h';
+  }
+
   // ── Request dispatch ──────────────────────────────────────────────────────
 
   Future<void> _dispatch(HttpRequest req) async {
@@ -89,6 +118,8 @@ class LocalHlsProxy {
           await _servePlaylist(req);
         case '/seg':
           await _serveSegment(req);
+        case '/media':
+          await _serveSegment(req, preserveContentType: true);
         default:
           req.response.statusCode = HttpStatus.notFound;
           await req.response.close();
@@ -114,20 +145,7 @@ class LocalHlsProxy {
     //   1. `h` query-param (JSON, set by the engine when building the URL).
     //   2. Inbound HTTP headers forwarded by MPV from httpHeaders.
     // We merge both; inbound headers win so the latest session values are used.
-    final String? rawH = req.uri.queryParameters['h'];
-    if (rawH != null) {
-      try {
-        final Map<String, dynamic> dec =
-            jsonDecode(rawH) as Map<String, dynamic>;
-        final Map<String, String> fromParam = dec.map(
-          (String k, dynamic v) => MapEntry<String, String>(k, v.toString()),
-        );
-        // Merge — don't overwrite the whole map so previous captures survive.
-        _forwardHeaders.addAll(fromParam);
-      } catch (e) {
-        debugPrint('HlsProxy: failed to parse h-param: $e');
-      }
-    }
+    _absorbQueryHeaders(req.uri.queryParameters['h']);
     _absorbInboundHeaders(req.headers);
 
     final Uri src = Uri.parse(rawUrl);
@@ -213,25 +231,165 @@ class LocalHlsProxy {
 
   // ── Segment handler ───────────────────────────────────────────────────────
 
-  Future<void> _serveSegment(HttpRequest req) async {
+  Future<void> _serveSegment(
+    HttpRequest req, {
+    bool preserveContentType = false,
+  }) async {
     final String? rawUrl = req.uri.queryParameters['u'];
     if (rawUrl == null) {
       req.response.statusCode = HttpStatus.badRequest;
       return req.response.close();
     }
 
+    _absorbQueryHeaders(req.uri.queryParameters['h']);
     _absorbInboundHeaders(req.headers);
     final Uri uri = Uri.parse(rawUrl);
     final String? range = req.headers.value(HttpHeaders.rangeHeader);
 
+    if (!preserveContentType && req.method != 'HEAD') {
+      return _serveBufferedSegment(req, uri, range);
+    }
+
+    return _serveStreamingSegment(
+      req,
+      uri,
+      range,
+      preserveContentType: preserveContentType,
+    );
+  }
+
+  Future<void> _serveBufferedSegment(
+    HttpRequest req,
+    Uri uri,
+    String? range,
+  ) async {
+    try {
+      final ({Uint8List body, HttpHeaders headers, int statusCode}) upstream =
+          await _fetchBufferedSegment(uri, range);
+
+      req.response.statusCode = upstream.statusCode;
+      req.response.bufferOutput = false;
+      _copyResponseHeaders(
+        upstream.headers,
+        req.response.headers,
+        defaultContentType: 'application/octet-stream',
+        preserveContentType: false,
+      );
+      req.response.contentLength = upstream.body.length;
+      req.response.add(upstream.body);
+      return req.response.close();
+    } on _SegmentBufferTooLarge {
+      debugPrint('HlsProxy seg too large for prebuffer, streaming $uri');
+      return _serveStreamingSegment(
+        req,
+        uri,
+        range,
+        preserveContentType: false,
+      );
+    } catch (e) {
+      if (_stopping && _isShutdownError(e)) {
+        try {
+          await req.response.close();
+        } catch (_) {}
+        return;
+      }
+      debugPrint('HlsProxy seg FAIL $uri → $e');
+      req.response.statusCode = HttpStatus.badGateway;
+      req.response.headers.set(HttpHeaders.contentTypeHeader, 'text/plain');
+      req.response.write('segment error: $e');
+      return req.response.close();
+    }
+  }
+
+  Future<({Uint8List body, HttpHeaders headers, int statusCode})>
+  _fetchBufferedSegment(Uri uri, String? range) async {
     for (int attempt = 1; attempt <= _kSegmentRetries; attempt++) {
       _resetIfIdle();
       _lastRequestAt = DateTime.now();
+      if (_stopping) throw StateError('proxy stopping');
 
       try {
         final HttpClientRequest r = await _client()
             .getUrl(uri)
             .timeout(_kConnectTimeout);
+        r.persistentConnection = true;
+        _applyUpstreamHeaders(r, uri);
+        if (range != null && range.trim().isNotEmpty) {
+          r.headers.set(HttpHeaders.rangeHeader, range.trim());
+        }
+
+        final HttpClientResponse upstream = await r.close().timeout(
+          _kReadTimeout,
+        );
+
+        if (_isRetriableStatus(upstream.statusCode) &&
+            attempt < _kSegmentRetries) {
+          await upstream.drain<void>().catchError((_) {});
+          debugPrint(
+            'HlsProxy seg retry $attempt '
+            '(HTTP ${upstream.statusCode}) $uri',
+          );
+          await _beforeRetry(attempt);
+          continue;
+        }
+
+        if (upstream.contentLength > _kBufferedSegmentLimitBytes) {
+          await upstream.drain<void>().catchError((_) {});
+          throw const _SegmentBufferTooLarge();
+        }
+
+        final BytesBuilder body = BytesBuilder(copy: false);
+        await for (final List<int> chunk in upstream.timeout(_kReadTimeout)) {
+          if (_stopping) throw StateError('proxy stopping');
+          body.add(chunk);
+          if (body.length > _kBufferedSegmentLimitBytes) {
+            throw const _SegmentBufferTooLarge();
+          }
+        }
+
+        return (
+          body: body.takeBytes(),
+          headers: upstream.headers,
+          statusCode: upstream.statusCode,
+        );
+      } on _SegmentBufferTooLarge {
+        rethrow;
+      } catch (e) {
+        final bool canRetry =
+            _isRetriableError(e) && attempt < _kSegmentRetries;
+        if (canRetry) {
+          debugPrint('HlsProxy seg retry $attempt ($e) $uri');
+          await _beforeRetry(attempt);
+          continue;
+        }
+        rethrow;
+      }
+    }
+    throw StateError('unreachable');
+  }
+
+  Future<void> _serveStreamingSegment(
+    HttpRequest req,
+    Uri uri,
+    String? range, {
+    required bool preserveContentType,
+  }) async {
+    for (int attempt = 1; attempt <= _kSegmentRetries; attempt++) {
+      _resetIfIdle();
+      _lastRequestAt = DateTime.now();
+      if (_stopping) {
+        try {
+          await req.response.close();
+        } catch (_) {}
+        return;
+      }
+
+      try {
+        final HttpClientRequest r =
+            await (req.method == 'HEAD'
+                    ? _client().headUrl(uri)
+                    : _client().getUrl(uri))
+                .timeout(_kConnectTimeout);
         r.persistentConnection = true;
         _applyUpstreamHeaders(r, uri);
         if (range != null && range.trim().isNotEmpty) {
@@ -259,15 +417,25 @@ class LocalHlsProxy {
           upstream.headers,
           req.response.headers,
           defaultContentType: 'application/octet-stream',
-          preserveContentType: false,
+          preserveContentType: preserveContentType,
         );
         if (upstream.contentLength >= 0) {
           req.response.contentLength = upstream.contentLength;
+        }
+        if (req.method == 'HEAD') {
+          await upstream.drain<void>().catchError((_) {});
+          return req.response.close();
         }
         try {
           await req.response.addStream(_activeStream(upstream));
           return req.response.close();
         } catch (e) {
+          if (_stopping && _isShutdownError(e)) {
+            try {
+              await req.response.close();
+            } catch (_) {}
+            return;
+          }
           debugPrint('HlsProxy seg stream FAIL $uri → $e');
           try {
             await req.response.close();
@@ -275,6 +443,12 @@ class LocalHlsProxy {
           return;
         }
       } catch (e) {
+        if (_stopping && _isShutdownError(e)) {
+          try {
+            await req.response.close();
+          } catch (_) {}
+          return;
+        }
         final bool canRetry =
             _isRetriableError(e) && attempt < _kSegmentRetries;
         if (canRetry) {
@@ -385,9 +559,15 @@ class LocalHlsProxy {
   bool _canProxy(Uri uri) => uri.scheme == 'http' || uri.scheme == 'https';
 
   Stream<List<int>> _activeStream(Stream<List<int>> upstream) async* {
-    await for (final List<int> chunk in upstream.timeout(_kReadTimeout)) {
-      _lastRequestAt = DateTime.now();
-      yield chunk;
+    try {
+      await for (final List<int> chunk in upstream.timeout(_kReadTimeout)) {
+        if (_stopping) break;
+        _lastRequestAt = DateTime.now();
+        yield chunk;
+      }
+    } on Object catch (e) {
+      if (_stopping && _isShutdownError(e)) return;
+      rethrow;
     }
   }
 
@@ -398,8 +578,46 @@ class LocalHlsProxy {
     ..idleTimeout = const Duration(seconds: 20)
     ..maxConnectionsPerHost = 16
     ..autoUncompress = true
+    ..findProxy = ((_) => 'DIRECT')
+    ..connectionFactory = _openSocket
     // ignore: avoid_redundant_argument_values
     ..badCertificateCallback = (cert, host, port) => true;
+
+  Future<ConnectionTask<Socket>> _openSocket(
+    Uri uri,
+    String? proxyHost,
+    int? proxyPort,
+  ) async {
+    if (proxyHost != null) {
+      return Socket.startConnect(proxyHost, proxyPort ?? 80);
+    }
+
+    final String connectHost = _okCdnEdgeHost(uri) ?? uri.host;
+    final int port = uri.hasPort ? uri.port : _defaultPort(uri);
+    final Future<ConnectionTask<Socket>> pending = Socket.startConnect(
+      connectHost,
+      port,
+    );
+
+    return pending.then((ConnectionTask<Socket> task) {
+      Future<Socket> socket = task.socket;
+      if (uri.scheme == 'https') {
+        socket = socket.then(
+          (Socket raw) => SecureSocket.secure(
+            raw,
+            host: uri.host,
+            onBadCertificate: (_) => true,
+            supportedProtocols: _kHttp11Protocols,
+          ),
+        );
+      }
+      return ConnectionTask.fromSocket<Socket>(socket, task.cancel);
+    });
+  }
+
+  int _defaultPort(Uri uri) => uri.scheme == 'https'
+      ? HttpClient.defaultHttpsPort
+      : HttpClient.defaultHttpPort;
 
   HttpClient _client() {
     _httpClient ??= _makeClient();
@@ -414,6 +632,7 @@ class LocalHlsProxy {
   }
 
   void _resetIfIdle() {
+    if (_stopping) return;
     final DateTime? last = _lastRequestAt;
     if (last != null && DateTime.now().difference(last) >= _kIdleReset) {
       debugPrint('HlsProxy: resetting idle HttpClient');
@@ -422,6 +641,14 @@ class LocalHlsProxy {
   }
 
   void _applyUpstreamHeaders(HttpClientRequest r, Uri url) {
+    final bool isOkCdnPinned = _okCdnEdgeHost(url) != null;
+    if (isOkCdnPinned) {
+      // OK CDN signed URLs can pin the real edge in the `urls` query param.
+      // The same vd*.okcdn.ru host may point at different edge IPs, so do not
+      // reuse pooled sockets across signed links.
+      r.persistentConnection = false;
+    }
+
     // Always send cache-busting headers.
     r.headers.set('Cache-Control', 'no-cache');
     r.headers.set('Pragma', 'no-cache');
@@ -437,6 +664,9 @@ class LocalHlsProxy {
     _forwardHeaders.forEach((String k, String v) {
       final String lk = k.toLowerCase();
       if (lk == 'host' || lk == 'connection' || lk == 'content-length') {
+        return;
+      }
+      if (isOkCdnPinned && lk == 'origin') {
         return;
       }
       if (v.trim().isEmpty) return;
@@ -459,6 +689,29 @@ class LocalHlsProxy {
         'Chrome/126.0 Safari/537.36',
       );
     }
+  }
+
+  bool _isOkCdnHost(String host) {
+    final String lower = host.toLowerCase();
+    return lower == 'okcdn.ru' ||
+        lower.endsWith('.okcdn.ru') ||
+        lower == 'mycdn.me' ||
+        lower.endsWith('.mycdn.me');
+  }
+
+  String? _okCdnEdgeHost(Uri uri) {
+    if (!_isOkCdnHost(uri.host)) return null;
+    final String? rawUrls = uri.queryParameters['urls'];
+    if (rawUrls == null || rawUrls.trim().isEmpty) return null;
+
+    for (final String candidate in rawUrls.split(RegExp(r'[,;|]'))) {
+      final String trimmed = candidate.trim();
+      if (trimmed.isEmpty) continue;
+      if (InternetAddress.tryParse(trimmed) != null) return trimmed;
+    }
+
+    final Match? match = RegExp(r'(?:\d{1,3}\.){3}\d{1,3}').firstMatch(rawUrls);
+    return match?.group(0);
   }
 
   void _copyResponseHeaders(
@@ -522,7 +775,22 @@ class LocalHlsProxy {
     }
   }
 
+  void _absorbQueryHeaders(String? rawH) {
+    if (rawH == null || rawH.isEmpty) return;
+    try {
+      final Map<String, dynamic> dec = jsonDecode(rawH) as Map<String, dynamic>;
+      final Map<String, String> fromParam = dec.map(
+        (String k, dynamic v) => MapEntry<String, String>(k, v.toString()),
+      );
+      // Merge; don't overwrite the whole map so previous captures survive.
+      _forwardHeaders.addAll(fromParam);
+    } catch (e) {
+      debugPrint('HlsProxy: failed to parse h-param: $e');
+    }
+  }
+
   Future<void> _beforeRetry(int attempt) async {
+    if (_stopping) return;
     _destroyClient();
     await Future<void>.delayed(
       Duration(milliseconds: _kRetryBackoffBaseMs * attempt),
@@ -536,4 +804,10 @@ class LocalHlsProxy {
 
   bool _isRetriableError(Object e) =>
       e is TimeoutException || e is SocketException || e is HttpException;
+
+  bool _isShutdownError(Object e) =>
+      e is HttpException ||
+      e is SocketException ||
+      e is TimeoutException ||
+      e is StateError;
 }

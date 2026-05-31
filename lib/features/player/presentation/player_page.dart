@@ -186,14 +186,21 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     final MediaServer? server = s.server;
     if (server == null) return;
     final StreamQuality? quality = s.quality;
-    final String url =
+    final String sourceUrl =
         quality != null && !quality.isAuto && quality.url.isNotEmpty
         ? quality.url
         : server.url;
-    final Map<String, String> headers =
+    final Map<String, String> sourceHeaders =
         quality != null && quality.headers.isNotEmpty
         ? quality.headers
         : server.headers;
+    final String url = engine.nativePlaybackUrl?.isNotEmpty == true
+        ? engine.nativePlaybackUrl!
+        : sourceUrl;
+    final Map<String, String> nativeHeaders = engine.nativePlaybackHeaders;
+    final Map<String, String> headers = nativeHeaders.isNotEmpty
+        ? nativeHeaders
+        : sourceHeaders;
 
     final SkipMarkers markers = _effectiveSkipMarkers(
       ref.read(skipMarkersProvider).value,

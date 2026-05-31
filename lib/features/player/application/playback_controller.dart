@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:collection';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/subtitle_parser.dart';
@@ -473,6 +474,8 @@ class PlaybackController extends Notifier<PlaybackState> {
     SubtitleTrack? subtitle,
     double? preserveAspectRatio,
     bool isAutoFallback = false,
+    PlayerBackend? backendOverride,
+    bool allowSourceFallback = true,
   }) async {
     if (!isAutoFallback) {
       _autoFallbackTriedServers.clear();
@@ -503,9 +506,13 @@ class PlaybackController extends Notifier<PlaybackState> {
         : quality.url;
     final PlayerSettings settings =
         ref.read(playerSettingsProvider).value ?? const PlayerSettings();
+    final PlayerBackend backend = backendOverride ?? settings.playerBackend;
+    final PlayerBackend engineBackend = backend == PlayerBackend.auto
+        ? PlayerBackend.mpv
+        : backend;
     final PlayerEngine engine = createPlayerEngine(
       initialAspectRatio: _safeAspectRatio(preserveAspectRatio),
-      backend: settings.playerBackend,
+      backend: engineBackend,
     );
 
     try {
@@ -538,13 +545,38 @@ class PlaybackController extends Notifier<PlaybackState> {
       _updateMediaSession();
       _startProgressSaver();
       _reinforceInitialSeek(engine, position, generation, _manualSeekEpoch);
-      _watchEngineErrors(engine, generation);
+      _watchEngineErrors(
+        engine,
+        generation,
+        engineBackend,
+        allowSourceFallback: allowSourceFallback,
+      );
       if (_seekPreviewStreamEnabled) {
         _scheduleSeekPreviewWarmup(position);
       }
     } on Object catch (error) {
+      final Duration fallbackPosition = _fallbackPositionFor(
+        engine,
+        requestedPosition: position,
+      );
+      final bool fallbackAutoplay = autoplay || engine.state.value.isPlaying;
+      final double? fallbackAspectRatio = _safeAspectRatio(
+        engine.state.value.aspectRatio,
+      );
       await engine.dispose();
       if (generation != _playbackGeneration) return;
+      if (_tryAutoBackendFallback(
+        failedBackend: engineBackend,
+        position: fallbackPosition,
+        autoplay: fallbackAutoplay,
+        preserveAspectRatio: fallbackAspectRatio ?? preserveAspectRatio,
+      )) {
+        return;
+      }
+      if (allowSourceFallback &&
+          _tryAutoFallbackServer(requestedPosition: fallbackPosition)) {
+        return;
+      }
       state = state.copyWith(
         engine: previous,
         loading: false,
@@ -600,7 +632,66 @@ class PlaybackController extends Notifier<PlaybackState> {
     }
   }
 
-  bool _tryAutoFallbackServer() {
+  Duration _fallbackPositionFor(
+    PlayerEngine? engine, {
+    Duration requestedPosition = Duration.zero,
+  }) {
+    Duration position = _currentPositionFor(engine);
+    if (position <= const Duration(seconds: 3) &&
+        requestedPosition > position) {
+      position = requestedPosition;
+    }
+
+    final DateTime? guardUntil = _resumeGuardUntil;
+    if (guardUntil != null &&
+        DateTime.now().isBefore(guardUntil) &&
+        _resumeGuardPosition > position) {
+      return _resumeGuardPosition;
+    }
+
+    return position;
+  }
+
+  bool _tryAutoBackendFallback({
+    required PlayerBackend failedBackend,
+    required Duration position,
+    required bool autoplay,
+    double? preserveAspectRatio,
+  }) {
+    final PlayerSettings settings =
+        ref.read(playerSettingsProvider).value ?? const PlayerSettings();
+    if (settings.playerBackend != PlayerBackend.auto ||
+        failedBackend != PlayerBackend.mpv) {
+      return false;
+    }
+
+    final MediaPlaybackItem? item = state.item;
+    final MediaServer? server = state.server;
+    final StreamQuality? quality = state.quality;
+    if (item == null || server == null || quality == null) return false;
+
+    debugPrint(
+      'Playback auto backend fallback: MPV failed; trying FVP for ${server.name}.',
+    );
+    unawaited(
+      _open(
+        item: item,
+        server: server,
+        quality: quality,
+        position: position,
+        autoplay: autoplay,
+        voiceover: state.voiceover,
+        subtitle: state.subtitle,
+        preserveAspectRatio: preserveAspectRatio,
+        isAutoFallback: true,
+        backendOverride: PlayerBackend.fvp,
+        allowSourceFallback: false,
+      ),
+    );
+    return true;
+  }
+
+  bool _tryAutoFallbackServer({Duration requestedPosition = Duration.zero}) {
     final MediaPlaybackItem? item = state.item;
     final MediaServer? current = state.server;
     if (item == null || current == null) return false;
@@ -615,24 +706,47 @@ class PlaybackController extends Notifier<PlaybackState> {
         item: item,
         server: next,
         quality: _initialQuality(next),
-        position: _currentPositionFor(state.engine),
+        position: _fallbackPositionFor(
+          state.engine,
+          requestedPosition: requestedPosition,
+        ),
         autoplay: true,
+        subtitle: state.subtitle,
         isAutoFallback: true,
       ),
     );
     return true;
   }
 
-  void _watchEngineErrors(PlayerEngine engine, int generation) {
+  void _watchEngineErrors(
+    PlayerEngine engine,
+    int generation,
+    PlayerBackend engineBackend, {
+    required bool allowSourceFallback,
+  }) {
     late void Function() listener;
     listener = () {
-      if (generation != _playbackGeneration || state.engine != engine) {
+      if (generation != _playbackGeneration ||
+          !identical(state.engine, engine)) {
         engine.removeListener(listener);
         return;
       }
       if (engine.state.value.hasError && state.error == null) {
         engine.removeListener(listener);
-        if (_tryAutoFallbackServer()) return;
+        if (_tryAutoBackendFallback(
+          failedBackend: engineBackend,
+          position: _fallbackPositionFor(engine),
+          autoplay: engine.state.value.isPlaying,
+          preserveAspectRatio: engine.state.value.aspectRatio,
+        )) {
+          return;
+        }
+        if (allowSourceFallback &&
+            _tryAutoFallbackServer(
+              requestedPosition: _fallbackPositionFor(engine),
+            )) {
+          return;
+        }
         state = state.copyWith(
           error: PlayerError(
             title: 'Playback error',
@@ -1850,10 +1964,10 @@ class PlaybackController extends Notifier<PlaybackState> {
     // keeping isWatched=true via the completed flag.
     final bool isNearEnd =
         hasReliableCompletionDuration &&
-        position.inSeconds >= durationSeconds! - 20;
+        position.inSeconds >= durationSeconds - 20;
     final int savePosition = isNearEnd ? 0 : position.inSeconds;
     final int? savedDurationSeconds = hasReliableCompletionDuration
-        ? durationSeconds!
+        ? durationSeconds
         : null;
 
     for (final String mediaId in _progressMediaIds(item)) {
@@ -1870,7 +1984,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     }
 
     if (hasReliableCompletionDuration) {
-      final double fraction = (position.inSeconds / durationSeconds!).clamp(
+      final double fraction = (position.inSeconds / durationSeconds).clamp(
         0.0,
         1.0,
       );

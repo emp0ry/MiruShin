@@ -124,20 +124,33 @@ bool PipPlayer::CreatePipWindow(const std::wstring& title) {
 }
 
 bool PipPlayer::SetupD3D11() {
-  HRESULT hr = D3D11CreateDevice(
-      nullptr,
+  const D3D_DRIVER_TYPE driver_types[] = {
       D3D_DRIVER_TYPE_HARDWARE,
-      nullptr,
-      D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-      nullptr,
-      0,
-      D3D11_SDK_VERSION,
-      &device_,
-      nullptr,
-      &ctx_
-  );
+      D3D_DRIVER_TYPE_WARP,
+  };
 
-  if (FAILED(hr)) {
+  HRESULT hr = E_FAIL;
+  for (const D3D_DRIVER_TYPE driver_type : driver_types) {
+    device_.Reset();
+    ctx_.Reset();
+    hr = D3D11CreateDevice(
+        nullptr,
+        driver_type,
+        nullptr,
+        D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+        nullptr,
+        0,
+        D3D11_SDK_VERSION,
+        &device_,
+        nullptr,
+        &ctx_
+    );
+    if (SUCCEEDED(hr)) {
+      break;
+    }
+  }
+
+  if (FAILED(hr) || !device_ || !ctx_) {
     return false;
   }
 
@@ -497,7 +510,7 @@ void PipPlayer::Cleanup() {
 }
 
 void PipPlayer::Close() {
-  if (!hwnd_) {
+  if (!hwnd_ && !player_api_ && !swap_chain_ && !rtv_ && !ctx_ && !device_) {
     return;
   }
 
@@ -587,6 +600,13 @@ LRESULT PipPlayer::HandleMessage(HWND hwnd,
         Dismiss(/*was_playing=*/true);
         return 0;
       }
+      break;
+
+    case WM_NCDESTROY:
+      if (hwnd_ == hwnd) {
+        hwnd_ = nullptr;
+      }
+      SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
       break;
 
     default:

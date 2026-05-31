@@ -6,6 +6,7 @@ import 'package:flutter/widgets.dart';
 import 'package:fvp/mdk.dart' as mdk;
 
 import '../domain/player_models.dart';
+import 'local_hls_proxy.dart';
 import 'player_engine.dart';
 
 const mdk.SeekFlag _vodSeekFlag = mdk.SeekFlag(
@@ -23,6 +24,7 @@ const int _startupRetryLimit = 0;
 const Duration _fragileHlsSmallResumeThreshold = Duration(seconds: 30);
 const Duration _firstFramePollInterval = Duration(milliseconds: 250);
 const int _firstFramePollAttempts = 120;
+const Duration _invalidStatusGrace = Duration(seconds: 3);
 
 /// Pure FVP/MDK implementation of MiruShin's PlayerEngine.
 ///
@@ -43,6 +45,7 @@ class FvpPlayerEngine extends PlayerEngine {
   final ValueNotifier<PlayerEngineState> _state;
 
   mdk.Player? _player;
+  final LocalHlsProxy _proxy = LocalHlsProxy();
   StreamSubscription<dynamic>? _eventSubscription;
   StreamSubscription<dynamic>? _stateSubscription;
   StreamSubscription<dynamic>? _mediaStatusSubscription;
@@ -63,6 +66,8 @@ class FvpPlayerEngine extends PlayerEngine {
   int _startupRetryCount = 0;
   bool _preserveStartupRetryCount = false;
   List<PlayerBufferedRange> _lastBufferedRanges = const <PlayerBufferedRange>[];
+  DateTime? _invalidSince;
+  bool _reportedInvalid = false;
 
   @override
   ValueListenable<PlayerEngineState> get state => _state;
@@ -113,8 +118,14 @@ class FvpPlayerEngine extends PlayerEngine {
     _currentStartAt = startAt ?? Duration.zero;
     _currentAutoplay = autoplay;
     _lastError = null;
+    _invalidSince = null;
+    _reportedInvalid = false;
 
-    _configureNetworkAndBuffering(player, source, playbackSpeed: _playbackSpeed);
+    _configureNetworkAndBuffering(
+      player,
+      source,
+      playbackSpeed: _playbackSpeed,
+    );
     _attachListeners(player);
 
     try {
@@ -136,9 +147,19 @@ class FvpPlayerEngine extends PlayerEngine {
       player.playbackRate = 1.0;
 
       final Uri remoteUri = Uri.parse(source.url);
+      String playbackUrl = remoteUri.toString();
+      if (!_previewMode && _requiresPinnedProxy(remoteUri)) {
+        await _proxy.stop();
+        await _proxy.start();
+        playbackUrl = _isHlsLikeSource(source)
+            ? _proxy.playlistUrl(remoteUri, headers: source.headers)
+            : _proxy.mediaUrl(remoteUri, headers: source.headers);
+        debugPrint('FVP open via proxy: $playbackUrl');
+      } else {
+        unawaited(_proxy.stop());
+        debugPrint('FVP open direct MDK URL: $playbackUrl');
+      }
       _applyDirectMdkHeaders(player, remoteUri, source.headers);
-      final String playbackUrl = remoteUri.toString();
-      debugPrint('FVP open direct MDK URL: $playbackUrl');
 
       player.media = playbackUrl;
       if (_previewMode) {
@@ -395,10 +416,7 @@ class FvpPlayerEngine extends PlayerEngine {
     }
   }
 
-  Future<void> _applySpeedAfterStartup(
-    mdk.Player player,
-    double speed,
-  ) async {
+  Future<void> _applySpeedAfterStartup(mdk.Player player, double speed) async {
     // Keep native startup at 1.0x, then apply the saved speed after the stream
     // has real media state. This fixes HLS streams that start at 1x but stall
     // when opened directly at 1.25x or higher.
@@ -420,17 +438,12 @@ class FvpPlayerEngine extends PlayerEngine {
 
     final PlayerSource? source = _currentSource;
     if (source != null) {
-      _configureNetworkAndBuffering(
-        active,
-        source,
-        playbackSpeed: speed,
-      );
+      _configureNetworkAndBuffering(active, source, playbackSpeed: speed);
     }
 
     active.playbackRate = speed;
     _syncState();
   }
-
 
   Future<bool> _waitForFirstFrame(mdk.Player player) async {
     for (int attempt = 0; attempt < _firstFramePollAttempts; attempt += 1) {
@@ -494,7 +507,6 @@ class FvpPlayerEngine extends PlayerEngine {
     active.playbackRate = speed;
     _syncState();
   }
-
 
   Future<bool> _seekWithVerification(
     mdk.Player player,
@@ -567,11 +579,7 @@ class FvpPlayerEngine extends PlayerEngine {
     final PlayerSource? source = _currentSource;
     if (player != null) {
       if (source != null) {
-        _configureNetworkAndBuffering(
-          player,
-          source,
-          playbackSpeed: safeSpeed,
-        );
+        _configureNetworkAndBuffering(player, source, playbackSpeed: safeSpeed);
       }
       player.playbackRate = safeSpeed;
     }
@@ -615,31 +623,42 @@ class FvpPlayerEngine extends PlayerEngine {
     );
     headers.putIfAbsent(HttpHeaders.acceptHeader, () => '*/*');
 
+    if (_isOkCdnHost(uri.host)) {
+      headers.remove('Origin');
+    }
+
     // Many CDNs validate that Origin matches the Referer host.
     // Derive Origin from Referer when not already set by the addon.
     final String? referer = headers[HttpHeaders.refererHeader];
-    if (referer != null && referer.isNotEmpty && !headers.containsKey('Origin')) {
+    if (referer != null &&
+        referer.isNotEmpty &&
+        !_isOkCdnHost(uri.host) &&
+        !headers.containsKey('Origin')) {
       final Uri? refUri = Uri.tryParse(referer);
       if (refUri != null && refUri.hasScheme && refUri.host.isNotEmpty) {
         headers['Origin'] = '${refUri.scheme}://${refUri.host}';
       }
     }
 
-    final String? userAgent = headers.remove(HttpHeaders.userAgentHeader);
+    final String? userAgent = headers[HttpHeaders.userAgentHeader];
     if (userAgent != null && userAgent.isNotEmpty) {
-      player.setProperty('avio.user_agent', userAgent);
+      try {
+        player.setProperty('avio.user_agent', userAgent);
+      } on Object {
+        // avio.headers below still carries User-Agent on MDK builds without
+        // the dedicated user_agent option.
+      }
     }
 
-    // Use the dedicated avio.referer property so libavformat re-sends the
-    // Referer header after cross-domain CDN redirects (avio.headers is dropped
-    // on such redirects, but avio.referer is preserved for the entire session).
-    final String? refererValue = headers.remove(HttpHeaders.refererHeader);
+    // Keep Referer in avio.headers for compatibility with fvp's default
+    // implementation, and also set the dedicated property when available so
+    // libavformat can preserve it across CDN redirects.
+    final String? refererValue = headers[HttpHeaders.refererHeader];
     if (refererValue != null && refererValue.isNotEmpty) {
       try {
         player.setProperty('avio.referer', refererValue);
-      } on Object {
-        // Fall back: re-include in avio.headers if property unsupported.
-        headers[HttpHeaders.refererHeader] = refererValue;
+      } on Object catch (error) {
+        debugPrint('FVP avio.referer unsupported: $error');
       }
     }
 
@@ -662,6 +681,30 @@ class FvpPlayerEngine extends PlayerEngine {
     if (lower == 'accept') return HttpHeaders.acceptHeader;
     if (lower == 'cookie') return HttpHeaders.cookieHeader;
     return name;
+  }
+
+  bool _isOkCdnHost(String host) {
+    final String lower = host.toLowerCase();
+    return lower == 'okcdn.ru' ||
+        lower.endsWith('.okcdn.ru') ||
+        lower == 'mycdn.me' ||
+        lower.endsWith('.mycdn.me');
+  }
+
+  bool _requiresPinnedProxy(Uri uri) {
+    if (uri.scheme != 'http' && uri.scheme != 'https') return false;
+    if (!_isOkCdnHost(uri.host)) return false;
+    return (uri.queryParameters['urls']?.trim().isNotEmpty ?? false);
+  }
+
+  bool _isHlsLikeSource(PlayerSource source) {
+    final String lower = source.url.toLowerCase();
+    return source.streamType == StreamType.hls ||
+        lower.contains('.m3u8') ||
+        lower.contains(':hls:') ||
+        lower.contains('/hls/') ||
+        lower.contains('manifest.m3u8') ||
+        lower.contains('.mp4:hls:');
   }
 
   ({int min, int max, String ranges}) _bufferConfigFor({
@@ -715,7 +758,9 @@ class FvpPlayerEngine extends PlayerEngine {
     final bool isNetwork =
         url.startsWith('http://') || url.startsWith('https://');
     final bool isHls =
-        source.streamType == StreamType.hls || url.contains('.m3u8') || url.contains(':hls:');
+        source.streamType == StreamType.hls ||
+        url.contains('.m3u8') ||
+        url.contains(':hls:');
     final config = _bufferConfigFor(
       previewMode: _previewMode,
       isHls: isHls,
@@ -744,7 +789,10 @@ class FvpPlayerEngine extends PlayerEngine {
       player.setProperty('avformat.safe', '0');
       player.setProperty('avformat.extension_picky', '0');
       player.setProperty('avformat.allowed_segment_extensions', 'ALL');
-      player.setProperty('avformat.protocol_whitelist', 'file,http,https,tcp,tls,crypto');
+      player.setProperty(
+        'avformat.protocol_whitelist',
+        'file,http,https,tcp,tls,crypto',
+      );
     } on Object {
       // Not all MDK builds expose avformat properties — safe to ignore.
     }
@@ -761,7 +809,17 @@ class FvpPlayerEngine extends PlayerEngine {
   }
 
   void _attachListeners(mdk.Player player) {
-    _eventSubscription = player.onEvent.listen((dynamic _) => _syncState());
+    _eventSubscription = player.onEvent.listen((dynamic event) {
+      if (event is mdk.MediaEvent &&
+          event.error != 0 &&
+          event.category != 'reader.buffering') {
+        debugPrint(
+          'FVP media event: ${event.category} ${event.detail} '
+          '(${event.error})',
+        );
+      }
+      _syncState();
+    });
     _stateSubscription = player.onStateChanged.listen(
       (dynamic _) => _syncState(),
     );
@@ -816,7 +874,30 @@ class FvpPlayerEngine extends PlayerEngine {
     final bool hasTexture = player.textureId.value != null;
     final bool hasVideoSize = videoSize.width > 0 && videoSize.height > 0;
     final bool hasDuration = duration > Duration.zero;
-    final bool invalid = status.test(mdk.MediaStatus.invalid);
+    final bool hasContent =
+        hasDuration ||
+        hasTexture ||
+        hasVideoSize ||
+        status.test(mdk.MediaStatus.prepared) ||
+        status.test(mdk.MediaStatus.loaded);
+    final bool nativeInvalid = status.test(mdk.MediaStatus.invalid);
+    if (nativeInvalid && !hasContent) {
+      _invalidSince ??= DateTime.now();
+    } else {
+      _invalidSince = null;
+      _reportedInvalid = false;
+    }
+    final DateTime? invalidSince = _invalidSince;
+    final bool invalid =
+        nativeInvalid &&
+        (hasContent ||
+            (invalidSince != null &&
+                DateTime.now().difference(invalidSince) >=
+                    _invalidStatusGrace));
+    if (invalid && !_reportedInvalid) {
+      _reportedInvalid = true;
+      debugPrint('FVP stream invalid: $status');
+    }
     // Preserve errors set by the open-timeout: _syncState fires every 120ms
     // and would silently reset hasError back to false otherwise.
     final bool hasError = invalid || _lastError != null;
@@ -827,27 +908,11 @@ class FvpPlayerEngine extends PlayerEngine {
         status.test(mdk.MediaStatus.buffering) ||
         status.test(mdk.MediaStatus.loading) ||
         status.test(mdk.MediaStatus.stalled);
-    final bool initialized =
-        !invalid &&
-        _hasMedia &&
-        (hasTexture ||
-            hasVideoSize ||
-            hasDuration ||
-            status.test(mdk.MediaStatus.prepared) ||
-            status.test(mdk.MediaStatus.loaded) ||
-            player.state == mdk.PlaybackState.paused ||
-            player.state == mdk.PlaybackState.playing ||
-            player.state == mdk.PlaybackState.running);
+    final bool initialized = !nativeInvalid && _hasMedia && hasContent;
 
-    // Only consider the stream truly opened once it has real content or an error.
-    // Player state alone (paused/playing) is set immediately and must not clear
-    // _opening prematurely, otherwise the open-timeout never fires for stuck streams.
-    final bool hasContent =
-        hasDuration ||
-        hasTexture ||
-        hasVideoSize ||
-        status.test(mdk.MediaStatus.prepared) ||
-        status.test(mdk.MediaStatus.loaded);
+    // Only consider the stream truly opened once it has real content or a
+    // debounced error. Player state alone is set immediately and must not clear
+    // _opening prematurely, otherwise the open-timeout never fires.
     if (hasContent || invalid) {
       _opening = false;
       _openTimeoutTimer?.cancel();
@@ -1000,12 +1065,15 @@ class FvpPlayerEngine extends PlayerEngine {
     _lastError = null;
     _currentSource = null;
     _lastBufferedRanges = const <PlayerBufferedRange>[];
+    _invalidSince = null;
+    _reportedInvalid = false;
     await _eventSubscription?.cancel();
     await _stateSubscription?.cancel();
     await _mediaStatusSubscription?.cancel();
     _eventSubscription = null;
     _stateSubscription = null;
     _mediaStatusSubscription = null;
+    await _proxy.stop();
 
     final mdk.Player? player = _player;
     _player = null;
