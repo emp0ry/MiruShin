@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
+import '../../../app/localization/app_localizations.dart';
 import '../application/playback_controller.dart';
 import '../application/player_settings.dart';
 import '../data/cast_controller.dart';
@@ -720,8 +721,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                                       onExit: () => unawaited(_exitPlayer()),
                                       onToggleFullscreen: _toggleFullscreen,
                                       onEnterNativePip: _nativePipSupported
-                                          ? () => unawaited(
-                                              _handOffToNativePip())
+                                          ? () =>
+                                                unawaited(_handOffToNativePip())
                                           : null,
                                     ),
                                   ),
@@ -746,7 +747,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                                         )
                                         .undoSkip,
                                     icon: const Icon(Icons.undo_rounded),
-                                    label: const Text('Undo skip'),
+                                    label: Text(context.t('Undo skip')),
                                   ),
                                 ),
                               if (state.autoNextVisible &&
@@ -1024,10 +1025,7 @@ class _PlayerLoadingIndicator extends StatelessWidget {
     return const SizedBox(
       width: 36,
       height: 36,
-      child: CircularProgressIndicator(
-        strokeWidth: 4,
-        color: Colors.white,
-      ),
+      child: CircularProgressIndicator(strokeWidth: 4, color: Colors.white),
     );
   }
 }
@@ -2482,7 +2480,7 @@ class _PlayerErrorOverlay extends ConsumerWidget {
                           TextButton.icon(
                             onPressed: onExit,
                             icon: const Icon(Icons.arrow_back_rounded),
-                            label: const Text('Back'),
+                            label: Text(context.t('Back')),
                           ),
                           if (canTryNextServer)
                             FilledButton.tonalIcon(
@@ -2499,7 +2497,7 @@ class _PlayerErrorOverlay extends ConsumerWidget {
                                     .switchServer(servers[next]);
                               },
                               icon: const Icon(Icons.dns_rounded),
-                              label: const Text('Try next'),
+                              label: Text(context.t('Try next')),
                             ),
                           if (error.canRetry)
                             FilledButton.icon(
@@ -2507,7 +2505,7 @@ class _PlayerErrorOverlay extends ConsumerWidget {
                                   .read(playbackControllerProvider.notifier)
                                   .retry,
                               icon: const Icon(Icons.refresh_rounded),
-                              label: const Text('Retry'),
+                              label: Text(context.t('Retry')),
                             ),
                         ],
                       ),
@@ -2547,7 +2545,7 @@ class _ChromeButton extends StatelessWidget {
   Widget build(BuildContext context) {
     if (!showLabel) {
       return IconButton(
-        tooltip: label,
+        tooltip: context.t(label),
         onPressed: onTap,
         color: Colors.white,
         icon: Icon(icon),
@@ -2557,7 +2555,10 @@ class _ChromeButton extends StatelessWidget {
     return TextButton.icon(
       onPressed: onTap,
       icon: Icon(icon, color: Colors.white),
-      label: Text(label, style: const TextStyle(color: Colors.white)),
+      label: Text(
+        context.t(label),
+        style: const TextStyle(color: Colors.white),
+      ),
     );
   }
 }
@@ -2576,7 +2577,7 @@ class _ChromeIconButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return IconButton(
-      tooltip: tooltip,
+      tooltip: context.t(tooltip),
       onPressed: onTap,
       color: Colors.white,
       icon: Icon(icon),
@@ -2619,7 +2620,7 @@ class _MenuSectionHeader extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
       child: Text(
-        label,
+        context.t(label),
         style: Theme.of(context).textTheme.labelLarge?.copyWith(
           fontWeight: FontWeight.w800,
           color: Theme.of(context).colorScheme.primary,
@@ -2695,7 +2696,7 @@ Future<void> _showSubtitleMenu(BuildContext context, WidgetRef ref) async {
     ListTile(
       selected: state.subtitle == null,
       leading: const Icon(Icons.subtitles_off_rounded),
-      title: const Text('Off'),
+      title: Text(context.t('Off')),
       onTap: () {
         Navigator.pop(context);
         ref
@@ -2758,7 +2759,7 @@ Future<void> _showSpeedMenu(BuildContext context, WidgetRef ref) async {
       ListTile(
         selected: active == speed,
         leading: const Icon(Icons.speed_rounded),
-        title: Text(speed == 1 ? 'Default' : '${speed}x'),
+        title: Text(speed == 1 ? context.t('Default') : '${speed}x'),
         onTap: () {
           Navigator.pop(context);
           ref.read(playbackControllerProvider.notifier).setSpeed(speed);
@@ -2773,7 +2774,7 @@ Future<void> _showEpisodes(
 ) async {
   await _showMenuSheet(context, 'Episodes', <Widget>[
     if (item == null || item.seasons.isEmpty)
-      const ListTile(title: Text('No episode data was provided.')),
+      ListTile(title: Text(context.t('No episode data was provided.'))),
     for (final Season season in item?.seasons ?? const <Season>[])
       ExpansionTile(
         initiallyExpanded: true,
@@ -2784,7 +2785,11 @@ Future<void> _showEpisodes(
               leading: CircleAvatar(child: Text(episode.number.toString())),
               title: Text(episode.title),
               subtitle: episode.progress > Duration.zero
-                  ? Text('Progress ${episode.progress.inMinutes} min')
+                  ? Text(
+                      context.tf('Progress {minutes} min', <String, Object?>{
+                        'minutes': episode.progress.inMinutes,
+                      }),
+                    )
                   : null,
             ),
         ],
@@ -2810,13 +2815,16 @@ class _PlayerSettingsTiles extends ConsumerWidget {
       children: <Widget>[
         ListTile(
           leading: const Icon(Icons.smart_display_rounded),
-          title: const Text('Player engine'),
-          subtitle: Text('${settings.playerBackend.title} · applies on next stream open'),
+          title: Text(context.t('Player engine')),
+          subtitle: Text(
+            '${context.t(settings.playerBackend.title)} · '
+            '${context.t('Applies on the next stream open.')}',
+          ),
           onTap: () async {
             final PlayerBackend? picked = await showDialog<PlayerBackend>(
               context: context,
               builder: (BuildContext context) => SimpleDialog(
-                title: const Text('Player engine'),
+                title: Text(context.t('Player engine')),
                 children: <Widget>[
                   RadioGroup<PlayerBackend>(
                     groupValue: settings.playerBackend,
@@ -2827,10 +2835,12 @@ class _PlayerSettingsTiles extends ConsumerWidget {
                           .map(
                             (PlayerBackend backend) =>
                                 RadioListTile<PlayerBackend>(
-                              value: backend,
-                              title: Text(backend.title),
-                              subtitle: Text(backend.description),
-                            ),
+                                  value: backend,
+                                  title: Text(context.t(backend.title)),
+                                  subtitle: Text(
+                                    context.t(backend.description),
+                                  ),
+                                ),
                           )
                           .toList(growable: false),
                     ),
@@ -2848,26 +2858,26 @@ class _PlayerSettingsTiles extends ConsumerWidget {
         SwitchListTile(
           value: settings.useAniSkip,
           secondary: const Icon(Icons.av_timer_rounded),
-          title: const Text('Use AniSkip'),
-          subtitle: const Text('Fetch OP/ED times from AniSkip & Anira'),
+          title: Text(context.t('Use AniSkip')),
+          subtitle: Text(context.t('Fetch OP/ED times from AniSkip & Anira')),
           onChanged: (bool value) =>
               ref.read(playerSettingsProvider.notifier).setUseAniSkip(value),
         ),
         if (settings.useAniSkip)
           ListTile(
             leading: const Icon(Icons.source_rounded),
-            title: const Text('Skip marks source'),
+            title: Text(context.t('Skip marks source')),
             subtitle: Text(
               settings.skipMarkersSource == SkipMarkersSource.addon
-                  ? 'Addon'
-                  : 'MiruShin (AniSkip & Anira)',
+                  ? context.t('Addon')
+                  : context.t('MiruShin (AniSkip & Anira)'),
             ),
             onTap: () async {
-              final SkipMarkersSource? picked =
-                  await showDialog<SkipMarkersSource>(
+              final SkipMarkersSource?
+              picked = await showDialog<SkipMarkersSource>(
                 context: context,
                 builder: (BuildContext context) => SimpleDialog(
-                  title: const Text('Primary skip marks source'),
+                  title: Text(context.t('Primary skip marks source')),
                   children: <Widget>[
                     RadioGroup<SkipMarkersSource>(
                       groupValue: settings.skipMarkersSource,
@@ -2877,16 +2887,20 @@ class _PlayerSettingsTiles extends ConsumerWidget {
                         children: <Widget>[
                           RadioListTile<SkipMarkersSource>(
                             value: SkipMarkersSource.addon,
-                            title: const Text('Addon'),
-                            subtitle: const Text(
-                              'Addon data takes priority; AniSkip & Anira fill gaps',
+                            title: Text(context.t('Addon')),
+                            subtitle: Text(
+                              context.t(
+                                'Addon data takes priority; AniSkip & Anira fill gaps',
+                              ),
                             ),
                           ),
                           RadioListTile<SkipMarkersSource>(
                             value: SkipMarkersSource.mirushin,
-                            title: const Text('MiruShin'),
-                            subtitle: const Text(
-                              'AniSkip & Anira take priority; addon fills gaps',
+                            title: Text(context.t('MiruShin')),
+                            subtitle: Text(
+                              context.t(
+                                'AniSkip & Anira take priority; addon fills gaps',
+                              ),
                             ),
                           ),
                         ],
@@ -2905,7 +2919,7 @@ class _PlayerSettingsTiles extends ConsumerWidget {
         SwitchListTile(
           value: settings.autoSkipOpening,
           secondary: const Icon(Icons.skip_next_rounded),
-          title: const Text('Auto-skip OP'),
+          title: Text(context.t('Auto-skip OP')),
           onChanged: (bool value) => ref
               .read(playerSettingsProvider.notifier)
               .setAutoSkipOpening(value),
@@ -2914,7 +2928,7 @@ class _PlayerSettingsTiles extends ConsumerWidget {
           SwitchListTile(
             value: settings.showSkipOpeningButton,
             secondary: const Icon(Icons.fast_forward_rounded),
-            title: const Text('Skip OP button'),
+            title: Text(context.t('Skip OP button')),
             onChanged: (bool value) => ref
                 .read(playerSettingsProvider.notifier)
                 .setShowSkipOpeningButton(value),
@@ -2922,7 +2936,7 @@ class _PlayerSettingsTiles extends ConsumerWidget {
         SwitchListTile(
           value: settings.autoSkipEnding,
           secondary: const Icon(Icons.skip_next_rounded),
-          title: const Text('Auto-skip ED'),
+          title: Text(context.t('Auto-skip ED')),
           onChanged: (bool value) => ref
               .read(playerSettingsProvider.notifier)
               .setAutoSkipEnding(value),
@@ -2931,7 +2945,7 @@ class _PlayerSettingsTiles extends ConsumerWidget {
           SwitchListTile(
             value: settings.showSkipEndingButton,
             secondary: const Icon(Icons.last_page_rounded),
-            title: const Text('Skip ED button'),
+            title: Text(context.t('Skip ED button')),
             onChanged: (bool value) => ref
                 .read(playerSettingsProvider.notifier)
                 .setShowSkipEndingButton(value),
@@ -2939,7 +2953,7 @@ class _PlayerSettingsTiles extends ConsumerWidget {
         SwitchListTile(
           value: settings.autoplayNext,
           secondary: const Icon(Icons.play_circle_outline_rounded),
-          title: const Text('Auto next episode'),
+          title: Text(context.t('Auto next episode')),
           onChanged: (bool value) =>
               ref.read(playerSettingsProvider.notifier).setAutoplayNext(value),
         ),
@@ -2947,7 +2961,7 @@ class _PlayerSettingsTiles extends ConsumerWidget {
           SwitchListTile(
             value: settings.showNextEpisodeButton,
             secondary: const Icon(Icons.skip_next_rounded),
-            title: const Text('Next episode button'),
+            title: Text(context.t('Next episode button')),
             onChanged: (bool value) => ref
                 .read(playerSettingsProvider.notifier)
                 .setShowNextEpisodeButton(value),
@@ -2956,9 +2970,11 @@ class _PlayerSettingsTiles extends ConsumerWidget {
           SwitchListTile(
             value: settings.discordRpcEnabled,
             secondary: const Icon(Icons.hub_rounded),
-            title: const Text('Discord RPC'),
-            subtitle: const Text(
-              'Share this playback to Discord while the app setting is enabled',
+            title: Text(context.t('Discord RPC')),
+            subtitle: Text(
+              context.t(
+                'Share this playback to Discord while the app setting is enabled',
+              ),
             ),
             onChanged: (bool value) => ref
                 .read(playerSettingsProvider.notifier)
@@ -2967,21 +2983,21 @@ class _PlayerSettingsTiles extends ConsumerWidget {
         SwitchListTile(
           value: settings.autoAnilistSync,
           secondary: const Icon(Icons.sync_rounded),
-          title: const Text('Auto AniList progress'),
-          subtitle: const Text('Sync episode progress to AniList at 85%'),
+          title: Text(context.t('Auto AniList progress')),
+          subtitle: Text(context.t('Sync episode progress to AniList at 85%')),
           onChanged: (bool value) => ref
               .read(playerSettingsProvider.notifier)
               .setAutoAnilistSync(value),
         ),
         ListTile(
           leading: const Icon(Icons.keyboard_double_arrow_right_rounded),
-          title: const Text('Seek interval'),
+          title: Text(context.t('Seek interval')),
           subtitle: Text('${settings.seekInterval.inSeconds}s'),
           onTap: () async {
             final int? seconds = await showDialog<int>(
               context: context,
               builder: (BuildContext context) => SimpleDialog(
-                title: const Text('Seek interval'),
+                title: Text(context.t('Seek interval')),
                 children: <Widget>[
                   for (final int value in <int>[5, 10, 15, 30, 60])
                     SimpleDialogOption(
@@ -3027,7 +3043,7 @@ class _SubtitleAppearanceTiles extends ConsumerWidget {
         const _MenuSectionHeader('Appearance'),
         ListTile(
           leading: const Icon(Icons.format_size_rounded),
-          title: const Text('Font size'),
+          title: Text(context.t('Font size')),
           trailing: _StepRow(
             value: '${s.subtitleFontSize.round()}px',
             onDecrement: s.subtitleFontSize > 12
@@ -3040,7 +3056,7 @@ class _SubtitleAppearanceTiles extends ConsumerWidget {
         ),
         ListTile(
           leading: const Icon(Icons.vertical_align_bottom_rounded),
-          title: const Text('Position'),
+          title: Text(context.t('Position')),
           subtitle: Slider(
             value: s.subtitleBottomOffset.clamp(20.0, 300.0),
             min: 20,
@@ -3052,7 +3068,7 @@ class _SubtitleAppearanceTiles extends ConsumerWidget {
         ),
         ListTile(
           leading: const Icon(Icons.palette_rounded),
-          title: const Text('Text color'),
+          title: Text(context.t('Text color')),
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: _presetColors
@@ -3084,14 +3100,14 @@ class _SubtitleAppearanceTiles extends ConsumerWidget {
         ),
         SwitchListTile(
           secondary: const Icon(Icons.opacity_rounded),
-          title: const Text('Text background'),
+          title: Text(context.t('Text background')),
           value: s.subtitleHasBackground,
           onChanged: (bool v) => ctrl.setSubtitleHasBackground(v),
         ),
         if (s.subtitleHasBackground)
           ListTile(
             leading: const Icon(Icons.blur_on_rounded),
-            title: const Text('Background opacity'),
+            title: Text(context.t('Background opacity')),
             subtitle: Slider(
               value: s.subtitleBackgroundOpacity.clamp(0.0, 1.0),
               divisions: 20,
@@ -3101,7 +3117,7 @@ class _SubtitleAppearanceTiles extends ConsumerWidget {
           ),
         ListTile(
           leading: const Icon(Icons.schedule_rounded),
-          title: const Text('Delay'),
+          title: Text(context.t('Delay')),
           trailing: _StepRow(
             value: '${s.subtitleDelay.inMilliseconds}ms',
             onDecrement: () => ctrl.setSubtitleDelay(
@@ -3182,7 +3198,7 @@ Future<void> _showMenuSheet(
           padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
           children: <Widget>[
             Text(
-              title,
+              context.t(title),
               style: Theme.of(
                 context,
               ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),

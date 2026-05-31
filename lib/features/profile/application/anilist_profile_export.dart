@@ -9,6 +9,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../../../app/localization/app_localizations.dart';
 import '../../../core/platform/io_compat.dart' if (dart.library.io) 'dart:io';
 import '../../../shared/models/anilist_models.dart';
 import '../../tracking/data/anilist_api_client.dart';
@@ -99,6 +100,7 @@ Future<String?> saveAniListExportPayload(
 ) async {
   final ScaffoldMessengerState? messenger = ScaffoldMessenger.maybeOf(context);
   final Rect origin = _computeShareOrigin(context);
+  final AppLocalizations l10n = context.l10n;
 
   try {
     if (!kIsWeb && Platform.isIOS) {
@@ -124,7 +126,7 @@ Future<String?> saveAniListExportPayload(
       );
       if (savedPath == null) {
         messenger?.showSnackBar(
-          const SnackBar(content: Text('Save cancelled')),
+          SnackBar(content: Text(l10n.t('Save cancelled'))),
         );
       }
       return savedPath;
@@ -141,7 +143,9 @@ Future<String?> saveAniListExportPayload(
       ],
     );
     if (location == null) {
-      messenger?.showSnackBar(const SnackBar(content: Text('Save cancelled')));
+      messenger?.showSnackBar(
+        SnackBar(content: Text(l10n.t('Save cancelled'))),
+      );
       return null;
     }
 
@@ -158,7 +162,13 @@ Future<String?> saveAniListExportPayload(
     return location.path;
   } catch (error) {
     messenger?.showSnackBar(
-      SnackBar(content: Text('Failed to export: $error')),
+      SnackBar(
+        content: Text(
+          l10n.tf('Failed to export: {error}', <String, Object?>{
+            'error': error,
+          }),
+        ),
+      ),
     );
     return null;
   }

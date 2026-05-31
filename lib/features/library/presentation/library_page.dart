@@ -543,7 +543,7 @@ class _AniListTabContent extends ConsumerWidget {
         action: FilledButton.icon(
           onPressed: () => loginAniList(context, ref),
           icon: const Icon(Icons.login_rounded),
-          label: const Text('Sign in with AniList'),
+          label: Text(context.t('Sign in with AniList')),
         ),
       );
     }
@@ -563,7 +563,7 @@ class _AniListTabContent extends ConsumerWidget {
             }
           },
           icon: const Icon(Icons.refresh_rounded),
-          label: const Text('Retry'),
+          label: Text(context.t('Retry')),
         ),
       );
     }
@@ -1259,7 +1259,7 @@ class _FolderViewState extends ConsumerState<_FolderView>
                           tmpFlags.clear();
                           tmpMinScore = 0;
                         }),
-                        child: const Text('Clear all'),
+                        child: Text(context.t('Clear all')),
                       ),
                       FilledButton(
                         onPressed: () {
@@ -1284,7 +1284,7 @@ class _FolderViewState extends ConsumerState<_FolderView>
                           unawaited(_savePreferences());
                           Navigator.pop(ctx);
                         },
-                        child: const Text('Apply'),
+                        child: Text(context.t('Apply')),
                       ),
                       const SizedBox(width: AppSpacing.sm),
                     ],
@@ -1426,12 +1426,12 @@ class _FolderViewState extends ConsumerState<_FolderView>
                       ),
                       const SizedBox(height: AppSpacing.sm),
                       Text(
-                        'Genre',
+                        context.t('Genre'),
                         style: Theme.of(context).textTheme.labelLarge,
                       ),
                       const SizedBox(height: AppSpacing.xs),
                       if (allGenres.isEmpty)
-                        const Text('No genres available')
+                        Text(context.t('No genres available'))
                       else
                         Wrap(
                           spacing: AppSpacing.sm,
@@ -2949,7 +2949,7 @@ class _LocalLibraryViewState extends State<_LocalLibraryView> {
               padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
               children: <Widget>[
                 ChoiceChip(
-                  label: const Text('All'),
+                  label: Text(context.t('All')),
                   selected: _selectedStatus == null,
                   onSelected: (_) => setState(() => _selectedStatus = null),
                 ),
@@ -2969,7 +2969,7 @@ class _LocalLibraryViewState extends State<_LocalLibraryView> {
 
         // ── Content ───────────────────────────────────────────────────────
         if (items.isEmpty)
-          const Expanded(child: Center(child: Text('No results')))
+          Expanded(child: Center(child: Text(context.t('No results'))))
         else if (_isGrid)
           Expanded(
             child: GridView.builder(

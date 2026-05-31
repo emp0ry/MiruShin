@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
+import '../../../app/localization/app_localizations.dart';
 import '../../../core/constants/app_constants.dart';
 import '../../../shared/models/anilist_models.dart';
 
@@ -128,7 +129,7 @@ class _AniListLoginPageState extends State<AniListLoginPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('AniList Login')),
+      appBar: AppBar(title: Text(context.t('AniList Login'))),
       body: Stack(
         children: <Widget>[
           WebViewWidget(controller: _controller),

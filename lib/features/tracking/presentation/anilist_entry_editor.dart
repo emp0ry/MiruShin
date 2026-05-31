@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../app/localization/app_localizations.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_radius.dart';
 import '../../../app/theme/app_spacing.dart';
@@ -266,10 +267,10 @@ Future<AniListEntryEditDraft?> showAniListEntryEditor(
                           controller: notesController,
                           minLines: 3,
                           maxLines: 5,
-                          decoration: const InputDecoration(
-                            labelText: 'Notes',
+                          decoration: InputDecoration(
+                            labelText: sheetContext.t('Notes'),
                             alignLabelWithHint: true,
-                            border: OutlineInputBorder(),
+                            border: const OutlineInputBorder(),
                           ),
                         ),
                         const SizedBox(height: AppSpacing.lg),
@@ -284,12 +285,12 @@ Future<AniListEntryEditDraft?> showAniListEntryEditor(
                                 foregroundColor: AppColors.danger,
                               ),
                               icon: const Icon(Icons.delete_outline_rounded),
-                              label: const Text('Remove'),
+                              label: Text(sheetContext.t('Remove')),
                             ),
                             const SizedBox(width: AppSpacing.sm),
                             TextButton(
                               onPressed: () => Navigator.pop(sheetContext),
-                              child: const Text('Cancel'),
+                              child: Text(sheetContext.t('Cancel')),
                             ),
                             const Spacer(),
                             FilledButton.icon(
@@ -316,7 +317,7 @@ Future<AniListEntryEditDraft?> showAniListEntryEditor(
                                 );
                               },
                               icon: const Icon(Icons.check_rounded),
-                              label: const Text('Save'),
+                              label: Text(sheetContext.t('Save')),
                             ),
                           ],
                         ),
@@ -383,7 +384,7 @@ Future<AniListEntrySaveResult> saveAniListEntryEdit({
     if (context.mounted) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('AniList edit queued')));
+      ).showSnackBar(SnackBar(content: Text(context.t('AniList edit queued'))));
     }
     return AniListEntrySaveResult.queued;
   }
@@ -428,7 +429,7 @@ Future<AniListEntrySaveResult> saveAniListEntryEdit({
     if (showSuccessSnack && context.mounted) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('AniList entry saved')));
+      ).showSnackBar(SnackBar(content: Text(context.t('AniList entry saved'))));
     }
     return AniListEntrySaveResult.saved;
   } catch (error) {
@@ -458,9 +459,9 @@ Future<void> deleteAniListEntry({
         .read(anilistEditQueueProvider)
         .queueDelete(entryId: entry.id, mediaId: mediaId);
     if (context.mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('AniList removal queued')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.t('AniList removal queued'))),
+      );
     }
     if (isManga) {
       invalidateAniListMangaLibraryProviders(ref.invalidate);
@@ -485,9 +486,9 @@ Future<void> deleteAniListEntry({
       invalidateAniListAnimePreviewLibraryProvider(ref.invalidate);
     }
     if (context.mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Removed from AniList')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.t('Removed from AniList'))),
+      );
     }
   } catch (error) {
     if (isQueueableAniListEditError(error)) {
@@ -850,14 +851,14 @@ class AniListStarPicker extends StatelessWidget {
           children: <Widget>[
             Expanded(
               child: Text(
-                'Score',
+                context.t('Score'),
                 style: Theme.of(context).textTheme.labelLarge,
               ),
             ),
             if (score > 0)
               TextButton(
                 onPressed: () => onChanged(0),
-                child: const Text('Clear'),
+                child: Text(context.t('Clear')),
               ),
           ],
         ),

@@ -47,9 +47,7 @@ class SettingsPage extends ConsumerWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            SectionHeader(
-              title: context.t('Settings'),
-            ),
+            SectionHeader(title: context.t('Settings')),
             const SizedBox(height: AppSpacing.lg),
             const _UpdateSection(),
             _AccountSection(placeholderOnly: !showAniListProfileUi),
@@ -309,14 +307,26 @@ class _ApiConnectionsSection extends ConsumerWidget {
         return;
       }
       messenger.showSnackBar(
-        SnackBar(content: Text('TMDB OK · ${results.length} trending items')),
+        SnackBar(
+          content: Text(
+            context.tf('TMDB OK · {count} trending items', <String, Object?>{
+              'count': results.length,
+            }),
+          ),
+        ),
       );
     } catch (error) {
       if (!context.mounted) {
         return;
       }
       messenger.showSnackBar(
-        SnackBar(content: Text('TMDB connection failed: $error')),
+        SnackBar(
+          content: Text(
+            context.tf('TMDB connection failed: {error}', <String, Object?>{
+              'error': error,
+            }),
+          ),
+        ),
       );
     }
   }
@@ -410,25 +420,31 @@ class _AniListSettingsSection extends ConsumerWidget {
           subtitle: context.t('How scores are displayed and entered.'),
           trailing: DropdownButton<String>(
             value: settings.anilistScoreFormat,
-            items: const <DropdownMenuItem<String>>[
+            items: <DropdownMenuItem<String>>[
               DropdownMenuItem<String>(
                 value: 'POINT_100',
-                child: Text('100-point'),
+                child: Text(context.t('100-point')),
               ),
               DropdownMenuItem<String>(
                 value: 'POINT_10_DECIMAL',
-                child: Text('10-point decimal'),
+                child: Text(context.t('10-point decimal')),
               ),
               DropdownMenuItem<String>(
                 value: 'POINT_10',
-                child: Text('10-point'),
+                child: Text(context.t('10-point')),
               ),
-              DropdownMenuItem<String>(value: 'POINT_5', child: Text('5-star')),
+              DropdownMenuItem<String>(
+                value: 'POINT_5',
+                child: Text(context.t('5-star')),
+              ),
               DropdownMenuItem<String>(
                 value: 'POINT_3',
-                child: Text('3-point'),
+                child: Text(context.t('3-point')),
               ),
-              DropdownMenuItem<String>(value: 'SMILEY', child: Text('Smiley')),
+              DropdownMenuItem<String>(
+                value: 'SMILEY',
+                child: Text(context.t('Smiley')),
+              ),
             ],
             onChanged: (String? value) {
               if (value != null) controller.setAniListScoreFormat(value);
@@ -876,7 +892,6 @@ class _ThemeModeOption extends StatelessWidget {
   }
 }
 
-
 class _PlayerEngineSection extends ConsumerWidget {
   const _PlayerEngineSection();
 
@@ -893,7 +908,8 @@ class _PlayerEngineSection extends ConsumerWidget {
       children: <Widget>[
         SettingsRow(
           title: context.t('Playback engine'),
-          subtitle: '${context.t(settings.playerBackend.description)} ${context.t('Applies on the next stream open.')}',
+          subtitle:
+              '${context.t(settings.playerBackend.description)} ${context.t('Applies on the next stream open.')}',
           trailing: DropdownButton<PlayerBackend>(
             value: settings.playerBackend,
             items: PlayerBackend.values

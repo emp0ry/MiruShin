@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../app/localization/app_localizations.dart';
 import '../../../shared/models/media_item.dart';
 import '../../settings/presentation/settings_state.dart';
 import '../application/anilist_favorite_provider.dart';
@@ -52,7 +53,7 @@ class _AniListFavoriteButtonState extends ConsumerState<AniListFavoriteButton> {
         : Theme.of(context).colorScheme.onSurface;
 
     return IconButton(
-      tooltip: favourite ? 'Remove favorite' : 'Add favorite',
+      tooltip: context.t(favourite ? 'Remove favorite' : 'Add favorite'),
       onPressed: _busy
           ? null
           : () async {
@@ -68,8 +69,10 @@ class _AniListFavoriteButtonState extends ConsumerState<AniListFavoriteButton> {
               } catch (_) {
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('AniList favorite update failed'),
+                    SnackBar(
+                      content: Text(
+                        context.t('AniList favorite update failed'),
+                      ),
                     ),
                   );
                 }

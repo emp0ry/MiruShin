@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../../../app/localization/app_localizations.dart';
+
 class AutoNextOverlay extends StatefulWidget {
   const AutoNextOverlay({
     required this.onProceed,
@@ -104,14 +106,14 @@ class _AutoNextOverlayState extends State<AutoNextOverlay> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: <Widget>[
-                  const Text(
-                    'Next Episode',
-                    style: TextStyle(color: Colors.white70, fontSize: 12),
+                  Text(
+                    context.t('Next Episode'),
+                    style: const TextStyle(color: Colors.white70, fontSize: 12),
                   ),
                   if (!widget.showCountdown)
-                    const Text(
-                      'Ready to play next',
-                      style: TextStyle(
+                    Text(
+                      context.t('Ready to play next'),
+                      style: const TextStyle(
                         color: Colors.white,
                         fontSize: 15,
                         fontWeight: FontWeight.w700,
@@ -119,7 +121,9 @@ class _AutoNextOverlayState extends State<AutoNextOverlay> {
                     )
                   else
                     Text(
-                      'Playing in ${_seconds}s',
+                      context.tf('Playing in {seconds}s', <String, Object?>{
+                        'seconds': _seconds,
+                      }),
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 15,
@@ -136,7 +140,7 @@ class _AutoNextOverlayState extends State<AutoNextOverlay> {
                   _timer?.cancel();
                   widget.onProceed();
                 },
-                child: const Text('Next'),
+                child: Text(context.t('Next')),
               ),
             if (widget.autoProceed)
               TextButton(
@@ -144,7 +148,7 @@ class _AutoNextOverlayState extends State<AutoNextOverlay> {
                   _timer?.cancel();
                   widget.onCancel();
                 },
-                child: const Text('Cancel'),
+                child: Text(context.t('Cancel')),
               ),
           ],
         ),

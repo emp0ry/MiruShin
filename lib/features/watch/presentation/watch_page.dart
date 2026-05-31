@@ -1787,9 +1787,9 @@ class _AddonGroupState extends State<_AddonGroup> {
             label: Text(
               widget.showMore
                   ? context.t('Show less')
-                  : context.t(
-                      'Show ${widget.results.length - _defaultMax} more',
-                    ),
+                  : context.tf('Show {count} more', <String, Object?>{
+                      'count': widget.results.length - _defaultMax,
+                    }),
             ),
           ),
         ],

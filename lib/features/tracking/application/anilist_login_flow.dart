@@ -71,12 +71,24 @@ Future<void> loginAniList(BuildContext context, WidgetRef ref) async {
     invalidateAniListLibraryProviders(ref.invalidate);
     if (!context.mounted) return;
     messenger.showSnackBar(
-      SnackBar(content: Text('AniList connected · ${viewer.name}')),
+      SnackBar(
+        content: Text(
+          context.tf('AniList connected · {name}', <String, Object?>{
+            'name': viewer.name,
+          }),
+        ),
+      ),
     );
   } catch (error) {
     if (!context.mounted) return;
     messenger.showSnackBar(
-      SnackBar(content: Text('AniList login failed: $error')),
+      SnackBar(
+        content: Text(
+          context.tf('AniList login failed: {error}', <String, Object?>{
+            'error': error,
+          }),
+        ),
+      ),
     );
   }
 }

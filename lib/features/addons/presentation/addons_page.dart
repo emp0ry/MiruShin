@@ -572,9 +572,9 @@ Future<bool> _confirmRemove(
       return AlertDialog(
         title: Text(context.t('Remove Addon')),
         content: Text(
-          context.t(
-            'Remove ${addon.manifest.sourceName} from installed addons?',
-          ),
+          context.tf('Remove {name} from installed addons?', <String, Object?>{
+            'name': addon.manifest.sourceName,
+          }),
         ),
         actions: <Widget>[
           TextButton(
@@ -618,11 +618,21 @@ Future<void> _exportAddons(BuildContext context, WidgetRef ref) async {
     } else if (savedPath.isEmpty) {
       _showSnack(context, context.t('Addon export shared'));
     } else {
-      _showSnack(context, context.t('Addons exported to: $savedPath'));
+      _showSnack(
+        context,
+        context.tf('Addons exported to: {path}', <String, Object?>{
+          'path': savedPath,
+        }),
+      );
     }
   } on Object catch (error) {
     if (context.mounted) {
-      _showSnack(context, context.t('Addon export failed: $error'));
+      _showSnack(
+        context,
+        context.tf('Addon export failed: {error}', <String, Object?>{
+          'error': error,
+        }),
+      );
     }
   }
 }
@@ -645,14 +655,25 @@ Future<void> _importAddons(BuildContext context, WidgetRef ref) async {
         .importInstalledJson(raw);
     if (!context.mounted) return;
     final String message = result.hasFailures
-        ? context.t(
-            'Imported ${result.installed} addons, ${result.failed} failed',
+        ? context.tf(
+            'Imported {count} addons, {failed} failed',
+            <String, Object?>{
+              'count': result.installed,
+              'failed': result.failed,
+            },
           )
-        : context.t('Imported ${result.installed} addons');
+        : context.tf('Imported {count} addons', <String, Object?>{
+            'count': result.installed,
+          });
     _showSnack(context, message);
   } on Object catch (error) {
     if (context.mounted) {
-      _showSnack(context, context.t('Addon import failed: $error'));
+      _showSnack(
+        context,
+        context.tf('Addon import failed: {error}', <String, Object?>{
+          'error': error,
+        }),
+      );
     }
   }
 }
@@ -731,7 +752,9 @@ Future<void> _showAddAddonDialog(BuildContext context) async {
   if (installed != null && context.mounted) {
     _showSnack(
       context,
-      context.t('${installed.manifest.sourceName} installed'),
+      context.tf('{name} installed', <String, Object?>{
+        'name': installed.manifest.sourceName,
+      }),
     );
   }
 }

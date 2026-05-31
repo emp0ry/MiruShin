@@ -416,7 +416,13 @@ class _ProfileActivitiesPageState extends ConsumerState<ProfileActivitiesPage> {
     } catch (error) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${context.t('Failed to post')}: $error')),
+        SnackBar(
+          content: Text(
+            context.tf('Failed to post: {error}', <String, Object?>{
+              'error': error,
+            }),
+          ),
+        ),
       );
     }
   }
@@ -525,12 +531,10 @@ class ProfileFavouritesPage extends ConsumerStatefulWidget {
       _ProfileFavouritesPageState();
 }
 
-class _ProfileFavouritesPageState
-    extends ConsumerState<ProfileFavouritesPage> {
+class _ProfileFavouritesPageState extends ConsumerState<ProfileFavouritesPage> {
   final Map<AniListFavouriteKind, List<MediaItem>> _items =
       <AniListFavouriteKind, List<MediaItem>>{};
-  final Map<AniListFavouriteKind, int> _pages =
-      <AniListFavouriteKind, int>{};
+  final Map<AniListFavouriteKind, int> _pages = <AniListFavouriteKind, int>{};
   final Map<AniListFavouriteKind, bool> _loading =
       <AniListFavouriteKind, bool>{};
   final Map<AniListFavouriteKind, bool> _hasMore =
@@ -1730,7 +1734,10 @@ class _ProfileBackHeader extends StatelessWidget {
         PageBackButton(onPressed: () => goBackOrGo(context, AppRoutes.profile)),
         const SizedBox(width: AppSpacing.md),
         Expanded(
-          child: SectionHeader(title: context.t(title), subtitle: subtitle),
+          child: SectionHeader(
+            title: context.t(title),
+            subtitle: context.t(subtitle),
+          ),
         ),
       ],
     );
@@ -2264,7 +2271,11 @@ class _ActivityTileState extends ConsumerState<_ActivityTile> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('${context.t('AniList action failed')}: $error'),
+          content: Text(
+            context.tf('AniList action failed: {error}', <String, Object?>{
+              'error': error,
+            }),
+          ),
         ),
       );
     } finally {
@@ -3383,7 +3394,13 @@ Future<void> _showStatusComposer(
   } catch (error) {
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('${context.t('Failed to post')}: $error')),
+      SnackBar(
+        content: Text(
+          context.tf('Failed to post: {error}', <String, Object?>{
+            'error': error,
+          }),
+        ),
+      ),
     );
   }
 }
@@ -3465,7 +3482,13 @@ Future<void> _showExportSheet(
       return;
     }
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('${context.t('Exported to')}: $savedPath')),
+      SnackBar(
+        content: Text(
+          context.tf('Exported to: {path}', <String, Object?>{
+            'path': savedPath,
+          }),
+        ),
+      ),
     );
   } on TimeoutException {
     closeProgressDialog();
@@ -3481,7 +3504,13 @@ Future<void> _showExportSheet(
     closeProgressDialog();
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('${context.t('Export failed')}: $error')),
+      SnackBar(
+        content: Text(
+          context.tf('Export failed: {error}', <String, Object?>{
+            'error': error,
+          }),
+        ),
+      ),
     );
   }
 }
