@@ -1116,9 +1116,23 @@ class _FvpVideoSurfaceState extends State<_FvpVideoSurface>
       valueListenable: widget.player.textureId,
       builder: (BuildContext context, int? textureId, Widget? child) {
         if (textureId == null) return const SizedBox.shrink();
-        return Texture(
-          textureId: textureId,
-          filterQuality: FilterQuality.medium,
+        return Stack(
+          fit: StackFit.expand,
+          children: <Widget>[
+            Texture(
+              textureId: textureId,
+              filterQuality: FilterQuality.medium,
+            ),
+            // Linux/MDK compositor quirk: when the MDK texture is the only
+            // painted layer (e.g. once the player controls hide) the GTK
+            // embedder composites it with wrong/inverted colors. Keeping one
+            // always-painted layer above it forces the same correct composite
+            // path Flutter uses while the UI is visible. alpha = 1/255, so it
+            // is visually imperceptible.
+            const IgnorePointer(
+              child: ColoredBox(color: Color(0x01000000)),
+            ),
+          ],
         );
       },
     );

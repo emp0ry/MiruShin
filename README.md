@@ -54,6 +54,16 @@ It can switch between TMDB-driven discovery and AniList-driven catalog views, th
 
 ## Getting Started
 
+### Download
+
+Prebuilt binaries are on the [Releases](https://github.com/emp0ry/MiruShin/releases/latest) page:
+
+- **Android** — `.apk`
+- **iOS** — `.ipa`
+- **Windows** — installer (`.exe`) and portable `.zip`
+- **macOS** — `.dmg`
+- **Linux** — `AppImage`, `.tar.gz`, and `.deb` (Debian/Ubuntu)
+
 ### Requirements
 
 - Flutter stable
@@ -154,7 +164,7 @@ Key feature areas:
 - Riverpod
 - GoRouter
 - Dio
-- FVP
+- media_kit (mpv) and FVP for playback
 - WebView Flutter
 - Flutter Secure Storage
 
