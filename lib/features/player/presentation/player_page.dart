@@ -3491,8 +3491,15 @@ class _PipResizeHandle extends StatefulWidget {
 }
 
 class _PipResizeHandleState extends State<_PipResizeHandle> {
-  ({double x, double y, double width, double height})? _start;
-  double _accumulatedDx = 0;
+  // Fixed screen edge (physical px) the resize anchors to: the right edge for
+  // left handles, the bottom edge for top handles, etc.
+  double? _anchorX;
+  double? _anchorY;
+  // The window's current left edge in physical px, tracked across frames so the
+  // pointer's true screen X can be reconstructed even while the window is moving
+  // (left handles). Accumulating window-relative deltas instead feeds the
+  // window's own movement back into the next delta → jitter.
+  double _curX = 0;
 
   bool get _isLeft =>
       widget.corner == _PipCorner.topLeft ||
@@ -3502,30 +3509,38 @@ class _PipResizeHandleState extends State<_PipResizeHandle> {
       widget.corner == _PipCorner.topRight;
 
   Future<void> _onPanStart(DragStartDetails _) async {
-    _start = await widget.windowPhysicalRect();
-    _accumulatedDx = 0;
+    final ({double x, double y, double width, double height})? rect = await widget
+        .windowPhysicalRect();
+    if (rect == null) {
+      _anchorX = null;
+      _anchorY = null;
+      return;
+    }
+    _curX = rect.x;
+    _anchorX = _isLeft ? rect.x + rect.width : rect.x;
+    _anchorY = _isTop ? rect.y + rect.height : rect.y;
   }
 
   void _onPanUpdate(DragUpdateDetails details) {
-    final ({double x, double y, double width, double height})? start = _start;
-    if (start == null) return;
-    _accumulatedDx += details.delta.dx;
+    final double? anchorX = _anchorX;
+    final double? anchorY = _anchorY;
+    if (anchorX == null || anchorY == null) return;
+    final double dpr = widget.devicePixelRatio;
     final double ar = widget.aspectRatio > 0 ? widget.aspectRatio : 16 / 9;
-    final double dxP = _accumulatedDx * widget.devicePixelRatio;
 
-    // Left handles grow when dragged left (negative dx); right handles grow
-    // when dragged right. Width drives height through the aspect ratio.
-    final double rawWidth = _isLeft ? start.width - dxP : start.width + dxP;
+    // Reconstruct the pointer's absolute screen X from the window's tracked
+    // position (globalPosition is relative to the moving window's client area).
+    final double pointerX = _curX + details.globalPosition.dx * dpr;
+
+    final double rawWidth = _isLeft ? anchorX - pointerX : pointerX - anchorX;
     final double width = rawWidth.clamp(280.0, 1280.0);
     final double height = width / ar;
 
-    // Anchor the opposite corner so resizing feels natural.
-    final double right = start.x + start.width;
-    final double bottom = start.y + start.height;
-    final double x = _isLeft ? right - width : start.x;
-    final double y = _isTop ? bottom - height : start.y;
+    final double x = _isLeft ? anchorX - width : anchorX;
+    final double y = _isTop ? anchorY - height : anchorY;
 
     widget.setWindowPhysicalRect(x, y, width, height);
+    _curX = x;
   }
 
   MouseCursor get _cursor =>
