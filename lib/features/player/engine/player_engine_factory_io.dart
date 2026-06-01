@@ -1,14 +1,21 @@
+import 'dart:io' show Platform;
+
 import '../domain/player_models.dart';
 import 'fvp_player_engine.dart';
 import 'media_kit_player_engine.dart';
 import 'player_engine.dart';
+
+PlayerBackend resolvePlayerEngineBackend(PlayerBackend backend) {
+  if (Platform.isLinux) return PlayerBackend.fvp;
+  return backend == PlayerBackend.auto ? PlayerBackend.mpv : backend;
+}
 
 PlayerEngine createPlayerEngine({
   double? initialAspectRatio,
   bool previewMode = false,
   PlayerBackend backend = PlayerBackend.auto,
 }) {
-  switch (backend) {
+  switch (resolvePlayerEngineBackend(backend)) {
     case PlayerBackend.auto:
     case PlayerBackend.mpv:
       return MediaKitPlayerEngine(

@@ -381,7 +381,7 @@
   "Recent reviews published on AniList.": "AniListに投稿された最近のレビュー。",
   "Recently Added to Library": "最近ライブラリに追加",
   "Recently Updated": "最近更新",
-  "Recommended. Tries MPV with proxy, MPV direct, then FVP.": "推奨。MPVプロキシ、MPV直接、FVPの順に試します。",
+  "Recommended. Uses FVP on Linux; elsewhere tries MPV with proxy, MPV direct, then FVP.": "推奨。LinuxではFVPを使用し、それ以外ではMPVプロキシ、MPV直接、FVPの順に試します。",
   "Reduce motion": "動きを減らす",
   "Refresh sources": "ソースを更新",
   "Refreshes metadata cache on next load.": "次回読み込み時にメタデータキャッシュを更新します。",

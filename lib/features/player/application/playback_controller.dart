@@ -26,16 +26,6 @@ import 'player_settings.dart';
 final playbackControllerProvider =
     NotifierProvider<PlaybackController, PlaybackState>(PlaybackController.new);
 
-/// Resolves the concrete engine backend actually used for playback.
-///
-/// `auto` resolves to mpv/MediaKit on every native platform. mpv is now
-/// initialized lazily (only when a player is first created — see
-/// [MediaKitPlayerEngine]), so libmpv is not loaded while merely browsing and
-/// no longer destabilizes the flutter_js QuickJS addon runtime on Linux.
-PlayerBackend _resolveBackend(PlayerBackend backend) {
-  return backend == PlayerBackend.auto ? PlayerBackend.mpv : backend;
-}
-
 class PlaybackState {
   const PlaybackState({
     this.item,
@@ -517,7 +507,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     final PlayerSettings settings =
         ref.read(playerSettingsProvider).value ?? const PlayerSettings();
     final PlayerBackend backend = backendOverride ?? settings.playerBackend;
-    final PlayerBackend engineBackend = _resolveBackend(backend);
+    final PlayerBackend engineBackend = resolvePlayerEngineBackend(backend);
     final PlayerEngine engine = createPlayerEngine(
       initialAspectRatio: _safeAspectRatio(preserveAspectRatio),
       backend: engineBackend,
@@ -1162,7 +1152,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     final PlayerEngine previewEngine = createPlayerEngine(
       initialAspectRatio: _safeAspectRatio(mainEngine?.state.value.aspectRatio),
       previewMode: true,
-      backend: _resolveBackend(settings.playerBackend),
+      backend: resolvePlayerEngineBackend(settings.playerBackend),
     );
     _seekPreviewEngine = previewEngine;
     _seekPreviewSourceKey = previewSource.key;
