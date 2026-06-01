@@ -112,6 +112,7 @@ class FvpPlayerEngine extends PlayerEngine {
 
     final mdk.Player player = mdk.Player();
     _player = player;
+    _configureVideoDecoders(player);
     _volume = _state.value.volume;
     _playbackSpeed = _state.value.playbackSpeed;
     _currentSource = source;
@@ -747,6 +748,22 @@ class FvpPlayerEngine extends PlayerEngine {
     }
 
     return (min: 1000, max: 60000, ranges: '4');
+  }
+
+  void _configureVideoDecoders(mdk.Player player) {
+    // MDK's default decoder order on Linux is hardware-first
+    // (VAAPI/CUDA/VDPAU). On machines without a working hardware
+    // decoder + GL interop (VMs, headless/llvmpipe Mesa, missing
+    // VA-API drivers) MDK crashes hard inside libmdk while initializing
+    // the hardware path — it does not fall back gracefully, it SIGSEGVs
+    // the whole process (NULL call on an MDK decoder thread). Forcing
+    // pure software decoding avoids that broken path entirely.
+    if (!Platform.isLinux) return;
+    try {
+      player.videoDecoders = const <String>['FFmpeg', 'dav1d'];
+    } on Object catch (error) {
+      debugPrint('FVP could not force software decoders: $error');
+    }
   }
 
   void _configureNetworkAndBuffering(
