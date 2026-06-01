@@ -11,15 +11,13 @@ env:
   PUBSPEC_APP_NAME: mirushin
   LINUX_APP_ID: com.emp0ry.mirushin
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  # Pin the MDK SDK (the native libmdk.so that fvp bundles) to a stable,
-  # tagged release. By default fvp downloads the SourceForge *nightly* at
-  # build time (see fvp cmake/deps.cmake), so the bundled libmdk silently
-  # changes day to day even though the fvp package version is fixed. A
-  # June 1 nightly regressed and crashes on playback (SIGSEGV at 0x0 in a
-  # libmdk FrameReader/MediaIO::createForProtocol worker thread); v1.2.2
-  # worked only because it was built against an older, good nightly. Pinning
-  # makes the native binary reproducible and escapes the broken nightly.
-  FVP_DEPS_URL: https://github.com/wang-bin/mdk-sdk/releases/download/v0.36.0
+  # Source libmdk from GitHub *releases* (stable, tested) — the SAME source
+  # the working Windows build uses. By default fvp downloads the SourceForge
+  # *nightly* at build time (see fvp cmake/deps.cmake), so the bundled libmdk
+  # silently changes day to day; a June 1 nightly regressed and crashes on
+  # playback (SIGSEGV at 0x0 in a libmdk FrameReader/MediaIO::createForProtocol
+  # worker thread). Using releases/latest avoids the unstable nightly channel.
+  FVP_DEPS_URL: https://github.com/wang-bin/mdk-sdk/releases/latest/download
 
 jobs:
   build-linux:

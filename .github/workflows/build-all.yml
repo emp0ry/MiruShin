@@ -75,7 +75,7 @@ jobs:
     # FrameReader/MediaIO::createForProtocol worker thread). Scoped to this job
     # so Android/Windows/macOS keep their own mdk handling.
     env:
-      FVP_DEPS_URL: https://github.com/wang-bin/mdk-sdk/releases/download/v0.36.0
+      FVP_DEPS_URL: https://github.com/wang-bin/mdk-sdk/releases/latest/download
     steps:
       - name: Checkout
         uses: actions/checkout@v5
