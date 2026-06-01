@@ -814,6 +814,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                               _WindowPipOverlay(
                                 isPlaying:
                                     state.engine?.value.isPlaying ?? false,
+                                controlsVisible: state.controlsVisible,
                                 onTogglePlay: () => ref
                                     .read(playbackControllerProvider.notifier)
                                     .togglePlay(),
@@ -3303,45 +3304,90 @@ class _NativePipOverlay extends StatelessWidget {
   }
 }
 
-// Compact control strip for the Windows mini-player (PiP). The window is
-// small and the full chrome is hidden, so this gives just enough to toggle
-// playback and expand back to the normal window.
+// Mini-player controls for the Windows borderless PiP. Mirrors the main
+// player's hover show/hide behaviour: an exit button in the top-left corner
+// and a large play/pause button in the centre, both fading in/out together
+// with `controlsVisible` (driven by the surrounding MouseRegion hover logic).
 class _WindowPipOverlay extends StatelessWidget {
   const _WindowPipOverlay({
     required this.isPlaying,
+    required this.controlsVisible,
     required this.onTogglePlay,
     required this.onExpand,
   });
 
   final bool isPlaying;
+  final bool controlsVisible;
   final VoidCallback onTogglePlay;
   final VoidCallback onExpand;
 
   @override
   Widget build(BuildContext context) {
-    return Positioned(
-      top: 6,
-      right: 6,
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          _MiniButton(
-            icon: isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-            onPressed: onTogglePlay,
+    return Positioned.fill(
+      child: AnimatedOpacity(
+        opacity: controlsVisible ? 1 : 0,
+        duration: const Duration(milliseconds: 180),
+        child: IgnorePointer(
+          ignoring: !controlsVisible,
+          child: Stack(
+            children: <Widget>[
+              // Dim scrim so the buttons stay legible over bright video.
+              const Positioned.fill(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: <Color>[
+                        Color(0x66000000),
+                        Color(0x22000000),
+                        Color(0x66000000),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              // Exit PiP — top-left corner.
+              Positioned(
+                top: 8,
+                left: 8,
+                child: _MiniButton(
+                  icon: Icons.close_fullscreen_rounded,
+                  size: 18,
+                  onPressed: onExpand,
+                ),
+              ),
+              // Play / pause — centre, like the original player.
+              Center(
+                child: _MiniButton(
+                  icon: isPlaying
+                      ? Icons.pause_rounded
+                      : Icons.play_arrow_rounded,
+                  size: 34,
+                  padding: 12,
+                  onPressed: onTogglePlay,
+                ),
+              ),
+            ],
           ),
-          const SizedBox(width: 6),
-          _MiniButton(icon: Icons.fullscreen_rounded, onPressed: onExpand),
-        ],
+        ),
       ),
     );
   }
 }
 
 class _MiniButton extends StatelessWidget {
-  const _MiniButton({required this.icon, required this.onPressed});
+  const _MiniButton({
+    required this.icon,
+    required this.onPressed,
+    this.size = 20,
+    this.padding = 6,
+  });
 
   final IconData icon;
   final VoidCallback onPressed;
+  final double size;
+  final double padding;
 
   @override
   Widget build(BuildContext context) {
@@ -3352,8 +3398,8 @@ class _MiniButton extends StatelessWidget {
       child: InkWell(
         onTap: onPressed,
         child: Padding(
-          padding: const EdgeInsets.all(6),
-          child: Icon(icon, color: Colors.white, size: 20),
+          padding: EdgeInsets.all(padding),
+          child: Icon(icon, color: Colors.white, size: size),
         ),
       ),
     );

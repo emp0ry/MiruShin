@@ -183,6 +183,38 @@ void FlutterWindow::SetupWindowChannel() {
           return;
         }
 
+        if (call.method_name() == "setBorderless") {
+          const bool* borderless = std::get_if<bool>(call.arguments());
+          if (!borderless) {
+            result->Error("bad_args", "setBorderless expects a bool");
+            return;
+          }
+          if (*borderless && !is_borderless_) {
+            pip_saved_style_ = GetWindowLongPtr(hwnd, GWL_STYLE);
+            // Strip the caption/title bar and resize frame so the mini-player
+            // is a clean borderless video surface.
+            SetWindowLongPtr(
+                hwnd, GWL_STYLE,
+                pip_saved_style_ & ~(WS_CAPTION | WS_THICKFRAME |
+                                     WS_MINIMIZEBOX | WS_MAXIMIZEBOX |
+                                     WS_SYSMENU));
+            SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+                             SWP_NOOWNERZORDER | SWP_FRAMECHANGED |
+                             SWP_NOACTIVATE);
+            is_borderless_ = true;
+          } else if (!*borderless && is_borderless_) {
+            SetWindowLongPtr(hwnd, GWL_STYLE, pip_saved_style_);
+            SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+                             SWP_NOOWNERZORDER | SWP_FRAMECHANGED |
+                             SWP_NOACTIVATE);
+            is_borderless_ = false;
+          }
+          result->Success();
+          return;
+        }
+
         if (call.method_name() == "setAlwaysOnTop") {
           const bool* on_top = std::get_if<bool>(call.arguments());
           if (!on_top) {

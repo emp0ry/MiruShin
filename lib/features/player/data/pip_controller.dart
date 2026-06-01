@@ -190,6 +190,10 @@ class DesktopPipController implements PipController {
         };
       }
 
+      // Strip the title bar / window frame first so the mini-player is a clean
+      // borderless video surface, then size it to the client area.
+      await _win.invokeMethod<void>('setBorderless', true);
+
       final double ar = aspectRatio > 0 ? aspectRatio : 16 / 9;
       final int miniHeight = (_miniWidth / ar).round().clamp(160, 2160);
       await _win.invokeMethod<void>('setWindowSize', <String, int>{
@@ -221,6 +225,8 @@ class DesktopPipController implements PipController {
     if (!_inPip) return;
     try {
       await _win.invokeMethod<void>('setAlwaysOnTop', false);
+      // Restore the title bar / window frame before putting the window back.
+      await _win.invokeMethod<void>('setBorderless', false);
       final Map<String, int>? rect = _savedRect;
       if (rect != null) {
         await _win.invokeMethod<void>('setWindowRect', rect);

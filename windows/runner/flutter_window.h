@@ -52,6 +52,10 @@ class FlutterWindow : public Win32Window {
   bool is_fullscreen_ = false;
   LONG_PTR saved_style_ = 0;
   WINDOWPLACEMENT saved_placement_{};
+
+  // Borderless (title-bar-less) state for the Windows mini-player PiP.
+  bool is_borderless_ = false;
+  LONG_PTR pip_saved_style_ = 0;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_
