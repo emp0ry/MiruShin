@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 import '../../../shared/models/media_item.dart';
 import '../../metadata/domain/anime_episode_metadata.dart';
 import '../../watch/domain/normalized_models.dart';
@@ -10,6 +12,29 @@ enum StreamType { mp4, hls, dash, unknown }
 /// native platforms use MediaKit first, retry direct when the local proxy
 /// fails, then fall back to FVP before trying the next source.
 enum PlayerBackend { auto, mpv, fvp }
+
+List<PlayerBackend> availablePlayerBackends({
+  TargetPlatform? platform,
+  bool isWeb = kIsWeb,
+}) {
+  final TargetPlatform targetPlatform = platform ?? defaultTargetPlatform;
+  if (!isWeb && targetPlatform == TargetPlatform.linux) {
+    return const <PlayerBackend>[PlayerBackend.auto, PlayerBackend.fvp];
+  }
+  return PlayerBackend.values;
+}
+
+PlayerBackend visiblePlayerBackend(
+  PlayerBackend backend, {
+  TargetPlatform? platform,
+  bool isWeb = kIsWeb,
+}) {
+  final List<PlayerBackend> backends = availablePlayerBackends(
+    platform: platform,
+    isWeb: isWeb,
+  );
+  return backends.contains(backend) ? backend : PlayerBackend.auto;
+}
 
 extension PlayerBackendLabel on PlayerBackend {
   String get title {

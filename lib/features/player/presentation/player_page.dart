@@ -2854,6 +2854,10 @@ class _PlayerSettingsTiles extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final PlayerSettings settings =
         ref.watch(playerSettingsProvider).value ?? const PlayerSettings();
+    final List<PlayerBackend> backends = availablePlayerBackends();
+    final PlayerBackend selectedBackend = visiblePlayerBackend(
+      settings.playerBackend,
+    );
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
@@ -2861,7 +2865,7 @@ class _PlayerSettingsTiles extends ConsumerWidget {
           leading: const Icon(Icons.smart_display_rounded),
           title: Text(context.t('Player engine')),
           subtitle: Text(
-            '${context.t(settings.playerBackend.title)} · '
+            '${context.t(selectedBackend.title)} · '
             '${context.t('Applies on the next stream open.')}',
           ),
           onTap: () async {
@@ -2871,11 +2875,11 @@ class _PlayerSettingsTiles extends ConsumerWidget {
                 title: Text(context.t('Player engine')),
                 children: <Widget>[
                   RadioGroup<PlayerBackend>(
-                    groupValue: settings.playerBackend,
+                    groupValue: selectedBackend,
                     onChanged: (PlayerBackend? value) =>
                         Navigator.pop(context, value),
                     child: Column(
-                      children: PlayerBackend.values
+                      children: backends
                           .map(
                             (PlayerBackend backend) =>
                                 RadioListTile<PlayerBackend>(

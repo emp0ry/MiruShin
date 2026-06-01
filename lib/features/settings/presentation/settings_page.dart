@@ -902,6 +902,10 @@ class _PlayerEngineSection extends ConsumerWidget {
     final PlayerSettingsController controller = ref.read(
       playerSettingsProvider.notifier,
     );
+    final List<PlayerBackend> backends = availablePlayerBackends();
+    final PlayerBackend selectedBackend = visiblePlayerBackend(
+      settings.playerBackend,
+    );
     return SettingsSection(
       title: context.t('Player'),
       icon: Icons.smart_display_rounded,
@@ -909,10 +913,10 @@ class _PlayerEngineSection extends ConsumerWidget {
         SettingsRow(
           title: context.t('Playback engine'),
           subtitle:
-              '${context.t(settings.playerBackend.description)} ${context.t('Applies on the next stream open.')}',
+              '${context.t(selectedBackend.description)} ${context.t('Applies on the next stream open.')}',
           trailing: DropdownButton<PlayerBackend>(
-            value: settings.playerBackend,
-            items: PlayerBackend.values
+            value: selectedBackend,
+            items: backends
                 .map(
                   (PlayerBackend backend) => DropdownMenuItem<PlayerBackend>(
                     value: backend,
