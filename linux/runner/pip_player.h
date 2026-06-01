@@ -9,10 +9,14 @@
 #include <string>
 
 #ifdef MIRUSHIN_PIP_LINUX
+#include "mdk/Player.h"
 #include "mdk/RenderAPI.h"
-#endif
 
+using MiruShinMdkPlayerApiPtr = decltype(mdkPlayerAPI_new());
+#else
 struct mdkPlayerAPI;
+using MiruShinMdkPlayerApiPtr = mdkPlayerAPI*;
+#endif
 
 #if defined(__clang__) || defined(__GNUC__)
 #define MIRUSHIN_UNUSED_PRIVATE_FIELD __attribute__((unused))
@@ -73,7 +77,7 @@ class PipPlayer {
   GtkWidget* window_ = nullptr;
   GtkGLArea* gl_area_ = nullptr;
 
-  mdkPlayerAPI* player_api_ MIRUSHIN_UNUSED_PRIVATE_FIELD = nullptr;
+  MiruShinMdkPlayerApiPtr player_api_ MIRUSHIN_UNUSED_PRIVATE_FIELD = nullptr;
   int width_ MIRUSHIN_UNUSED_PRIVATE_FIELD = 640;
   int height_ MIRUSHIN_UNUSED_PRIVATE_FIELD = 360;
 

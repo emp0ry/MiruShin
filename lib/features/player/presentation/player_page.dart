@@ -60,8 +60,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   bool _nativePipActive = false;
   bool? _lastPipIsPlaying;
   late final bool _nativePipSupported;
-  // Windows/Linux mini-player PiP (shrinks the main window, keeps the same mpv
-  // engine running) instead of the native AVPlayer PiP used on iOS/macOS.
+  // Windows/Linux mini-player PiP (shrinks the main window, keeps the current
+  // player engine running) instead of the native AVPlayer PiP used on iOS/macOS.
   late final bool _windowPipSupported;
   final FocusNode _playerFocusNode = FocusNode(
     debugLabel: 'MiruShinPlayerFocus',
@@ -182,8 +182,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   }
 
   // Enter the Windows/Linux mini-player: the DesktopPipController shrinks the
-  // main window and flips _inPipMode via pipModeStream. The mpv engine keeps
-  // playing — no handoff to a second engine.
+  // main window and flips _inPipMode via pipModeStream. Playback keeps going
+  // in the existing engine — no handoff to a second engine.
   Future<void> _enterWindowPip() async {
     final PlayerEngine? engine = ref.read(playbackControllerProvider).engine;
     final double aspectRatio = (engine?.value.aspectRatio ?? 0) > 0

@@ -139,12 +139,11 @@ class AndroidPipController implements PipController {
 // ── Desktop (Windows/Linux) implementation ──────────────────────────────────
 //
 // There is no OS-level PiP on Windows/Linux, so instead of spinning up a
-// second video engine (which collided with the main mpv decoder on the GPU and
-// crashed), we shrink the *main* application window into a small always-on-top
-// "mini player". The same mpv engine keeps decoding — exactly like the OS PiP
-// on Android/iOS reuses the one player. All window manipulation goes through
-// the existing `mirushin/window` MethodChannel implemented natively on both
-// platforms.
+// second video engine, we shrink the *main* application window into a small
+// always-on-top "mini player". The same current engine keeps decoding —
+// exactly like OS PiP reuses the one player. All window manipulation goes
+// through the existing `mirushin/window` MethodChannel implemented natively on
+// both platforms.
 
 class DesktopPipController implements PipController {
   static const MethodChannel _win = MethodChannel('mirushin/window');

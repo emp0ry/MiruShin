@@ -50,8 +50,8 @@ class NativePlayerService {
 
   // iOS/macOS use the OS-native AVPlayer PiP, which reuses a single player and
   // is rock solid. Windows/Linux used to spin up a *second* MDK video engine in
-  // a floating window, which collided with the main mpv decoder on the GPU and
-  // crashed; those platforms now use the window-resize mini-player in
+  // a floating window, which could collide with the main decoder on the GPU and
+  // crash; those platforms now use the window-resize mini-player in
   // DesktopPipController instead, so they are intentionally excluded here.
   static bool get isSupported =>
       !kIsWeb &&

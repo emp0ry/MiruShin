@@ -90,6 +90,11 @@ class MediaKitPlayerEngine extends PlayerEngine {
 
   static void _ensureMediaKitInitialized() {
     if (_mediaKitInitialized) return;
+    if (Platform.isLinux) {
+      throw UnsupportedError(
+        'MediaKit/mpv is disabled on Linux; use the FVP backend instead.',
+      );
+    }
     mk.MediaKit.ensureInitialized();
     _mediaKitInitialized = true;
   }

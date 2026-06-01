@@ -34,11 +34,9 @@ Future<void> main() async {
       FlutterError.presentError(details);
     }
   };
-  // NOTE: MediaKit/mpv is NOT initialized here. It is initialized lazily in
-  // MediaKitPlayerEngine the first time a player is created, so libmpv is never
-  // loaded while only browsing/searching. Eager init at startup loaded mpv into
-  // the process and deterministically crashed the flutter_js QuickJS addon
-  // runtime on Linux.
+  // NOTE: MediaKit/mpv is NOT initialized here. On Linux it is disabled
+  // entirely; on the other native platforms MediaKitPlayerEngine initializes it
+  // lazily only when that backend is actually used.
   configureMiruShinFvp();
   runApp(ProviderScope(child: MiruShinApp(initialRoute: initialRoute)));
 }
