@@ -53,6 +53,17 @@ jobs:
       - name: Flutter pub get
         run: flutter pub get
 
+      - name: Force fresh pinned MDK SDK
+        run: |
+          # fvp's cmake/deps.cmake skips re-downloading libmdk if an mdk-sdk is
+          # already extracted in its package dir. Because ~/.pub-cache can be
+          # cached between runs, a previously-downloaded (broken nightly) libmdk
+          # could otherwise persist and silently ignore FVP_DEPS_URL. Delete any
+          # cached/extracted mdk-sdk so the pinned stable SDK is always fetched.
+          find "$HOME/.pub-cache" -type d -path "*fvp*/linux/mdk-sdk" -prune -exec rm -rf {} + 2>/dev/null || true
+          find "$HOME/.pub-cache" -type f -path "*fvp*/linux/mdk-sdk-*.tar.xz*" -delete 2>/dev/null || true
+          echo "Cleared cached mdk-sdk; build will fetch FVP_DEPS_URL=$FVP_DEPS_URL"
+
       - name: Strip Linux MediaKit plugin
         run: bash .github/scripts/strip-linux-media-kit.sh
 
