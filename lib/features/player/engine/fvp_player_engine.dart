@@ -707,38 +707,79 @@ class FvpPlayerEngine extends PlayerEngine {
         lower.contains('.mp4:hls:');
   }
 
+  ({int min, int max, String ranges}) _bufferConfigFor({
+    required bool previewMode,
+    required bool isHls,
+    required bool isNetwork,
+    required double speed,
+  }) {
+    if (previewMode) {
+      return (min: 500, max: 8000, ranges: '2');
+    }
+
+    // MPV-like FVP profile: start fast with a small minimum buffer, but allow
+    // a large read-ahead cache. This helps streams that only continue loading
+    // well when the playback pressure is low, without forcing visible pauses.
+    if (isHls) {
+      if (speed <= 1.0) {
+        return (min: 1500, max: 300000, ranges: '24');
+      }
+      if (speed <= 1.5) {
+        return (min: 3000, max: 360000, ranges: '28');
+      }
+      if (speed <= 2.0) {
+        return (min: 6000, max: 420000, ranges: '32');
+      }
+      return (min: 12000, max: 480000, ranges: '40');
+    }
+
+    if (isNetwork) {
+      if (speed <= 1.0) {
+        return (min: 2000, max: 180000, ranges: '12');
+      }
+      if (speed <= 1.5) {
+        return (min: 4000, max: 240000, ranges: '16');
+      }
+      if (speed <= 2.0) {
+        return (min: 8000, max: 300000, ranges: '20');
+      }
+      return (min: 12000, max: 360000, ranges: '24');
+    }
+
+    return (min: 1000, max: 60000, ranges: '4');
+  }
+
   void _configureNetworkAndBuffering(
     mdk.Player player,
     PlayerSource source, {
     double playbackSpeed = 1.0,
   }) {
-    // Conservative, known-good libmdk buffer/demuxer configuration restored
-    // from v1.2.2. The aggressive multi-range buffering (`demux.buffer.ranges`
-    // up to 40, multi-hundred-second buffers) and the extra avio/avformat
-    // properties added in v1.3.0 (`avformat.protocol_whitelist`,
-    // `avio.reconnect_at_eof`, `avio.rw_timeout`) crashed libmdk's demuxer/IO
-    // worker thread on Linux — a SIGSEGV via a NULL call inside libmdk, even
-    // though v1.2.2 played the same streams fine on the same machine. These
-    // settings program libmdk's worker threads directly, which is exactly
-    // where the crash happens, so we keep them minimal and fixed.
-    // `source`/`playbackSpeed` are intentionally unused: a fixed buffer is
-    // stable across speeds and stream types.
-    final int minBufferMs = _previewMode ? 800 : 8000;
-    final int maxBufferMs = _previewMode ? 8000 : 120000;
+    final String url = source.url.toLowerCase();
+    final bool isNetwork =
+        url.startsWith('http://') || url.startsWith('https://');
+    final bool isHls =
+        source.streamType == StreamType.hls ||
+        url.contains('.m3u8') ||
+        url.contains(':hls:');
+    final config = _bufferConfigFor(
+      previewMode: _previewMode,
+      isHls: isHls,
+      isNetwork: isNetwork,
+      speed: playbackSpeed,
+    );
+
     try {
       player.setProperty('demux.buffer.protocols', 'file,http,https');
-      if (_previewMode) {
-        player.setProperty('demux.buffer.ranges', '2');
-      }
+      player.setProperty('demux.buffer.ranges', config.ranges);
       player.setBufferRange(
-        min: minBufferMs,
-        max: maxBufferMs,
+        min: config.min,
+        max: config.max,
         drop: _previewMode,
       );
     } on Object {
       player.setBufferRange(
-        min: minBufferMs,
-        max: maxBufferMs,
+        min: config.min,
+        max: config.max,
         drop: _previewMode,
       );
     }
@@ -748,6 +789,10 @@ class FvpPlayerEngine extends PlayerEngine {
       player.setProperty('avformat.safe', '0');
       player.setProperty('avformat.extension_picky', '0');
       player.setProperty('avformat.allowed_segment_extensions', 'ALL');
+      player.setProperty(
+        'avformat.protocol_whitelist',
+        'file,http,https,tcp,tls,crypto',
+      );
     } on Object {
       // Not all MDK builds expose avformat properties — safe to ignore.
     }
@@ -755,7 +800,9 @@ class FvpPlayerEngine extends PlayerEngine {
     try {
       player.setProperty('avio.reconnect', '1');
       player.setProperty('avio.reconnect_streamed', '1');
+      player.setProperty('avio.reconnect_at_eof', '1');
       player.setProperty('avio.reconnect_delay_max', '5');
+      player.setProperty('avio.rw_timeout', '15000000');
     } on Object {
       // Older MDK builds may not expose all avio properties — safe to ignore.
     }
