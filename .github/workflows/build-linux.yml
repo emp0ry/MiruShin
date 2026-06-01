@@ -230,11 +230,35 @@ jobs:
           StartupWMClass=${APP_NAME}
           EOF
 
-          # ${LINUX_APP_ID}.png was created in the AppImage step (same job dir).
-          if [ -f "${LINUX_APP_ID}.png" ]; then
-            cp "${LINUX_APP_ID}.png" \
-               "$DEB_DIR/usr/share/icons/hicolor/256x256/apps/${LINUX_APP_ID}.png"
+          # Icon: render several sizes into the hicolor theme + a pixmaps
+          # fallback so every desktop environment finds it.
+          if [ -f "assets/icons/logo.png" ]; then ICON_SRC="assets/icons/logo.png"
+          elif [ -f "linux/runner/resources/logo.png" ]; then ICON_SRC="linux/runner/resources/logo.png"
+          else echo "ERROR: no source logo for .deb icon"; exit 1; fi
+          mkdir -p "$DEB_DIR/usr/share/pixmaps"
+          for sz in 16 32 48 64 128 256 512; do
+            d="$DEB_DIR/usr/share/icons/hicolor/${sz}x${sz}/apps"
+            mkdir -p "$d"
+            python3 -c "from PIL import Image; Image.open('$ICON_SRC').convert('RGBA').resize(($sz,$sz), Image.LANCZOS).save('$d/${LINUX_APP_ID}.png')"
+          done
+          cp "$DEB_DIR/usr/share/icons/hicolor/256x256/apps/${LINUX_APP_ID}.png" \
+             "$DEB_DIR/usr/share/pixmaps/${LINUX_APP_ID}.png"
+
+          # Refresh icon + desktop caches on install/remove so the launcher
+          # shows the icon immediately.
+          cat > "$DEB_DIR/DEBIAN/postinst" <<'EOF'
+          #!/bin/sh
+          set -e
+          if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+            gtk-update-icon-cache -f -t /usr/share/icons/hicolor >/dev/null 2>&1 || true
           fi
+          if command -v update-desktop-database >/dev/null 2>&1; then
+            update-desktop-database -q /usr/share/applications >/dev/null 2>&1 || true
+          fi
+          exit 0
+          EOF
+          cp "$DEB_DIR/DEBIAN/postinst" "$DEB_DIR/DEBIAN/postrm"
+          chmod 0755 "$DEB_DIR/DEBIAN/postinst" "$DEB_DIR/DEBIAN/postrm"
 
           INSTALLED_KB=$(du -sk "$DEB_DIR/usr" | cut -f1)
           cat > "$DEB_DIR/DEBIAN/control" <<EOF

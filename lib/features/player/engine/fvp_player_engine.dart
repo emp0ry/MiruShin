@@ -82,17 +82,7 @@ class FvpPlayerEngine extends PlayerEngine {
   Widget buildVideoSurface(BuildContext context) {
     final mdk.Player? player = _player;
     if (player == null) return const SizedBox.shrink();
-
-    return ValueListenableBuilder<int?>(
-      valueListenable: player.textureId,
-      builder: (BuildContext context, int? textureId, Widget? child) {
-        if (textureId == null) return const SizedBox.shrink();
-        return Texture(
-          textureId: textureId,
-          filterQuality: FilterQuality.medium,
-        );
-      },
-    );
+    return _FvpVideoSurface(player: player);
   }
 
   @override
@@ -1081,5 +1071,56 @@ class FvpPlayerEngine extends PlayerEngine {
       player.state = mdk.PlaybackState.stopped;
       player.dispose();
     }
+  }
+}
+
+/// Hosts the MDK GL texture and forces a repaint every vsync.
+///
+/// On Linux the MDK texture is only re-sampled when Flutter actually paints a
+/// frame. Flutter only schedules frames when something is animating, so once
+/// the player controls hide (and their animations stop) the engine stops
+/// producing frames and the video freezes / goes black — even though MDK keeps
+/// decoding. A free-running [Ticker] keeps frames scheduled so the texture
+/// stays live regardless of the UI. Other platforms don't use this engine, so
+/// the cost is confined to the FVP (Linux) path.
+class _FvpVideoSurface extends StatefulWidget {
+  const _FvpVideoSurface({required this.player});
+
+  final mdk.Player player;
+
+  @override
+  State<_FvpVideoSurface> createState() => _FvpVideoSurfaceState();
+}
+
+class _FvpVideoSurfaceState extends State<_FvpVideoSurface>
+    with SingleTickerProviderStateMixin {
+  late final _ticker = createTicker((_) {
+    if (mounted) setState(() {});
+  });
+
+  @override
+  void initState() {
+    super.initState();
+    _ticker.start();
+  }
+
+  @override
+  void dispose() {
+    _ticker.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<int?>(
+      valueListenable: widget.player.textureId,
+      builder: (BuildContext context, int? textureId, Widget? child) {
+        if (textureId == null) return const SizedBox.shrink();
+        return Texture(
+          textureId: textureId,
+          filterQuality: FilterQuality.medium,
+        );
+      },
+    );
   }
 }
