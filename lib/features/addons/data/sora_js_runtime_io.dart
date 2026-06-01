@@ -38,6 +38,17 @@ class SoraJsRuntime {
   final List<String> _loadOrder = <String>[];
   Future<void> _jsTail = Future<void>.value();
 
+  // Pending host→JS request bookkeeping. We never hand a Dart Future across the
+  // flutter_js bridge (the `_dartToJs(Future)` → promise-capability → native
+  // resolve-callback path is what corrupts QuickJS under heavy fetch load and
+  // SIGSEGVs on Linux). Instead every async hop is a synchronous channel
+  // message plus a pure-JS promise resolved later via `evaluate('__miruResolve…')`.
+  int _reqSeq = 0;
+  // Active `_call` completers keyed by call id; completed by the synchronous
+  // `MiruSoraCallDone` channel message rather than `handlePromise`.
+  final Map<String, Completer<String>> _pendingCalls =
+      <String, Completer<String>>{};
+
   // Single shared QuickJS/JavaScriptCore context for all addon modules.
   // Created lazily on first use. Never disposed during normal operation —
   // creating and destroying per-addon contexts caused SIGSEGV in QuickJS on
@@ -275,29 +286,17 @@ class SoraJsRuntime {
     try {
       for (final String functionName in functionNames) {
         module.activeFunctionName = functionName;
-        final String expression =
-            '''
-        (async () => {
-          globalThis.__miruCurrentAddonId = ${jsonEncode(addon.id)};
-          const module = globalThis.__miruSoraModules && globalThis.__miruSoraModules[${jsonEncode(addon.id)}];
-          const fn = module && module[${jsonEncode(functionName)}];
-          if (typeof fn !== 'function') return { "__miruMissingFunction": true };
-          const args = $argsJson;
-          const value = await fn.apply(null, args);
-          return globalThis.__miruSoraSerializeResult(value);
-        })()
-      ''';
-        try {
-          final JsEvalResult initial = rt.evaluate(expression);
-          final JsEvalResult resolved = await rt.handlePromise(initial);
-          final Object? decoded = decodeSoraPayload(resolved.stringResult);
-          if (_isMissingFunction(decoded)) {
-            continue;
-          }
-          return decoded;
-        } finally {
-          module.activeFunctionName = null;
+        final Object? decoded = await _invokeFunction(
+          rt: rt,
+          addon: addon,
+          functionName: functionName,
+          argsJson: argsJson,
+        );
+        module.activeFunctionName = null;
+        if (_isMissingFunction(decoded)) {
+          continue;
         }
+        return decoded;
       }
       if (!required) {
         return null;
@@ -306,24 +305,124 @@ class SoraJsRuntime {
         '${addon.manifest.sourceName} does not expose ${functionNames.first}().',
       );
     } finally {
-      // Drain any fire-and-forget background tasks (un-awaited fetchv2 /
-      // setTimeout) this call spawned BEFORE releasing the serialize lock, so
-      // none of them resolve later against the next addon's mutated global
-      // context — and, on QuickJS, so none resolve outside the pump window.
+      // Let any fire-and-forget background tasks (un-awaited fetchv2 /
+      // setTimeout) this call spawned settle BEFORE releasing the serialize
+      // lock, so none of them resolve later against the next addon's mutated
+      // global context.
       await _settlePending(rt, module);
     }
   }
 
-  // Wait for tracked background JS tasks spawned during this call to settle.
-  // The persistent pump keeps draining QuickJS jobs, so this just polls the
-  // JS-side pending set. If a straggler exceeds the budget, its in-flight
-  // dio request / delay is cancelled so the Dart Future completes promptly and
-  // its (still GC-rooted) promise resolves cleanly while the pump is alive.
+  // Runs a single addon function and waits for its result via a synchronous
+  // `MiruSoraCallDone` channel message — NOT `handlePromise`. The async IIFE
+  // resolves entirely inside QuickJS (driven by the persistent pump); host I/O
+  // is dispatched through synchronous channel messages and resolved back into
+  // JS via `evaluate('__miruResolve…')`. No Dart Future ever crosses the
+  // flutter_js bridge, so the crashing `_dartToJs(Future)` path is never hit.
+  Future<Object?> _invokeFunction({
+    required JavascriptRuntime rt,
+    required SoraInstalledAddon addon,
+    required String functionName,
+    required String argsJson,
+  }) async {
+    final String callId = 'c${_reqSeq++}';
+    final Completer<String> completer = Completer<String>();
+    _pendingCalls[callId] = completer;
+
+    final String expression =
+        '''
+      (function() {
+        var __cid = ${jsonEncode(callId)};
+        Promise.resolve().then(function() {
+          globalThis.__miruCurrentAddonId = ${jsonEncode(addon.id)};
+          var module = globalThis.__miruSoraModules && globalThis.__miruSoraModules[${jsonEncode(addon.id)}];
+          var fn = module && module[${jsonEncode(functionName)}];
+          if (typeof fn !== 'function') {
+            return { "__miruMissingFunction": true };
+          }
+          var args = $argsJson;
+          return Promise.resolve(fn.apply(null, args));
+        }).then(function(value) {
+          globalThis.__miruSoraCallDone(__cid, true, globalThis.__miruSoraSerializeResult(value));
+        }, function(err) {
+          globalThis.__miruSoraCallDone(__cid, false, String(err && err.message ? err.message : err));
+        });
+      })();
+    ''';
+
+    try {
+      final JsEvalResult initial = rt.evaluate(expression);
+      if (initial.isError) {
+        throw SoraAddonException(
+          'Failed to invoke ${addon.manifest.sourceName}.$functionName: '
+          '${initial.stringResult}',
+        );
+      }
+      // Drive the engine until the call settles. The pump already runs on
+      // QuickJS; we also nudge it here so JSC (no pump) makes progress.
+      final String payload = await _awaitCall(rt, completer);
+      return _decodeCallPayload(payload);
+    } finally {
+      _pendingCalls.remove(callId);
+    }
+  }
+
+  Future<String> _awaitCall(
+    JavascriptRuntime rt,
+    Completer<String> completer,
+  ) async {
+    // Safety valve: an addon that never resolves must not hang the queue.
+    const Duration callTimeout = Duration(seconds: 45);
+    final Stopwatch sw = Stopwatch()..start();
+    while (!completer.isCompleted) {
+      try {
+        rt.executePendingJob();
+      } catch (_) {}
+      if (sw.elapsed >= callTimeout) {
+        if (!completer.isCompleted) {
+          completer.complete(
+            jsonEncode(<String, Object?>{'ok': false, 'error': 'timeout'}),
+          );
+        }
+        break;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 8));
+    }
+    return completer.future;
+  }
+
+  Object? _decodeCallPayload(String payload) {
+    Map<String, dynamic> envelope;
+    try {
+      final Object? parsed = jsonDecode(payload);
+      envelope = parsed is Map
+          ? parsed.map(
+              (Object? k, Object? v) => MapEntry<String, dynamic>('$k', v),
+            )
+          : <String, dynamic>{};
+    } catch (_) {
+      envelope = <String, dynamic>{};
+    }
+    final bool ok = envelope['ok'] == true;
+    if (!ok) {
+      final String error = _string(envelope['error'], fallback: 'addon error');
+      throw SoraAddonException(error);
+    }
+    final Object? result = envelope['result'];
+    if (result is String) {
+      return decodeSoraPayload(result);
+    }
+    return result;
+  }
+
+  // Wait for background host requests spawned during this call to settle, so a
+  // straggler can't resolve against the next addon's context. Resolution is
+  // pure-JS (`evaluate('__miruResolve…')`), so there is no crash risk here —
+  // this is purely for correctness/cleanliness.
   Future<void> _settlePending(
     JavascriptRuntime rt,
     _LoadedSoraModule module,
   ) async {
-    if (!_usesQuickJs) return; // JSC drains its own microtasks.
     final Stopwatch sw = Stopwatch()..start();
     const Duration budget = Duration(seconds: 5);
     const Duration hardStop = Duration(seconds: 7);
@@ -331,9 +430,10 @@ class SoraJsRuntime {
     while (true) {
       int size;
       try {
+        rt.executePendingJob();
         final JsEvalResult r = rt.evaluate(
-          '(globalThis.__miruSoraPendingTasks && '
-          'globalThis.__miruSoraPendingTasks.size) | 0',
+          '(globalThis.__miruSoraPendingResolvers ? '
+          'Object.keys(globalThis.__miruSoraPendingResolvers).length : 0)',
         );
         size = int.tryParse(r.stringResult.trim()) ?? 0;
       } catch (_) {
@@ -346,8 +446,6 @@ class SoraJsRuntime {
         cancelled = true;
       }
       if (sw.elapsed >= hardStop) {
-        // Give up waiting. The persistent pump still keeps the VM consistent,
-        // so any remaining straggler resolves safely on a later tick.
         return;
       }
       await Future<void>.delayed(const Duration(milliseconds: 12));
@@ -452,57 +550,165 @@ class SoraJsRuntime {
       return null;
     });
 
-    runtime.onMessage('MiruSoraHttpFetch', (dynamic args) async {
+    // Completion of a top-level `_call`. Synchronous: just complete the Dart
+    // completer the JS side resolved into. Never returns a Future.
+    runtime.onMessage('MiruSoraCallDone', (dynamic args) {
       final Map<String, dynamic> payload = _asMap(args);
+      final String callId = _string(payload['__cid']);
+      final Completer<String>? completer = _pendingCalls[callId];
+      if (completer != null && !completer.isCompleted) {
+        completer.complete(
+          jsonEncode(<String, Object?>{
+            'ok': payload['ok'] == true,
+            'result': payload['result'],
+            'error': payload['error'],
+          }),
+        );
+      }
+      return null;
+    });
+
+    // ── Async host requests ──────────────────────────────────────────────
+    // Each handler is SYNCHRONOUS (returns an ack string, never a Future).
+    // The real work runs in the background and resolves the pure-JS promise
+    // via `evaluate('__miruSoraResolve(id, …)')`. This avoids the
+    // `_dartToJs(Future)` promise-capability path that corrupts QuickJS.
+    runtime.onMessage('MiruSoraHttpFetch', (dynamic args) {
+      final Map<String, dynamic> payload = _asMap(args);
+      final String reqId = _string(payload['__reqId']);
       final String addonId = _string(payload['__addonId']);
-      final _LoadedSoraModule? module = _loaded[addonId];
-      if (module == null || module._disposed) {
-        return jsonEncode(<String, dynamic>{
+      unawaited(_dispatchHttpFetch(reqId, addonId, payload));
+      return 'ok';
+    });
+
+    runtime.onMessage('MiruSoraDelay', (dynamic args) {
+      final Map<String, dynamic> payload = _asMap(args);
+      final String reqId = _string(payload['__reqId']);
+      final String addonId = _string(payload['__addonId']);
+      unawaited(_dispatchDelay(reqId, addonId, payload));
+      return 'ok';
+    });
+
+    runtime.onMessage('MiruSoraNetworkFetch', (dynamic args) {
+      final Map<String, dynamic> payload = _asMap(args);
+      final String reqId = _string(payload['__reqId']);
+      final String addonId = _string(payload['__addonId']);
+      unawaited(_dispatchNetworkFetch(reqId, addonId, payload));
+      return 'ok';
+    });
+
+    runtime.evaluate(_bridgeScript());
+  }
+
+  // Resolve a pending JS promise by calling back into JS via `evaluate` — the
+  // stable path. `raw` is passed as a JS string the bridge JSON-parses.
+  void _resolveJs(String reqId, String raw) {
+    if (reqId.isEmpty) return;
+    final JavascriptRuntime? rt = _sharedRuntime;
+    if (rt == null) return;
+    try {
+      rt.evaluate(
+        'globalThis.__miruSoraResolve && '
+        'globalThis.__miruSoraResolve(${jsonEncode(reqId)}, ${jsonEncode(raw)});',
+      );
+      // Nudge the engine so the resolved promise's continuations run promptly
+      // (QuickJS has the pump; JSC drains on evaluate, this is belt-and-braces).
+      rt.executePendingJob();
+    } catch (_) {}
+  }
+
+  Future<void> _dispatchHttpFetch(
+    String reqId,
+    String addonId,
+    Map<String, dynamic> payload,
+  ) async {
+    final _LoadedSoraModule? module = _loaded[addonId];
+    String body;
+    if (module == null || module._disposed) {
+      body = jsonEncode(<String, dynamic>{
+        '__miruResponse': true,
+        'status': 0,
+        'headers': <String, dynamic>{},
+        'body': '',
+        'error': 'addon disposed',
+      });
+    } else {
+      try {
+        body = await _httpFetchBody(module.addon, payload);
+      } catch (error) {
+        body = jsonEncode(<String, dynamic>{
           '__miruResponse': true,
           'status': 0,
           'headers': <String, dynamic>{},
           'body': '',
-          'error': 'addon disposed',
+          'error': error.toString(),
         });
       }
-      return _httpFetchBody(module.addon, payload);
-    });
+    }
+    _resolveJs(reqId, body);
+  }
 
-    runtime.onMessage('MiruSoraDelay', (dynamic args) async {
-      final Map<String, dynamic> payload = _asMap(args);
-      final String addonId = _string(payload['__addonId']);
-      final int ms = _int(
-        payload['milliseconds'],
-        fallback: 16,
-      ).clamp(0, 60000).toInt();
-      final _LoadedSoraModule? module = _loaded[addonId];
-      if (module == null || module._disposed) return 'cancelled';
-      final Completer<void> c = Completer<void>();
-      module._delayCompleters.add(c);
+  Future<void> _dispatchDelay(
+    String reqId,
+    String addonId,
+    Map<String, dynamic> payload,
+  ) async {
+    final int ms = _int(
+      payload['milliseconds'],
+      fallback: 16,
+    ).clamp(0, 60000).toInt();
+    final _LoadedSoraModule? module = _loaded[addonId];
+    if (module == null || module._disposed) {
+      _resolveJs(reqId, 'cancelled');
+      return;
+    }
+    final Completer<void> c = Completer<void>();
+    module._delayCompleters.add(c);
+    try {
+      await Future.any(<Future<void>>[
+        Future<void>.delayed(Duration(milliseconds: ms)),
+        c.future,
+      ]);
+    } finally {
+      module._delayCompleters.remove(c);
+      if (!c.isCompleted) c.complete();
+    }
+    _resolveJs(reqId, 'true');
+  }
+
+  Future<void> _dispatchNetworkFetch(
+    String reqId,
+    String addonId,
+    Map<String, dynamic> payload,
+  ) async {
+    final _LoadedSoraModule? module = _loaded[addonId];
+    String body;
+    if (module == null || module._disposed) {
+      body = jsonEncode(<String, Object?>{
+        'originalUrl': _string(payload['url']),
+        'requests': <String>[],
+        'html': null,
+        'cookies': null,
+        'success': false,
+        'error': 'addon disposed',
+        'cutoffTriggered': false,
+        'cutoffUrl': null,
+        'htmlCaptured': false,
+        'cookiesCaptured': false,
+        'elementsClicked': <String>[],
+        'waitResults': <String, bool>{},
+      });
+    } else {
       try {
-        await Future.any(<Future<void>>[
-          Future<void>.delayed(Duration(milliseconds: ms)),
-          c.future,
-        ]);
-      } finally {
-        module._delayCompleters.remove(c);
-        if (!c.isCompleted) c.complete();
-      }
-      return 'true';
-    });
-
-    runtime.onMessage('MiruSoraNetworkFetch', (dynamic args) async {
-      final Map<String, dynamic> payload = _asMap(args);
-      final String addonId = _string(payload['__addonId']);
-      final _LoadedSoraModule? module = _loaded[addonId];
-      if (module == null || module._disposed) {
-        return jsonEncode(<String, Object?>{
+        body = await _networkFetch(module.addon, payload);
+      } catch (error) {
+        body = jsonEncode(<String, Object?>{
           'originalUrl': _string(payload['url']),
           'requests': <String>[],
           'html': null,
           'cookies': null,
           'success': false,
-          'error': 'addon disposed',
+          'error': error.toString(),
           'cutoffTriggered': false,
           'cutoffUrl': null,
           'htmlCaptured': false,
@@ -511,10 +717,8 @@ class SoraJsRuntime {
           'waitResults': <String, bool>{},
         });
       }
-      return _networkFetch(module.addon, payload);
-    });
-
-    runtime.evaluate(_bridgeScript());
+    }
+    _resolveJs(reqId, body);
   }
 
   // ── HTTP helpers ──────────────────────────────────────────────────────────
@@ -724,39 +928,63 @@ class SoraJsRuntime {
       globalThis.__miruSoraBaseUrl = '';
       globalThis.__miruSoraSearchBaseUrl = '';
       globalThis.__miruCurrentAddonId = '';
-      globalThis.__miruSoraPendingTasks = globalThis.__miruSoraPendingTasks || new Set();
+      globalThis.__miruSoraPendingResolvers = globalThis.__miruSoraPendingResolvers || {};
+      globalThis.__miruSoraReqSeq = globalThis.__miruSoraReqSeq || 0;
 
-      function __miruSoraTrackPromise(promise) {
-        const tracked = Promise.resolve(promise);
-        globalThis.__miruSoraPendingTasks.add(tracked);
-        tracked.then(
-          function() { globalThis.__miruSoraPendingTasks.delete(tracked); },
-          function() { globalThis.__miruSoraPendingTasks.delete(tracked); }
-        );
-        return promise;
+      // Resolve a pending host-request promise. Called FROM DART via
+      // evaluate('__miruSoraResolve(...)') — the stable bridge path. A Dart
+      // Future is never handed back across the bridge (that path corrupts
+      // QuickJS), so every async result arrives through here as a string.
+      globalThis.__miruSoraResolve = function(id, raw) {
+        var r = globalThis.__miruSoraPendingResolvers[id];
+        if (!r) return;
+        delete globalThis.__miruSoraPendingResolvers[id];
+        try { r(raw); } catch (_) {}
+      };
+
+      // Report a top-level call's result to Dart through a SYNCHRONOUS channel
+      // message (completes a Dart Completer). Replaces handlePromise, which
+      // relied on converting this JS promise back into a Dart Future.
+      globalThis.__miruSoraCallDone = function(cid, ok, result) {
+        try {
+          sendMessage('MiruSoraCallDone', JSON.stringify({
+            __cid: cid,
+            ok: !!ok,
+            result: ok ? result : undefined,
+            error: ok ? undefined : String(result)
+          }));
+        } catch (_) {}
+      };
+
+      // Start an async host request and return a PURE-JS promise. The host
+      // channel handler returns synchronously; the real result is delivered
+      // later via __miruSoraResolve. No Dart Future crosses the bridge.
+      function __miruAwaitHost(channel, payload) {
+        var id = 'r' + (globalThis.__miruSoraReqSeq++);
+        return new Promise(function(resolve) {
+          globalThis.__miruSoraPendingResolvers[id] = resolve;
+          var msg;
+          try {
+            msg = JSON.stringify(Object.assign({ __reqId: id }, payload));
+          } catch (_) {
+            msg = JSON.stringify({ __reqId: id });
+          }
+          try {
+            sendMessage(channel, msg);
+          } catch (e) {
+            delete globalThis.__miruSoraPendingResolvers[id];
+            resolve('');
+          }
+        });
       }
 
       async function __miruSoraDelay(milliseconds) {
         const bounded = Math.max(0, Math.min(Number(milliseconds) || 0, 60000));
-        await sendMessage(
-          'MiruSoraDelay',
-          JSON.stringify({ milliseconds: bounded, __addonId: globalThis.__miruCurrentAddonId })
-        );
+        await __miruAwaitHost('MiruSoraDelay', {
+          milliseconds: bounded,
+          __addonId: globalThis.__miruCurrentAddonId
+        });
       }
-
-      globalThis.__miruSoraDrainPendingTasks = async function(timeoutMs) {
-        const deadline = Date.now() + Math.max(0, Number(timeoutMs) || 0);
-        while (globalThis.__miruSoraPendingTasks.size > 0 && Date.now() < deadline) {
-          const pending = Array.from(globalThis.__miruSoraPendingTasks);
-          if (pending.length === 0) break;
-          await Promise.race(
-            pending.map(function(task) {
-              return Promise.resolve(task).then(function() {}, function() {});
-            })
-          );
-        }
-        return globalThis.__miruSoraPendingTasks.size;
-      };
 
       function __miruSoraHeaders(headers) {
         const merged = {};
@@ -800,7 +1028,7 @@ class SoraJsRuntime {
           };
         }
         const msgPayload = Object.assign({}, payload, { __addonId: globalThis.__miruCurrentAddonId });
-        const raw = await sendMessage('MiruSoraHttpFetch', JSON.stringify(msgPayload));
+        const raw = await __miruAwaitHost('MiruSoraHttpFetch', msgPayload);
         let status = 200, responseHeaders = {}, responseBody = typeof raw === 'string' ? raw : '';
         try {
           if (typeof raw === 'string') {
@@ -829,7 +1057,7 @@ class SoraJsRuntime {
       }
 
       globalThis.fetchv2 = function(url, headers, method, body) {
-        const task = (async function() {
+        return (async function() {
           const native = await __miruSoraNativeFetch(url, headers, method, body);
           const responseBody = native && native.body != null ? String(native.body) : '';
           return {
@@ -845,7 +1073,6 @@ class SoraJsRuntime {
             [Symbol.toPrimitive]: function() { return responseBody; }
           };
         })();
-        return __miruSoraTrackPromise(task);
       };
 
       globalThis.__miruSoraSerializeResult = function(value) {
@@ -903,13 +1130,11 @@ class SoraJsRuntime {
           const args = Array.prototype.slice.call(arguments, 2);
           const id = globalThis.__miruSoraTimerSeq++;
           globalThis.__miruSoraTimers[id] = true;
-          const capturedAddonId = globalThis.__miruCurrentAddonId;
-          const task = __miruSoraDelay(Math.max(0, Math.min(Number(delay) || 0, 60000))).then(function() {
+          __miruSoraDelay(Math.max(0, Math.min(Number(delay) || 0, 60000))).then(function() {
             if (!globalThis.__miruSoraTimers[id]) return;
             delete globalThis.__miruSoraTimers[id];
             try { callback.apply(globalThis, args); } catch (_) {}
           });
-          __miruSoraTrackPromise(task);
           return id;
         };
         globalThis.clearTimeout = function(id) {
@@ -979,16 +1204,15 @@ class SoraJsRuntime {
       }
 
       globalThis.networkFetch = globalThis.networkFetch || function(url, timeoutOrOptions, headers, cutoff) {
-        const task = (async function() {
+        return (async function() {
           const payload = __miruSoraNormalizeNetworkFetch(url, timeoutOrOptions, headers, cutoff);
-          const raw = await sendMessage('MiruSoraNetworkFetch', JSON.stringify(payload));
+          const raw = await __miruAwaitHost('MiruSoraNetworkFetch', payload);
           try {
             return JSON.parse(typeof raw === 'string' ? raw : '{}');
           } catch (_) {
             return { originalUrl: String(url), requests: [], html: null, cookies: null, success: false };
           }
         })();
-        return __miruSoraTrackPromise(task);
       };
       globalThis.networkFetchSimple = globalThis.networkFetchSimple || globalThis.networkFetch;
 
