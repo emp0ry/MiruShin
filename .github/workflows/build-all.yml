@@ -236,6 +236,19 @@ jobs:
           FINAL="${APP_NAME}-linux-v${VERSION}.AppImage"
           mv "$APPIMAGE_OUT" "$FINAL"
           chmod +x "$FINAL"
+
+          # Guard: libmdk dlopens libffmpeg.so at runtime; if it's not inside the
+          # AppImage, playback SIGSEGVs (MediaIO::create -> NULL FFmpeg I/O).
+          # Fail the build rather than ship a crashing AppImage.
+          rm -rf squashfs-root
+          "./$FINAL" --appimage-extract >/dev/null 2>&1 || true
+          if ! ls squashfs-root/usr/lib/libffmpeg.so* >/dev/null 2>&1; then
+            echo "ERROR: libffmpeg.so missing from AppImage — playback would crash."
+            find squashfs-root -name 'libmdk*' -o -name 'libffmpeg*' || true
+            exit 1
+          fi
+          echo "Verified: $(ls squashfs-root/usr/lib/libffmpeg.so*) bundled in AppImage"
+          rm -rf squashfs-root
           echo "appimage_path=$FINAL" >> "$GITHUB_OUTPUT"
 
       - name: Upload Linux artifacts
