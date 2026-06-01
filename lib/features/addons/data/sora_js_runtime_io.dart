@@ -29,7 +29,7 @@ class SoraJsRuntime {
   static const int _maxSearchBodyBytes = 96 * 1024;
   // Episode APIs can include many voiceover/player entries in one JSON body.
   static const int _maxBodyBytes = 8 * 1024 * 1024;
-  static const int _callDrainTimeoutMs = 900;
+
 
   final SoraAddonStore _store;
   final Dio _dio;
@@ -247,9 +247,6 @@ class SoraJsRuntime {
           if (typeof fn !== 'function') return { "__miruMissingFunction": true };
           const args = $argsJson;
           const value = await fn.apply(null, args);
-          try {
-            await globalThis.__miruSoraDrainPendingTasks($_callDrainTimeoutMs);
-          } catch (_) {}
           return globalThis.__miruSoraSerializeResult(value);
         })()
       ''';
