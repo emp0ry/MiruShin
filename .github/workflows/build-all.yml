@@ -67,6 +67,15 @@ jobs:
 
   build-linux:
     runs-on: ubuntu-latest
+    # Pin the MDK SDK (the native libmdk.so fvp bundles) to a stable, tagged
+    # release. By default fvp downloads the SourceForge *nightly* at build
+    # time (fvp cmake/deps.cmake), so the bundled libmdk silently changes day
+    # to day even though the fvp package version is fixed. A June 1 nightly
+    # regressed and crashes on playback (SIGSEGV at 0x0 in a libmdk
+    # FrameReader/MediaIO::createForProtocol worker thread). Scoped to this job
+    # so Android/Windows/macOS keep their own mdk handling.
+    env:
+      FVP_DEPS_URL: https://github.com/wang-bin/mdk-sdk/releases/download/v0.36.0
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -82,7 +91,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev \
-            libfuse2 libglib2.0-0 libsecret-1-dev libpulse0 python3-pil
+            libfuse2 libglib2.0-0 libsecret-1-dev libpulse0 python3-pil \
+            libmpv-dev libva2 libva-drm2 libva-x11-2 libvdpau1 libass9
+          # Extra runtime libs kept for build-host parity (libmdk resolves some
+          # media/codec/audio libs at runtime; linuxdeploy only bundles libs
+          # present on the host). The actual crash fix is FVP_DEPS_URL above.
 
       - name: Flutter pub get
         run: flutter pub get

@@ -11,6 +11,15 @@ env:
   PUBSPEC_APP_NAME: mirushin
   LINUX_APP_ID: com.emp0ry.mirushin
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  # Pin the MDK SDK (the native libmdk.so that fvp bundles) to a stable,
+  # tagged release. By default fvp downloads the SourceForge *nightly* at
+  # build time (see fvp cmake/deps.cmake), so the bundled libmdk silently
+  # changes day to day even though the fvp package version is fixed. A
+  # June 1 nightly regressed and crashes on playback (SIGSEGV at 0x0 in a
+  # libmdk FrameReader/MediaIO::createForProtocol worker thread); v1.2.2
+  # worked only because it was built against an older, good nightly. Pinning
+  # makes the native binary reproducible and escapes the broken nightly.
+  FVP_DEPS_URL: https://github.com/wang-bin/mdk-sdk/releases/download/v0.36.0
 
 jobs:
   build-linux:
@@ -33,14 +42,13 @@ jobs:
             clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev \
             libfuse2 libglib2.0-0 libsecret-1-dev libpulse0 python3-pil \
             libmpv-dev libva2 libva-drm2 libva-x11-2 libvdpau1 libass9
-          # libmdk (bundled by fvp) is linked with
-          # `-Wl,--unresolved-symbols=ignore-in-shared-libs` and resolves a
-          # number of media/codec/audio libraries at RUNTIME. linuxdeploy only
-          # bundles libraries that exist on the build host, so these MUST be
-          # present here or the AppImage ships without them and libmdk calls a
-          # NULL pointer (SIGSEGV at 0x0) on a worker thread during playback.
-          # v1.2.2 worked only because `libmpv-dev` happened to drag this whole
-          # stack onto the build host; v1.3.0 dropped it and started crashing.
+          # The real playback-crash fix is pinning the MDK SDK (FVP_DEPS_URL
+          # above). These extra runtime libs (VA-API / VDPAU / libass / the
+          # ffmpeg stack via libmpv-dev) are kept so the build host matches
+          # v1.2.2's environment: libmdk is linked with
+          # `-Wl,--unresolved-symbols=ignore-in-shared-libs` and resolves some
+          # media/codec/audio libraries at runtime, and linuxdeploy only bundles
+          # libraries present on the build host.
 
       - name: Flutter pub get
         run: flutter pub get
