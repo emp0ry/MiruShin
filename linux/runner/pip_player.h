@@ -32,9 +32,8 @@ struct DismissedArgs {
   bool was_playing;
 };
 
-// Floating always-on-top GTK window that plays a video using a separate MDK
-// player rendered via GtkGLArea (OpenGL).  Mirrors the Windows pip_player so
-// the same Dart-side NativePlayerService flow works on Linux.
+// Legacy native Linux PiP player. The app currently uses the Dart-side desktop
+// mini-player on Linux, so this compiles as a stub unless explicitly enabled.
 class PipPlayer {
  public:
   using DismissCallback = std::function<void(DismissedArgs)>;

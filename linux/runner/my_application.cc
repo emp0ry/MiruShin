@@ -483,8 +483,8 @@ static void my_application_activate(GApplication* application) {
             g_autoptr(FlMethodErrorResponse) resp =
                 fl_method_error_response_new(
                     "pip_failed",
-                    "Failed to open PiP window (mdk-sdk unavailable or "
-                    "GL error)",
+                    "Linux native PiP is disabled; use the window "
+                    "mini-player",
                     nullptr);
             fl_method_call_respond(call, FL_METHOD_RESPONSE(resp), nullptr);
           }
