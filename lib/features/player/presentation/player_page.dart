@@ -704,6 +704,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                         onTap: _toggleControls,
                         seekInterval: settings.seekInterval,
                         isMobile: _isMobile,
+                        enableGestures: !_inPipMode,
                         onToggleFullscreen: _toggleFullscreen,
                         onTogglePlay: () => ref
                             .read(playbackControllerProvider.notifier)
@@ -826,12 +827,18 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                                       .read(pipControllerProvider)
                                       .startWindowMove(),
                                 ),
-                                windowPhysicalSize: () => ref
+                                windowPhysicalRect: () => ref
                                     .read(pipControllerProvider)
-                                    .windowPhysicalSize(),
-                                setWindowPhysicalSize: (double w, double h) => ref
-                                    .read(pipControllerProvider)
-                                    .setWindowPhysicalSize(w, h),
+                                    .windowPhysicalRect(),
+                                setWindowPhysicalRect:
+                                    (
+                                      double x,
+                                      double y,
+                                      double w,
+                                      double h,
+                                    ) => ref
+                                        .read(pipControllerProvider)
+                                        .setWindowPhysicalRect(x, y, w, h),
                               ),
                           ],
                         ),
@@ -3317,13 +3324,16 @@ class _NativePipOverlay extends StatelessWidget {
   }
 }
 
+enum _PipCorner { topLeft, topRight, bottomLeft, bottomRight }
+
 // Mini-player controls for the Windows borderless PiP. Mirrors the main
 // player's hover show/hide behaviour: an exit button in the top-left corner
 // and a large play/pause button in the centre, both fading in/out together
 // with `controlsVisible` (driven by the surrounding MouseRegion hover logic).
 //
-// Grabbing anywhere on the surface moves the window (macOS-style), and a grip
-// in the bottom-right corner resizes it while preserving the video aspect.
+// Grabbing anywhere on the surface moves the window (macOS-style); the four
+// corners are invisible resize handles (always active) that sit above the drag
+// layer, and the buttons sit above everything so they never start a drag.
 class _WindowPipOverlay extends StatelessWidget {
   const _WindowPipOverlay({
     required this.isPlaying,
@@ -3332,8 +3342,8 @@ class _WindowPipOverlay extends StatelessWidget {
     required this.onTogglePlay,
     required this.onExpand,
     required this.onMoveStart,
-    required this.windowPhysicalSize,
-    required this.setWindowPhysicalSize,
+    required this.windowPhysicalRect,
+    required this.setWindowPhysicalRect,
   });
 
   final bool isPlaying;
@@ -3342,11 +3352,14 @@ class _WindowPipOverlay extends StatelessWidget {
   final VoidCallback onTogglePlay;
   final VoidCallback onExpand;
   final VoidCallback onMoveStart;
-  final Future<({double width, double height})?> Function() windowPhysicalSize;
-  final void Function(double width, double height) setWindowPhysicalSize;
+  final Future<({double x, double y, double width, double height})?> Function()
+  windowPhysicalRect;
+  final void Function(double x, double y, double width, double height)
+  setWindowPhysicalRect;
 
   @override
   Widget build(BuildContext context) {
+    final double dpr = MediaQuery.devicePixelRatioOf(context);
     return Positioned.fill(
       child: Stack(
         fit: StackFit.expand,
@@ -3356,6 +3369,16 @@ class _WindowPipOverlay extends StatelessWidget {
             onPointerDown: (_) => onMoveStart(),
             behavior: HitTestBehavior.translucent,
           ),
+          // Invisible corner resize handles (always active, on top of drag).
+          for (final _PipCorner corner in _PipCorner.values)
+            _PipResizeHandle(
+              corner: corner,
+              aspectRatio: aspectRatio,
+              devicePixelRatio: dpr,
+              windowPhysicalRect: windowPhysicalRect,
+              setWindowPhysicalRect: setWindowPhysicalRect,
+            ),
+          // Buttons + scrim, fading with hover. On top so taps never drag.
           AnimatedOpacity(
             opacity: controlsVisible ? 1 : 0,
             duration: const Duration(milliseconds: 180),
@@ -3365,16 +3388,18 @@ class _WindowPipOverlay extends StatelessWidget {
                 fit: StackFit.expand,
                 children: <Widget>[
                   // Dim scrim so the buttons stay legible over bright video.
-                  const DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: <Color>[
-                          Color(0x66000000),
-                          Color(0x22000000),
-                          Color(0x66000000),
-                        ],
+                  const IgnorePointer(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: <Color>[
+                            Color(0x66000000),
+                            Color(0x22000000),
+                            Color(0x66000000),
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -3398,17 +3423,6 @@ class _WindowPipOverlay extends StatelessWidget {
                       onPressed: onTogglePlay,
                     ),
                   ),
-                  // Resize grip — bottom-right corner.
-                  Positioned(
-                    right: 0,
-                    bottom: 0,
-                    child: _PipResizeGrip(
-                      aspectRatio: aspectRatio,
-                      devicePixelRatio: MediaQuery.devicePixelRatioOf(context),
-                      windowPhysicalSize: windowPhysicalSize,
-                      setWindowPhysicalSize: setWindowPhysicalSize,
-                    ),
-                  ),
                 ],
               ),
             ),
@@ -3422,7 +3436,11 @@ class _WindowPipOverlay extends StatelessWidget {
 // Icon-only mini-player button: no background, just a white glyph with a soft
 // shadow so it stays legible over bright video.
 class _MiniButton extends StatelessWidget {
-  const _MiniButton({required this.icon, required this.onPressed, this.size = 20});
+  const _MiniButton({
+    required this.icon,
+    required this.onPressed,
+    this.size = 20,
+  });
 
   final IconData icon;
   final VoidCallback onPressed;
@@ -3439,72 +3457,97 @@ class _MiniButton extends StatelessWidget {
           icon,
           color: Colors.white,
           size: size,
-          shadows: const <Shadow>[
-            Shadow(color: Colors.black54, blurRadius: 8),
-          ],
+          shadows: const <Shadow>[Shadow(color: Colors.black54, blurRadius: 8)],
         ),
       ),
     );
   }
 }
 
-// Bottom-right resize grip for the borderless mini-player. Pans translate to
-// a new window width (height derived from the video aspect ratio) applied via
-// the native window channel, keeping the top-left corner fixed.
-class _PipResizeGrip extends StatefulWidget {
-  const _PipResizeGrip({
+// Invisible corner resize handle for the borderless mini-player. Pans are
+// applied as a new window rect anchored to the opposite corner, preserving the
+// video aspect ratio. No icon is drawn — only the cursor hints at resizing.
+class _PipResizeHandle extends StatefulWidget {
+  const _PipResizeHandle({
+    required this.corner,
     required this.aspectRatio,
     required this.devicePixelRatio,
-    required this.windowPhysicalSize,
-    required this.setWindowPhysicalSize,
+    required this.windowPhysicalRect,
+    required this.setWindowPhysicalRect,
   });
 
+  static const double _hitSize = 22;
+
+  final _PipCorner corner;
   final double aspectRatio;
   final double devicePixelRatio;
-  final Future<({double width, double height})?> Function() windowPhysicalSize;
-  final void Function(double width, double height) setWindowPhysicalSize;
+  final Future<({double x, double y, double width, double height})?> Function()
+  windowPhysicalRect;
+  final void Function(double x, double y, double width, double height)
+  setWindowPhysicalRect;
 
   @override
-  State<_PipResizeGrip> createState() => _PipResizeGripState();
+  State<_PipResizeHandle> createState() => _PipResizeHandleState();
 }
 
-class _PipResizeGripState extends State<_PipResizeGrip> {
-  double _startWidth = 0;
+class _PipResizeHandleState extends State<_PipResizeHandle> {
+  ({double x, double y, double width, double height})? _start;
   double _accumulatedDx = 0;
 
+  bool get _isLeft =>
+      widget.corner == _PipCorner.topLeft ||
+      widget.corner == _PipCorner.bottomLeft;
+  bool get _isTop =>
+      widget.corner == _PipCorner.topLeft ||
+      widget.corner == _PipCorner.topRight;
+
   Future<void> _onPanStart(DragStartDetails _) async {
-    final ({double width, double height})? size = await widget
-        .windowPhysicalSize();
-    _startWidth = size?.width ?? 0;
+    _start = await widget.windowPhysicalRect();
     _accumulatedDx = 0;
   }
 
   void _onPanUpdate(DragUpdateDetails details) {
-    if (_startWidth <= 0) return;
+    final ({double x, double y, double width, double height})? start = _start;
+    if (start == null) return;
     _accumulatedDx += details.delta.dx;
     final double ar = widget.aspectRatio > 0 ? widget.aspectRatio : 16 / 9;
-    final double newWidth =
-        (_startWidth + _accumulatedDx * widget.devicePixelRatio)
-            .clamp(280.0, 1280.0);
-    widget.setWindowPhysicalSize(newWidth, newWidth / ar);
+    final double dxP = _accumulatedDx * widget.devicePixelRatio;
+
+    // Left handles grow when dragged left (negative dx); right handles grow
+    // when dragged right. Width drives height through the aspect ratio.
+    final double rawWidth = _isLeft ? start.width - dxP : start.width + dxP;
+    final double width = rawWidth.clamp(280.0, 1280.0);
+    final double height = width / ar;
+
+    // Anchor the opposite corner so resizing feels natural.
+    final double right = start.x + start.width;
+    final double bottom = start.y + start.height;
+    final double x = _isLeft ? right - width : start.x;
+    final double y = _isTop ? bottom - height : start.y;
+
+    widget.setWindowPhysicalRect(x, y, width, height);
   }
+
+  MouseCursor get _cursor =>
+      _isLeft == _isTop // topLeft / bottomRight
+      ? SystemMouseCursors.resizeUpLeftDownRight
+      : SystemMouseCursors.resizeUpRightDownLeft;
 
   @override
   Widget build(BuildContext context) {
-    return MouseRegion(
-      cursor: SystemMouseCursors.resizeUpLeftDownRight,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onPanStart: _onPanStart,
-        onPanUpdate: _onPanUpdate,
-        child: const Padding(
-          padding: EdgeInsets.all(6),
-          child: Icon(
-            Icons.open_in_full_rounded,
-            color: Colors.white,
-            size: 16,
-            shadows: <Shadow>[Shadow(color: Colors.black54, blurRadius: 8)],
-          ),
+    return Positioned(
+      left: _isLeft ? 0 : null,
+      right: _isLeft ? null : 0,
+      top: _isTop ? 0 : null,
+      bottom: _isTop ? null : 0,
+      width: _PipResizeHandle._hitSize,
+      height: _PipResizeHandle._hitSize,
+      child: MouseRegion(
+        cursor: _cursor,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onPanStart: _onPanStart,
+          onPanUpdate: _onPanUpdate,
         ),
       ),
     );

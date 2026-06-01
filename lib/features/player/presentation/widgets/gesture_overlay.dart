@@ -13,6 +13,7 @@ class GestureOverlay extends ConsumerStatefulWidget {
     required this.isMobile,
     required this.onToggleFullscreen,
     required this.onTogglePlay,
+    this.enableGestures = true,
     super.key,
   });
 
@@ -22,6 +23,11 @@ class GestureOverlay extends ConsumerStatefulWidget {
   final bool isMobile;
   final VoidCallback onToggleFullscreen;
   final VoidCallback onTogglePlay;
+
+  /// When false (e.g. Windows mini-player PiP) all tap/drag/double-tap/seek/
+  /// volume gestures are disabled so the surface can be used purely to drag and
+  /// resize the small window.
+  final bool enableGestures;
 
   @override
   ConsumerState<GestureOverlay> createState() => _GestureOverlayState();
@@ -170,6 +176,10 @@ class _GestureOverlayState extends ConsumerState<GestureOverlay> {
     final bool controlsVisible = ref
         .watch(playbackControllerProvider)
         .controlsVisible;
+    if (!widget.enableGestures) {
+      // PiP mini-player: no player gestures — the child layer owns drag/resize.
+      return widget.child;
+    }
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: widget.isMobile ? null : widget.onTogglePlay,

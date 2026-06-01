@@ -21,12 +21,17 @@ abstract class PipController {
   /// Begin an OS-driven move of the mini-player window (desktop PiP only).
   Future<void> startWindowMove() async {}
 
-  /// Current window size in physical pixels, or null if unavailable.
-  Future<({double width, double height})?> windowPhysicalSize() async => null;
+  /// Current window rect in physical pixels, or null if unavailable.
+  Future<({double x, double y, double width, double height})?>
+  windowPhysicalRect() async => null;
 
-  /// Resize the mini-player window (physical pixels), keeping its top-left
-  /// corner fixed. Desktop PiP only.
-  Future<void> setWindowPhysicalSize(double width, double height) async {}
+  /// Move + resize the mini-player window (physical pixels). Desktop PiP only.
+  Future<void> setWindowPhysicalRect(
+    double x,
+    double y,
+    double width,
+    double height,
+  ) async {}
 
   void dispose();
 }
@@ -65,10 +70,16 @@ class UnsupportedPipController implements PipController {
   Future<void> startWindowMove() async {}
 
   @override
-  Future<({double width, double height})?> windowPhysicalSize() async => null;
+  Future<({double x, double y, double width, double height})?>
+  windowPhysicalRect() async => null;
 
   @override
-  Future<void> setWindowPhysicalSize(double width, double height) async {}
+  Future<void> setWindowPhysicalRect(
+    double x,
+    double y,
+    double width,
+    double height,
+  ) async {}
 
   @override
   void dispose() {}
@@ -151,10 +162,16 @@ class AndroidPipController implements PipController {
   Future<void> startWindowMove() async {}
 
   @override
-  Future<({double width, double height})?> windowPhysicalSize() async => null;
+  Future<({double x, double y, double width, double height})?>
+  windowPhysicalRect() async => null;
 
   @override
-  Future<void> setWindowPhysicalSize(double width, double height) async {}
+  Future<void> setWindowPhysicalRect(
+    double x,
+    double y,
+    double width,
+    double height,
+  ) async {}
 
   @override
   void dispose() {
@@ -288,15 +305,18 @@ class DesktopPipController implements PipController {
   }
 
   @override
-  Future<({double width, double height})?> windowPhysicalSize() async {
+  Future<({double x, double y, double width, double height})?>
+  windowPhysicalRect() async {
     try {
       final Map<Object?, Object?>? rect = await _win
           .invokeMethod<Map<Object?, Object?>>('getWindowRect');
       if (rect == null) return null;
+      final double x = (rect['x'] as num?)?.toDouble() ?? 0;
+      final double y = (rect['y'] as num?)?.toDouble() ?? 0;
       final double w = (rect['width'] as num?)?.toDouble() ?? 0;
       final double h = (rect['height'] as num?)?.toDouble() ?? 0;
       if (w <= 0 || h <= 0) return null;
-      return (width: w, height: h);
+      return (x: x, y: y, width: w, height: h);
     } on PlatformException {
       return null;
     } on MissingPluginException {
@@ -305,10 +325,17 @@ class DesktopPipController implements PipController {
   }
 
   @override
-  Future<void> setWindowPhysicalSize(double width, double height) async {
+  Future<void> setWindowPhysicalRect(
+    double x,
+    double y,
+    double width,
+    double height,
+  ) async {
     if (!_inPip) return;
     try {
-      await _win.invokeMethod<void>('setWindowSize', <String, int>{
+      await _win.invokeMethod<void>('setWindowRect', <String, int>{
+        'x': x.round(),
+        'y': y.round(),
         'width': width.round().clamp(240, 7680),
         'height': height.round().clamp(135, 4320),
       });
