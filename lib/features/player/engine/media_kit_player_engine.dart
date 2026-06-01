@@ -78,6 +78,22 @@ class MediaKitPlayerEngine extends PlayerEngine {
   final bool _previewMode;
   final ValueNotifier<PlayerEngineState> _state;
 
+  // mpv/MediaKit is initialized lazily — only when a player is actually about
+  // to be created — instead of eagerly at app startup. `MediaKit.ensureInitialized()`
+  // dlopens libmpv and runs mpv/ffmpeg's global init; doing that at startup
+  // poisoned the flutter_js QuickJS addon runtime on Linux (deterministic
+  // SIGSEGV while resolving streams, even when just browsing). Deferring it
+  // keeps addon resolution running in a clean process — mpv only loads once the
+  // user actually plays, after the stream URL has already been resolved by the
+  // addon JS.
+  static bool _mediaKitInitialized = false;
+
+  static void _ensureMediaKitInitialized() {
+    if (_mediaKitInitialized) return;
+    mk.MediaKit.ensureInitialized();
+    _mediaKitInitialized = true;
+  }
+
   mk.Player? _player;
   mkv.VideoController? _videoController;
   Timer? _positionTimer;
@@ -159,6 +175,8 @@ class MediaKitPlayerEngine extends PlayerEngine {
     _lastVideoSize = Size.zero;
     _lastBufferedRanges = const <PlayerBufferedRange>[];
     _lastReliableDuration = Duration.zero;
+
+    _ensureMediaKitInitialized();
 
     final mk.Player player = mk.Player(
       configuration: mk.PlayerConfiguration(

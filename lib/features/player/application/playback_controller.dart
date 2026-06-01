@@ -28,18 +28,11 @@ final playbackControllerProvider =
 
 /// Resolves the concrete engine backend actually used for playback.
 ///
-/// On Linux the app does NOT initialize mpv/MediaKit at all (see
-/// `configureMiruShinMediaKit`): loading libmpv and its large native
-/// dependency tree into the process destabilizes the flutter_js QuickJS addon
-/// runtime and causes a hard SIGSEGV when opening a stream — a native crash the
-/// Dart-level FVP fallback can never recover from, since the process dies
-/// before any `catch` runs. FVP was the sole engine in v1.2.2 and is stable on
-/// Linux, so every backend (including an explicit mpv selection) resolves to
-/// FVP there. Other platforms keep mpv as the `auto` default.
+/// `auto` resolves to mpv/MediaKit on every native platform. mpv is now
+/// initialized lazily (only when a player is first created — see
+/// [MediaKitPlayerEngine]), so libmpv is not loaded while merely browsing and
+/// no longer destabilizes the flutter_js QuickJS addon runtime on Linux.
 PlayerBackend _resolveBackend(PlayerBackend backend) {
-  if (!kIsWeb && defaultTargetPlatform == TargetPlatform.linux) {
-    return PlayerBackend.fvp;
-  }
   return backend == PlayerBackend.auto ? PlayerBackend.mpv : backend;
 }
 

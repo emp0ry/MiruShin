@@ -4,7 +4,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app/app.dart';
 import 'bootstrap/mirushin_fvp_bootstrap.dart';
-import 'bootstrap/mirushin_media_kit_bootstrap.dart';
 import 'core/constants/app_constants.dart';
 import 'core/utils/settings_preferences.dart';
 import 'features/settings/presentation/settings_state.dart';
@@ -35,7 +34,11 @@ Future<void> main() async {
       FlutterError.presentError(details);
     }
   };
-  configureMiruShinMediaKit();
+  // NOTE: MediaKit/mpv is NOT initialized here. It is initialized lazily in
+  // MediaKitPlayerEngine the first time a player is created, so libmpv is never
+  // loaded while only browsing/searching. Eager init at startup loaded mpv into
+  // the process and deterministically crashed the flutter_js QuickJS addon
+  // runtime on Linux.
   configureMiruShinFvp();
   runApp(ProviderScope(child: MiruShinApp(initialRoute: initialRoute)));
 }
