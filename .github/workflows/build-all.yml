@@ -201,9 +201,27 @@ jobs:
           export LINUXDEPLOY=./linuxdeploy-x86_64.AppImage
           export LINUXDEPLOY_PLUGIN_GTK=./linuxdeploy-plugin-gtk.sh
 
+          # libmdk dlopens its FFmpeg backend (libffmpeg.so.*) and codec plugins
+          # at RUNTIME — they are NOT in libmdk's DT_NEEDED graph. linuxdeploy
+          # only bundles NEEDED dependencies, so without this it drops
+          # libffmpeg.so.* from the AppImage; the app then launches but SIGSEGVs
+          # the instant playback starts (MediaIO::create calls a NULL FFmpeg I/O
+          # vtable). Force-include the whole mdk runtime so it ships in usr/lib.
+          MDK_LIB_DIR="$(dirname "$APP_BIN")/lib"
+          LIB_ARGS=()
+          for so in "$MDK_LIB_DIR"/libffmpeg.so* "$MDK_LIB_DIR"/libmdk-*.so* "$MDK_LIB_DIR"/libc++.so*; do
+            [ -e "$so" ] && LIB_ARGS+=( --library "$so" ) && echo "Force-bundling $so"
+          done
+          if [ ${#LIB_ARGS[@]} -eq 0 ]; then
+            echo "ERROR: no libmdk runtime libs found in $MDK_LIB_DIR"
+            ls -la "$MDK_LIB_DIR" || true
+            exit 1
+          fi
+
           ./linuxdeploy-x86_64.AppImage \
             --appdir AppDir \
             --executable "$APP_BIN" \
+            "${LIB_ARGS[@]}" \
             --desktop-file "AppDir/usr/share/applications/${LINUX_APP_ID}.desktop" \
             --icon-file "$ICON_PATH" \
             --plugin gtk \
