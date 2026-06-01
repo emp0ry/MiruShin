@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
 
 import 'package:dio/dio.dart';
 import 'package:flutter_js/flutter_js.dart';
@@ -43,12 +44,47 @@ class SoraJsRuntime {
   // Linux (the dispose path races with pending promise callbacks).
   JavascriptRuntime? _sharedRuntime;
 
+  // Persistent QuickJS event-loop pump.
+  //
+  // flutter_js's QuickJS binding (QuickJsRuntime2) ships WITHOUT a running
+  // event loop — its `dispatch()` has the `await for (port)` loop commented
+  // out, so pending JS jobs only drain while `handlePromise`'s short-lived
+  // 20ms timer is alive. The moment the awaited promise settles, that timer is
+  // cancelled. Any background task an addon fired but didn't await (a
+  // fire-and-forget `fetchv2`, a `setTimeout`) later completes on the Dart side
+  // and re-enters QuickJS via the promise-resolve callback in
+  // `_dartToJs(Future)` — which enqueues reaction jobs that nothing pumps.
+  // Those stale jobs run interleaved with the next evaluation after GC has
+  // moved/freed objects, jumping through a dangling function pointer → SIGSEGV
+  // (the libquickjs_c_bridge crash seen on Linux). JavaScriptCore on
+  // iOS/macOS has its own internal microtask loop, so it never hits this.
+  //
+  // The fix is to be that event loop: continuously drain pending jobs for the
+  // whole life of the runtime so every promise resolution runs promptly in a
+  // consistent VM, exactly like JSC does internally. Only needed on the
+  // QuickJS platforms; JSC drains itself.
+  Timer? _pump;
+
+  static bool get _usesQuickJs =>
+      Platform.isLinux || Platform.isWindows || Platform.isAndroid;
+
   JavascriptRuntime _runtime() {
     final JavascriptRuntime? existing = _sharedRuntime;
     if (existing != null) return existing;
     final JavascriptRuntime rt = getJavascriptRuntime(xhr: false);
     _installSharedBridge(rt);
     _sharedRuntime = rt;
+    if (_usesQuickJs) {
+      _pump ??= Timer.periodic(const Duration(milliseconds: 10), (_) {
+        final JavascriptRuntime? r = _sharedRuntime;
+        if (r == null) return;
+        try {
+          r.executePendingJob();
+        } catch (_) {
+          // A throw here must never crash the pump; the next tick retries.
+        }
+      });
+    }
     return rt;
   }
 
@@ -236,10 +272,11 @@ class SoraJsRuntime {
     );
 
     final String argsJson = jsonEncode(args);
-    for (final String functionName in functionNames) {
-      module.activeFunctionName = functionName;
-      final String expression =
-          '''
+    try {
+      for (final String functionName in functionNames) {
+        module.activeFunctionName = functionName;
+        final String expression =
+            '''
         (async () => {
           globalThis.__miruCurrentAddonId = ${jsonEncode(addon.id)};
           const module = globalThis.__miruSoraModules && globalThis.__miruSoraModules[${jsonEncode(addon.id)}];
@@ -250,24 +287,71 @@ class SoraJsRuntime {
           return globalThis.__miruSoraSerializeResult(value);
         })()
       ''';
-      try {
-        final JsEvalResult initial = rt.evaluate(expression);
-        final JsEvalResult resolved = await rt.handlePromise(initial);
-        final Object? decoded = decodeSoraPayload(resolved.stringResult);
-        if (_isMissingFunction(decoded)) {
-          continue;
+        try {
+          final JsEvalResult initial = rt.evaluate(expression);
+          final JsEvalResult resolved = await rt.handlePromise(initial);
+          final Object? decoded = decodeSoraPayload(resolved.stringResult);
+          if (_isMissingFunction(decoded)) {
+            continue;
+          }
+          return decoded;
+        } finally {
+          module.activeFunctionName = null;
         }
-        return decoded;
-      } finally {
-        module.activeFunctionName = null;
       }
+      if (!required) {
+        return null;
+      }
+      throw SoraAddonException(
+        '${addon.manifest.sourceName} does not expose ${functionNames.first}().',
+      );
+    } finally {
+      // Drain any fire-and-forget background tasks (un-awaited fetchv2 /
+      // setTimeout) this call spawned BEFORE releasing the serialize lock, so
+      // none of them resolve later against the next addon's mutated global
+      // context — and, on QuickJS, so none resolve outside the pump window.
+      await _settlePending(rt, module);
     }
-    if (!required) {
-      return null;
+  }
+
+  // Wait for tracked background JS tasks spawned during this call to settle.
+  // The persistent pump keeps draining QuickJS jobs, so this just polls the
+  // JS-side pending set. If a straggler exceeds the budget, its in-flight
+  // dio request / delay is cancelled so the Dart Future completes promptly and
+  // its (still GC-rooted) promise resolves cleanly while the pump is alive.
+  Future<void> _settlePending(
+    JavascriptRuntime rt,
+    _LoadedSoraModule module,
+  ) async {
+    if (!_usesQuickJs) return; // JSC drains its own microtasks.
+    final Stopwatch sw = Stopwatch()..start();
+    const Duration budget = Duration(seconds: 5);
+    const Duration hardStop = Duration(seconds: 7);
+    bool cancelled = false;
+    while (true) {
+      int size;
+      try {
+        final JsEvalResult r = rt.evaluate(
+          '(globalThis.__miruSoraPendingTasks && '
+          'globalThis.__miruSoraPendingTasks.size) | 0',
+        );
+        size = int.tryParse(r.stringResult.trim()) ?? 0;
+      } catch (_) {
+        return;
+      }
+      if (size <= 0) return;
+      if (!cancelled && sw.elapsed >= budget) {
+        module.cancelPendingFetches();
+        module.cancelPendingDelays();
+        cancelled = true;
+      }
+      if (sw.elapsed >= hardStop) {
+        // Give up waiting. The persistent pump still keeps the VM consistent,
+        // so any remaining straggler resolves safely on a later tick.
+        return;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 12));
     }
-    throw SoraAddonException(
-      '${addon.manifest.sourceName} does not expose ${functionNames.first}().',
-    );
   }
 
   Future<_LoadedSoraModule> _load(SoraInstalledAddon addon) async {
