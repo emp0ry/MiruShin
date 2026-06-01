@@ -60,7 +60,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   bool _nativePipActive = false;
   bool? _lastPipIsPlaying;
   late final bool _nativePipSupported;
-  // Windows/Linux mini-player PiP (shrinks the main window, keeps the current
+  // Windows mini-player PiP (shrinks the main window, keeps the current
   // player engine running) instead of the native AVPlayer PiP used on iOS/macOS.
   late final bool _windowPipSupported;
   final FocusNode _playerFocusNode = FocusNode(
@@ -91,9 +91,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
             defaultTargetPlatform == TargetPlatform.iOS);
     _nativePipSupported = NativePlayerService.isSupported;
     _windowPipSupported =
-        !kIsWeb &&
-        (defaultTargetPlatform == TargetPlatform.windows ||
-            defaultTargetPlatform == TargetPlatform.linux);
+        !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
     _playbackNotifier = ref.read(playbackControllerProvider.notifier);
     _playbackNotifier.setNextEpisodeHandler(
       () => unawaited(_exitPlayer(playNext: true)),
@@ -181,7 +179,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     }
   }
 
-  // Enter the Windows/Linux mini-player: the DesktopPipController shrinks the
+  // Enter the Windows mini-player: the DesktopPipController shrinks the
   // main window and flips _inPipMode via pipModeStream. Playback keeps going
   // in the existing engine — no handoff to a second engine.
   Future<void> _enterWindowPip() async {
@@ -189,7 +187,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     final double aspectRatio = (engine?.value.aspectRatio ?? 0) > 0
         ? engine!.value.aspectRatio
         : 16 / 9;
-    await ref.read(pipControllerProvider).enter(
+    await ref
+        .read(pipControllerProvider)
+        .enter(
           aspectRatio: aspectRatio,
           isPlaying: engine?.value.isPlaying ?? true,
           hasNext: true,
@@ -807,7 +807,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                                   onExit: () => unawaited(_exitPlayer()),
                                 ),
                             ],
-                            // Mini-player controls (Windows/Linux PiP): a small
+                            // Mini-player controls (Windows PiP): a small
                             // always-visible strip so the user can play/pause
                             // and restore the window from the shrunken state.
                             if (_inPipMode && _windowPipSupported)
@@ -3303,7 +3303,7 @@ class _NativePipOverlay extends StatelessWidget {
   }
 }
 
-// Compact control strip for the Windows/Linux mini-player (PiP). The window is
+// Compact control strip for the Windows mini-player (PiP). The window is
 // small and the full chrome is hidden, so this gives just enough to toggle
 // playback and expand back to the normal window.
 class _WindowPipOverlay extends StatelessWidget {
@@ -3330,10 +3330,7 @@ class _WindowPipOverlay extends StatelessWidget {
             onPressed: onTogglePlay,
           ),
           const SizedBox(width: 6),
-          _MiniButton(
-            icon: Icons.fullscreen_rounded,
-            onPressed: onExpand,
-          ),
+          _MiniButton(icon: Icons.fullscreen_rounded, onPressed: onExpand),
         ],
       ),
     );

@@ -14,10 +14,7 @@ abstract class PipController {
     bool hasNext = false,
   });
 
-  Future<void> updateParams({
-    required bool isPlaying,
-    required bool hasNext,
-  });
+  Future<void> updateParams({required bool isPlaying, required bool hasNext});
 
   Future<void> bringToForeground();
   void dispose();
@@ -136,14 +133,13 @@ class AndroidPipController implements PipController {
   }
 }
 
-// ── Desktop (Windows/Linux) implementation ──────────────────────────────────
+// ── Desktop (Windows) implementation ────────────────────────────────────────
 //
-// There is no OS-level PiP on Windows/Linux, so instead of spinning up a
+// There is no OS-level PiP on Windows, so instead of spinning up a
 // second video engine, we shrink the *main* application window into a small
 // always-on-top "mini player". The same current engine keeps decoding —
 // exactly like OS PiP reuses the one player. All window manipulation goes
-// through the existing `mirushin/window` MethodChannel implemented natively on
-// both platforms.
+// through the existing `mirushin/window` MethodChannel implemented natively.
 
 class DesktopPipController implements PipController {
   static const MethodChannel _win = MethodChannel('mirushin/window');
@@ -177,15 +173,14 @@ class DesktopPipController implements PipController {
     if (_inPip) return;
     try {
       // Leave fullscreen first; a fullscreen window cannot be made small.
-      _wasFullscreen =
-          await _win.invokeMethod<bool>('isFullscreen') ?? false;
+      _wasFullscreen = await _win.invokeMethod<bool>('isFullscreen') ?? false;
       if (_wasFullscreen) {
         await _win.invokeMethod<void>('setFullscreen', false);
       }
 
       // Remember where the window was so we can put it back.
-      final Map<Object?, Object?>? rect =
-          await _win.invokeMethod<Map<Object?, Object?>>('getWindowRect');
+      final Map<Object?, Object?>? rect = await _win
+          .invokeMethod<Map<Object?, Object?>>('getWindowRect');
       if (rect != null) {
         _savedRect = <String, int>{
           'x': (rect['x'] as num?)?.toInt() ?? 0,
@@ -253,16 +248,15 @@ class DesktopPipController implements PipController {
 
 // ── Provider ─────────────────────────────────────────────────────────────────
 
-final Provider<PipController> pipControllerProvider =
-    Provider<PipController>((Ref ref) {
+final Provider<PipController> pipControllerProvider = Provider<PipController>((
+  Ref ref,
+) {
   if (defaultTargetPlatform == TargetPlatform.android) {
     final AndroidPipController ctrl = AndroidPipController();
     ref.onDispose(ctrl.dispose);
     return ctrl;
   }
-  if (!kIsWeb &&
-      (defaultTargetPlatform == TargetPlatform.windows ||
-          defaultTargetPlatform == TargetPlatform.linux)) {
+  if (!kIsWeb && defaultTargetPlatform == TargetPlatform.windows) {
     final DesktopPipController ctrl = DesktopPipController();
     ref.onDispose(ctrl.dispose);
     return ctrl;

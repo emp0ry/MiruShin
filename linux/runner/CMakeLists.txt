@@ -9,7 +9,6 @@ project(runner LANGUAGES CXX)
 add_executable(${BINARY_NAME}
   "main.cc"
   "my_application.cc"
-  "pip_player.cc"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
 )
 
@@ -25,7 +24,3 @@ target_link_libraries(${BINARY_NAME} PRIVATE flutter)
 target_link_libraries(${BINARY_NAME} PRIVATE PkgConfig::GTK)
 
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
-
-# Linux uses the Dart-side DesktopPipController mini-player. Keep the native
-# player channel as a stub so the runner does not link a second MDK player.
-message(STATUS "MiruShin: Linux native PiP disabled; using window mini-player")

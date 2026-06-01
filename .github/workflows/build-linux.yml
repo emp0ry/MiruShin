@@ -31,13 +31,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev \
-            libfuse2 libglib2.0-0 libsecret-1-dev python3-pil
+            libfuse2 libglib2.0-0 libsecret-1-dev libpulse0 python3-pil
 
       - name: Flutter pub get
         run: flutter pub get
 
+      - name: Strip Linux MediaKit plugin
+        run: bash .github/scripts/strip-linux-media-kit.sh
+
       - name: Build Linux (release)
-        run: flutter build linux --release
+        run: flutter build linux --release --no-pub
 
       - name: Read version from pubspec.yaml
         id: ver
