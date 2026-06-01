@@ -815,10 +815,23 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                                 isPlaying:
                                     state.engine?.value.isPlaying ?? false,
                                 controlsVisible: state.controlsVisible,
+                                aspectRatio:
+                                    state.engine?.value.aspectRatio ?? 16 / 9,
                                 onTogglePlay: () => ref
                                     .read(playbackControllerProvider.notifier)
                                     .togglePlay(),
                                 onExpand: () => unawaited(_exitWindowPip()),
+                                onMoveStart: () => unawaited(
+                                  ref
+                                      .read(pipControllerProvider)
+                                      .startWindowMove(),
+                                ),
+                                windowPhysicalSize: () => ref
+                                    .read(pipControllerProvider)
+                                    .windowPhysicalSize(),
+                                setWindowPhysicalSize: (double w, double h) => ref
+                                    .read(pipControllerProvider)
+                                    .setWindowPhysicalSize(w, h),
                               ),
                           ],
                         ),
@@ -3308,98 +3321,190 @@ class _NativePipOverlay extends StatelessWidget {
 // player's hover show/hide behaviour: an exit button in the top-left corner
 // and a large play/pause button in the centre, both fading in/out together
 // with `controlsVisible` (driven by the surrounding MouseRegion hover logic).
+//
+// Grabbing anywhere on the surface moves the window (macOS-style), and a grip
+// in the bottom-right corner resizes it while preserving the video aspect.
 class _WindowPipOverlay extends StatelessWidget {
   const _WindowPipOverlay({
     required this.isPlaying,
     required this.controlsVisible,
+    required this.aspectRatio,
     required this.onTogglePlay,
     required this.onExpand,
+    required this.onMoveStart,
+    required this.windowPhysicalSize,
+    required this.setWindowPhysicalSize,
   });
 
   final bool isPlaying;
   final bool controlsVisible;
+  final double aspectRatio;
   final VoidCallback onTogglePlay;
   final VoidCallback onExpand;
+  final VoidCallback onMoveStart;
+  final Future<({double width, double height})?> Function() windowPhysicalSize;
+  final void Function(double width, double height) setWindowPhysicalSize;
 
   @override
   Widget build(BuildContext context) {
     return Positioned.fill(
-      child: AnimatedOpacity(
-        opacity: controlsVisible ? 1 : 0,
-        duration: const Duration(milliseconds: 180),
-        child: IgnorePointer(
-          ignoring: !controlsVisible,
-          child: Stack(
-            children: <Widget>[
-              // Dim scrim so the buttons stay legible over bright video.
-              const Positioned.fill(
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: <Color>[
-                        Color(0x66000000),
-                        Color(0x22000000),
-                        Color(0x66000000),
-                      ],
+      child: Stack(
+        fit: StackFit.expand,
+        children: <Widget>[
+          // Whole surface is a drag handle — grab anywhere to move the window.
+          Listener(
+            onPointerDown: (_) => onMoveStart(),
+            behavior: HitTestBehavior.translucent,
+          ),
+          AnimatedOpacity(
+            opacity: controlsVisible ? 1 : 0,
+            duration: const Duration(milliseconds: 180),
+            child: IgnorePointer(
+              ignoring: !controlsVisible,
+              child: Stack(
+                fit: StackFit.expand,
+                children: <Widget>[
+                  // Dim scrim so the buttons stay legible over bright video.
+                  const DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: <Color>[
+                          Color(0x66000000),
+                          Color(0x22000000),
+                          Color(0x66000000),
+                        ],
+                      ),
                     ),
                   ),
-                ),
+                  // Exit PiP — top-left corner.
+                  Positioned(
+                    top: 8,
+                    left: 8,
+                    child: _MiniButton(
+                      icon: Icons.close_fullscreen_rounded,
+                      size: 20,
+                      onPressed: onExpand,
+                    ),
+                  ),
+                  // Play / pause — centre, like the original player.
+                  Center(
+                    child: _MiniButton(
+                      icon: isPlaying
+                          ? Icons.pause_rounded
+                          : Icons.play_arrow_rounded,
+                      size: 44,
+                      onPressed: onTogglePlay,
+                    ),
+                  ),
+                  // Resize grip — bottom-right corner.
+                  Positioned(
+                    right: 0,
+                    bottom: 0,
+                    child: _PipResizeGrip(
+                      aspectRatio: aspectRatio,
+                      devicePixelRatio: MediaQuery.devicePixelRatioOf(context),
+                      windowPhysicalSize: windowPhysicalSize,
+                      setWindowPhysicalSize: setWindowPhysicalSize,
+                    ),
+                  ),
+                ],
               ),
-              // Exit PiP — top-left corner.
-              Positioned(
-                top: 8,
-                left: 8,
-                child: _MiniButton(
-                  icon: Icons.close_fullscreen_rounded,
-                  size: 18,
-                  onPressed: onExpand,
-                ),
-              ),
-              // Play / pause — centre, like the original player.
-              Center(
-                child: _MiniButton(
-                  icon: isPlaying
-                      ? Icons.pause_rounded
-                      : Icons.play_arrow_rounded,
-                  size: 34,
-                  padding: 12,
-                  onPressed: onTogglePlay,
-                ),
-              ),
-            ],
+            ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+// Icon-only mini-player button: no background, just a white glyph with a soft
+// shadow so it stays legible over bright video.
+class _MiniButton extends StatelessWidget {
+  const _MiniButton({required this.icon, required this.onPressed, this.size = 20});
+
+  final IconData icon;
+  final VoidCallback onPressed;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onPressed,
+      behavior: HitTestBehavior.opaque,
+      child: Padding(
+        padding: const EdgeInsets.all(8),
+        child: Icon(
+          icon,
+          color: Colors.white,
+          size: size,
+          shadows: const <Shadow>[
+            Shadow(color: Colors.black54, blurRadius: 8),
+          ],
         ),
       ),
     );
   }
 }
 
-class _MiniButton extends StatelessWidget {
-  const _MiniButton({
-    required this.icon,
-    required this.onPressed,
-    this.size = 20,
-    this.padding = 6,
+// Bottom-right resize grip for the borderless mini-player. Pans translate to
+// a new window width (height derived from the video aspect ratio) applied via
+// the native window channel, keeping the top-left corner fixed.
+class _PipResizeGrip extends StatefulWidget {
+  const _PipResizeGrip({
+    required this.aspectRatio,
+    required this.devicePixelRatio,
+    required this.windowPhysicalSize,
+    required this.setWindowPhysicalSize,
   });
 
-  final IconData icon;
-  final VoidCallback onPressed;
-  final double size;
-  final double padding;
+  final double aspectRatio;
+  final double devicePixelRatio;
+  final Future<({double width, double height})?> Function() windowPhysicalSize;
+  final void Function(double width, double height) setWindowPhysicalSize;
+
+  @override
+  State<_PipResizeGrip> createState() => _PipResizeGripState();
+}
+
+class _PipResizeGripState extends State<_PipResizeGrip> {
+  double _startWidth = 0;
+  double _accumulatedDx = 0;
+
+  Future<void> _onPanStart(DragStartDetails _) async {
+    final ({double width, double height})? size = await widget
+        .windowPhysicalSize();
+    _startWidth = size?.width ?? 0;
+    _accumulatedDx = 0;
+  }
+
+  void _onPanUpdate(DragUpdateDetails details) {
+    if (_startWidth <= 0) return;
+    _accumulatedDx += details.delta.dx;
+    final double ar = widget.aspectRatio > 0 ? widget.aspectRatio : 16 / 9;
+    final double newWidth =
+        (_startWidth + _accumulatedDx * widget.devicePixelRatio)
+            .clamp(280.0, 1280.0);
+    widget.setWindowPhysicalSize(newWidth, newWidth / ar);
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.black.withValues(alpha: .55),
-      shape: const CircleBorder(),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onPressed,
-        child: Padding(
-          padding: EdgeInsets.all(padding),
-          child: Icon(icon, color: Colors.white, size: size),
+    return MouseRegion(
+      cursor: SystemMouseCursors.resizeUpLeftDownRight,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onPanStart: _onPanStart,
+        onPanUpdate: _onPanUpdate,
+        child: const Padding(
+          padding: EdgeInsets.all(6),
+          child: Icon(
+            Icons.open_in_full_rounded,
+            color: Colors.white,
+            size: 16,
+            shadows: <Shadow>[Shadow(color: Colors.black54, blurRadius: 8)],
+          ),
         ),
       ),
     );

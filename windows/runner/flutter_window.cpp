@@ -1,5 +1,7 @@
 #include "flutter_window.h"
 
+#include <dwmapi.h>
+
 #include <optional>
 
 #include "flutter/generated_plugin_registrant.h"
@@ -202,8 +204,15 @@ void FlutterWindow::SetupWindowChannel() {
                          SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
                              SWP_NOOWNERZORDER | SWP_FRAMECHANGED |
                              SWP_NOACTIVATE);
+            // macOS-like softly rounded corners (Windows 11; no-op on older).
+            const DWM_WINDOW_CORNER_PREFERENCE round = DWMWCP_ROUND;
+            DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &round,
+                                  sizeof(round));
             is_borderless_ = true;
           } else if (!*borderless && is_borderless_) {
+            const DWM_WINDOW_CORNER_PREFERENCE def = DWMWCP_DEFAULT;
+            DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &def,
+                                  sizeof(def));
             SetWindowLongPtr(hwnd, GWL_STYLE, pip_saved_style_);
             SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
                          SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
@@ -211,6 +220,15 @@ void FlutterWindow::SetupWindowChannel() {
                              SWP_NOACTIVATE);
             is_borderless_ = false;
           }
+          result->Success();
+          return;
+        }
+
+        if (call.method_name() == "startWindowDrag") {
+          // Hand the drag off to the OS so the borderless mini-player can be
+          // moved by grabbing anywhere on it, like a native title bar.
+          ReleaseCapture();
+          SendMessage(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0);
           result->Success();
           return;
         }
