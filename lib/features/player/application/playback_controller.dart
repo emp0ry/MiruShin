@@ -26,6 +26,23 @@ import 'player_settings.dart';
 final playbackControllerProvider =
     NotifierProvider<PlaybackController, PlaybackState>(PlaybackController.new);
 
+/// Resolves the concrete engine backend actually used for playback.
+///
+/// On Linux the app does NOT initialize mpv/MediaKit at all (see
+/// `configureMiruShinMediaKit`): loading libmpv and its large native
+/// dependency tree into the process destabilizes the flutter_js QuickJS addon
+/// runtime and causes a hard SIGSEGV when opening a stream — a native crash the
+/// Dart-level FVP fallback can never recover from, since the process dies
+/// before any `catch` runs. FVP was the sole engine in v1.2.2 and is stable on
+/// Linux, so every backend (including an explicit mpv selection) resolves to
+/// FVP there. Other platforms keep mpv as the `auto` default.
+PlayerBackend _resolveBackend(PlayerBackend backend) {
+  if (!kIsWeb && defaultTargetPlatform == TargetPlatform.linux) {
+    return PlayerBackend.fvp;
+  }
+  return backend == PlayerBackend.auto ? PlayerBackend.mpv : backend;
+}
+
 class PlaybackState {
   const PlaybackState({
     this.item,
@@ -507,9 +524,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     final PlayerSettings settings =
         ref.read(playerSettingsProvider).value ?? const PlayerSettings();
     final PlayerBackend backend = backendOverride ?? settings.playerBackend;
-    final PlayerBackend engineBackend = backend == PlayerBackend.auto
-        ? PlayerBackend.mpv
-        : backend;
+    final PlayerBackend engineBackend = _resolveBackend(backend);
     final PlayerEngine engine = createPlayerEngine(
       initialAspectRatio: _safeAspectRatio(preserveAspectRatio),
       backend: engineBackend,
@@ -1154,7 +1169,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     final PlayerEngine previewEngine = createPlayerEngine(
       initialAspectRatio: _safeAspectRatio(mainEngine?.state.value.aspectRatio),
       previewMode: true,
-      backend: settings.playerBackend,
+      backend: _resolveBackend(settings.playerBackend),
     );
     _seekPreviewEngine = previewEngine;
     _seekPreviewSourceKey = previewSource.key;
