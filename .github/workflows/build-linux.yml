@@ -31,7 +31,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev \
-            libfuse2 libglib2.0-0 libsecret-1-dev libpulse0 python3-pil
+            libfuse2 libglib2.0-0 libsecret-1-dev libpulse0 python3-pil \
+            libmpv-dev libva2 libva-drm2 libva-x11-2 libvdpau1 libass9
+          # libmdk (bundled by fvp) is linked with
+          # `-Wl,--unresolved-symbols=ignore-in-shared-libs` and resolves a
+          # number of media/codec/audio libraries at RUNTIME. linuxdeploy only
+          # bundles libraries that exist on the build host, so these MUST be
+          # present here or the AppImage ships without them and libmdk calls a
+          # NULL pointer (SIGSEGV at 0x0) on a worker thread during playback.
+          # v1.2.2 worked only because `libmpv-dev` happened to drag this whole
+          # stack onto the build host; v1.3.0 dropped it and started crashing.
 
       - name: Flutter pub get
         run: flutter pub get
