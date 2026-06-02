@@ -406,6 +406,20 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     unawaited(_setFullscreen(!_isFullscreen));
   }
 
+  // Escape priority: leave the Windows mini-player first, then drop out of
+  // fullscreen, and only exit the player entirely when neither applies.
+  void _handleEscape() {
+    if (_inPipMode) {
+      unawaited(_exitWindowPip());
+      return;
+    }
+    if (_isFullscreen) {
+      unawaited(_setFullscreen(false));
+      return;
+    }
+    unawaited(_exitPlayer());
+  }
+
   void _cancelSpaceHold({required bool restoreSpeed}) {
     _spaceHoldTimer?.cancel();
     _spaceHoldTimer = null;
@@ -544,7 +558,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.escape) {
-      unawaited(_exitPlayer());
+      _handleEscape();
       return KeyEventResult.handled;
     }
 
@@ -657,7 +671,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
           ),
           _BackIntent: CallbackAction<_BackIntent>(
             onInvoke: (_) {
-              unawaited(_exitPlayer());
+              _handleEscape();
               return null;
             },
           ),
@@ -3408,7 +3422,7 @@ class _WindowPipOverlay extends StatelessWidget {
                     top: 8,
                     left: 8,
                     child: _MiniButton(
-                      icon: Icons.close_fullscreen_rounded,
+                      icon: Icons.close_rounded,
                       size: 20,
                       onPressed: onExpand,
                     ),

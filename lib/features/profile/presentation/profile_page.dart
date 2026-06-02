@@ -540,11 +540,13 @@ class _ProfileFavouritesPageState extends ConsumerState<ProfileFavouritesPage> {
   final Map<AniListFavouriteKind, bool> _hasMore =
       <AniListFavouriteKind, bool>{};
 
+  late final ScrollController _scrollController;
   int? _viewerId;
 
   @override
   void initState() {
     super.initState();
+    _scrollController = ScrollController()..addListener(_onScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _viewerId = ref.read(aniListViewerIdProvider);
       if (_viewerId != null) {
@@ -553,6 +555,32 @@ class _ProfileFavouritesPageState extends ConsumerState<ProfileFavouritesPage> {
         }
       }
     });
+  }
+
+  @override
+  void dispose() {
+    _scrollController
+      ..removeListener(_onScroll)
+      ..dispose();
+    super.dispose();
+  }
+
+  // Infinite scroll: when nearing the bottom, grow the bottom-most section
+  // that still has more, so new cards appear right where the user is looking.
+  void _onScroll() {
+    if (!_scrollController.hasClients) return;
+    final ScrollPosition position = _scrollController.position;
+    if (position.maxScrollExtent - position.pixels >= 900) return;
+    for (final AniListFavouriteKind kind
+        in AniListFavouriteKind.values.reversed) {
+      final bool busy = _loading[kind] ?? false;
+      final bool hasMore = _hasMore[kind] ?? true;
+      final bool hasItems = (_items[kind] ?? const <MediaItem>[]).isNotEmpty;
+      if (hasItems && hasMore && !busy) {
+        _loadFavourites(kind, (_pages[kind] ?? 0) + 1);
+        return;
+      }
+    }
   }
 
   Future<void> _loadFavourites(
@@ -598,6 +626,7 @@ class _ProfileFavouritesPageState extends ConsumerState<ProfileFavouritesPage> {
     return _ProfileSubpage(
       title: 'Favourites',
       subtitle: 'Favourite anime, manga, characters, staff, and studios.',
+      scrollController: _scrollController,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: AniListFavouriteKind.values
@@ -1697,16 +1726,19 @@ class _ProfileSubpage extends StatelessWidget {
     required this.title,
     required this.subtitle,
     required this.child,
+    this.scrollController,
   });
 
   final String title;
   final String subtitle;
   final Widget child;
+  final ScrollController? scrollController;
 
   @override
   Widget build(BuildContext context) {
     return AdaptivePage(
       child: SingleChildScrollView(
+        controller: scrollController,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
