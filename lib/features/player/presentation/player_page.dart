@@ -3447,9 +3447,7 @@ class _WindowPipOverlay extends StatelessWidget {
   }
 }
 
-// Icon-only mini-player button: no background, just a white glyph with a soft
-// shadow so it stays legible over bright video.
-class _MiniButton extends StatelessWidget {
+class _MiniButton extends StatefulWidget {
   const _MiniButton({
     required this.icon,
     required this.onPressed,
@@ -3461,17 +3459,55 @@ class _MiniButton extends StatelessWidget {
   final double size;
 
   @override
+  State<_MiniButton> createState() => _MiniButtonState();
+}
+
+class _MiniButtonState extends State<_MiniButton> {
+  bool _hovered = false;
+  bool _pressed = false;
+
+  @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onPressed,
-      behavior: HitTestBehavior.opaque,
-      child: Padding(
-        padding: const EdgeInsets.all(8),
-        child: Icon(
-          icon,
-          color: Colors.white,
-          size: size,
-          shadows: const <Shadow>[Shadow(color: Colors.black54, blurRadius: 8)],
+    final Color backgroundColor = _pressed
+        ? Colors.white.withValues(alpha: 0.24)
+        : _hovered
+        ? Colors.white.withValues(alpha: 0.16)
+        : Colors.transparent;
+
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) {
+        setState(() {
+          _hovered = false;
+          _pressed = false;
+        });
+      },
+      child: GestureDetector(
+        onTap: widget.onPressed,
+        onTapDown: (_) => setState(() => _pressed = true),
+        onTapCancel: () => setState(() => _pressed = false),
+        onTapUp: (_) => setState(() => _pressed = false),
+        behavior: HitTestBehavior.opaque,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          curve: Curves.easeOutCubic,
+          width: widget.size >= 40 ? 72 : 36,
+          height: widget.size >= 40 ? 72 : 36,
+          decoration: BoxDecoration(
+            color: backgroundColor,
+            borderRadius: BorderRadius.circular(widget.size >= 40 ? 999 : 12),
+          ),
+          child: Center(
+            child: Icon(
+              widget.icon,
+              color: Colors.white,
+              size: widget.size,
+              shadows: const <Shadow>[
+                Shadow(color: Colors.black54, blurRadius: 8),
+              ],
+            ),
+          ),
         ),
       ),
     );
