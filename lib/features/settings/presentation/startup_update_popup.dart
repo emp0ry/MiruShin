@@ -169,27 +169,28 @@ class _UpdateNotificationCard extends StatelessWidget {
             child: BackdropFilter(
               filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
               child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: <Color>[
-                      palette.glassStrongColor.withValues(alpha: 0.94),
-                      palette.glassColor.withValues(alpha: 0.9),
-                    ],
-                  ),
-                  borderRadius: AppRadius.all(AppRadius.xl),
-                  border: Border.all(
-                    color: palette.borderColor.withValues(alpha: 0.8),
-                  ),
-                  boxShadow: <BoxShadow>[
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.2),
-                      blurRadius: 34,
-                      offset: const Offset(0, 18),
-                    ),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: <Color>[
+                    palette.glassStrongColor.withValues(alpha: 0.94),
+                    palette.glassColor.withValues(alpha: 0.9),
                   ],
                 ),
+                borderRadius: AppRadius.all(AppRadius.xl),
+                border: Border.all(
+                  color: scheme.primary.withValues(alpha: 0.75),
+                  width: 1.2,
+                ),
+                boxShadow: <BoxShadow>[
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.2),
+                    blurRadius: 34,
+                    offset: const Offset(0, 18),
+                  ),
+                ],
+              ),
                 child: LayoutBuilder(
                   builder: (BuildContext context, BoxConstraints constraints) {
                     final bool compact = constraints.maxWidth < 420;
