@@ -139,7 +139,7 @@ class DiscordRpcService {
         : null;
 
     return _DiscordActivity(
-      name: details,
+      name: AppConstants.appName,
       type: 3,
       details: details,
       detailsUrl: mediaUrl.isEmpty ? null : mediaUrl,
