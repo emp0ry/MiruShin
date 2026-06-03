@@ -13,6 +13,7 @@ abstract final class AppColors {
   static const Color accentPurple = Color(0xFF8B5CF6);
   static const Color accentAqua = Color(0xFF64D8FF);
   static const Color accentViolet = Color(0xFF9B8CFF);
+  static const Color accentMint = Color(0xFF8FE388);
   static const Color accentRose = Color(0xFFFF7DAF);
   static const Color accentAmber = Color(0xFFFFC46B);
   static const Color success = Color(0xFF6FE3B1);
@@ -21,8 +22,8 @@ abstract final class AppColors {
 
   static const List<Color> accentOptions = <Color>[
     accentPurple,
-    accentViolet,
     accentAqua,
+    accentMint,
     accentRose,
     accentAmber,
   ];

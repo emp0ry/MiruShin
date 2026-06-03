@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -46,7 +48,7 @@ class SettingsPage extends ConsumerWidget {
       child: SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
+          children: <Widget>[ 
             SectionHeader(title: context.t('Settings')),
             const SizedBox(height: AppSpacing.lg),
             const _UpdateSection(),
@@ -699,31 +701,26 @@ class _AppearanceSection extends StatelessWidget {
           title: context.t('Accent color'),
           trailing: Wrap(
             spacing: AppSpacing.sm,
-            children: AppColors.accentOptions
-                .map(
-                  (Color color) => Tooltip(
-                    message: context.t('Accent color'),
-                    child: InkWell(
-                      borderRadius: AppRadius.all(99),
-                      onTap: () => controller.setAccentColor(color),
-                      child: Container(
-                        width: 36,
-                        height: 36,
-                        decoration: BoxDecoration(
-                          color: color,
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: settings.accentColor == color
-                                ? Theme.of(context).colorScheme.onSurface
-                                : Colors.transparent,
-                            width: 2,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                )
-                .toList(),
+            runSpacing: AppSpacing.sm,
+            children: <Widget>[
+              for (final Color color in AppColors.accentOptions)
+                _AccentColorSwatch(
+                  color: color,
+                  selected: settings.accentColor.toARGB32() == color.toARGB32(),
+                  onPressed: () => controller.setAccentColor(color),
+                ),
+              _CustomAccentColorSwatch(
+                selected: !AppColors.accentOptions.any(
+                  (Color color) =>
+                      settings.accentColor.toARGB32() == color.toARGB32(),
+                ),
+                onPressed: () => _showAccentColorPicker(
+                  context,
+                  initialColor: settings.accentColor,
+                  onChanged: controller.setAccentColor,
+                ),
+              ),
+            ],
           ),
         ),
         SettingsRow(
@@ -772,6 +769,677 @@ class _AppearanceSection extends StatelessWidget {
       ],
     );
   }
+}
+
+Future<void> _showAccentColorPicker(
+  BuildContext context, {
+  required Color initialColor,
+  required ValueChanged<Color> onChanged,
+}) async {
+  final Color? color = await showDialog<Color>(
+    context: context,
+    builder: (BuildContext context) {
+      return _AccentColorPickerDialog(initialColor: initialColor);
+    },
+  );
+  if (color != null) {
+    onChanged(color);
+  }
+}
+
+class _AccentColorSwatch extends StatelessWidget {
+  const _AccentColorSwatch({
+    required this.color,
+    required this.selected,
+    required this.onPressed,
+  });
+
+  final Color color;
+  final bool selected;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: context.t('Accent color'),
+      child: Semantics(
+        button: true,
+        selected: selected,
+        label: context.t('Accent color'),
+        child: InkWell(
+          borderRadius: AppRadius.all(99),
+          onTap: onPressed,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 160),
+            width: 36,
+            height: 36,
+            padding: const EdgeInsets.all(3),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: selected
+                    ? Theme.of(context).colorScheme.onSurface
+                    : Theme.of(
+                        context,
+                      ).colorScheme.outlineVariant.withValues(alpha: 0.4),
+                width: selected ? 2 : 1,
+              ),
+            ),
+            child: DecoratedBox(
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CustomAccentColorSwatch extends StatelessWidget {
+  const _CustomAccentColorSwatch({
+    required this.selected,
+    required this.onPressed,
+  });
+
+  final bool selected;
+  final VoidCallback onPressed;
+
+  static const List<Color> _colors = <Color>[
+    AppColors.accentPurple,
+    AppColors.accentAqua,
+    AppColors.accentMint,
+    AppColors.accentRose,
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: context.t('Custom color'),
+      child: Semantics(
+        button: true,
+        selected: selected,
+        label: context.t('Custom color'),
+        child: InkWell(
+          borderRadius: AppRadius.all(99),
+          onTap: onPressed,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 160),
+            width: 36,
+            height: 36,
+            padding: const EdgeInsets.all(3),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: selected
+                    ? Theme.of(context).colorScheme.onSurface
+                    : Theme.of(
+                        context,
+                      ).colorScheme.outlineVariant.withValues(alpha: 0.4),
+                width: selected ? 2 : 1,
+              ),
+            ),
+            child: ClipOval(
+              child: CustomPaint(
+                painter: _SegmentedColorCirclePainter(_colors),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SegmentedColorCirclePainter extends CustomPainter {
+  const _SegmentedColorCirclePainter(this.colors);
+
+  final List<Color> colors;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final Rect rect = Offset.zero & size;
+    final Offset center = rect.center;
+    final double radius = math.min(size.width, size.height) / 2;
+    final Paint paint = Paint()..style = PaintingStyle.fill;
+    final Rect circle = Rect.fromCircle(center: center, radius: radius);
+    final double sweep = math.pi * 2 / colors.length;
+    for (int i = 0; i < colors.length; i++) {
+      paint.color = colors[i];
+      canvas.drawArc(
+        circle,
+        -math.pi / 2 + sweep * i,
+        sweep + 0.01,
+        true,
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_SegmentedColorCirclePainter oldDelegate) {
+    return oldDelegate.colors != colors;
+  }
+}
+
+class _AccentColorPickerDialog extends StatefulWidget{
+  const _AccentColorPickerDialog({required this.initialColor});
+
+  final Color initialColor;
+
+  @override
+  State<_AccentColorPickerDialog> createState() =>
+      _AccentColorPickerDialogState();
+}
+
+class _AccentColorPickerDialogState extends State<_AccentColorPickerDialog> {
+  late HSVColor _color = HSVColor.fromColor(widget.initialColor);
+
+  Color get _selectedColor => _color.toColor().withValues(alpha: 1);
+
+  @override
+  Widget build(BuildContext context) {
+    final Color selected = _selectedColor;
+
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: AppRadius.all(AppRadius.xl)),
+      title: Text(context.t('Custom color')),
+      content: SizedBox(
+        width: 460,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              _ColorPickerArea(
+                hue: _color.hue,
+                saturation: _color.saturation,
+                value: _color.value,
+                onChanged: (double saturation, double value) {
+                  setState(() {
+                    _color = _color
+                        .withSaturation(saturation)
+                        .withValue(value);
+                  });
+                },
+              ),
+
+              const SizedBox(height: AppSpacing.xl),
+
+              Row(
+                children: <Widget>[
+                  Container(
+                    width: 58,
+                    height: 58,
+                    decoration: BoxDecoration(
+                      color: selected,
+                      shape: BoxShape.circle,
+                      boxShadow: <BoxShadow>[
+                        BoxShadow(
+                          color: selected.withValues(alpha: 0.35),
+                          blurRadius: 24,
+                          offset: const Offset(0, 10),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  const SizedBox(width: AppSpacing.lg),
+
+                  Expanded(
+                    child: Column(
+                      children: <Widget>[
+                        _HueSlider(
+                          value: _color.hue,
+                          onChanged: (double value) {
+                            setState(() {
+                              _color = _color.withHue(value);
+                            });
+                          },
+                        ),
+
+                        const SizedBox(height: AppSpacing.md),
+
+                        _BrightnessSlider(
+                          value: _color.value,
+                          color: HSVColor.fromAHSV(
+                            1,
+                            _color.hue,
+                            _color.saturation,
+                            1,
+                          ).toColor(),
+                          onChanged: (double value) {
+                            setState(() {
+                              _color = _color.withValue(value);
+                            });
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: AppSpacing.xl),
+
+              _ColorValueFields(color: selected),
+            ],
+          ),
+        ),
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text(context.t('Cancel')),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(selected),
+          child: Text(context.t('Apply')),
+        ),
+      ],
+    );
+  }
+}
+
+class _ColorPickerArea extends StatelessWidget {
+  const _ColorPickerArea({
+    required this.hue,
+    required this.saturation,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final double hue;
+  final double saturation;
+  final double value;
+  final void Function(double saturation, double value) onChanged;
+
+  void _handlePosition(Offset localPosition, Size size) {
+    if (size.width <= 0 || size.height <= 0) return;
+
+    final double nextSaturation =
+        (localPosition.dx / size.width).clamp(0.0, 1.0);
+    final double nextValue =
+        (1.0 - localPosition.dy / size.height).clamp(0.0, 1.0);
+
+    onChanged(nextSaturation, nextValue);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final Color hueColor = HSVColor.fromAHSV(1, hue, 1, 1).toColor();
+
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        final double width = constraints.hasBoundedWidth
+            ? constraints.maxWidth
+            : 460;
+        const double height = 230;
+        final Size areaSize = Size(width, height);
+
+        return GestureDetector(
+          onPanDown: (DragDownDetails details) {
+            _handlePosition(details.localPosition, areaSize);
+          },
+          onPanUpdate: (DragUpdateDetails details) {
+            _handlePosition(details.localPosition, areaSize);
+          },
+          onTapDown: (TapDownDetails details) {
+            _handlePosition(details.localPosition, areaSize);
+          },
+          child: SizedBox(
+            width: width,
+            height: height,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: <Widget>[
+                ClipRRect(
+                  borderRadius: AppRadius.all(AppRadius.lg),
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: hueColor,
+                      borderRadius: AppRadius.all(AppRadius.lg),
+                    ),
+                    child: Stack(
+                      children: <Widget>[
+                        Positioned.fill(
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              borderRadius: AppRadius.all(AppRadius.lg),
+                              gradient: const LinearGradient(
+                                begin: Alignment.centerLeft,
+                                end: Alignment.centerRight,
+                                colors: <Color>[
+                                  Colors.white,
+                                  Colors.transparent,
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                        Positioned.fill(
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              borderRadius: AppRadius.all(AppRadius.lg),
+                              gradient: const LinearGradient(
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                                colors: <Color>[
+                                  Colors.transparent,
+                                  Colors.black,
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        borderRadius: AppRadius.all(AppRadius.lg),
+                        border: Border.all(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .outlineVariant
+                              .withValues(alpha: 0.45),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+
+                Positioned(
+                  left: (saturation * width - 10).clamp(0.0, width - 20),
+                  top: ((1.0 - value) * height - 10).clamp(0.0, height - 20),
+                  child: IgnorePointer(
+                    child: Container(
+                      width: 20,
+                      height: 20,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 2),
+                        boxShadow: <BoxShadow>[
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.45),
+                            blurRadius: 10,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _HueSlider extends StatelessWidget {
+  const _HueSlider({
+    required this.value,
+    required this.onChanged,
+  });
+
+  final double value;
+  final ValueChanged<double> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return _GradientSlider(
+      value: value,
+      max: 360,
+      gradient: const LinearGradient(
+        colors: <Color>[
+          Color(0xFFFF0000),
+          Color(0xFFFFFF00),
+          Color(0xFF00FF00),
+          Color(0xFF00FFFF),
+          Color(0xFF0000FF),
+          Color(0xFFFF00FF),
+          Color(0xFFFF0000),
+        ],
+      ),
+      onChanged: onChanged,
+    );
+  }
+}
+
+class _BrightnessSlider extends StatelessWidget {
+  const _BrightnessSlider({
+    required this.value,
+    required this.color,
+    required this.onChanged,
+  });
+
+  final double value;
+  final Color color;
+  final ValueChanged<double> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return _GradientSlider(
+      value: value,
+      max: 1,
+      gradient: LinearGradient(
+        colors: <Color>[
+          Colors.black,
+          color,
+        ],
+      ),
+      onChanged: onChanged,
+    );
+  }
+}
+
+class _GradientSlider extends StatelessWidget {
+  const _GradientSlider({
+    required this.value,
+    required this.max,
+    required this.gradient,
+    required this.onChanged,
+  });
+
+  final double value;
+  final double max;
+  final Gradient gradient;
+  final ValueChanged<double> onChanged;
+
+  void _handlePosition(Offset localPosition, double width) {
+    if (width <= 0) return;
+    final double next = (localPosition.dx / width * max).clamp(0.0, max);
+    onChanged(next);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        final double width = constraints.hasBoundedWidth
+            ? constraints.maxWidth
+            : 260;
+        final double normalized = max == 0 ? 0 : (value / max).clamp(0.0, 1.0);
+
+        return GestureDetector(
+          onPanDown: (DragDownDetails details) {
+            _handlePosition(details.localPosition, width);
+          },
+          onPanUpdate: (DragUpdateDetails details) {
+            _handlePosition(details.localPosition, width);
+          },
+          onTapDown: (TapDownDetails details) {
+            _handlePosition(details.localPosition, width);
+          },
+          child: SizedBox(
+            height: 28,
+            width: width,
+            child: Stack(
+              alignment: Alignment.centerLeft,
+              clipBehavior: Clip.none,
+              children: <Widget>[
+                Container(
+                  height: 12,
+                  decoration: BoxDecoration(
+                    gradient: gradient,
+                    borderRadius: AppRadius.all(99),
+                    border: Border.all(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .outlineVariant
+                          .withValues(alpha: 0.35),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  left: (normalized * width - 11).clamp(0.0, width - 22),
+                  child: IgnorePointer(
+                    child: Container(
+                      width: 22,
+                      height: 22,
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.surface,
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: Theme.of(context).colorScheme.outlineVariant,
+                        ),
+                        boxShadow: <BoxShadow>[
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.25),
+                            blurRadius: 8,
+                            offset: const Offset(0, 3),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _ColorValueFields extends StatelessWidget {
+  const _ColorValueFields({required this.color});
+
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final int r = (color.r * 255).round();
+    final int g = (color.g * 255).round();
+    final int b = (color.b * 255).round();
+
+    return Row(
+      children: <Widget>[
+        Expanded(
+          flex: 2,
+          child: _ColorValueBox(
+            label: 'HEX',
+            value: _hexColor(color),
+          ),
+        ),
+        const SizedBox(width: AppSpacing.sm),
+        Expanded(
+          child: _ColorValueBox(
+            label: 'R',
+            value: r.toString(),
+          ),
+        ),
+        const SizedBox(width: AppSpacing.sm),
+        Expanded(
+          child: _ColorValueBox(
+            label: 'G',
+            value: g.toString(),
+          ),
+        ),
+        const SizedBox(width: AppSpacing.sm),
+        Expanded(
+          child: _ColorValueBox(
+            label: 'B',
+            value: b.toString(),
+          ),
+        ),
+        const SizedBox(width: AppSpacing.sm),
+        const Expanded(
+          child: _ColorValueBox(
+            label: 'A',
+            value: '100%',
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ColorValueBox extends StatelessWidget {
+  const _ColorValueBox({
+    required this.label,
+    required this.value,
+  });
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final TextTheme textTheme = Theme.of(context).textTheme;
+
+    return Column(
+      children: <Widget>[
+        Text(
+          label,
+          style: textTheme.labelMedium?.copyWith(
+            fontWeight: FontWeight.w800,
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: AppSpacing.xs),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.sm,
+            vertical: AppSpacing.sm,
+          ),
+          decoration: BoxDecoration(
+            color: Theme.of(context)
+                .colorScheme
+                .surfaceContainerHighest
+                .withValues(alpha: 0.42),
+            borderRadius: AppRadius.all(AppRadius.sm),
+            border: Border.all(
+              color: Theme.of(context)
+                  .colorScheme
+                  .outlineVariant
+                  .withValues(alpha: 0.45),
+            ),
+          ),
+          child: Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: textTheme.bodyMedium?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+String _hexColor(Color color) {
+  final int rgb = color.toARGB32() & 0x00FFFFFF;
+  return '#${rgb.toRadixString(16).padLeft(6, '0').toUpperCase()}';
 }
 
 class _ThemeModeSelector extends StatelessWidget {
