@@ -71,6 +71,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   bool _exitingPlayer = false;
   bool _allowRoutePop = false;
   bool _isFullscreen = false;
+  bool _preserveFullscreenForNextRoute = false;
   bool _spacePressed = false;
   bool _spaceTemporarySpeedActive = false;
   late final bool _isMobile;
@@ -97,7 +98,13 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     _playbackNotifier.setNextEpisodeHandler(
       () => unawaited(_exitPlayer(playNext: true)),
     );
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    unawaited(
+      SystemChrome.setEnabledSystemUIMode(
+        _shouldStartFullscreen
+            ? SystemUiMode.immersiveSticky
+            : SystemUiMode.edgeToEdge,
+      ),
+    );
     if (_nativePipSupported) {
       NativePlayerService.init();
       _nativePlayerSub = NativePlayerService.events.listen(
@@ -116,7 +123,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_syncFullscreenState());
-      if (_isMobile || widget.startInFullscreen) {
+      if (_shouldStartFullscreen) {
         unawaited(_setFullscreen(true));
       }
       _requestPlayerFocus();
@@ -278,9 +285,15 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     _playbackNotifier.setNextEpisodeHandler(null);
     unawaited(_stopPlayback());
     _playerFocusNode.dispose();
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    SystemChrome.setEnabledSystemUIMode(
+      _preserveFullscreenForNextRoute
+          ? SystemUiMode.immersiveSticky
+          : SystemUiMode.edgeToEdge,
+    );
     super.dispose();
   }
+
+  bool get _shouldStartFullscreen => _isMobile || widget.startInFullscreen;
 
   void _requestPlayerFocus() {
     if (!_playerFocusNode.hasFocus && _playerFocusNode.canRequestFocus) {
@@ -347,6 +360,11 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   Future<void> _exitPlayer({bool playNext = false}) async {
     if (_exitingPlayer) return;
     final bool wasFullscreen = _isFullscreen;
+    final bool shouldStartNextFullscreen =
+        playNext && (wasFullscreen || _shouldStartFullscreen);
+    final bool preserveFullscreenForNext =
+        _isMobile && shouldStartNextFullscreen;
+    _preserveFullscreenForNextRoute = preserveFullscreenForNext;
     setState(() {
       _exitingPlayer = true;
     });
@@ -366,16 +384,24 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       }
     }
 
-    unawaited(
-      Future.any(<Future<void>>[
-        _setFullscreen(false),
-        Future<void>.delayed(_exitCleanupTimeout),
-      ]),
-    );
+    if (preserveFullscreenForNext) {
+      unawaited(
+        SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky),
+      );
+    } else {
+      unawaited(
+        Future.any(<Future<void>>[
+          _setFullscreen(false),
+          Future<void>.delayed(_exitCleanupTimeout),
+        ]),
+      );
+    }
     unawaited(_stopPlayback());
 
     final Object? result = playNext
-        ? (wasFullscreen ? _nextEpisodeFullscreenSignal : _nextEpisodeSignal)
+        ? (shouldStartNextFullscreen
+              ? _nextEpisodeFullscreenSignal
+              : _nextEpisodeSignal)
         : null;
     setState(() {
       _allowRoutePop = true;
@@ -474,6 +500,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     await SystemChrome.setEnabledSystemUIMode(
       fullscreen ? SystemUiMode.immersiveSticky : SystemUiMode.edgeToEdge,
     );
+    if (fullscreen) {
+      _scheduleFullscreenSystemUiReassert();
+    }
     try {
       final bool? actualFullscreen = await _windowChannel.invokeMethod<bool>(
         'setFullscreen',
@@ -486,6 +515,22 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       // Mobile/web can still use SystemChrome above.
     } on PlatformException {
       // Leave the player usable even if native fullscreen fails.
+    }
+  }
+
+  void _scheduleFullscreenSystemUiReassert() {
+    for (final Duration delay in <Duration>[
+      const Duration(milliseconds: 250),
+      const Duration(milliseconds: 900),
+    ]) {
+      unawaited(
+        Future<void>.delayed(delay, () async {
+          if (!mounted || !_isFullscreen) return;
+          await SystemChrome.setEnabledSystemUIMode(
+            SystemUiMode.immersiveSticky,
+          );
+        }),
+      );
     }
   }
 

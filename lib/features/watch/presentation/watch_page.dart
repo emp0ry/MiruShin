@@ -294,6 +294,9 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     final bool canAutoPlay =
         resolvedBundle.activeUrl.trim().isNotEmpty &&
         (isAutoNext || !_bundleRequiresManualChoice(resolvedBundle));
+    if (isAutoNext && !canAutoPlay) {
+      _clearAutoNextFullscreen();
+    }
 
     setState(() {
       _session = _session!.copyWith(
@@ -320,7 +323,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     }
     final bool wasAutoNext = _streamResolutionState.takeAutoNext(requestKey);
     if (wasAutoNext) {
-      _nextEpisodeInFullscreen = false;
+      _clearAutoNextFullscreen();
     }
     setState(() {
       _session = _session!.copyWith(
@@ -370,6 +373,12 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     } on PlatformException {
       // Ignore.
     }
+  }
+
+  void _clearAutoNextFullscreen() {
+    if (!_nextEpisodeInFullscreen) return;
+    _nextEpisodeInFullscreen = false;
+    unawaited(_exitFullscreen());
   }
 
   void _scrollToKey(GlobalKey key) {
@@ -489,7 +498,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
           .extractEpisodes(addon: addon, result: source);
     } on Object catch (error) {
       if (!mounted) return;
-      _nextEpisodeInFullscreen = false;
+      _clearAutoNextFullscreen();
       setState(() {
         _session = _session?.copyWith(
           step: WatchStep.streamReady,
@@ -501,7 +510,10 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     }
     if (!mounted) return;
 
-    if (episodes.isEmpty) return;
+    if (episodes.isEmpty) {
+      _clearAutoNextFullscreen();
+      return;
+    }
     int index = episodes.indexWhere((SoraEpisode e) => e.href == current.href);
     if (index < 0) {
       index = episodes.indexWhere(
@@ -511,10 +523,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     if (index < 0 || index + 1 >= episodes.length) {
       // Last episode — if the player kept the window fullscreen for the smooth
       // transition, exit fullscreen now since there's nothing to play next.
-      if (_nextEpisodeInFullscreen) {
-        _nextEpisodeInFullscreen = false;
-        unawaited(_exitFullscreen());
-      }
+      _clearAutoNextFullscreen();
       return;
     }
 
