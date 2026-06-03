@@ -120,11 +120,17 @@ Future<List<SoraTitleVariant>> buildSoraTitleVariantsForTest({
 // running search loop without touching Riverpod providers (which would restart
 // them while their listeners are still alive).
 int _soraSearchEpoch = 0;
+final Map<String, SoraSourceSearchBundle> _soraSearchCompletedCache =
+    <String, SoraSourceSearchBundle>{};
 
 /// Call this synchronously before switching away from the Find Sources tab.
 /// Every in-flight search loop will see the stale epoch and break on its next
 /// await, without restarting the providers.
-void cancelAllSoraSearches() => _soraSearchEpoch++;
+void cancelAllSoraSearches([SoraJsRuntime? runtime]) {
+  _soraSearchEpoch++;
+  runtime?.cancelActiveSearches();
+  debugPrint('[Sora] Search loading cancel requested epoch=$_soraSearchEpoch');
+}
 
 final soraSourceSearchProvider =
     FutureProvider.autoDispose.family<
@@ -134,137 +140,223 @@ final soraSourceSearchProvider =
       Ref ref,
       SoraSourceSearchRequest request,
     ) async {
+      final String cacheKey = _soraSearchCacheKey(request);
+      final SoraSourceSearchBundle? cached =
+          _soraSearchCompletedCache[cacheKey];
+      if (cached != null) {
+        debugPrint(
+          '[Sora] Search loading cache hit ${_soraSearchDebugLabel(request)}',
+        );
+        return cached;
+      }
+      final Stopwatch searchStopwatch = Stopwatch()..start();
+      final String searchLabel = _soraSearchDebugLabel(request);
+      debugPrint('[Sora] Search loading start $searchLabel');
       // Capture epoch at provider start. Any later increment stops this run.
       final int myEpoch = _soraSearchEpoch;
       bool providerDisposed = false;
-      ref.onDispose(() => providerDisposed = true);
+      bool completed = false;
+      ref.onDispose(() {
+        providerDisposed = true;
+        if (!completed) {
+          debugPrint(
+            '[Sora] Search loading disposed $searchLabel '
+            'elapsed=${searchStopwatch.elapsedMilliseconds}ms',
+          );
+        }
+      });
       bool shouldStop() => providerDisposed || _soraSearchEpoch != myEpoch;
 
-      final SoraAddonsState addonsState = ref.watch(soraAddonsProvider);
-      final List<SoraInstalledAddon> addons = addonsState.enabled
-          .where(
-            (SoraInstalledAddon addon) =>
-                request.addonId == null || addon.id == request.addonId,
-          )
-          .toList(growable: false);
-      final List<SoraTitleVariant> variants = await ref.watch(
-        soraTitleVariantsProvider(
-          _TitleVariantsKey(
-            media: request.media,
-            languageCodes: request.languageCodes,
-          ),
-        ).future,
-      );
-      if (shouldStop()) {
-        return SoraSourceSearchBundle(
-          variants: variants,
-          results: const <SoraSearchResult>[],
-          errors: const <SoraSourceError>[],
+      try {
+        final SoraAddonsState addonsState = ref.watch(soraAddonsProvider);
+        final List<SoraInstalledAddon> addons = addonsState.enabled
+            .where(
+              (SoraInstalledAddon addon) =>
+                  request.addonId == null || addon.id == request.addonId,
+            )
+            .toList(growable: false);
+        final List<SoraTitleVariant> variants = await ref.watch(
+          soraTitleVariantsProvider(
+            _TitleVariantsKey(
+              media: request.media,
+              languageCodes: request.languageCodes,
+            ),
+          ).future,
         );
-      }
-      if (addons.isEmpty) {
-        return SoraSourceSearchBundle(
-          variants: variants,
-          results: const <SoraSearchResult>[],
-          errors: const <SoraSourceError>[],
+        debugPrint(
+          '[Sora] Search loading variants $searchLabel '
+          'variants=${variants.length} addons=${addons.length} '
+          'elapsed=${searchStopwatch.elapsedMilliseconds}ms',
         );
-      }
+        if (shouldStop()) {
+          completed = true;
+          debugPrint(
+            '[Sora] Search loading cancelled $searchLabel '
+            'stage=variants elapsed=${searchStopwatch.elapsedMilliseconds}ms',
+          );
+          return SoraSourceSearchBundle(
+            variants: variants,
+            results: const <SoraSearchResult>[],
+            errors: const <SoraSourceError>[],
+          );
+        }
+        if (addons.isEmpty) {
+          completed = true;
+          debugPrint(
+            '[Sora] Search loading done $searchLabel '
+            'reason=no_addons elapsed=${searchStopwatch.elapsedMilliseconds}ms',
+          );
+          return SoraSourceSearchBundle(
+            variants: variants,
+            results: const <SoraSearchResult>[],
+            errors: const <SoraSourceError>[],
+          );
+        }
 
-      final Map<String, SoraSearchResult> deduped =
-          <String, SoraSearchResult>{};
-      final List<SoraSourceError> errors = <SoraSourceError>[];
-      final Set<String> matchedAddonIds = <String>{};
-      final List<String> languageCodes = request.languageCodes.isEmpty
-          ? SoraSearchLanguage.defaultPriority
-          : request.languageCodes;
-      final runtime = ref.watch(soraJsRuntimeProvider);
+        final Map<String, SoraSearchResult> deduped =
+            <String, SoraSearchResult>{};
+        final List<SoraSourceError> errors = <SoraSourceError>[];
+        final Set<String> matchedAddonIds = <String>{};
+        final List<String> languageCodes = request.languageCodes.isEmpty
+            ? SoraSearchLanguage.defaultPriority
+            : request.languageCodes;
+        final runtime = ref.watch(soraJsRuntimeProvider);
 
-      outer:
-      for (
-        int languageIndex = 0;
-        languageIndex < languageCodes.length;
-        languageIndex += 1
-      ) {
-        if (shouldStop()) break;
-        final String languageCode = languageCodes[languageIndex];
-        final List<String> queries = request.customQuery != null
-            ? <String>[request.customQuery!]
-            : _queriesForLanguage(
-                variants: variants,
-                languageCode: languageCode,
-                fallbackTitle: request.media.title,
-                fallbackOriginalTitle: request.media.originalTitle,
-              );
-        for (final SoraInstalledAddon addon in addons) {
-          if (shouldStop()) break outer;
-          if (matchedAddonIds.contains(addon.id)) {
-            continue;
-          }
-          for (final String query in queries) {
+        outer:
+        for (
+          int languageIndex = 0;
+          languageIndex < languageCodes.length;
+          languageIndex += 1
+        ) {
+          if (shouldStop()) break;
+          final String languageCode = languageCodes[languageIndex];
+          final List<String> queries = request.customQuery != null
+              ? <String>[request.customQuery!]
+              : _queriesForLanguage(
+                  variants: variants,
+                  languageCode: languageCode,
+                  fallbackTitle: request.media.title,
+                  fallbackOriginalTitle: request.media.originalTitle,
+                );
+          debugPrint(
+            '[Sora] Search loading language $searchLabel '
+            'language=$languageCode queries=${queries.length}',
+          );
+          for (final SoraInstalledAddon addon in addons) {
             if (shouldStop()) break outer;
-            try {
-              debugPrint(
-                '[Sora] Search addon="${addon.manifest.sourceName}" '
-                'language=$languageCode query="$query"',
-              );
-              final List<SoraSearchResult> results = await runtime
-                  .searchResults(
-                    addon: addon,
-                    keyword: query,
-                    languageCode: languageCode,
-                    titleVariants: variants,
-                    shouldCancel: shouldStop,
-                  );
+            if (matchedAddonIds.contains(addon.id)) {
+              continue;
+            }
+            for (final String query in queries) {
               if (shouldStop()) break outer;
-              debugPrint(
-                '[Sora] Search result addon="${addon.manifest.sourceName}" '
-                'language=$languageCode query="$query" count=${results.length}',
-              );
-              for (final SoraSearchResult result in results) {
-                final String key = '${addon.id}:${result.href}';
-                final SoraSearchResult? previous = deduped[key];
-                if (previous == null || result.score > previous.score) {
-                  deduped[key] = result;
+              final Stopwatch queryStopwatch = Stopwatch()..start();
+              try {
+                debugPrint(
+                  '[Sora] Search addon="${addon.manifest.sourceName}" '
+                  'language=$languageCode query="$query"',
+                );
+                final List<SoraSearchResult> results = await runtime
+                    .searchResults(
+                      addon: addon,
+                      keyword: query,
+                      languageCode: languageCode,
+                      titleVariants: variants,
+                      shouldCancel: shouldStop,
+                    );
+                if (shouldStop()) break outer;
+                debugPrint(
+                  '[Sora] Search result addon="${addon.manifest.sourceName}" '
+                  'language=$languageCode query="$query" '
+                  'count=${results.length} '
+                  'elapsed=${queryStopwatch.elapsedMilliseconds}ms',
+                );
+                for (final SoraSearchResult result in results) {
+                  final String key = '${addon.id}:${result.href}';
+                  final SoraSearchResult? previous = deduped[key];
+                  if (previous == null || result.score > previous.score) {
+                    deduped[key] = result;
+                  }
                 }
-              }
-              if (results.isNotEmpty) {
-                matchedAddonIds.add(addon.id);
+                if (results.isNotEmpty) {
+                  matchedAddonIds.add(addon.id);
+                  break;
+                }
+              } on Object catch (error) {
+                if (shouldStop()) break outer;
+                debugPrint(
+                  '[Sora] Search error addon="${addon.manifest.sourceName}" '
+                  'language=$languageCode query="$query" '
+                  'elapsed=${queryStopwatch.elapsedMilliseconds}ms '
+                  'error=${_friendlyError(error)}',
+                );
+                errors.add(
+                  SoraSourceError(
+                    addonId: addon.id,
+                    addonName: addon.manifest.sourceName,
+                    message: _friendlyError(error),
+                  ),
+                );
                 break;
               }
-            } on Object catch (error) {
-              if (shouldStop()) break outer;
-              errors.add(
-                SoraSourceError(
-                  addonId: addon.id,
-                  addonName: addon.manifest.sourceName,
-                  message: _friendlyError(error),
-                ),
-              );
-              break;
             }
           }
         }
-      }
 
-      final List<SoraSearchResult> results = deduped.values.toList();
-      results.sort((SoraSearchResult a, SoraSearchResult b) {
-        final int score = b.score.compareTo(a.score);
-        if (score != 0) {
-          return score;
+        final List<SoraSearchResult> results = deduped.values.toList();
+        results.sort((SoraSearchResult a, SoraSearchResult b) {
+          final int score = b.score.compareTo(a.score);
+          if (score != 0) {
+            return score;
+          }
+          final int language = languageCodes
+              .indexOf(a.languageCode)
+              .compareTo(languageCodes.indexOf(b.languageCode));
+          if (language != 0) {
+            return language;
+          }
+          return a.title.compareTo(b.title);
+        });
+        final List<SoraSourceError> uniqueErrors = _uniqueErrors(errors);
+        final bool cancelled = shouldStop();
+        final SoraSourceSearchBundle bundle = SoraSourceSearchBundle(
+          variants: variants,
+          results: results,
+          errors: uniqueErrors,
+        );
+        completed = true;
+        if (cancelled) {
+          debugPrint(
+            '[Sora] Search loading cancelled $searchLabel '
+            'results=${results.length} errors=${uniqueErrors.length} '
+            'matchedAddons=${matchedAddonIds.length} '
+            'elapsed=${searchStopwatch.elapsedMilliseconds}ms',
+          );
+        } else {
+          _soraSearchCompletedCache[cacheKey] = bundle;
+          debugPrint(
+            '[Sora] Search loading done $searchLabel '
+            'results=${results.length} errors=${uniqueErrors.length} '
+            'matchedAddons=${matchedAddonIds.length} '
+            'elapsed=${searchStopwatch.elapsedMilliseconds}ms',
+          );
         }
-        final int language = languageCodes
-            .indexOf(a.languageCode)
-            .compareTo(languageCodes.indexOf(b.languageCode));
-        if (language != 0) {
-          return language;
+        return bundle;
+      } on Object catch (error) {
+        completed = true;
+        debugPrint(
+          '[Sora] Search loading failed $searchLabel '
+          'elapsed=${searchStopwatch.elapsedMilliseconds}ms '
+          'error=${_friendlyError(error)}',
+        );
+        rethrow;
+      } finally {
+        if (!completed && shouldStop()) {
+          debugPrint(
+            '[Sora] Search loading cancelled $searchLabel '
+            'elapsed=${searchStopwatch.elapsedMilliseconds}ms',
+          );
         }
-        return a.title.compareTo(b.title);
-      });
-      return SoraSourceSearchBundle(
-        variants: variants,
-        results: results,
-        errors: _uniqueErrors(errors),
-      );
+      }
     });
 
 final soraSourceDetailsProvider =
@@ -1211,4 +1303,32 @@ void _debugPrintTitleVariants(
     sb.write('\n  [$code] ${titles.isEmpty ? "(none)" : titles.join(", ")}');
   }
   debugPrint(sb.toString());
+}
+
+String _soraSearchDebugLabel(SoraSourceSearchRequest request) {
+  final String title = request.media.title
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+  final String addon = request.addonId == null
+      ? 'all'
+      : request.addonId!.trim();
+  final String custom = request.customQuery?.trim() ?? '';
+  return 'media="${title.isEmpty ? request.media.id : title}" '
+      'id=${request.media.id} addon=$addon '
+      'custom=${custom.isEmpty ? "none" : "\"$custom\""}';
+}
+
+String _soraSearchCacheKey(SoraSourceSearchRequest request) {
+  return <String>[
+    request.media.id,
+    request.media.title,
+    request.media.originalTitle,
+    request.media.externalIds['sora_season_number'] ?? '',
+    request.media.externalIds['sora_season_name'] ?? '',
+    request.media.externalIds['sora_season_original_name'] ?? '',
+    request.media.externalIds['sora_season_aliases'] ?? '',
+    request.addonId ?? '',
+    request.customQuery ?? '',
+    request.languageCodes.join('\u0001'),
+  ].join('\u0002');
 }

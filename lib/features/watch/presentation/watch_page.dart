@@ -223,7 +223,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
   void _pickSource(SoraSearchResult result) {
     // Synchronously bump the epoch so every in-flight search loop sees a stale
     // epoch on its next await and breaks out — without restarting providers.
-    cancelAllSoraSearches();
+    cancelAllSoraSearches(ref.read(soraJsRuntimeProvider));
     setState(() {
       _visibleTab = 1;
       _continueEpisode = null;

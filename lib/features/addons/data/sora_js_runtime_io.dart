@@ -236,6 +236,14 @@ class SoraJsRuntime {
     unawaited(_serialized<void>(() async => _removeAllModules()));
   }
 
+  void cancelActiveSearches() {
+    for (final _LoadedSoraModule module in _loaded.values) {
+      if (!module.isSearchCall) continue;
+      module.cancelPendingFetches();
+      module.cancelPendingDelays();
+    }
+  }
+
   // ── Internal queue ────────────────────────────────────────────────────────
 
   Future<T> _serialized<T>(Future<T> Function() action) async {
@@ -1480,7 +1488,12 @@ class _LoadedSoraModule {
 
   bool get isSearchCall {
     final String name = activeFunctionName ?? '';
-    return name == 'searchResults' || name == 'search' || name == 'searchAnime';
+    return name == 'searchResults' ||
+        name == 'searchContent' ||
+        name == 'search' ||
+        name == 'searchAnime' ||
+        name == 'searchAnimes' ||
+        name == 'searchResult';
   }
 
   void registerCancelToken(CancelToken token) {
