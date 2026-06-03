@@ -11,6 +11,9 @@
   <a href="https://github.com/emp0ry/MiruShin/releases/latest">
     <img alt="Total downloads" src="https://img.shields.io/github/downloads/emp0ry/MiruShin/total?color=ff6d00&label=Total%20Downloads">
   </a>
+  <a href="https://www.buymeacoffee.com/emp0ry">
+    <img alt="Buy Me a Coffee" src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-emp0ry-FFDD00?logo=buymeacoffee&logoColor=111827">
+  </a>
   <img alt="Flutter" src="https://img.shields.io/badge/Flutter-stable-02569B?logo=flutter&logoColor=white">
   <img alt="Dart" src="https://img.shields.io/badge/Dart-3.11%2B-0175C2?logo=dart&logoColor=white">
   <img alt="Platforms" src="https://img.shields.io/badge/Platforms-Android%20%7C%20iOS%20%7C%20Windows%20%7C%20macOS%20%7C%20Linux-111827">
@@ -120,6 +123,13 @@ Sora-compatible modules, shown as addons inside the app, unlock source search fo
 MiruShin keeps a local working copy of installed modules and can update them later.
 
 For information on how to get Sora addons, please join the [Sora Discord](https://discord.gg/XR3SrmUbpd) server.
+
+
+## Support the Project
+
+Love MiruShin? Fuel its development with a coffee!
+
+[![Buy Me a Coffee](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/emp0ry)
 
 ## Safety and Scope
 
