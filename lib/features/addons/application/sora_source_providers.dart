@@ -263,6 +263,37 @@ final soraSourceSearchProvider =
       );
     });
 
+final soraSourceDetailsProvider =
+    FutureProvider.family<SoraSourceDetails, SoraSourceRequest>((
+      Ref ref,
+      SoraSourceRequest request,
+    ) async {
+      final SoraInstalledAddon? addon = ref
+          .watch(soraAddonsProvider)
+          .byId(request.addonId);
+      if (addon == null) {
+        throw const SoraAddonException('Addon is no longer installed.');
+      }
+      final runtime = ref.watch(soraJsRuntimeProvider);
+      return runtime.extractDetails(addon: addon, result: request.result);
+    });
+
+final soraSourceEpisodesProvider =
+    FutureProvider.family<List<SoraEpisode>, SoraSourceRequest>((
+      Ref ref,
+      SoraSourceRequest request,
+    ) async {
+      final SoraInstalledAddon? addon = ref
+          .watch(soraAddonsProvider)
+          .byId(request.addonId);
+      if (addon == null) {
+        throw const SoraAddonException('Addon is no longer installed.');
+      }
+      return ref
+          .watch(soraJsRuntimeProvider)
+          .extractEpisodes(addon: addon, result: request.result);
+    });
+
 final soraSourceContentProvider =
     FutureProvider.family<SoraSourceContent, SoraSourceRequest>((
       Ref ref,
@@ -274,15 +305,14 @@ final soraSourceContentProvider =
       if (addon == null) {
         throw const SoraAddonException('Addon is no longer installed.');
       }
-      final runtime = ref.watch(soraJsRuntimeProvider);
-      final SoraSourceDetails details = await runtime.extractDetails(
-        addon: addon,
-        result: request.result,
+      final Future<SoraSourceDetails> detailsFuture = ref.watch(
+        soraSourceDetailsProvider(request).future,
       );
-      final List<SoraEpisode> episodes = await runtime.extractEpisodes(
-        addon: addon,
-        result: request.result,
+      final Future<List<SoraEpisode>> episodesFuture = ref.watch(
+        soraSourceEpisodesProvider(request).future,
       );
+      final SoraSourceDetails details = await detailsFuture;
+      final List<SoraEpisode> episodes = await episodesFuture;
       return SoraSourceContent(
         addon: addon,
         result: request.result,

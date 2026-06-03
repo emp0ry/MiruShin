@@ -756,6 +756,7 @@ class _AniListView extends ConsumerStatefulWidget {
 class _AniListViewState extends ConsumerState<_AniListView>
     with TickerProviderStateMixin {
   late TabController _tab;
+  int _activeTabIndex = 0;
 
   List<AniListAnimeListFolder> get _viewFolders {
     final Map<int, AniListAnimeListEntry> byEntryId =
@@ -779,11 +780,13 @@ class _AniListViewState extends ConsumerState<_AniListView>
   void initState() {
     super.initState();
     final List<AniListAnimeListFolder> folders = _viewFolders;
+    _activeTabIndex = _defaultFolderIndex(folders, widget.defaultPage);
     _tab = TabController(
       length: folders.length,
       vsync: this,
-      initialIndex: _defaultFolderIndex(folders, widget.defaultPage),
+      initialIndex: _activeTabIndex,
     );
+    _tab.addListener(_handleTabChanged);
   }
 
   @override
@@ -795,17 +798,29 @@ class _AniListViewState extends ConsumerState<_AniListView>
       final int prev = old.defaultPage != widget.defaultPage
           ? _defaultFolderIndex(folders, widget.defaultPage)
           : _tab.index.clamp(0, nextLength - 1);
+      _tab.removeListener(_handleTabChanged);
       _tab.dispose();
       _tab = TabController(length: nextLength, vsync: this, initialIndex: prev);
+      _activeTabIndex = prev;
+      _tab.addListener(_handleTabChanged);
     } else if (old.defaultPage != widget.defaultPage) {
       _tab.animateTo(_defaultFolderIndex(folders, widget.defaultPage));
+    } else if (_activeTabIndex >= nextLength) {
+      _activeTabIndex = nextLength - 1;
     }
   }
 
   @override
   void dispose() {
+    _tab.removeListener(_handleTabChanged);
     _tab.dispose();
     super.dispose();
+  }
+
+  void _handleTabChanged() {
+    final int next = _tab.index;
+    if (next == _activeTabIndex || !mounted) return;
+    setState(() => _activeTabIndex = next);
   }
 
   @override
@@ -832,9 +847,13 @@ class _AniListViewState extends ConsumerState<_AniListView>
         Expanded(
           child: TabBarView(
             controller: _tab,
-            children: folders
-                .map((f) => _FolderView(folder: f, mediaType: widget.mediaType))
-                .toList(),
+            children: folders.asMap().entries.map((entry) {
+              return _FolderView(
+                folder: entry.value,
+                mediaType: widget.mediaType,
+                enableRussianAliasLoad: entry.key == _activeTabIndex,
+              );
+            }).toList(),
           ),
         ),
       ],
@@ -869,9 +888,15 @@ class _AniListViewState extends ConsumerState<_AniListView>
 // ─── Per-status folder view ───────────────────────────────────────────────────
 
 class _FolderView extends ConsumerStatefulWidget {
-  const _FolderView({required this.folder, required this.mediaType});
+  const _FolderView({
+    required this.folder,
+    required this.mediaType,
+    required this.enableRussianAliasLoad,
+  });
+
   final AniListAnimeListFolder folder;
   final String mediaType;
+  final bool enableRussianAliasLoad;
 
   @override
   ConsumerState<_FolderView> createState() => _FolderViewState();
@@ -1015,15 +1040,21 @@ class _FolderViewState extends ConsumerState<_FolderView>
 
   List<AniListAnimeListEntry> get _filtered {
     final String q = _search.text.toLowerCase().trim();
+    final Map<int, String> russianAliasesByMalId = _russianAliasesByMalId;
     List<AniListAnimeListEntry> list = widget.folder.entries;
 
     if (q.isNotEmpty) {
       list = list
           .where((e) {
+            final int? malId = _malIdForMediaItem(e.mediaItem);
+            final String russianAlias = malId == null
+                ? ''
+                : russianAliasesByMalId[malId] ?? '';
             final List<String> searchable = <String>[
               e.mediaItem.title,
               e.mediaItem.originalTitle,
               ...e.mediaItem.aliases,
+              russianAlias,
               ...e.mediaItem.genres,
               e.format ?? '',
               e.status.label,
@@ -1118,6 +1149,43 @@ class _FolderViewState extends ConsumerState<_FolderView>
         list.sort((a, b) => (a.avgScore ?? 0).compareTo(b.avgScore ?? 0));
     }
     return list;
+  }
+
+  Map<int, String> get _russianAliasesByMalId {
+    if (widget.mediaType != 'ANIME' || !widget.enableRussianAliasLoad) {
+      return const <int, String>{};
+    }
+
+    final bool isAllTab = widget.folder.status == null;
+    final bool hasRussianSearch = _hasCyrillic(_search.text);
+    final bool loadNetwork = !isAllTab || hasRussianSearch;
+    final int? viewerId = ref.watch(
+      settingsProvider.select(
+        (SettingsState settings) => settings.anilistViewerId,
+      ),
+    );
+    return ref
+        .watch(
+          anilistRussianAliasProvider(
+            AniListRussianAliasRequest(
+              viewerId: viewerId,
+              mediaType: widget.mediaType,
+              statusKey: widget.folder.status?.name ?? 'all',
+              malIds: widget.folder.entries
+                  .map(
+                    (AniListAnimeListEntry entry) =>
+                        _malIdForMediaItem(entry.mediaItem),
+                  )
+                  .whereType<int>(),
+              loadNetwork: loadNetwork,
+            ),
+          ),
+        )
+        .maybeWhen(
+          skipLoadingOnReload: true,
+          data: (Map<int, String> value) => value,
+          orElse: () => const <int, String>{},
+        );
   }
 
   int get _activeFilterCount {
@@ -2319,6 +2387,13 @@ bool _matchesFlag(AniListAnimeListEntry entry, _LibraryFlag flag) {
 
 String _humanizeMediaStatus(String raw) {
   return humanReadableMediaStatus(raw);
+}
+
+bool _hasCyrillic(String value) => RegExp(r'[а-яёА-ЯЁ]').hasMatch(value);
+
+int? _malIdForMediaItem(MediaItem item) {
+  final int? malId = int.tryParse(item.externalIds['mal'] ?? '');
+  return malId != null && malId > 0 ? malId : null;
 }
 
 String? _nextAiringLabel({

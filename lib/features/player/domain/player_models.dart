@@ -577,7 +577,11 @@ class MediaPlaybackItem {
       subtitle: episodeSubtitle,
       posterUrl: item.posterUrl,
       backdropUrl: item.backdropUrl,
-      externalIds: item.externalIds,
+      externalIds: <String, String>{
+        ...item.externalIds,
+        'sora_addon_id': bundle.addonId,
+        'sora_episode_href': bundle.episode.href,
+      },
       servers: servers,
       currentEpisodeId: '${seasonNumber}_$episodeNumber',
       skipMarkers: _skipMarkersFromBundle(bundle),

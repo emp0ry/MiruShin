@@ -406,9 +406,17 @@ class _WatchPageState extends ConsumerState<WatchPage> {
       final String? mediaId = _lastItem?.id;
       final int? seasonNum = _session?.seasonNumber;
       if (mediaId != null && seasonNum != null) {
+        final String? progressMediaId = soraEpisodeProgressMediaId(
+          addonId: bundle.addonId,
+          episodeHref: bundle.episode.href,
+        );
         final EpisodeProgress? prog = ref
             .read(localLibraryProvider.notifier)
-            .episodeProgress(mediaId, seasonNum, bundle.episode.number);
+            .episodeProgress(
+              progressMediaId ?? mediaId,
+              seasonNum,
+              bundle.episode.number,
+            );
         if (prog != null && prog.positionSeconds > 0) {
           startPosition = Duration(seconds: prog.positionSeconds);
         }
@@ -472,9 +480,9 @@ class _WatchPageState extends ConsumerState<WatchPage> {
       addonId: source.addonId,
       result: source,
     );
-    final SoraSourceContent content;
+    final List<SoraEpisode> episodes;
     try {
-      content = await ref.read(soraSourceContentProvider(request).future);
+      episodes = await ref.read(soraSourceEpisodesProvider(request).future);
     } on Object catch (error) {
       if (!mounted) return;
       _nextEpisodeInFullscreen = false;
@@ -489,7 +497,6 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     }
     if (!mounted) return;
 
-    final List<SoraEpisode> episodes = content.episodes;
     if (episodes.isEmpty) return;
     int index = episodes.indexWhere((SoraEpisode e) => e.href == current.href);
     if (index < 0) {
@@ -539,6 +546,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
           AnimeEpisodeMetadataRequest(
             anilistId: anilistId,
             languageCode: _episodeMetadataLanguage(settings),
+            loadNetwork: false,
           ),
         ).future,
       );
@@ -2017,6 +2025,73 @@ class _EpisodePickerSection extends ConsumerStatefulWidget {
 class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
   String? _lastNotifiedHref;
   int _lastNotifiedNum = -1;
+  String? _episodeMetadataLoadKey;
+  bool _episodeMetadataLoadEnabled = false;
+  bool _episodeMetadataLoadScheduled = false;
+
+  @override
+  void didUpdateWidget(covariant _EpisodePickerSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.item.id != widget.item.id ||
+        oldWidget.source.addonId != widget.source.addonId ||
+        oldWidget.source.href != widget.source.href) {
+      _resetEpisodeMetadataLoad();
+    }
+  }
+
+  void _resetEpisodeMetadataLoad() {
+    _episodeMetadataLoadKey = null;
+    _episodeMetadataLoadEnabled = false;
+    _episodeMetadataLoadScheduled = false;
+  }
+
+  AnimeEpisodeMetadataBundle _lazyEpisodeMetadata({
+    required SettingsState settings,
+    required bool useAniListProgress,
+    required int? anilistId,
+  }) {
+    if (!useAniListProgress || anilistId == null) {
+      return AnimeEpisodeMetadataBundle.empty;
+    }
+
+    final String languageCode = _episodeMetadataLanguage(settings);
+    final String key =
+        '${widget.item.id}:${widget.source.addonId}:'
+        '${widget.source.href}:$anilistId:$languageCode';
+    if (_episodeMetadataLoadKey != key) {
+      _episodeMetadataLoadKey = key;
+      _episodeMetadataLoadEnabled = false;
+      _episodeMetadataLoadScheduled = false;
+    }
+
+    if (!_episodeMetadataLoadEnabled) {
+      if (!_episodeMetadataLoadScheduled) {
+        _episodeMetadataLoadScheduled = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || _episodeMetadataLoadKey != key) return;
+          setState(() {
+            _episodeMetadataLoadEnabled = true;
+            _episodeMetadataLoadScheduled = false;
+          });
+        });
+      }
+      return AnimeEpisodeMetadataBundle.empty;
+    }
+
+    return ref
+        .watch(
+          animeEpisodeMetadataProvider(
+            AnimeEpisodeMetadataRequest(
+              anilistId: anilistId,
+              languageCode: languageCode,
+            ),
+          ),
+        )
+        .maybeWhen(
+          data: (AnimeEpisodeMetadataBundle value) => value,
+          orElse: () => AnimeEpisodeMetadataBundle.empty,
+        );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2025,8 +2100,8 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
       result: widget.source,
     );
 
-    final AsyncValue<SoraSourceContent> contentAsync = ref.watch(
-      soraSourceContentProvider(request),
+    final AsyncValue<List<SoraEpisode>> episodesAsync = ref.watch(
+      soraSourceEpisodesProvider(request),
     );
     final Set<String> watchedSet = ref.watch(soraEpisodeProgressProvider);
     final SettingsState settings = ref.watch(settingsProvider);
@@ -2062,23 +2137,6 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
       localLibraryProvider.notifier,
     );
 
-    final AnimeEpisodeMetadataBundle episodeMetadata =
-        !useAniListProgress || anilistId == null
-        ? AnimeEpisodeMetadataBundle.empty
-        : ref
-              .watch(
-                animeEpisodeMetadataProvider(
-                  AnimeEpisodeMetadataRequest(
-                    anilistId: anilistId,
-                    languageCode: _episodeMetadataLanguage(settings),
-                  ),
-                ),
-              )
-              .maybeWhen(
-                data: (AnimeEpisodeMetadataBundle value) => value,
-                orElse: () => AnimeEpisodeMetadataBundle.empty,
-              );
-
     return GlassCard(
       padding: const EdgeInsets.all(AppSpacing.xl),
       child: Column(
@@ -2090,7 +2148,7 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
                 : context.t('Choose Episode'),
             subtitle: context.t('Tap to resolve stream.'),
           ),
-          contentAsync.when(
+          episodesAsync.when(
             loading: () => const SkeletonBox(height: 200, radius: AppRadius.lg),
             error: (Object error, _) => Text(
               error.toString(),
@@ -2098,8 +2156,15 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
                 context,
               ).textTheme.bodyMedium?.copyWith(color: AppColors.danger),
             ),
-            data: (SoraSourceContent content) {
-              if (content.episodes.isEmpty) {
+            data: (List<SoraEpisode> episodes) {
+              final AnimeEpisodeMetadataBundle episodeMetadata =
+                  _lazyEpisodeMetadata(
+                    settings: settings,
+                    useAniListProgress: useAniListProgress,
+                    anilistId: anilistId,
+                  );
+
+              if (episodes.isEmpty) {
                 final SoraEpisode episode = SoraEpisode(
                   number: 1,
                   href: widget.source.href,
@@ -2128,7 +2193,7 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
               // Episode 0 (number < 1) is excluded — it's a special/prologue
               // that must not shift the watched range for numbered episodes.
               int maxLocalWatched = 0;
-              for (final SoraEpisode ep in content.episodes) {
+              for (final SoraEpisode ep in episodes) {
                 if (ep.number < 1) continue;
                 final String key = ref
                     .read(soraEpisodeProgressProvider.notifier)
@@ -2144,10 +2209,16 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
               }
               // Also check local position-based progress
               int maxPositionWatched = 0;
-              for (final SoraEpisode ep in content.episodes) {
+              for (final SoraEpisode ep in episodes) {
                 if (ep.number < 1) continue;
+                final String progressMediaId =
+                    soraEpisodeProgressMediaId(
+                      addonId: widget.source.addonId,
+                      episodeHref: ep.href,
+                    ) ??
+                    widget.item.id;
                 final EpisodeProgress? prog = libraryNotifier.episodeProgress(
-                  widget.item.id,
+                  progressMediaId,
                   widget.seasonNumber,
                   ep.number,
                 );
@@ -2170,7 +2241,7 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
               SoraEpisode? continueEp;
               AnimeEpisodeMetadata? continueEpMeta;
               if (effectiveContinued > 0) {
-                for (final SoraEpisode ep in content.episodes) {
+                for (final SoraEpisode ep in episodes) {
                   if (ep.number.round() == effectiveContinued + 1) {
                     continueEp = ep;
                     continueEpMeta = episodeMetadata.forNumber(ep.number);
@@ -2199,11 +2270,11 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
               return ListView.separated(
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
-                itemCount: content.episodes.length,
+                itemCount: episodes.length,
                 separatorBuilder: (context, index) =>
                     const SizedBox(height: AppSpacing.sm),
                 itemBuilder: (BuildContext context, int index) {
-                  final SoraEpisode episode = content.episodes[index];
+                  final SoraEpisode episode = episodes[index];
                   final AnimeEpisodeMetadata? metadata = episodeMetadata
                       .forNumber(episode.number);
                   final int epNum = episode.number.round();
@@ -2215,9 +2286,15 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
                         result: widget.source,
                         episode: episode,
                       );
+                  final String progressMediaId =
+                      soraEpisodeProgressMediaId(
+                        addonId: widget.source.addonId,
+                        episodeHref: episode.href,
+                      ) ??
+                      widget.item.id;
                   final EpisodeProgress? localProg = libraryNotifier
                       .episodeProgress(
-                        widget.item.id,
+                        progressMediaId,
                         widget.seasonNumber,
                         episode.number,
                       );

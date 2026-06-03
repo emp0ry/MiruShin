@@ -156,6 +156,7 @@ class PlaybackController extends Notifier<PlaybackState> {
   static const Duration _seekSettleMinHold = Duration(milliseconds: 700);
   static const Duration _seekSettleTimeout = Duration(milliseconds: 5000);
   static const Duration _seekSettleTolerance = Duration(milliseconds: 1200);
+  static const Duration _engineOpenTimeout = Duration(seconds: 45);
   static const double _temporaryPlaybackSpeedBoost = 1.0;
 
   Timer? _progressTimer;
@@ -446,6 +447,15 @@ class PlaybackController extends Notifier<PlaybackState> {
       }
     }
 
+    final String? soraMediaId = soraEpisodeProgressMediaId(
+      addonId: item.externalIds['sora_addon_id'] ?? '',
+      episodeHref: item.externalIds['sora_episode_href'] ?? '',
+    );
+    if (soraMediaId != null) {
+      add(soraMediaId);
+      return ids.toList(growable: false);
+    }
+
     add(item.id);
 
     item.externalIds.forEach((String key, String value) {
@@ -514,17 +524,19 @@ class PlaybackController extends Notifier<PlaybackState> {
     );
 
     try {
-      await engine.open(
-        PlayerSource(
-          url: url,
-          headers: quality.headers.isNotEmpty
-              ? quality.headers
-              : server.headers,
-          streamType: server.streamType,
-        ),
-        startAt: position,
-        autoplay: false,
-      );
+      await engine
+          .open(
+            PlayerSource(
+              url: url,
+              headers: quality.headers.isNotEmpty
+                  ? quality.headers
+                  : server.headers,
+              streamType: server.streamType,
+            ),
+            startAt: position,
+            autoplay: false,
+          )
+          .timeout(_engineOpenTimeout);
       if (generation != _playbackGeneration) {
         await engine.dispose();
         return;
@@ -543,6 +555,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       _updateMediaSession();
       _startProgressSaver();
       _reinforceInitialSeek(engine, position, generation, _manualSeekEpoch);
+      _guardFreshStart(engine, position, generation, _manualSeekEpoch);
       _watchEngineErrors(
         engine,
         generation,
@@ -601,32 +614,112 @@ class PlaybackController extends Notifier<PlaybackState> {
     int manualSeekEpoch,
   ) {
     if (position <= const Duration(seconds: 3)) return;
+    unawaited(
+      _reinforceInitialSeekUntilAccepted(
+        engine,
+        position,
+        generation,
+        manualSeekEpoch,
+      ),
+    );
+  }
 
+  Future<void> _reinforceInitialSeekUntilAccepted(
+    PlayerEngine engine,
+    Duration position,
+    int generation,
+    int manualSeekEpoch,
+  ) async {
     for (final Duration delay in const <Duration>[
-      Duration(milliseconds: 500),
-      Duration(milliseconds: 1200),
+      Duration(milliseconds: 1800),
       Duration(milliseconds: 2500),
-      Duration(milliseconds: 4500),
+      Duration(milliseconds: 4000),
     ]) {
-      Future<void>.delayed(delay, () async {
-        if (generation != _playbackGeneration ||
-            manualSeekEpoch != _manualSeekEpoch ||
-            state.engine != engine) {
-          return;
-        }
+      await Future<void>.delayed(delay);
+      if (generation != _playbackGeneration ||
+          manualSeekEpoch != _manualSeekEpoch ||
+          state.engine != engine) {
+        return;
+      }
 
-        final PlayerEngineState value = engine.state.value;
-        if (!value.isInitialized) {
-          return;
-        }
+      if (_initialSeekAccepted(engine, position)) {
+        return;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 700));
+      if (generation != _playbackGeneration ||
+          manualSeekEpoch != _manualSeekEpoch ||
+          state.engine != engine ||
+          _initialSeekAccepted(engine, position)) {
+        return;
+      }
 
-        if (value.position + const Duration(seconds: 2) >= position) {
-          return;
-        }
+      final PlayerEngineState value = engine.state.value;
+      if (!value.isInitialized) continue;
 
+      try {
         await engine.seekTo(position);
-        state = state.copyWith();
-      });
+      } on Object {
+        // Some native backends reject an early startup seek. Later loop ticks
+        // can retry if the stream is still behind the saved resume point.
+      }
+      state = state.copyWith();
+    }
+  }
+
+  bool _initialSeekAccepted(PlayerEngine engine, Duration position) {
+    final PlayerEngineState value = engine.state.value;
+    if (!value.isInitialized) return false;
+    return value.position + const Duration(seconds: 3) >= position;
+  }
+
+  void _guardFreshStart(
+    PlayerEngine engine,
+    Duration requestedPosition,
+    int generation,
+    int manualSeekEpoch,
+  ) {
+    if (requestedPosition > const Duration(seconds: 1)) return;
+    unawaited(
+      _guardFreshStartFromInheritedPosition(
+        engine,
+        generation,
+        manualSeekEpoch,
+      ),
+    );
+  }
+
+  Future<void> _guardFreshStartFromInheritedPosition(
+    PlayerEngine engine,
+    int generation,
+    int manualSeekEpoch,
+  ) async {
+    for (final Duration delay in const <Duration>[
+      Duration(milliseconds: 250),
+      Duration(milliseconds: 900),
+      Duration(milliseconds: 1600),
+    ]) {
+      await Future<void>.delayed(delay);
+      if (generation != _playbackGeneration ||
+          manualSeekEpoch != _manualSeekEpoch ||
+          state.engine != engine) {
+        return;
+      }
+
+      final PlayerEngineState value = engine.state.value;
+      if (!value.isInitialized) continue;
+
+      final Duration position = value.position;
+      if (position > const Duration(seconds: 5) &&
+          position < const Duration(seconds: 30)) {
+        try {
+          await engine.seekTo(Duration.zero);
+          state = state.copyWith();
+        } on Object {
+          // Startup guard should never break playback if the backend rejects
+          // a defensive seek-to-zero.
+        }
+        return;
+      }
     }
   }
 
@@ -1711,6 +1804,30 @@ class PlaybackController extends Notifier<PlaybackState> {
       voiceover: state.voiceover,
       subtitle: state.subtitle,
       preserveAspectRatio: current?.state.value.aspectRatio,
+    );
+  }
+
+  Future<void> reloadWithBackend(PlayerBackend backend) async {
+    await ref.read(playerSettingsProvider.notifier).setPlayerBackend(backend);
+
+    final MediaPlaybackItem? item = state.item;
+    final MediaServer? server = state.server;
+    final StreamQuality? quality = state.quality;
+    final PlayerEngine? current = state.engine;
+    if (item == null || server == null || quality == null) {
+      return;
+    }
+
+    await _open(
+      item: item,
+      server: server,
+      quality: quality,
+      position: _currentPositionFor(current),
+      autoplay: current?.state.value.isPlaying ?? true,
+      voiceover: state.voiceover,
+      subtitle: state.subtitle,
+      preserveAspectRatio: current?.state.value.aspectRatio,
+      backendOverride: backend,
     );
   }
 

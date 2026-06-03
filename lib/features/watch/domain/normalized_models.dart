@@ -1,5 +1,16 @@
 import '../../addons/domain/sora_models.dart';
 
+String? soraEpisodeProgressMediaId({
+  required String addonId,
+  required String episodeHref,
+}) {
+  final String cleanAddonId = addonId.trim();
+  final String cleanHref = episodeHref.trim();
+  if (cleanAddonId.isEmpty || cleanHref.isEmpty) return null;
+  return 'sora:${Uri.encodeComponent(cleanAddonId)}:'
+      '${Uri.encodeComponent(cleanHref)}';
+}
+
 class NormalizedSourceMatch {
   const NormalizedSourceMatch({
     required this.addonId,

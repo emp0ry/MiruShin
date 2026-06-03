@@ -188,16 +188,17 @@ final animeEpisodeMetadataProvider =
       final MetadataCacheStore cache = ref.watch(metadataCacheStoreProvider);
       final String cacheKey =
           'anilist.episodeMetadata.${request.anilistId}.${request.languageCode}';
+      final Map<String, dynamic>? cached = await cache.read(cacheKey);
+      if (cached != null) return _episodeMetadataFromJson(cached);
+      if (!request.loadNetwork) return AnimeEpisodeMetadataBundle.empty;
+
       final AnimeEpisodeMetadataBundle bundle = await ref
           .watch(_animeEpisodeMetadataClientProvider)
           .fetch(
             anilistId: request.anilistId,
             languageCode: request.languageCode,
           );
-      if (bundle.isEmpty) {
-        final Map<String, dynamic>? cached = await cache.read(cacheKey);
-        if (cached != null) return _episodeMetadataFromJson(cached);
-      } else {
+      if (!bundle.isEmpty) {
         await cache.write(cacheKey, _episodeMetadataToJson(bundle));
       }
       return bundle;
@@ -207,20 +208,23 @@ class AnimeEpisodeMetadataRequest {
   const AnimeEpisodeMetadataRequest({
     required this.anilistId,
     required this.languageCode,
+    this.loadNetwork = true,
   });
 
   final int anilistId;
   final String languageCode;
+  final bool loadNetwork;
 
   @override
   bool operator ==(Object other) {
     return other is AnimeEpisodeMetadataRequest &&
         other.anilistId == anilistId &&
-        other.languageCode == languageCode;
+        other.languageCode == languageCode &&
+        other.loadNetwork == loadNetwork;
   }
 
   @override
-  int get hashCode => Object.hash(anilistId, languageCode);
+  int get hashCode => Object.hash(anilistId, languageCode, loadNetwork);
 }
 
 class DiscoveryMetadataQuery {

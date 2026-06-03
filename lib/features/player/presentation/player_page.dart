@@ -49,6 +49,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   static const String _nextEpisodeSignal = 'next_episode';
   static const String _nextEpisodeFullscreenSignal = 'next_episode_fullscreen';
   static const Duration _spaceHoldSpeedDelay = Duration(milliseconds: 260);
+  static const Duration _exitCleanupTimeout = Duration(seconds: 2);
 
   Timer? _hideTimer;
   Timer? _autoNextTimer;
@@ -337,7 +338,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     if (_stoppedPlayback) return;
     _stoppedPlayback = true;
     try {
-      await _playbackNotifier.stop();
+      await _playbackNotifier.stop().timeout(_exitCleanupTimeout);
     } catch (_) {
       // Native players can reject teardown while the window is already closing.
     }
@@ -356,22 +357,22 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     // to the foreground first so the window is not stranded in its shrunken
     // always-on-top state and navigation opens normally.
     if (_inPipMode) {
-      await ref.read(pipControllerProvider).bringToForeground();
+      await Future.any(<Future<void>>[
+        ref.read(pipControllerProvider).bringToForeground(),
+        Future<void>.delayed(const Duration(milliseconds: 700)),
+      ]);
       if (playNext) {
         await Future<void>.delayed(const Duration(milliseconds: 300));
       }
     }
 
-    await Future.any(<Future<void>>[
-      _setFullscreen(false),
-      Future<void>.delayed(const Duration(seconds: 4)),
-    ]);
-    await Future.any(<Future<void>>[
-      _stopPlayback(),
-      Future<void>.delayed(const Duration(seconds: 4)),
-    ]);
-    await Future<void>.delayed(const Duration(milliseconds: 80));
-    if (!mounted) return;
+    unawaited(
+      Future.any(<Future<void>>[
+        _setFullscreen(false),
+        Future<void>.delayed(_exitCleanupTimeout),
+      ]),
+    );
+    unawaited(_stopPlayback());
 
     final Object? result = playNext
         ? (wasFullscreen ? _nextEpisodeFullscreenSignal : _nextEpisodeSignal)
@@ -379,6 +380,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     setState(() {
       _allowRoutePop = true;
     });
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    if (!mounted) return;
     if (context.canPop()) {
       context.pop(result);
     } else {
@@ -845,14 +848,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                                     .read(pipControllerProvider)
                                     .windowPhysicalRect(),
                                 setWindowPhysicalRect:
-                                    (
-                                      double x,
-                                      double y,
-                                      double w,
-                                      double h,
-                                    ) => ref
-                                        .read(pipControllerProvider)
-                                        .setWindowPhysicalRect(x, y, w, h),
+                                    (double x, double y, double w, double h) =>
+                                        ref
+                                            .read(pipControllerProvider)
+                                            .setWindowPhysicalRect(x, y, w, h),
                               ),
                           ],
                         ),
@@ -2901,7 +2900,7 @@ class _PlayerSettingsTiles extends ConsumerWidget {
           title: Text(context.t('Player engine')),
           subtitle: Text(
             '${context.t(selectedBackend.title)} · '
-            '${context.t('Applies on the next stream open.')}',
+            'Reloads current stream.',
           ),
           onTap: () async {
             final PlayerBackend? picked = await showDialog<PlayerBackend>(
@@ -2933,8 +2932,8 @@ class _PlayerSettingsTiles extends ConsumerWidget {
             );
             if (picked != null) {
               await ref
-                  .read(playerSettingsProvider.notifier)
-                  .setPlayerBackend(picked);
+                  .read(playbackControllerProvider.notifier)
+                  .reloadWithBackend(picked);
             }
           },
         ),
@@ -3559,8 +3558,8 @@ class _PipResizeHandleState extends State<_PipResizeHandle> {
       widget.corner == _PipCorner.topRight;
 
   Future<void> _onPanStart(DragStartDetails _) async {
-    final ({double x, double y, double width, double height})? rect = await widget
-        .windowPhysicalRect();
+    final ({double x, double y, double width, double height})? rect =
+        await widget.windowPhysicalRect();
     if (rect == null) {
       _anchorX = null;
       _anchorY = null;
@@ -3594,7 +3593,8 @@ class _PipResizeHandleState extends State<_PipResizeHandle> {
   }
 
   MouseCursor get _cursor =>
-      _isLeft == _isTop // topLeft / bottomRight
+      _isLeft ==
+          _isTop // topLeft / bottomRight
       ? SystemMouseCursors.resizeUpLeftDownRight
       : SystemMouseCursors.resizeUpRightDownLeft;
 

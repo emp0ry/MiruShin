@@ -128,6 +128,13 @@ final anilistAnimePreviewRussianListProvider =
       );
     });
 
+final anilistRussianAliasProvider =
+    AsyncNotifierProvider.family<
+      AniListRussianAliasController,
+      Map<int, String>,
+      AniListRussianAliasRequest
+    >(AniListRussianAliasController.new);
+
 final anilistMangaPreviewListProvider =
     FutureProvider<List<AniListAnimeListFolder>>((Ref ref) async {
       return _fetchCollection(
@@ -137,6 +144,259 @@ final anilistMangaPreviewListProvider =
         flushQueue: false,
       );
     });
+
+const Duration _russianAliasCacheTtl = Duration(days: 30);
+const List<String> _russianAliasStatusKeys = <String>[
+  'current',
+  'planning',
+  'completed',
+  'dropped',
+  'paused',
+  'repeating',
+];
+
+class AniListRussianAliasRequest {
+  AniListRussianAliasRequest({
+    required this.viewerId,
+    required this.mediaType,
+    required this.statusKey,
+    required Iterable<int> malIds,
+    this.loadNetwork = false,
+  }) : malIds = _sortedUniqueIds(malIds);
+
+  final int? viewerId;
+  final String mediaType;
+  final String statusKey;
+  final List<int> malIds;
+  final bool loadNetwork;
+
+  @override
+  bool operator ==(Object other) {
+    if (other is! AniListRussianAliasRequest) return false;
+    if (other.viewerId != viewerId ||
+        other.mediaType != mediaType ||
+        other.statusKey != statusKey ||
+        other.loadNetwork != loadNetwork ||
+        other.malIds.length != malIds.length) {
+      return false;
+    }
+    for (int index = 0; index < malIds.length; index += 1) {
+      if (other.malIds[index] != malIds[index]) return false;
+    }
+    return true;
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    viewerId,
+    mediaType,
+    statusKey,
+    loadNetwork,
+    Object.hashAll(malIds),
+  );
+
+  static List<int> _sortedUniqueIds(Iterable<int> ids) {
+    final List<int> result = ids.where((int id) => id > 0).toSet().toList();
+    result.sort();
+    return result;
+  }
+}
+
+class AniListRussianAliasController extends AsyncNotifier<Map<int, String>> {
+  AniListRussianAliasController(this.request);
+
+  final AniListRussianAliasRequest request;
+
+  @override
+  Future<Map<int, String>> build() async {
+    if (request.mediaType != 'ANIME' || request.malIds.isEmpty) {
+      return const <int, String>{};
+    }
+
+    bool disposed = false;
+    ref.onDispose(() => disposed = true);
+
+    final MetadataCacheStore cache = ref.watch(metadataCacheStoreProvider);
+    final _RussianAliasCacheEntry cached = await _readRussianAliasCache(
+      cache,
+      request,
+    );
+
+    if (request.loadNetwork) {
+      unawaited(
+        _refreshRussianAliasCache(cache, cached, isDisposed: () => disposed),
+      );
+    }
+
+    return cached.titlesByMalId;
+  }
+
+  Future<void> _refreshRussianAliasCache(
+    MetadataCacheStore cache,
+    _RussianAliasCacheEntry cached, {
+    required bool Function() isDisposed,
+  }) async {
+    final DateTime now = DateTime.now();
+    final List<int> pendingIds = <int>[];
+    for (final int malId in request.malIds) {
+      final DateTime? fetchedAt = cached.fetchedAtByMalId[malId];
+      if (fetchedAt == null ||
+          now.difference(fetchedAt) >= _russianAliasCacheTtl) {
+        pendingIds.add(malId);
+      }
+    }
+    if (pendingIds.isEmpty) return;
+
+    final Map<int, String> fetched = await ShikiMoriClient().batchRussianTitles(
+      pendingIds,
+    );
+    final Map<int, String> nextTitles = <int, String>{...cached.titlesByMalId};
+    final Map<int, DateTime> nextFetchedAt = <int, DateTime>{
+      ...cached.fetchedAtByMalId,
+    };
+    for (final int malId in pendingIds) {
+      nextFetchedAt[malId] = now;
+      final String? title = fetched[malId]?.trim();
+      if (title != null && title.isNotEmpty) {
+        nextTitles[malId] = title;
+      }
+    }
+
+    final _RussianAliasCacheEntry updated = _RussianAliasCacheEntry(
+      titlesByMalId: nextTitles,
+      fetchedAtByMalId: nextFetchedAt,
+    );
+    await cache.write(
+      _russianAliasCacheKey(request),
+      _encodeRussianAliases(updated),
+    );
+    if (!isDisposed()) {
+      state = AsyncData<Map<int, String>>(updated.titlesByMalId);
+    }
+  }
+}
+
+class _RussianAliasCacheEntry {
+  const _RussianAliasCacheEntry({
+    required this.titlesByMalId,
+    required this.fetchedAtByMalId,
+  });
+
+  final Map<int, String> titlesByMalId;
+  final Map<int, DateTime> fetchedAtByMalId;
+}
+
+Future<_RussianAliasCacheEntry> _readRussianAliasCache(
+  MetadataCacheStore cache,
+  AniListRussianAliasRequest request,
+) async {
+  if (request.statusKey == 'all') {
+    _RussianAliasCacheEntry result = const _RussianAliasCacheEntry(
+      titlesByMalId: <int, String>{},
+      fetchedAtByMalId: <int, DateTime>{},
+    );
+    for (final String statusKey in <String>[
+      'all',
+      ..._russianAliasStatusKeys,
+    ]) {
+      final Map<String, dynamic>? json = await cache.read(
+        _russianAliasCacheKey(request, statusKeyOverride: statusKey),
+      );
+      if (json == null) continue;
+      result = _mergeRussianAliasCaches(result, _decodeRussianAliases(json));
+    }
+    return result;
+  }
+
+  final Map<String, dynamic>? json = await cache.read(
+    _russianAliasCacheKey(request),
+  );
+  if (json == null) {
+    return const _RussianAliasCacheEntry(
+      titlesByMalId: <int, String>{},
+      fetchedAtByMalId: <int, DateTime>{},
+    );
+  }
+  return _decodeRussianAliases(json);
+}
+
+_RussianAliasCacheEntry _mergeRussianAliasCaches(
+  _RussianAliasCacheEntry left,
+  _RussianAliasCacheEntry right,
+) {
+  final Map<int, String> titles = <int, String>{...left.titlesByMalId};
+  for (final MapEntry<int, String> entry in right.titlesByMalId.entries) {
+    if (entry.value.trim().isNotEmpty) {
+      titles[entry.key] = entry.value;
+    }
+  }
+
+  final Map<int, DateTime> fetchedAt = <int, DateTime>{
+    ...left.fetchedAtByMalId,
+  };
+  for (final MapEntry<int, DateTime> entry in right.fetchedAtByMalId.entries) {
+    final DateTime? previous = fetchedAt[entry.key];
+    if (previous == null || entry.value.isAfter(previous)) {
+      fetchedAt[entry.key] = entry.value;
+    }
+  }
+  return _RussianAliasCacheEntry(
+    titlesByMalId: titles,
+    fetchedAtByMalId: fetchedAt,
+  );
+}
+
+String _russianAliasCacheKey(
+  AniListRussianAliasRequest request, {
+  String? statusKeyOverride,
+}) {
+  return 'anilist.russianAliases.'
+      '${request.viewerId ?? 'viewer'}.'
+      '${request.mediaType}.'
+      '${statusKeyOverride ?? request.statusKey}';
+}
+
+Map<String, dynamic> _encodeRussianAliases(_RussianAliasCacheEntry entry) {
+  return <String, dynamic>{
+    'titlesByMalId': entry.titlesByMalId.map(
+      (int key, String value) => MapEntry<String, String>('$key', value),
+    ),
+    'fetchedAtByMalId': entry.fetchedAtByMalId.map(
+      (int key, DateTime value) =>
+          MapEntry<String, String>('$key', value.toIso8601String()),
+    ),
+  };
+}
+
+_RussianAliasCacheEntry _decodeRussianAliases(Map<String, dynamic> json) {
+  final Object? titlesRaw = json['titlesByMalId'];
+  final Object? fetchedRaw = json['fetchedAtByMalId'];
+  final Map<int, String> titles = <int, String>{};
+  if (titlesRaw is Map) {
+    for (final MapEntry<dynamic, dynamic> entry in titlesRaw.entries) {
+      final int? key = int.tryParse(entry.key.toString());
+      final String value = entry.value.toString().trim();
+      if (key != null && key > 0 && value.isNotEmpty) {
+        titles[key] = value;
+      }
+    }
+  }
+
+  final Map<int, DateTime> fetchedAt = <int, DateTime>{};
+  if (fetchedRaw is Map) {
+    for (final MapEntry<dynamic, dynamic> entry in fetchedRaw.entries) {
+      final int? key = int.tryParse(entry.key.toString());
+      final DateTime? value = DateTime.tryParse(entry.value.toString());
+      if (key != null && key > 0 && value != null) {
+        fetchedAt[key] = value;
+      }
+    }
+  }
+  return _RussianAliasCacheEntry(
+    titlesByMalId: titles,
+    fetchedAtByMalId: fetchedAt,
+  );
+}
 
 void invalidateAniListAnimeLibraryProviders(dynamic invalidate) {
   invalidate(anilistAnimeListProvider);
@@ -571,9 +831,7 @@ Future<List<AniListAnimeListFolder>> _fetchCollection(
         data: (AniListUserSettings settings) => settings.airingNotifications,
         orElse: () => true,
       );
-  if (mediaType == 'ANIME' &&
-      statuses == null &&
-      !airingNotificationsEnabled) {
+  if (mediaType == 'ANIME' && statuses == null && !airingNotificationsEnabled) {
     unawaited(AiringNotificationScheduler.cancelAll());
   }
   final String scope = _collectionScope(statuses);
