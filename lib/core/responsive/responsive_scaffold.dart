@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/app_routes.dart';
 import '../../app/theme/app_theme_extension.dart';
 import '../../features/catalog/application/catalog_mode.dart';
+import '../../features/settings/presentation/startup_update_popup.dart';
 import 'adaptive_navigation.dart';
 import 'app_breakpoints.dart';
 import 'app_navigation_item.dart';
@@ -65,7 +66,19 @@ class ResponsiveScaffold extends ConsumerWidget {
                       catalogMode: catalogMode,
                       onLogoPressed: switchCatalogMode,
                     ),
-                  Expanded(child: child),
+                  Expanded(
+                    child: Stack(
+                      children: <Widget>[
+                        child,
+                        const Positioned(
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          child: StartupUpdatePopup(),
+                        ),
+                      ],
+                    ),
+                  ),
                 ],
               ),
             ),
