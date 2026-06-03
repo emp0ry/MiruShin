@@ -32,12 +32,24 @@ class SoraJsRuntime {
     required String keyword,
     required String languageCode,
     required List<SoraTitleVariant> titleVariants,
+    bool Function()? shouldCancel,
   }) {
     return _serialized(() async {
+      if (shouldCancel?.call() ?? false) {
+        return const <SoraSearchResult>[];
+      }
       final Object? payload = await _call(
         addon: addon,
-        functionNames: const <String>['searchResults', 'search', 'searchAnime'],
+        functionNames: const <String>[
+          'searchResults',
+          'searchContent',
+          'search',
+          'searchAnime',
+          'searchAnimes',
+          'searchResult',
+        ],
         args: <Object?>[keyword],
+        drainTimeoutMs: 0,
       );
       return parseSoraSearchResults(
         payload: payload,
@@ -59,6 +71,7 @@ class SoraJsRuntime {
         addon: addon,
         functionNames: const <String>[
           'extractDetails',
+          'getContentData',
           'getDetails',
           'details',
         ],
@@ -74,14 +87,20 @@ class SoraJsRuntime {
     required SoraSearchResult result,
   }) {
     return _serialized(() async {
+      final List<Object?> args = await _episodeCallArgs(addon, result);
       final Object? payload = await _call(
         addon: addon,
         functionNames: const <String>[
           'extractEpisodes',
+          'extractChapters',
+          'extractChapterList',
+          'getChapters',
+          'getChapterList',
           'getEpisodes',
           'episodes',
         ],
-        args: <Object?>[result.href],
+        args: args,
+        drainTimeoutMs: 0,
       );
       final List<SoraEpisode> episodes = parseSoraEpisodes(payload);
       if (episodes.isNotEmpty) {
@@ -177,6 +196,7 @@ class SoraJsRuntime {
     required List<String> functionNames,
     required List<Object?> args,
     bool required = true,
+    int drainTimeoutMs = _callDrainTimeoutMs,
   }) async {
     final _LoadedSoraModule module = await _load(addon);
     final String argsJson = jsonEncode(args);
@@ -191,7 +211,7 @@ class SoraJsRuntime {
           const args = $argsJson;
           const value = await fn.apply(null, args);
           try {
-            await globalThis.__miruSoraDrainPendingTasks($_callDrainTimeoutMs);
+            await globalThis.__miruSoraDrainPendingTasks($drainTimeoutMs);
           } catch (_) {}
           return String(globalThis.__miruSoraSerializeResult(value));
         })()
@@ -241,12 +261,36 @@ class SoraJsRuntime {
           searchResults:
             (typeof searchResults === 'function' && searchResults) ||
             exported.searchResults || defaults.searchResults,
+          searchContent:
+            (typeof searchContent === 'function' && searchContent) ||
+            exported.searchContent || defaults.searchContent,
+          searchResult:
+            (typeof searchResult === 'function' && searchResult) ||
+            exported.searchResult || defaults.searchResult,
+          searchAnimes:
+            (typeof searchAnimes === 'function' && searchAnimes) ||
+            exported.searchAnimes || defaults.searchAnimes,
           extractDetails:
             (typeof extractDetails === 'function' && extractDetails) ||
             exported.extractDetails || defaults.extractDetails,
+          getContentData:
+            (typeof getContentData === 'function' && getContentData) ||
+            exported.getContentData || defaults.getContentData,
           extractEpisodes:
             (typeof extractEpisodes === 'function' && extractEpisodes) ||
             exported.extractEpisodes || defaults.extractEpisodes,
+          extractChapters:
+            (typeof extractChapters === 'function' && extractChapters) ||
+            exported.extractChapters || defaults.extractChapters,
+          extractChapterList:
+            (typeof extractChapterList === 'function' && extractChapterList) ||
+            exported.extractChapterList || defaults.extractChapterList,
+          getChapters:
+            (typeof getChapters === 'function' && getChapters) ||
+            exported.getChapters || defaults.getChapters,
+          getChapterList:
+            (typeof getChapterList === 'function' && getChapterList) ||
+            exported.getChapterList || defaults.getChapterList,
           extractStreamUrl:
             (typeof extractStreamUrl === 'function' && extractStreamUrl) ||
             exported.extractStreamUrl || defaults.extractStreamUrl,
@@ -516,6 +560,75 @@ class SoraJsRuntime {
       return decoded['__miruMissingFunction'] == true;
     }
     return false;
+  }
+
+  Future<List<Object?>> _episodeCallArgs(
+    SoraInstalledAddon addon,
+    SoraSearchResult result,
+  ) async {
+    final String href = result.href.trim();
+    if (_isAsyncModule(addon) || !_looksLikeUrl(href)) {
+      return <Object?>[result.href];
+    }
+
+    await _load(addon);
+    final String requestUrl = _proxyUrl(
+      _resolveUrl(href, addon.manifest.baseUrl),
+    );
+    final String html = await _evaluatePromiseString('''
+      (async () => {
+        const fetchFn = globalThis.__miruSoraOriginalFetch ||
+          (typeof globalThis.fetch === 'function' ? globalThis.fetch.bind(globalThis) : null);
+        if (!fetchFn) return '';
+        const response = await fetchFn(${jsonEncode(requestUrl)}, {
+          method: 'GET',
+          headers: ${jsonEncode(_defaultEpisodeHeaders(addon))},
+          credentials: 'omit'
+        });
+        return String(await response.text());
+      })()
+    ''');
+    return <Object?>[html];
+  }
+
+  Map<String, String> _defaultEpisodeHeaders(SoraInstalledAddon addon) {
+    return <String, String>{
+      'Accept': 'text/html,application/json;q=0.9,*/*;q=0.8',
+      'Accept-Language': _acceptLanguage(addon.manifest.language),
+    };
+  }
+
+  String _acceptLanguage(String language) {
+    final String code = language.trim().isEmpty ? 'en' : language.trim();
+    return '$code,en;q=0.9,ru;q=0.8,ja;q=0.7,*;q=0.5';
+  }
+
+  bool _isAsyncModule(SoraInstalledAddon addon) {
+    return _boolManifest(addon, 'asyncJS');
+  }
+
+  bool _boolManifest(SoraInstalledAddon addon, String key) {
+    final Object? value = addon.manifest.raw[key];
+    if (value is bool) return value;
+    if (value is String) return value.toLowerCase().trim() == 'true';
+    return false;
+  }
+
+  bool _looksLikeUrl(String value) {
+    final Uri? uri = Uri.tryParse(value.trim());
+    return uri != null && (uri.scheme == 'http' || uri.scheme == 'https');
+  }
+
+  String _resolveUrl(String value, String baseUrl) {
+    final Uri? parsed = Uri.tryParse(value);
+    if (parsed != null && parsed.hasScheme) {
+      return parsed.toString();
+    }
+    final Uri? base = Uri.tryParse(baseUrl);
+    if (base != null && base.hasScheme) {
+      return base.resolve(value).toString();
+    }
+    return value;
   }
 
   String _proxyUrl(String url) {

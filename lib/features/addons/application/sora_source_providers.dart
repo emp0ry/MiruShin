@@ -127,7 +127,10 @@ int _soraSearchEpoch = 0;
 void cancelAllSoraSearches() => _soraSearchEpoch++;
 
 final soraSourceSearchProvider =
-    FutureProvider.family<SoraSourceSearchBundle, SoraSourceSearchRequest>((
+    FutureProvider.autoDispose.family<
+      SoraSourceSearchBundle,
+      SoraSourceSearchRequest
+    >((
       Ref ref,
       SoraSourceSearchRequest request,
     ) async {
@@ -210,6 +213,7 @@ final soraSourceSearchProvider =
                     keyword: query,
                     languageCode: languageCode,
                     titleVariants: variants,
+                    shouldCancel: shouldStop,
                   );
               if (shouldStop()) break outer;
               debugPrint(
@@ -279,7 +283,7 @@ final soraSourceDetailsProvider =
     });
 
 final soraSourceEpisodesProvider =
-    FutureProvider.family<List<SoraEpisode>, SoraSourceRequest>((
+    FutureProvider.autoDispose.family<List<SoraEpisode>, SoraSourceRequest>((
       Ref ref,
       SoraSourceRequest request,
     ) async {
@@ -295,7 +299,7 @@ final soraSourceEpisodesProvider =
     });
 
 final soraSourceContentProvider =
-    FutureProvider.family<SoraSourceContent, SoraSourceRequest>((
+    FutureProvider.autoDispose.family<SoraSourceContent, SoraSourceRequest>((
       Ref ref,
       SoraSourceRequest request,
     ) async {

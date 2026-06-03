@@ -620,7 +620,7 @@ List<SoraStreamCandidate> _parseStreamValue(Object? value) {
 
 List<Object?> _listFrom(Object? value) {
   if (value is List) {
-    return value.cast<Object?>();
+    return _flattenList(value);
   }
   if (value is Map) {
     for (final String key in <String>[
@@ -633,12 +633,53 @@ List<Object?> _listFrom(Object? value) {
     ]) {
       final Object? child = value[key];
       if (child is List) {
-        return child.cast<Object?>();
+        return _flattenList(child);
+      }
+      if (child is Map) {
+        final List<Object?> values = _flattenMapValues(child);
+        if (values.isNotEmpty) return values;
       }
     }
+    if (_looksLikeItemMap(value)) {
+      return <Object?>[value];
+    }
+    final List<Object?> values = _flattenMapValues(value);
+    if (values.isNotEmpty) return values;
     return <Object?>[value];
   }
   return const <Object?>[];
+}
+
+List<Object?> _flattenList(List source) {
+  final List<Object?> out = <Object?>[];
+  for (final Object? item in source) {
+    if (item is List && item.length >= 2 && item[1] is List) {
+      out.addAll(_flattenList(item[1] as List));
+    } else {
+      out.add(item);
+    }
+  }
+  return out;
+}
+
+List<Object?> _flattenMapValues(Map source) {
+  final List<Object?> out = <Object?>[];
+  for (final Object? value in source.values) {
+    if (value is List) {
+      out.addAll(_flattenList(value));
+    } else if (value is Map) {
+      out.add(value);
+    }
+  }
+  return out;
+}
+
+bool _looksLikeItemMap(Map value) {
+  return value.containsKey('href') ||
+      value.containsKey('url') ||
+      value.containsKey('link') ||
+      value.containsKey('title') ||
+      value.containsKey('name');
 }
 
 Map<String, dynamic> _firstMap(Object? value) {

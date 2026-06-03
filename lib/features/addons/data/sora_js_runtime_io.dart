@@ -106,12 +106,24 @@ class SoraJsRuntime {
     required String keyword,
     required String languageCode,
     required List<SoraTitleVariant> titleVariants,
+    bool Function()? shouldCancel,
   }) {
     return _serialized(() async {
+      if (shouldCancel?.call() ?? false) {
+        return const <SoraSearchResult>[];
+      }
       final Object? payload = await _call(
         addon: addon,
-        functionNames: const <String>['searchResults', 'search', 'searchAnime'],
+        functionNames: const <String>[
+          'searchResults',
+          'searchContent',
+          'search',
+          'searchAnime',
+          'searchAnimes',
+          'searchResult',
+        ],
         args: <Object?>[keyword],
+        settlePending: false,
       );
       return parseSoraSearchResults(
         payload: payload,
@@ -133,6 +145,7 @@ class SoraJsRuntime {
         addon: addon,
         functionNames: const <String>[
           'extractDetails',
+          'getContentData',
           'getDetails',
           'details',
         ],
@@ -148,14 +161,20 @@ class SoraJsRuntime {
     required SoraSearchResult result,
   }) {
     return _serialized(() async {
+      final List<Object?> args = await _episodeCallArgs(addon, result);
       final Object? payload = await _call(
         addon: addon,
         functionNames: const <String>[
           'extractEpisodes',
+          'extractChapters',
+          'extractChapterList',
+          'getChapters',
+          'getChapterList',
           'getEpisodes',
           'episodes',
         ],
-        args: <Object?>[result.href],
+        args: args,
+        settlePending: false,
       );
       final List<SoraEpisode> episodes = parseSoraEpisodes(payload);
       if (episodes.isNotEmpty) {
@@ -270,6 +289,7 @@ class SoraJsRuntime {
     required List<String> functionNames,
     required List<Object?> args,
     bool required = true,
+    bool settlePending = true,
   }) async {
     final _LoadedSoraModule module = await _load(addon);
     final JavascriptRuntime rt = _runtime();
@@ -309,7 +329,9 @@ class SoraJsRuntime {
       // setTimeout) this call spawned settle BEFORE releasing the serialize
       // lock, so none of them resolve later against the next addon's mutated
       // global context.
-      await _settlePending(rt, module);
+      if (settlePending) {
+        await _settlePending(rt, module);
+      }
     }
   }
 
@@ -479,12 +501,36 @@ class SoraJsRuntime {
           searchResults:
             (typeof searchResults === 'function' && searchResults) ||
             exported.searchResults || defaults.searchResults,
+          searchContent:
+            (typeof searchContent === 'function' && searchContent) ||
+            exported.searchContent || defaults.searchContent,
+          searchResult:
+            (typeof searchResult === 'function' && searchResult) ||
+            exported.searchResult || defaults.searchResult,
+          searchAnimes:
+            (typeof searchAnimes === 'function' && searchAnimes) ||
+            exported.searchAnimes || defaults.searchAnimes,
           extractDetails:
             (typeof extractDetails === 'function' && extractDetails) ||
             exported.extractDetails || defaults.extractDetails,
+          getContentData:
+            (typeof getContentData === 'function' && getContentData) ||
+            exported.getContentData || defaults.getContentData,
           extractEpisodes:
             (typeof extractEpisodes === 'function' && extractEpisodes) ||
             exported.extractEpisodes || defaults.extractEpisodes,
+          extractChapters:
+            (typeof extractChapters === 'function' && extractChapters) ||
+            exported.extractChapters || defaults.extractChapters,
+          extractChapterList:
+            (typeof extractChapterList === 'function' && extractChapterList) ||
+            exported.extractChapterList || defaults.extractChapterList,
+          getChapters:
+            (typeof getChapters === 'function' && getChapters) ||
+            exported.getChapters || defaults.getChapters,
+          getChapterList:
+            (typeof getChapterList === 'function' && getChapterList) ||
+            exported.getChapterList || defaults.getChapterList,
           extractStreamUrl:
             (typeof extractStreamUrl === 'function' && extractStreamUrl) ||
             exported.extractStreamUrl || defaults.extractStreamUrl,
@@ -1283,6 +1329,63 @@ class SoraJsRuntime {
       return base.resolve(value);
     }
     throw SoraAddonException('Fetch URL is not valid: $value');
+  }
+
+  Future<List<Object?>> _episodeCallArgs(
+    SoraInstalledAddon addon,
+    SoraSearchResult result,
+  ) async {
+    final String href = result.href.trim();
+    if (_isAsyncModule(addon) || !_looksLikeUrl(href)) {
+      return <Object?>[result.href];
+    }
+
+    final String html = await _fetchEpisodeHtml(addon, href);
+    return <Object?>[html];
+  }
+
+  Future<String> _fetchEpisodeHtml(
+    SoraInstalledAddon addon,
+    String href,
+  ) async {
+    final Uri uri = _resolveUrl(href, addon.manifest.baseUrl);
+    final Response<String> response = await _dio.getUri<String>(
+      uri,
+      options: Options(
+        responseType: ResponseType.plain,
+        headers: _defaultEpisodeHeaders(addon),
+        receiveTimeout: const Duration(seconds: 20),
+        followRedirects: true,
+        validateStatus: (_) => true,
+      ),
+    );
+    return response.data ?? '';
+  }
+
+  Map<String, String> _defaultEpisodeHeaders(SoraInstalledAddon addon) {
+    return <String, String>{
+      'User-Agent': _userAgent,
+      'Accept': 'text/html,application/json;q=0.9,*/*;q=0.8',
+      'Accept-Language': _acceptLanguage(addon.manifest.language),
+      if (addon.manifest.baseUrl.trim().isNotEmpty)
+        'Referer': addon.manifest.baseUrl,
+    };
+  }
+
+  bool _isAsyncModule(SoraInstalledAddon addon) {
+    return _boolManifest(addon, 'asyncJS');
+  }
+
+  bool _boolManifest(SoraInstalledAddon addon, String key) {
+    final Object? value = addon.manifest.raw[key];
+    if (value is bool) return value;
+    if (value is String) return value.toLowerCase().trim() == 'true';
+    return false;
+  }
+
+  bool _looksLikeUrl(String value) {
+    final Uri? uri = Uri.tryParse(value.trim());
+    return uri != null && (uri.scheme == 'http' || uri.scheme == 'https');
   }
 
   Map<String, dynamic> _asMap(Object? value) {

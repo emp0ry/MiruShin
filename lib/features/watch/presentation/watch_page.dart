@@ -476,13 +476,17 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     _lastAutoNextFromEpisodeHref = current.href;
     _lastAutoNextAt = now;
 
-    final SoraSourceRequest request = SoraSourceRequest(
-      addonId: source.addonId,
-      result: source,
-    );
     final List<SoraEpisode> episodes;
     try {
-      episodes = await ref.read(soraSourceEpisodesProvider(request).future);
+      final SoraInstalledAddon? addon = ref
+          .read(soraAddonsProvider)
+          .byId(source.addonId);
+      if (addon == null) {
+        throw const SoraAddonException('Addon is no longer installed.');
+      }
+      episodes = await ref
+          .read(soraJsRuntimeProvider)
+          .extractEpisodes(addon: addon, result: source);
     } on Object catch (error) {
       if (!mounted) return;
       _nextEpisodeInFullscreen = false;
@@ -2028,6 +2032,21 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
   String? _episodeMetadataLoadKey;
   bool _episodeMetadataLoadEnabled = false;
   bool _episodeMetadataLoadScheduled = false;
+  Timer? _episodeMetadataLoadTimer;
+  late SoraSourceRequest _episodesRequest;
+  late Future<List<SoraEpisode>> _episodesFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _restartEpisodeLoad();
+  }
+
+  @override
+  void dispose() {
+    _episodeMetadataLoadTimer?.cancel();
+    super.dispose();
+  }
 
   @override
   void didUpdateWidget(covariant _EpisodePickerSection oldWidget) {
@@ -2035,30 +2054,58 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
     if (oldWidget.item.id != widget.item.id ||
         oldWidget.source.addonId != widget.source.addonId ||
         oldWidget.source.href != widget.source.href) {
+      _restartEpisodeLoad();
       _resetEpisodeMetadataLoad();
     }
   }
 
+  SoraSourceRequest _requestForWidget() {
+    return SoraSourceRequest(
+      addonId: widget.source.addonId,
+      result: widget.source,
+    );
+  }
+
+  void _restartEpisodeLoad() {
+    _episodesRequest = _requestForWidget();
+    _episodesFuture = _loadEpisodes(_episodesRequest);
+  }
+
+  Future<List<SoraEpisode>> _loadEpisodes(SoraSourceRequest request) async {
+    final SoraInstalledAddon? addon = ref
+        .read(soraAddonsProvider)
+        .byId(request.addonId);
+    if (addon == null) {
+      throw const SoraAddonException('Addon is no longer installed.');
+    }
+    return ref
+        .read(soraJsRuntimeProvider)
+        .extractEpisodes(addon: addon, result: request.result);
+  }
+
   void _resetEpisodeMetadataLoad() {
+    _episodeMetadataLoadTimer?.cancel();
+    _episodeMetadataLoadTimer = null;
     _episodeMetadataLoadKey = null;
     _episodeMetadataLoadEnabled = false;
     _episodeMetadataLoadScheduled = false;
   }
 
-  AnimeEpisodeMetadataBundle _lazyEpisodeMetadata({
+  bool _externalEpisodeVisualsEnabled({
     required SettingsState settings,
-    required bool useAniListProgress,
     required int? anilistId,
+    required List<SoraEpisode> episodes,
   }) {
-    if (!useAniListProgress || anilistId == null) {
-      return AnimeEpisodeMetadataBundle.empty;
-    }
+    if (episodes.isEmpty) return false;
+    if (!_episodesNeedExternalVisuals(episodes)) return false;
 
     final String languageCode = _episodeMetadataLanguage(settings);
     final String key =
         '${widget.item.id}:${widget.source.addonId}:'
         '${widget.source.href}:$anilistId:$languageCode';
     if (_episodeMetadataLoadKey != key) {
+      _episodeMetadataLoadTimer?.cancel();
+      _episodeMetadataLoadTimer = null;
       _episodeMetadataLoadKey = key;
       _episodeMetadataLoadEnabled = false;
       _episodeMetadataLoadScheduled = false;
@@ -2069,15 +2116,47 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
         _episodeMetadataLoadScheduled = true;
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!mounted || _episodeMetadataLoadKey != key) return;
-          setState(() {
-            _episodeMetadataLoadEnabled = true;
-            _episodeMetadataLoadScheduled = false;
-          });
+          _episodeMetadataLoadTimer?.cancel();
+          _episodeMetadataLoadTimer = Timer(
+            const Duration(milliseconds: 700),
+            () {
+              if (!mounted || _episodeMetadataLoadKey != key) return;
+              setState(() {
+                _episodeMetadataLoadEnabled = true;
+                _episodeMetadataLoadScheduled = false;
+              });
+            },
+          );
         });
       }
-      return AnimeEpisodeMetadataBundle.empty;
+      return false;
     }
 
+    return true;
+  }
+
+  bool _episodesNeedExternalVisuals(List<SoraEpisode> episodes) {
+    for (final SoraEpisode episode in episodes) {
+      final String title = episode.title.trim();
+      final bool hasModuleTitle =
+          title.isNotEmpty && !isGenericEpisodeTitle(title, episode.number);
+      final bool hasModuleImage = episode.image.trim().isNotEmpty;
+      if (!hasModuleTitle || !hasModuleImage) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  AnimeEpisodeMetadataBundle _episodeMetadata({
+    required String languageCode,
+    required bool externalVisualsEnabled,
+    required bool useAniListProgress,
+    required int? anilistId,
+  }) {
+    if (!externalVisualsEnabled || !useAniListProgress || anilistId == null) {
+      return AnimeEpisodeMetadataBundle.empty;
+    }
     return ref
         .watch(
           animeEpisodeMetadataProvider(
@@ -2093,45 +2172,44 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
         );
   }
 
+  int _anilistEpisodeProgress({
+    required bool externalVisualsEnabled,
+    required bool useAniListProgress,
+    required int? anilistId,
+  }) {
+    if (!externalVisualsEnabled || !useAniListProgress || anilistId == null) {
+      return 0;
+    }
+
+    int progress = 0;
+    void scanFolders(List<AniListAnimeListFolder> folders) {
+      for (final AniListAnimeListFolder folder in folders) {
+        for (final AniListAnimeListEntry entry in folder.entries) {
+          final int? entryAnilistId = int.tryParse(
+            entry.mediaItem.externalIds['anilist'] ?? '',
+          );
+          if (entryAnilistId == anilistId && entry.progress > progress) {
+            progress = entry.progress;
+          }
+        }
+      }
+    }
+
+    ref.watch(anilistAnimeListProvider).whenData(scanFolders);
+    if (progress == 0) {
+      ref.watch(anilistAnimePreviewListProvider).whenData(scanFolders);
+    }
+    return progress;
+  }
+
   @override
   Widget build(BuildContext context) {
-    final SoraSourceRequest request = SoraSourceRequest(
-      addonId: widget.source.addonId,
-      result: widget.source,
-    );
-
-    final AsyncValue<List<SoraEpisode>> episodesAsync = ref.watch(
-      soraSourceEpisodesProvider(request),
-    );
+    final Future<List<SoraEpisode>> episodesFuture = _episodesFuture;
     final Set<String> watchedSet = ref.watch(soraEpisodeProgressProvider);
     final SettingsState settings = ref.watch(settingsProvider);
     final bool useAniListProgress =
         ref.watch(catalogModeProvider) == CatalogMode.anilist;
     final int? anilistId = _animeAnilistId(widget.item);
-
-    // AniList episode progress (integer count of watched episodes)
-    int anilistProgress = 0;
-    if (useAniListProgress && anilistId != null) {
-      void scanFolders(List<AniListAnimeListFolder> folders) {
-        for (final AniListAnimeListFolder folder in folders) {
-          for (final AniListAnimeListEntry entry in folder.entries) {
-            final int? entryAnilistId = int.tryParse(
-              entry.mediaItem.externalIds['anilist'] ?? '',
-            );
-            if (entryAnilistId == anilistId &&
-                entry.progress > anilistProgress) {
-              anilistProgress = entry.progress;
-            }
-          }
-        }
-      }
-
-      ref.watch(anilistAnimeListProvider).whenData(scanFolders);
-      // Fall back to preview list (loads first) when full list is still loading.
-      if (anilistProgress == 0) {
-        ref.watch(anilistAnimePreviewListProvider).whenData(scanFolders);
-      }
-    }
 
     final LocalLibraryController libraryNotifier = ref.read(
       localLibraryProvider.notifier,
@@ -2148,18 +2226,39 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
                 : context.t('Choose Episode'),
             subtitle: context.t('Tap to resolve stream.'),
           ),
-          episodesAsync.when(
-            loading: () => const SkeletonBox(height: 200, radius: AppRadius.lg),
-            error: (Object error, _) => Text(
-              error.toString(),
-              style: Theme.of(
-                context,
-              ).textTheme.bodyMedium?.copyWith(color: AppColors.danger),
-            ),
-            data: (List<SoraEpisode> episodes) {
-              final AnimeEpisodeMetadataBundle episodeMetadata =
-                  _lazyEpisodeMetadata(
+          FutureBuilder<List<SoraEpisode>>(
+            future: episodesFuture,
+            builder: (
+              BuildContext context,
+              AsyncSnapshot<List<SoraEpisode>> snapshot,
+            ) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const SkeletonBox(height: 200, radius: AppRadius.lg);
+              }
+              if (snapshot.hasError) {
+                return Text(
+                  snapshot.error.toString(),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium?.copyWith(color: AppColors.danger),
+                );
+              }
+
+              final List<SoraEpisode> episodes =
+                  snapshot.data ?? const <SoraEpisode>[];
+              final String episodeMetadataLanguage = _episodeMetadataLanguage(
+                settings,
+              );
+              final bool externalVisualsEnabled =
+                  _externalEpisodeVisualsEnabled(
                     settings: settings,
+                    anilistId: anilistId,
+                    episodes: episodes,
+                  );
+              final AnimeEpisodeMetadataBundle episodeMetadata =
+                  _episodeMetadata(
+                    languageCode: episodeMetadataLanguage,
+                    externalVisualsEnabled: externalVisualsEnabled,
                     useAniListProgress: useAniListProgress,
                     anilistId: anilistId,
                   );
@@ -2187,6 +2286,12 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
                   ),
                 );
               }
+
+              final int anilistProgress = _anilistEpisodeProgress(
+                externalVisualsEnabled: externalVisualsEnabled,
+                useAniListProgress: useAniListProgress,
+                anilistId: anilistId,
+              );
 
               // Compute the max watched episode number from soraEpisodeProgress
               // as fallback when AniList is not connected.
@@ -2329,6 +2434,7 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
                       episode: episode,
                       metadata: metadata,
                       item: widget.item,
+                      allowExternalVisuals: externalVisualsEnabled,
                     ),
                     isSelected: widget.selectedEpisodeHref == episode.href,
                     isWatched: isWatched,
@@ -2588,12 +2694,13 @@ String _episodeImageUrl({
   required SoraEpisode episode,
   required AnimeEpisodeMetadata? metadata,
   required MediaItem item,
+  required bool allowExternalVisuals,
 }) {
   for (final String image in <String>[
-    metadata?.aniZipImage ?? '',
-    metadata?.aniListThumbnail ?? '',
+    if (allowExternalVisuals) metadata?.aniZipImage ?? '',
+    if (allowExternalVisuals) metadata?.aniListThumbnail ?? '',
     episode.image,
-    item.posterUrl,
+    if (allowExternalVisuals) item.posterUrl,
   ]) {
     final String trimmed = image.trim();
     if (trimmed.isNotEmpty) return trimmed;
