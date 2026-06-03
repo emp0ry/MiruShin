@@ -753,23 +753,6 @@ class _AppearanceSection extends StatelessWidget {
           ),
         ),
         SettingsRow(
-          title: context.t('Reduce motion'),
-          trailing: Switch(
-            value: settings.reduceMotion,
-            onChanged: controller.setReduceMotion,
-          ),
-        ),
-        SettingsRow(
-          title: context.t('Background blur intensity'),
-          trailing: SizedBox(
-            width: 240,
-            child: Slider(
-              value: settings.backgroundBlurIntensity,
-              onChanged: controller.setBackgroundBlurIntensity,
-            ),
-          ),
-        ),
-        SettingsRow(
           title: context.t('Startup page'),
           trailing: DropdownButton<AppStartupPage>(
             value: settings.startupPage,

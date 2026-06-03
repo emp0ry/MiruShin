@@ -96,8 +96,6 @@ class SettingsState {
     this.posterCardStyle = 'Cinematic',
     this.compactMode = false,
     this.discordRpcEnabled = true,
-    this.reduceMotion = false,
-    this.backgroundBlurIntensity = 0.55,
     this.tmdbEnabled = false,
     this.tmdbReadAccessToken = '',
     this.tmdbLanguage = 'en-US',
@@ -131,8 +129,6 @@ class SettingsState {
   final String posterCardStyle;
   final bool compactMode;
   final bool discordRpcEnabled;
-  final bool reduceMotion;
-  final double backgroundBlurIntensity;
   final bool tmdbEnabled;
   final String tmdbReadAccessToken;
   final String tmdbLanguage;
@@ -201,8 +197,6 @@ class SettingsState {
     String? posterCardStyle,
     bool? compactMode,
     bool? discordRpcEnabled,
-    bool? reduceMotion,
-    double? backgroundBlurIntensity,
     bool? tmdbEnabled,
     String? tmdbReadAccessToken,
     String? tmdbLanguage,
@@ -241,9 +235,6 @@ class SettingsState {
       posterCardStyle: posterCardStyle ?? this.posterCardStyle,
       compactMode: compactMode ?? this.compactMode,
       discordRpcEnabled: discordRpcEnabled ?? this.discordRpcEnabled,
-      reduceMotion: reduceMotion ?? this.reduceMotion,
-      backgroundBlurIntensity:
-          backgroundBlurIntensity ?? this.backgroundBlurIntensity,
       tmdbEnabled: tmdbEnabled ?? this.tmdbEnabled,
       tmdbReadAccessToken: tmdbReadAccessToken ?? this.tmdbReadAccessToken,
       tmdbLanguage: tmdbLanguage ?? this.tmdbLanguage,
@@ -501,14 +492,6 @@ class SettingsController extends Notifier<SettingsState> {
     unawaited(
       _save((SettingsPreferences prefs) => prefs.saveDiscordRpcEnabled(value)),
     );
-  }
-
-  void setReduceMotion(bool value) {
-    state = state.copyWith(reduceMotion: value);
-  }
-
-  void setBackgroundBlurIntensity(double value) {
-    state = state.copyWith(backgroundBlurIntensity: value);
   }
 
   void setTmdbEnabled(bool value) {
