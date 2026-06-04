@@ -24,6 +24,130 @@ if (yearNode) {
   yearNode.textContent = String(new Date().getFullYear());
 }
 
+const releaseApiUrl = "https://api.github.com/repos/emp0ry/MiruShin/releases/latest";
+const releasePageUrl = "https://github.com/emp0ry/MiruShin/releases/latest";
+const downloadTargets = [
+  {
+    key: "windows-setup",
+    label: "Windows setup installer",
+    pattern: /^MiruShin-windows-v.+-setup\.exe$/i,
+  },
+  {
+    key: "windows-portable",
+    label: "Windows portable ZIP",
+    pattern: /^MiruShin-windows-v.+-portable\.zip$/i,
+  },
+  {
+    key: "macos",
+    label: "macOS DMG",
+    pattern: /^MiruShin-macos-v.+\.dmg$/i,
+  },
+  {
+    key: "ios",
+    label: "iOS IPA",
+    pattern: /^MiruShin-ios-v.+\.ipa$/i,
+  },
+  {
+    key: "android",
+    label: "Android APK",
+    pattern: /^MiruShin-android-v.+\.apk$/i,
+  },
+  {
+    key: "linux-appimage",
+    label: "Linux AppImage",
+    pattern: /^MiruShin-linux-v.+\.AppImage$/i,
+  },
+  {
+    key: "linux-deb",
+    label: "Linux DEB package",
+    pattern: /^MiruShin-linux-v.+\.deb$/i,
+  },
+  {
+    key: "linux-targz",
+    label: "Linux tar.gz archive",
+    pattern: /^MiruShin-linux-v.+\.tar\.gz$/i,
+  },
+];
+
+const releaseStatus = document.querySelector("[data-release-status]");
+const downloadCards = [...document.querySelectorAll("[data-download-card]")];
+
+const setDownloadFallback = (card) => {
+  const link = card.querySelector("[data-download]");
+
+  card.classList.add("is-missing");
+  if (link) {
+    link.href = releasePageUrl;
+    link.textContent = "Open Release";
+    link.setAttribute("target", "_blank");
+    link.removeAttribute("download");
+  }
+};
+
+const resolveDownloadLinks = async () => {
+  if (!downloadCards.length) {
+    return;
+  }
+
+  try {
+    const response = await fetch(releaseApiUrl, {
+      headers: { Accept: "application/vnd.github+json" },
+    });
+
+    if (!response.ok) {
+      throw new Error(`GitHub release request failed: ${response.status}`);
+    }
+
+    const release = await response.json();
+    const assets = Array.isArray(release.assets) ? release.assets : [];
+    let resolvedCount = 0;
+
+    downloadTargets.forEach((target) => {
+      const card = document.querySelector(`[data-download-card="${target.key}"]`);
+      const link = document.querySelector(`[data-download="${target.key}"]`);
+      const asset = assets.find((item) => target.pattern.test(item.name || ""));
+
+      if (!card || !link) {
+        return;
+      }
+
+      if (!asset?.browser_download_url) {
+        setDownloadFallback(card);
+        if (release.html_url) {
+          link.href = release.html_url;
+        }
+        return;
+      }
+
+      resolvedCount += 1;
+      card.classList.add("is-ready");
+      link.href = asset.browser_download_url;
+      link.textContent = "Download";
+      link.setAttribute("aria-label", `Download ${target.label}: ${asset.name}`);
+      link.setAttribute("download", "");
+      link.removeAttribute("target");
+    });
+
+    if (releaseStatus) {
+      const releaseLabel = release.name || release.tag_name || "latest release";
+      releaseStatus.textContent =
+        resolvedCount === downloadTargets.length
+          ? `Latest release: ${releaseLabel}`
+          : `Latest release: ${releaseLabel} · ${resolvedCount}/${downloadTargets.length} files found`;
+      releaseStatus.classList.add("is-loaded");
+    }
+  } catch (error) {
+    downloadCards.forEach(setDownloadFallback);
+    if (releaseStatus) {
+      releaseStatus.textContent =
+        "Could not check GitHub right now. Buttons open the release page.";
+      releaseStatus.classList.add("is-error");
+    }
+  }
+};
+
+resolveDownloadLinks();
+
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 const revealNodes = document.querySelectorAll(".reveal");
