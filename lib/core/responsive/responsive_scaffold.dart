@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/app_routes.dart';
-import '../../app/navigation_helpers.dart';
 import '../../app/theme/app_theme_extension.dart';
 import '../../features/catalog/application/catalog_mode.dart';
 import '../../features/settings/presentation/startup_update_popup.dart';
@@ -68,19 +67,16 @@ class ResponsiveScaffold extends ConsumerWidget {
                       onLogoPressed: switchCatalogMode,
                     ),
                   Expanded(
-                    child: _MobileBackSwipeRegion(
-                      enabled: sizeClass == WindowSizeClass.compact,
-                      child: Stack(
-                        children: <Widget>[
-                          child,
-                          const Positioned(
-                            top: 0,
-                            left: 0,
-                            right: 0,
-                            child: StartupUpdatePopup(),
-                          ),
-                        ],
-                      ),
+                    child: Stack(
+                      children: <Widget>[
+                        child,
+                        const Positioned(
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          child: StartupUpdatePopup(),
+                        ),
+                      ],
                     ),
                   ),
                 ],
@@ -99,81 +95,6 @@ class ResponsiveScaffold extends ConsumerWidget {
           ),
         );
       },
-    );
-  }
-}
-
-class _MobileBackSwipeRegion extends StatefulWidget {
-  const _MobileBackSwipeRegion({required this.child, required this.enabled});
-
-  final Widget child;
-  final bool enabled;
-
-  @override
-  State<_MobileBackSwipeRegion> createState() => _MobileBackSwipeRegionState();
-}
-
-class _MobileBackSwipeRegionState extends State<_MobileBackSwipeRegion> {
-  static const double _edgeWidth = 72;
-  static const double _triggerDistance = 72;
-  static const double _minHorizontalBias = 1.2;
-
-  int? _activePointer;
-  Offset? _startPosition;
-  bool _triggered = false;
-
-  void _handlePointerDown(PointerDownEvent event) {
-    if (!widget.enabled ||
-        _activePointer != null ||
-        event.localPosition.dx > _edgeWidth) {
-      return;
-    }
-    _activePointer = event.pointer;
-    _startPosition = event.localPosition;
-    _triggered = false;
-  }
-
-  void _handlePointerMove(PointerMoveEvent event) {
-    if (_activePointer != event.pointer || _triggered) return;
-    final Offset? start = _startPosition;
-    if (start == null) return;
-
-    final Offset delta = event.localPosition - start;
-    if (delta.dx < _triggerDistance) return;
-
-    final bool mostlyHorizontal =
-        delta.dx > delta.dy.abs() * _minHorizontalBias;
-    if (!mostlyHorizontal) return;
-
-    _triggered = true;
-    goBackOrGo(context, AppRoutes.board);
-    _resetGesture(event.pointer);
-  }
-
-  void _handlePointerUp(PointerUpEvent event) {
-    _resetGesture(event.pointer);
-  }
-
-  void _handlePointerCancel(PointerCancelEvent event) {
-    _resetGesture(event.pointer);
-  }
-
-  void _resetGesture(int pointer) {
-    if (_activePointer != pointer) return;
-    _activePointer = null;
-    _startPosition = null;
-    _triggered = false;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Listener(
-      behavior: HitTestBehavior.translucent,
-      onPointerDown: _handlePointerDown,
-      onPointerMove: _handlePointerMove,
-      onPointerUp: _handlePointerUp,
-      onPointerCancel: _handlePointerCancel,
-      child: widget.child,
     );
   }
 }
