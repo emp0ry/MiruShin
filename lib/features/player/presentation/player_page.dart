@@ -1258,221 +1258,262 @@ class _PlayerChrome extends ConsumerWidget {
         controller == null ||
         !controller.value.isInitialized ||
         (controller.value.isBuffering && !seekPreviewBuffered);
-    return DecoratedBox(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: <Color>[Colors.black87, Colors.transparent, Colors.black87],
+    final EdgeInsets padding = MediaQuery.paddingOf(context);
+    final double topScrimHeight = padding.top + 96;
+    final double bottomScrimHeight = padding.bottom + 132;
+    return Stack(
+      fit: StackFit.expand,
+      children: <Widget>[
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          height: topScrimHeight,
+          child: const DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: <Color>[Colors.black87, Colors.transparent],
+              ),
+            ),
+          ),
         ),
-      ),
-      child: SafeArea(
-        child: Column(
-          children: <Widget>[
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-              child: Row(
-                children: <Widget>[
-                  IconButton(
-                    onPressed: onExit,
-                    icon: const Icon(
-                      Icons.arrow_back_rounded,
-                      color: Colors.white,
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          height: bottomScrimHeight,
+          child: const DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.bottomCenter,
+                end: Alignment.topCenter,
+                colors: <Color>[Colors.black87, Colors.transparent],
+              ),
+            ),
+          ),
+        ),
+        SafeArea(
+          child: Column(
+            children: <Widget>[
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 8,
+                ),
+                child: Row(
+                  children: <Widget>[
+                    IconButton(
+                      onPressed: onExit,
+                      icon: const Icon(
+                        Icons.arrow_back_rounded,
+                        color: Colors.white,
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: <Widget>[
-                        Text(
-                          item?.title ?? 'MiruShin Player',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 18,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                        if (item != null)
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
                           Text(
-                            _episodeLabel(item),
+                            item?.title ?? 'MiruShin Player',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: Colors.white.withValues(alpha: .72),
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 18,
+                              fontWeight: FontWeight.w800,
                             ),
                           ),
-                      ],
-                    ),
-                  ),
-                  if (MediaQuery.sizeOf(context).width >= 480) ...<Widget>[
-                    _TopChip(label: state.server?.name ?? 'Server'),
-                    const SizedBox(width: 8),
-                    _TopChip(label: state.quality?.label ?? 'Auto'),
-                  ],
-                  if (onEnterNativePip != null)
-                    IconButton(
-                      tooltip: 'Picture in Picture',
-                      onPressed: onEnterNativePip,
-                      icon: const Icon(
-                        Icons.picture_in_picture_alt_rounded,
-                        color: Colors.white,
-                      ),
-                    )
-                  else if (pipSupported)
-                    IconButton(
-                      onPressed: () {
-                        final double rawAr = controller?.value.aspectRatio ?? 0;
-                        final double ar = rawAr > 0 ? rawAr : 16 / 9;
-                        final bool playing =
-                            controller?.value.isPlaying ?? true;
-                        unawaited(
-                          ref
-                              .read(pipControllerProvider)
-                              .enter(
-                                aspectRatio: ar,
-                                isPlaying: playing,
-                                hasNext: true,
+                          if (item != null)
+                            Text(
+                              _episodeLabel(item),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: Colors.white.withValues(alpha: .72),
                               ),
-                        );
-                      },
-                      icon: const Icon(
-                        Icons.picture_in_picture_alt_rounded,
-                        color: Colors.white,
+                            ),
+                        ],
                       ),
                     ),
-                  if (castSupported)
-                    IconButton(
-                      onPressed: () =>
-                          ref.read(castControllerProvider).startSession(),
-                      icon: const Icon(Icons.cast_rounded, color: Colors.white),
-                    ),
-                  IconButton(
-                    tooltip: 'Settings',
-                    onPressed: () => _showSettings(context, ref),
-                    icon: const Icon(
-                      Icons.settings_rounded,
-                      color: Colors.white,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const Spacer(),
-            if (showLoading)
-              const _PlayerLoadingIndicator()
-            else if (isMobile)
-              _CenterPlayPauseButton(controller: controller),
-            const Spacer(),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
-              child: Column(
-                children: <Widget>[
-                  if (controller != null)
-                    _PositionBar(controller: controller, skipMarkers: markers),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: <Widget>[
-                      _BottomLeftControls(
-                        controller: controller,
-                        isMobile: isMobile,
-                      ),
-                      const SizedBox(width: 18),
-                      Expanded(
-                        child: LayoutBuilder(
-                          builder:
-                              (
-                                BuildContext context,
-                                BoxConstraints constraints,
-                              ) {
-                                final double width = constraints.maxWidth;
-                                final bool compactStreams = width < 520;
-                                final bool compactSubs = width < 470;
-                                final bool compactZoom = width < 420;
-                                final bool compactSpeed = width < 365;
-                                final bool compactQuality = width < 315;
-                                final String speedLabel =
-                                    '${settings.playbackSpeed.toStringAsFixed(settings.playbackSpeed == settings.playbackSpeed.roundToDouble() ? 0 : 2)}x';
-
-                                return Align(
-                                  alignment: Alignment.centerRight,
-                                  child: SingleChildScrollView(
-                                    scrollDirection: Axis.horizontal,
-                                    reverse: true,
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: <Widget>[
-                                        _ChromeButton(
-                                          icon: Icons.dns_rounded,
-                                          label: 'Streams',
-                                          showLabel: !compactStreams,
-                                          onTap: () =>
-                                              _showStreamsMenu(context, ref),
-                                        ),
-                                        _ChromeButton(
-                                          icon: Icons.subtitles_rounded,
-                                          label: 'Subs',
-                                          showLabel: !compactSubs,
-                                          onTap: () =>
-                                              _showSubtitleMenu(context, ref),
-                                        ),
-                                        _ChromeButton(
-                                          icon: settings.verticalStretch
-                                              ? Icons.fullscreen_exit_rounded
-                                              : Icons.zoom_out_map_rounded,
-                                          label: settings.verticalStretch
-                                              ? 'Normal'
-                                              : 'Zoom',
-                                          showLabel: !compactZoom,
-                                          onTap: () => ref
-                                              .read(
-                                                playerSettingsProvider.notifier,
-                                              )
-                                              .setVerticalStretch(
-                                                !settings.verticalStretch,
-                                              ),
-                                        ),
-                                        _ChromeButton(
-                                          icon: Icons.speed_rounded,
-                                          label: speedLabel,
-                                          showLabel: !compactSpeed,
-                                          onTap: () =>
-                                              _showSpeedMenu(context, ref),
-                                        ),
-                                        _ChromeButton(
-                                          icon: Icons.high_quality_rounded,
-                                          label: 'Quality',
-                                          showLabel: !compactQuality,
-                                          onTap: () =>
-                                              _showQualityMenu(context, ref),
-                                        ),
-                                        if (!isMobile)
-                                          _ChromeIconButton(
-                                            icon: isFullscreen
-                                                ? Icons.fullscreen_exit_rounded
-                                                : Icons.fullscreen_rounded,
-                                            tooltip: isFullscreen
-                                                ? 'Exit fullscreen'
-                                                : 'Fullscreen',
-                                            onTap: onToggleFullscreen,
-                                          ),
-                                      ],
-                                    ),
-                                  ),
-                                );
-                              },
+                    if (MediaQuery.sizeOf(context).width >= 480) ...<Widget>[
+                      _TopChip(label: state.server?.name ?? 'Server'),
+                      const SizedBox(width: 8),
+                      _TopChip(label: state.quality?.label ?? 'Auto'),
+                    ],
+                    if (onEnterNativePip != null)
+                      IconButton(
+                        tooltip: 'Picture in Picture',
+                        onPressed: onEnterNativePip,
+                        icon: const Icon(
+                          Icons.picture_in_picture_alt_rounded,
+                          color: Colors.white,
+                        ),
+                      )
+                    else if (pipSupported)
+                      IconButton(
+                        onPressed: () {
+                          final double rawAr =
+                              controller?.value.aspectRatio ?? 0;
+                          final double ar = rawAr > 0 ? rawAr : 16 / 9;
+                          final bool playing =
+                              controller?.value.isPlaying ?? true;
+                          unawaited(
+                            ref
+                                .read(pipControllerProvider)
+                                .enter(
+                                  aspectRatio: ar,
+                                  isPlaying: playing,
+                                  hasNext: true,
+                                ),
+                          );
+                        },
+                        icon: const Icon(
+                          Icons.picture_in_picture_alt_rounded,
+                          color: Colors.white,
                         ),
                       ),
-                    ],
-                  ),
-                ],
+                    if (castSupported)
+                      IconButton(
+                        onPressed: () =>
+                            ref.read(castControllerProvider).startSession(),
+                        icon: const Icon(
+                          Icons.cast_rounded,
+                          color: Colors.white,
+                        ),
+                      ),
+                    IconButton(
+                      tooltip: 'Settings',
+                      onPressed: () => _showSettings(context, ref),
+                      icon: const Icon(
+                        Icons.settings_rounded,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-          ],
+              const Spacer(),
+              if (showLoading)
+                const _PlayerLoadingIndicator()
+              else if (isMobile)
+                _CenterPlayPauseButton(controller: controller),
+              const Spacer(),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+                child: Column(
+                  children: <Widget>[
+                    if (controller != null)
+                      _PositionBar(
+                        controller: controller,
+                        skipMarkers: markers,
+                      ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: <Widget>[
+                        _BottomLeftControls(
+                          controller: controller,
+                          isMobile: isMobile,
+                        ),
+                        const SizedBox(width: 18),
+                        Expanded(
+                          child: LayoutBuilder(
+                            builder:
+                                (
+                                  BuildContext context,
+                                  BoxConstraints constraints,
+                                ) {
+                                  final double width = constraints.maxWidth;
+                                  final bool compactStreams = width < 520;
+                                  final bool compactSubs = width < 470;
+                                  final bool compactZoom = width < 420;
+                                  final bool compactSpeed = width < 365;
+                                  final bool compactQuality = width < 315;
+                                  final String speedLabel =
+                                      '${settings.playbackSpeed.toStringAsFixed(settings.playbackSpeed == settings.playbackSpeed.roundToDouble() ? 0 : 2)}x';
+
+                                  return Align(
+                                    alignment: Alignment.centerRight,
+                                    child: SingleChildScrollView(
+                                      scrollDirection: Axis.horizontal,
+                                      reverse: true,
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: <Widget>[
+                                          _ChromeButton(
+                                            icon: Icons.dns_rounded,
+                                            label: 'Streams',
+                                            showLabel: !compactStreams,
+                                            onTap: () =>
+                                                _showStreamsMenu(context, ref),
+                                          ),
+                                          _ChromeButton(
+                                            icon: Icons.subtitles_rounded,
+                                            label: 'Subs',
+                                            showLabel: !compactSubs,
+                                            onTap: () =>
+                                                _showSubtitleMenu(context, ref),
+                                          ),
+                                          _ChromeButton(
+                                            icon: settings.verticalStretch
+                                                ? Icons.fullscreen_exit_rounded
+                                                : Icons.zoom_out_map_rounded,
+                                            label: settings.verticalStretch
+                                                ? 'Normal'
+                                                : 'Zoom',
+                                            showLabel: !compactZoom,
+                                            onTap: () => ref
+                                                .read(
+                                                  playerSettingsProvider
+                                                      .notifier,
+                                                )
+                                                .setVerticalStretch(
+                                                  !settings.verticalStretch,
+                                                ),
+                                          ),
+                                          _ChromeButton(
+                                            icon: Icons.speed_rounded,
+                                            label: speedLabel,
+                                            showLabel: !compactSpeed,
+                                            onTap: () =>
+                                                _showSpeedMenu(context, ref),
+                                          ),
+                                          _ChromeButton(
+                                            icon: Icons.high_quality_rounded,
+                                            label: 'Quality',
+                                            showLabel: !compactQuality,
+                                            onTap: () =>
+                                                _showQualityMenu(context, ref),
+                                          ),
+                                          if (!isMobile)
+                                            _ChromeIconButton(
+                                              icon: isFullscreen
+                                                  ? Icons
+                                                        .fullscreen_exit_rounded
+                                                  : Icons.fullscreen_rounded,
+                                              tooltip: isFullscreen
+                                                  ? 'Exit fullscreen'
+                                                  : 'Fullscreen',
+                                              onTap: onToggleFullscreen,
+                                            ),
+                                        ],
+                                      ),
+                                    ),
+                                  );
+                                },
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
-      ),
+      ],
     );
   }
 }
