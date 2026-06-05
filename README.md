@@ -61,11 +61,11 @@ It can switch between TMDB-driven discovery and AniList-driven catalog views, th
 
 Prebuilt binaries are on the [Releases](https://github.com/emp0ry/MiruShin/releases/latest) page:
 
-- **Android** — `.apk`
-- **iOS** — `.ipa`
-- **Windows** — installer (`.exe`) and portable `.zip`
-- **macOS** — `.dmg`
-- **Linux** — `AppImage`, `.tar.gz`, and `.deb` (Debian/Ubuntu)
+- **Android** - `.apk`
+- **iOS** - `.ipa`
+- **Windows** - installer (`.exe`) and portable `.zip`
+- **macOS** - `.dmg`
+- **Linux** - `AppImage`, `.tar.gz`, and `.deb` (Debian/Ubuntu)
 
 ### Requirements
 
