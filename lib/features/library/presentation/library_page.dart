@@ -1536,159 +1536,192 @@ class _FolderViewState extends ConsumerState<_FolderView>
     final bool filterActive = activeFilterCount > 0;
     final List<AniListAnimeListEntry> upcoming = _upcomingEntries(entries);
 
-    return Column(
-      children: <Widget>[
-        // ── Search / Sort / Filter / Grid bar ─────────────────────────────
-        Padding(
-          padding: const EdgeInsets.fromLTRB(
-            AppSpacing.lg,
-            AppSpacing.sm,
-            AppSpacing.lg,
-            AppSpacing.sm,
-          ),
-          child: Row(
-            children: <Widget>[
-              Expanded(
-                child: TextField(
-                  controller: _search,
-                  onChanged: (_) => setState(() {}),
-                  decoration: InputDecoration(
-                    hintText:
-                        'Search ${widget.folder.status?.label ?? widget.folder.name}…',
-                    prefixIcon: const Icon(Icons.search_rounded, size: 20),
-                    suffixIcon: _search.text.isNotEmpty
-                        ? IconButton(
-                            icon: const Icon(Icons.clear_rounded, size: 18),
-                            onPressed: () {
-                              _search.clear();
-                              setState(() {});
-                            },
-                          )
-                        : null,
-                    isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: AppSpacing.md,
-                      vertical: AppSpacing.sm,
-                    ),
-                    border: OutlineInputBorder(
-                      borderRadius: AppRadius.all(AppRadius.md),
-                      borderSide: BorderSide.none,
-                    ),
-                    filled: true,
-                    fillColor: palette.surfaceSoftColor,
-                  ),
-                ),
-              ),
-              const SizedBox(width: AppSpacing.sm),
-              _BarIcon(
-                icon: _isGrid
-                    ? Icons.view_list_rounded
-                    : Icons.grid_view_rounded,
-                tooltip: _isGrid ? 'List view' : 'Grid view',
-                onTap: () {
-                  setState(() => _isGrid = !_isGrid);
-                  unawaited(_savePreferences());
-                },
-              ),
-              const SizedBox(width: AppSpacing.xs),
-              _BarIcon(
-                icon: Icons.sort_rounded,
-                tooltip: 'Sort',
-                onTap: _openSortSheet,
-              ),
-              const SizedBox(width: AppSpacing.xs),
-              Badge(
-                isLabelVisible: filterActive,
-                label: Text(activeFilterCount.toString()),
-                backgroundColor: Theme.of(context).colorScheme.primary,
-                child: _BarIcon(
-                  icon: Icons.filter_list_rounded,
-                  tooltip: 'Filter',
-                  active: filterActive,
-                  onTap: _openFilterSheet,
-                ),
-              ),
-            ],
-          ),
-        ),
-        // _LibrarySummaryBar(
-        //   entries: entries,
-        //   totalCount: widget.folder.entries.length,
-        // ),
-        if (upcoming.isNotEmpty) _AiringSoonStrip(entries: upcoming),
-        // ── Entry list / grid ─────────────────────────────────────────────
-        Expanded(
-          child: RefreshIndicator(
-            onRefresh: () => refreshAniListLibraryForMediaType(
-              ref,
-              mediaType: widget.mediaType,
+    return RefreshIndicator(
+      onRefresh: () =>
+          refreshAniListLibraryForMediaType(ref, mediaType: widget.mediaType),
+      child: CustomScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        slivers: <Widget>[
+          SliverToBoxAdapter(
+            child: _buildActionBar(
+              context,
+              palette: palette,
+              activeFilterCount: activeFilterCount,
+              filterActive: filterActive,
             ),
-            child: entries.isEmpty
-                ? ListView(
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    padding: const EdgeInsets.fromLTRB(
-                      AppSpacing.lg,
-                      AppSpacing.xxl,
-                      AppSpacing.lg,
-                      AppSpacing.xl,
-                    ),
-                    children: <Widget>[
-                      Icon(
-                        Icons.search_off_rounded,
-                        size: 40,
-                        color: palette.textMutedColor,
-                      ),
-                      const SizedBox(height: AppSpacing.sm),
-                      Text(
-                        _emptyEntriesMessage(filterActive),
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: palette.textMutedColor,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                    ],
-                  )
-                : _isGrid
-                ? _buildGrid(entries)
-                : _buildList(entries),
           ),
+          // _LibrarySummaryBar(
+          //   entries: entries,
+          //   totalCount: widget.folder.entries.length,
+          // ),
+          if (upcoming.isNotEmpty)
+            SliverToBoxAdapter(child: _AiringSoonStrip(entries: upcoming)),
+          // ── Entry list / grid ─────────────────────────────────────────────
+          if (entries.isEmpty)
+            _buildEmptySliver(context, palette, filterActive)
+          else if (_isGrid)
+            _buildGrid(entries)
+          else
+            _buildList(entries),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildActionBar(
+    BuildContext context, {
+    required AppThemeExtension palette,
+    required int activeFilterCount,
+    required bool filterActive,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.lg,
+        AppSpacing.sm,
+        AppSpacing.lg,
+        AppSpacing.sm,
+      ),
+      child: Row(
+        children: <Widget>[
+          Expanded(
+            child: TextField(
+              controller: _search,
+              onChanged: (_) => setState(() {}),
+              decoration: InputDecoration(
+                hintText:
+                    'Search ${widget.folder.status?.label ?? widget.folder.name}…',
+                prefixIcon: const Icon(Icons.search_rounded, size: 20),
+                suffixIcon: _search.text.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear_rounded, size: 18),
+                        onPressed: () {
+                          _search.clear();
+                          setState(() {});
+                        },
+                      )
+                    : null,
+                isDense: true,
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.md,
+                  vertical: AppSpacing.sm,
+                ),
+                border: OutlineInputBorder(
+                  borderRadius: AppRadius.all(AppRadius.md),
+                  borderSide: BorderSide.none,
+                ),
+                filled: true,
+                fillColor: palette.surfaceSoftColor,
+              ),
+            ),
+          ),
+          const SizedBox(width: AppSpacing.sm),
+          _BarIcon(
+            icon: _isGrid ? Icons.view_list_rounded : Icons.grid_view_rounded,
+            tooltip: _isGrid ? 'List view' : 'Grid view',
+            onTap: () {
+              setState(() => _isGrid = !_isGrid);
+              unawaited(_savePreferences());
+            },
+          ),
+          const SizedBox(width: AppSpacing.xs),
+          _BarIcon(
+            icon: Icons.sort_rounded,
+            tooltip: 'Sort',
+            onTap: _openSortSheet,
+          ),
+          const SizedBox(width: AppSpacing.xs),
+          Badge(
+            isLabelVisible: filterActive,
+            label: Text(activeFilterCount.toString()),
+            backgroundColor: Theme.of(context).colorScheme.primary,
+            child: _BarIcon(
+              icon: Icons.filter_list_rounded,
+              tooltip: 'Filter',
+              active: filterActive,
+              onTap: _openFilterSheet,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmptySliver(
+    BuildContext context,
+    AppThemeExtension palette,
+    bool filterActive,
+  ) {
+    return SliverFillRemaining(
+      hasScrollBody: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(
+          AppSpacing.lg,
+          AppSpacing.xxl,
+          AppSpacing.lg,
+          AppSpacing.xl,
         ),
-      ],
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Icon(
+              Icons.search_off_rounded,
+              size: 40,
+              color: palette.textMutedColor,
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            Text(
+              _emptyEntriesMessage(filterActive),
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: palette.textMutedColor),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
     );
   }
 
   Widget _buildList(List<AniListAnimeListEntry> entries) {
-    return ListView.builder(
+    return SliverPadding(
       padding: const EdgeInsets.fromLTRB(
         AppSpacing.lg,
         AppSpacing.xs,
         AppSpacing.lg,
         AppSpacing.xl,
       ),
-      itemCount: entries.length,
-      itemBuilder: (_, i) => Padding(
-        padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-        child: _CollectionTile(entry: entries[i]),
+      sliver: SliverList(
+        delegate: SliverChildBuilderDelegate(
+          (_, i) => Padding(
+            padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+            child: _CollectionTile(entry: entries[i]),
+          ),
+          childCount: entries.length,
+        ),
       ),
     );
   }
 
   Widget _buildGrid(List<AniListAnimeListEntry> entries) {
-    return GridView.builder(
+    return SliverPadding(
       padding: const EdgeInsets.fromLTRB(
         AppSpacing.lg,
         AppSpacing.xs,
         AppSpacing.lg,
         AppSpacing.xl,
       ),
-      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 160,
-        childAspectRatio: 0.65,
-        crossAxisSpacing: AppSpacing.sm,
-        mainAxisSpacing: AppSpacing.sm,
+      sliver: SliverGrid(
+        gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+          maxCrossAxisExtent: 160,
+          childAspectRatio: 0.65,
+          crossAxisSpacing: AppSpacing.sm,
+          mainAxisSpacing: AppSpacing.sm,
+        ),
+        delegate: SliverChildBuilderDelegate(
+          (_, i) => _GridCell(entry: entries[i]),
+          childCount: entries.length,
+        ),
       ),
-      itemCount: entries.length,
-      itemBuilder: (_, i) => _GridCell(entry: entries[i]),
     );
   }
 }

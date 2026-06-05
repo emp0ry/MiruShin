@@ -12,10 +12,8 @@ import 'app_breakpoints.dart';
 import 'app_navigation_item.dart';
 
 const int _visibleDestinationCount = 3;
-const double _railLogoHeightBreakpoint = 536;
-const double _railMoreHeightBreakpoint = 464;
-const double _sidebarLogoHeightBreakpoint = 480;
-const double _sidebarMoreHeightBreakpoint = 400;
+const double _railMoreHeightBreakpoint = 546;
+const double _sidebarMoreHeightBreakpoint = 480;
 
 bool _matchesLocation(AppNavigationItem item, String location) {
   return location.startsWith(item.path);
@@ -423,8 +421,6 @@ class _NavigationRail extends StatelessWidget {
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         final bool useMore = constraints.maxHeight < _railMoreHeightBreakpoint;
-        final bool showLogo =
-            constraints.maxHeight >= _railLogoHeightBreakpoint;
         final List<AppNavigationItem> visibleItems = useMore
             ? items.take(_visibleDestinationCount).toList(growable: false)
             : items;
@@ -452,15 +448,14 @@ class _NavigationRail extends StatelessWidget {
             border: Border.all(color: palette.borderColor),
           ),
           child: NavigationRail(
-            leading: showLogo
-                ? Padding(
-                    padding: const EdgeInsets.only(top: AppSpacing.xl),
-                    child: AppLogo(compact: true, onPressed: onLogoPressed),
-                  )
-                : null,
+            scrollable: true,
+            leading: Padding(
+              padding: const EdgeInsets.only(top: AppSpacing.xl),
+              child: AppLogo(compact: true, onPressed: onLogoPressed),
+            ),
             selectedIndex: railSelectedIndex,
             labelType: NavigationRailLabelType.all,
-            groupAlignment: showLogo ? -0.75 : -0.9,
+            groupAlignment: -0.75,
             onDestinationSelected: (int index) {
               if (useMore && index == visibleItems.length) {
                 _showMoreDestinations(
@@ -524,10 +519,9 @@ class _SidebarNavigation extends StatelessWidget {
     final AppThemeExtension palette = AppThemeExtension.of(context);
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
-        final bool showLogo =
-            constraints.maxHeight >= _sidebarLogoHeightBreakpoint;
-        final bool useMore =
-            constraints.maxHeight < _sidebarMoreHeightBreakpoint;
+        final double contentHeight =
+            constraints.maxHeight - (AppSpacing.lg * 4);
+        final bool useMore = contentHeight < _sidebarMoreHeightBreakpoint;
         final List<AppNavigationItem> visibleItems = useMore
             ? items.take(_visibleDestinationCount).toList(growable: false)
             : items;
@@ -548,61 +542,63 @@ class _SidebarNavigation extends StatelessWidget {
             border: Border.all(color: palette.borderColor),
             gradient: palette.cardGradient,
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              if (showLogo) ...<Widget>[
-                AppLogo(
-                  taglineOverride: catalogMode.label,
-                  onPressed: onLogoPressed,
-                ),
-                const SizedBox(height: AppSpacing.xxl),
-              ],
-              Expanded(
-                child: ListView(
-                  padding: EdgeInsets.zero,
-                  children: <Widget>[
-                    ...visibleItems.map((AppNavigationItem item) {
-                      final bool selected = _matchesLocation(
-                        item,
-                        currentLocation,
-                      );
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-                        child: _SidebarButton(
-                          item: item,
-                          selected: selected,
-                          accent: accent,
-                          onTap: () => onDestinationSelected(item.path),
-                        ),
-                      );
-                    }),
-                    if (useMore)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-                        child: _SidebarMoreButton(
-                          selected: moreSelected,
-                          accent: accent,
-                          onTap: () => _showMoreDestinations(
-                            context,
-                            items: moreItems,
-                            currentLocation: currentLocation,
-                            onDestinationSelected: onDestinationSelected,
-                            catalogMode: catalogMode,
-                            onSwitchCatalogMode: onLogoPressed,
-                          ),
-                        ),
-                      ),
-                  ],
+          child: CustomScrollView(
+            slivers: <Widget>[
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: AppSpacing.xxl),
+                  child: AppLogo(
+                    taglineOverride: catalogMode.label,
+                    onPressed: onLogoPressed,
+                  ),
                 ),
               ),
+              SliverList(
+                delegate: SliverChildListDelegate(<Widget>[
+                  ...visibleItems.map((AppNavigationItem item) {
+                    final bool selected = _matchesLocation(
+                      item,
+                      currentLocation,
+                    );
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                      child: _SidebarButton(
+                        item: item,
+                        selected: selected,
+                        accent: accent,
+                        onTap: () => onDestinationSelected(item.path),
+                      ),
+                    );
+                  }),
+                  if (useMore)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                      child: _SidebarMoreButton(
+                        selected: moreSelected,
+                        accent: accent,
+                        onTap: () => _showMoreDestinations(
+                          context,
+                          items: moreItems,
+                          currentLocation: currentLocation,
+                          onDestinationSelected: onDestinationSelected,
+                          catalogMode: catalogMode,
+                          onSwitchCatalogMode: onLogoPressed,
+                        ),
+                      ),
+                    ),
+                ]),
+              ),
               // if (showFooter) ...<Widget>[
-              //   const SizedBox(height: AppSpacing.sm),
-              //   Text(
-              //     AppConstants.appVersion.split('+').first,
-              //     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              //       color: palette.textMutedColor,
-              //       fontSize: 12,
+              //   SliverToBoxAdapter(
+              //     child: Padding(
+              //       padding: const EdgeInsets.only(top: AppSpacing.sm),
+              //       child: Text(
+              //         AppConstants.appVersion.split('+').first,
+              //         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              //           color: palette.textMutedColor,
+              //           fontSize: 12,
+              //         ),
+              //       ),
               //     ),
               //   ),
               // ],
