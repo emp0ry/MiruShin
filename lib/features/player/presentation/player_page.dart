@@ -766,11 +766,19 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                         onTap: _toggleControls,
                         seekInterval: settings.seekInterval,
                         isMobile: _isMobile,
+                        isZoomed: settings.verticalStretch,
                         enableGestures: !_inPipMode,
                         onToggleFullscreen: _toggleFullscreen,
                         onTogglePlay: () => ref
                             .read(playbackControllerProvider.notifier)
                             .togglePlay(),
+                        onZoomChanged: (bool zoomed) {
+                          unawaited(
+                            ref
+                                .read(playerSettingsProvider.notifier)
+                                .setVerticalStretch(zoomed),
+                          );
+                        },
                         child: Stack(
                           fit: StackFit.expand,
                           children: <Widget>[
