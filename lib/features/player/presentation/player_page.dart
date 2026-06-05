@@ -931,40 +931,57 @@ class _VideoSurface extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final PlayerEngine? active = controller;
-    if (active == null || !active.value.isInitialized) {
+    if (active == null) {
       return const ColoredBox(color: Colors.black);
     }
 
-    final Size videoSize = active.value.videoSize;
-    final double fallbackAspectRatio = active.value.aspectRatio == 0
-        ? 16 / 9
-        : active.value.aspectRatio;
-    final double videoWidth = videoSize.width > 0 ? videoSize.width : 1920;
-    final double videoHeight = videoSize.height > 0
-        ? videoSize.height
-        : videoWidth / fallbackAspectRatio;
+    return ValueListenableBuilder<PlayerEngineState>(
+      valueListenable: active.state,
+      child: active.buildVideoSurface(context),
+      builder:
+          (
+            BuildContext context,
+            PlayerEngineState engineState,
+            Widget? videoSurface,
+          ) {
+            if (!engineState.isInitialized) {
+              return const ColoredBox(color: Colors.black);
+            }
 
-    if (!stretchVertical) {
-      return Center(
-        child: AspectRatio(
-          aspectRatio: fallbackAspectRatio,
-          child: active.buildVideoSurface(context),
-        ),
-      );
-    }
+            final Size videoSize = engineState.videoSize;
+            final double fallbackAspectRatio = engineState.aspectRatio == 0
+                ? 16 / 9
+                : engineState.aspectRatio;
+            final double videoWidth = videoSize.width > 0
+                ? videoSize.width
+                : 1920;
+            final double videoHeight = videoSize.height > 0
+                ? videoSize.height
+                : videoWidth / fallbackAspectRatio;
 
-    return ClipRect(
-      child: SizedBox.expand(
-        child: FittedBox(
-          fit: BoxFit.cover,
-          alignment: Alignment.center,
-          child: SizedBox(
-            width: videoWidth,
-            height: videoHeight,
-            child: active.buildVideoSurface(context),
-          ),
-        ),
-      ),
+            if (!stretchVertical) {
+              return Center(
+                child: AspectRatio(
+                  aspectRatio: fallbackAspectRatio,
+                  child: videoSurface,
+                ),
+              );
+            }
+
+            return ClipRect(
+              child: SizedBox.expand(
+                child: FittedBox(
+                  fit: BoxFit.cover,
+                  alignment: Alignment.center,
+                  child: SizedBox(
+                    width: videoWidth,
+                    height: videoHeight,
+                    child: videoSurface,
+                  ),
+                ),
+              ),
+            );
+          },
     );
   }
 }
