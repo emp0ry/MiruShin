@@ -12,7 +12,6 @@ import '../../../app/theme/app_radius.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../app/theme/app_theme_extension.dart';
 import '../../../core/responsive/app_breakpoints.dart';
-import '../../../core/responsive/responsive_grid.dart';
 import '../../../core/widgets/adaptive_page.dart';
 import '../../../core/widgets/glass_card.dart';
 import '../../../core/widgets/metadata_chip.dart';
@@ -101,13 +100,15 @@ class _DetailsBody extends ConsumerWidget {
         (item.externalIds['anilist_source'] != null ||
             item.externalIds['anilist_studios'] != null ||
             item.externalIds['anilist_tags'] != null ||
-            item.externalIds['anilist_popularity'] != null);
+            item.externalIds['anilist_format'] != null ||
+            item.externalIds['anilist_relation_type'] != null ||
+            item.externalIds['anilist_popularity'] != null ||
+            item.episodeCount != null ||
+            item.genres.isNotEmpty);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
         _ActionPanel(item: item),
-        const SizedBox(height: AppSpacing.xxl),
-        _MetadataSnapshot(item: item),
         const SizedBox(height: AppSpacing.xxl),
         _OverviewPanel(item: item),
         if (hasAniListInfo) ...<Widget>[
@@ -123,100 +124,157 @@ class _DetailsBody extends ConsumerWidget {
   }
 }
 
-class _MetadataSnapshot extends ConsumerWidget {
-  const _MetadataSnapshot({required this.item});
+AniListAnimeListEntry? _findAniListEntry(WidgetRef ref, MediaItem item) {
+  final int? anilistId = _aniListId(item);
+  if (anilistId == null) return null;
 
-  final MediaItem item;
+  final bool isManga = _isAniListManga(item);
+  final List<AniListAnimeListFolder> fullFolders = ref
+      .watch(isManga ? anilistMangaListProvider : anilistAnimeListProvider)
+      .maybeWhen(
+        skipLoadingOnReload: true,
+        data: (List<AniListAnimeListFolder> folders) => folders,
+        orElse: () => const <AniListAnimeListFolder>[],
+      );
+  final AniListAnimeListEntry? fullEntry = _findAniListEntryInFolders(
+    anilistId,
+    fullFolders,
+  );
+  if (fullEntry != null) return fullEntry;
 
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final CatalogMode mode = ref.watch(catalogModeProvider);
-    LibraryItem? libraryItem;
-    if (mode == CatalogMode.tmdb) {
-      final List<LibraryItem> library = ref.watch(localLibraryProvider);
-      for (final LibraryItem current in library) {
-        if (current.mediaItem.id == item.id) {
-          libraryItem = current;
-          break;
-        }
+  final List<AniListAnimeListFolder> previewFolders = ref
+      .watch(
+        isManga
+            ? anilistMangaPreviewListProvider
+            : anilistAnimePreviewListProvider,
+      )
+      .maybeWhen(
+        skipLoadingOnReload: true,
+        data: (List<AniListAnimeListFolder> folders) => folders,
+        orElse: () => const <AniListAnimeListFolder>[],
+      );
+  return _findAniListEntryInFolders(anilistId, previewFolders);
+}
+
+AniListAnimeListEntry? _findAniListEntryInFolders(
+  int anilistId,
+  List<AniListAnimeListFolder> folders,
+) {
+  for (final AniListAnimeListFolder folder in folders) {
+    for (final AniListAnimeListEntry entry in folder.entries) {
+      if (entryAniListId(entry) == anilistId) {
+        return entry;
       }
     }
-    final List<({IconData icon, String label, String value, Color? color})>
-    stats = <({IconData icon, String label, String value, Color? color})>[
-      if (item.rating > 0 && item.rating <= 10)
-        (
-          icon: Icons.star_rounded,
-          label: 'Rating',
-          value: item.rating.toStringAsFixed(1),
-          color: AppColors.accentAmber,
-        ),
-      (
-        icon: Icons.calendar_today_rounded,
-        label: 'Year',
-        value: item.year.toString(),
-        color: null,
-      ),
-      (
-        icon: Icons.timelapse_rounded,
-        label: 'Duration',
-        value: item.durationLabel,
-        color: null,
-      ),
-      (
-        icon: Icons.bookmark_added_rounded,
-        label: mode == CatalogMode.anilist ? 'Catalog' : 'Library',
-        value: mode == CatalogMode.anilist
-            ? 'AniList'
-            : libraryItem?.status.label ?? 'Not in Library',
-        color: libraryItem == null
-            ? null
-            : Theme.of(context).colorScheme.primary,
-      ),
-    ];
-
-    return ResponsiveGrid(
-      itemCount: stats.length,
-      minItemWidth: 190,
-      maxColumns: 4,
-      childAspectRatio: 2.45,
-      itemBuilder: (BuildContext context, int index) {
-        final stat = stats[index];
-        return GlassCard(
-          padding: const EdgeInsets.all(AppSpacing.md),
-          child: Row(
-            children: <Widget>[
-              Icon(
-                stat.icon,
-                color: stat.color ?? Theme.of(context).colorScheme.primary,
-              ),
-              const SizedBox(width: AppSpacing.md),
-              Expanded(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(
-                      context.t(stat.label),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.labelMedium,
-                    ),
-                    const SizedBox(height: AppSpacing.xs),
-                    Text(
-                      context.t(stat.value),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
   }
+  return null;
+}
+
+int? _aniListId(MediaItem item) {
+  final String? anilistId = item.externalIds['anilist'];
+  return anilistId == null ? null : int.tryParse(anilistId);
+}
+
+bool _isAniListManga(MediaItem item) {
+  return item.externalIds['anilist_type'] == 'MANGA' ||
+      item.id.toLowerCase().startsWith('anilist:manga:');
+}
+
+bool _isAniListAnime(MediaItem item) {
+  return item.externalIds['anilist_type'] == 'ANIME' ||
+      RegExp(r'^anilist:\d+$').hasMatch(item.id);
+}
+
+String _aniListStatusLabel(AniListListStatus status, MediaItem item) {
+  final bool isManga = _isAniListManga(item);
+  return switch (status) {
+    AniListListStatus.current => isManga ? 'Reading' : 'Watching',
+    AniListListStatus.planning => 'Planning',
+    AniListListStatus.completed => 'Finished',
+    AniListListStatus.dropped => 'Dropped',
+    AniListListStatus.paused => 'Paused',
+    AniListListStatus.repeating => isManga ? 'Rereading' : 'Rewatching',
+  };
+}
+
+String _personalStatusLabel(WidgetRef ref, MediaItem item, CatalogMode mode) {
+  if (mode == CatalogMode.anilist) {
+    final AniListAnimeListEntry? entry = _findAniListEntry(ref, item);
+    return entry == null ? '' : _aniListStatusLabel(entry.status, item);
+  }
+
+  final List<LibraryItem> library = ref.watch(localLibraryProvider);
+  for (final LibraryItem current in library) {
+    if (current.mediaItem.id == item.id) {
+      return current.status.label;
+    }
+  }
+  return '';
+}
+
+String _formatMediaFormat(String raw) {
+  final String value = raw.trim();
+  if (value.isEmpty) return '';
+  return switch (value.toUpperCase()) {
+    'TV' => 'TV',
+    'TV_SHORT' => 'TV Short',
+    'MOVIE' => 'Movie',
+    'SPECIAL' => 'Special',
+    'OVA' => 'OVA',
+    'ONA' => 'ONA',
+    'MUSIC' => 'Music',
+    'MANGA' => 'Manga',
+    'NOVEL' => 'Novel',
+    'ONE_SHOT' => 'One Shot',
+    _ => _titleCaseToken(value),
+  };
+}
+
+String _mediaKindLabel(MediaItem item, {String? fallbackFormat}) {
+  final String format = _formatMediaFormat(
+    item.externalIds['anilist_format'] ?? fallbackFormat ?? '',
+  );
+  final String relation = _formatRelationType(
+    item.externalIds['anilist_relation_type'] ?? '',
+  );
+  if (format.isNotEmpty && relation.isNotEmpty) {
+    return '$format · $relation';
+  }
+  return format.isNotEmpty ? format : relation;
+}
+
+String _formatRelationType(String raw) {
+  final String value = raw.trim();
+  if (value.isEmpty) return '';
+  return switch (value.toUpperCase()) {
+    'SIDE_STORY' => 'Side Story',
+    'SPIN_OFF' => 'Spin-off',
+    'PREQUEL' => 'Prequel',
+    'SEQUEL' => 'Sequel',
+    'ADAPTATION' => 'Adaptation',
+    'ALTERNATIVE' => 'Alternative',
+    'SUMMARY' => 'Summary',
+    'OTHER' => 'Other',
+    _ => _titleCaseToken(value),
+  };
+}
+
+String _titleCaseToken(String value) {
+  return value
+      .split(RegExp(r'[_\s]+'))
+      .where((String part) => part.isNotEmpty)
+      .map((String part) {
+        if (part.length <= 3 && part.toUpperCase() == part) return part;
+        final String lower = part.toLowerCase();
+        return '${lower[0].toUpperCase()}${lower.substring(1)}';
+      })
+      .join(' ');
+}
+
+String _episodeCountLabel(MediaItem item) {
+  final int? count = item.episodeCount;
+  if (count == null || count <= 0) return '';
+  return '$count';
 }
 
 class _OverviewPanel extends ConsumerWidget {
@@ -227,7 +285,14 @@ class _OverviewPanel extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final CatalogMode mode = ref.watch(catalogModeProvider);
-    final String statusLabel = humanReadableMediaStatus(item.statusLabel);
+    final List<Widget> chips = <Widget>[
+      if (mode != CatalogMode.anilist && item.sourceProvider.isNotEmpty)
+        MetadataChip(label: item.sourceProvider),
+      if (mode != CatalogMode.anilist && item.externalIds['tmdb'] != null)
+        MetadataChip(label: 'TMDB ${item.externalIds['tmdb']}'),
+      if (mode != CatalogMode.anilist)
+        MetadataChip(label: context.t(item.type.labelKey)),
+    ];
     return GlassCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -239,22 +304,16 @@ class _OverviewPanel extends ConsumerWidget {
             ),
           ),
           Text(item.overview, style: Theme.of(context).textTheme.bodyLarge),
-          const SizedBox(height: AppSpacing.lg),
-          Wrap(
-            spacing: AppSpacing.sm,
-            runSpacing: AppSpacing.sm,
-            children: <Widget>[
-              MetadataChip(label: item.sourceProvider),
-              if (item.externalIds['tmdb'] != null)
-                MetadataChip(label: 'TMDB ${item.externalIds['tmdb']}'),
-              if (item.externalIds['anilist'] != null)
-                MetadataChip(label: 'AniList ${item.externalIds['anilist']}'),
-              if (mode != CatalogMode.anilist)
-                MetadataChip(label: context.t(item.type.labelKey)),
-              if (statusLabel.isNotEmpty) MetadataChip(label: statusLabel),
-            ],
-          ),
-          if (item.genres.isNotEmpty) ...<Widget>[
+          if (chips.isNotEmpty) ...<Widget>[
+            const SizedBox(height: AppSpacing.lg),
+            Wrap(
+              spacing: AppSpacing.sm,
+              runSpacing: AppSpacing.sm,
+              children: chips,
+            ),
+          ],
+          if (mode != CatalogMode.anilist &&
+              item.genres.isNotEmpty) ...<Widget>[
             const SizedBox(height: AppSpacing.lg),
             Text(
               context.t('Genres'),
@@ -340,10 +399,18 @@ class _AniListInfoPanelState extends State<_AniListInfoPanel> {
   Widget build(BuildContext context) {
     final ColorScheme cs = Theme.of(context).colorScheme;
     final TextTheme tt = Theme.of(context).textTheme;
+    final Color spoilerTextColor = Colors.red.shade200;
+    final String episodeLabel = _episodeCountLabel(widget.item);
 
     // Info rows
     final List<({IconData icon, String label, String value})> infoRows =
         <({IconData icon, String label, String value})>[
+          if (episodeLabel.isNotEmpty)
+            (
+              icon: Icons.format_list_numbered_rounded,
+              label: _isAniListManga(widget.item) ? 'Chapters' : 'Episodes',
+              value: episodeLabel,
+            ),
           if (_ext['anilist_country'] != null)
             (
               icon: Icons.flag_outlined,
@@ -510,6 +577,68 @@ class _AniListInfoPanelState extends State<_AniListInfoPanel> {
             const SizedBox(height: AppSpacing.sm),
           ],
 
+          // Genres
+          if (widget.item.genres.isNotEmpty) ...<Widget>[
+            Text(context.t('Genres'), style: tt.titleSmall),
+            const SizedBox(height: AppSpacing.sm),
+            Wrap(
+              spacing: AppSpacing.sm,
+              runSpacing: AppSpacing.sm,
+              children: <Widget>[
+                for (final String genre in widget.item.genres.take(12))
+                  Chip(
+                    label: Text(genre),
+                    visualDensity: VisualDensity.compact,
+                  ),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.lg),
+          ],
+
+          // Tags
+          if (tags.isNotEmpty) ...<Widget>[
+            Text(context.t('Tags'), style: tt.titleSmall),
+            const SizedBox(height: AppSpacing.sm),
+            Wrap(
+              spacing: AppSpacing.sm,
+              runSpacing: AppSpacing.sm,
+              children: <Widget>[
+                ...visibleTags.map(
+                  (t) => Chip(
+                    label: Text('${t.rank}% ${t.name}'),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+                if (spoilerTags.isNotEmpty)
+                  ..._spoilersRevealed
+                      ? spoilerTags.map(
+                          (t) => Chip(
+                            label: Text('${t.rank}% ${t.name}'),
+                            visualDensity: VisualDensity.compact,
+                            labelStyle: TextStyle(color: spoilerTextColor),
+                          ),
+                        )
+                      : <Widget>[
+                          ActionChip(
+                            avatar: Icon(
+                              Icons.visibility_off_outlined,
+                              size: 14,
+                              color: spoilerTextColor,
+                            ),
+                            label: Text(
+                              '${spoilerTags.length} ${context.t('spoiler tags')}',
+                            ),
+                            onPressed: () =>
+                                setState(() => _spoilersRevealed = true),
+                            visualDensity: VisualDensity.compact,
+                            labelStyle: TextStyle(color: spoilerTextColor),
+                          ),
+                        ],
+              ],
+            ),
+            const SizedBox(height: AppSpacing.lg),
+          ],
+
           // Animation studios
           if (animationStudios.isNotEmpty) ...<Widget>[
             Text(context.t('Studios'), style: tt.titleSmall),
@@ -548,53 +677,6 @@ class _AniListInfoPanelState extends State<_AniListInfoPanel> {
                     ),
                   )
                   .toList(),
-            ),
-            const SizedBox(height: AppSpacing.lg),
-          ],
-
-          // Tags
-          if (tags.isNotEmpty) ...<Widget>[
-            Text(context.t('Tags'), style: tt.titleSmall),
-            const SizedBox(height: AppSpacing.sm),
-            Wrap(
-              spacing: AppSpacing.sm,
-              runSpacing: AppSpacing.sm,
-              children: <Widget>[
-                ...visibleTags.map(
-                  (t) => FilterChip(
-                    label: Text('${t.rank}% ${t.name}'),
-                    selected: false,
-                    onSelected: null,
-                    visualDensity: VisualDensity.compact,
-                  ),
-                ),
-                if (spoilerTags.isNotEmpty)
-                  ..._spoilersRevealed
-                      ? spoilerTags.map(
-                          (t) => FilterChip(
-                            label: Text('${t.rank}% ${t.name}'),
-                            selected: false,
-                            onSelected: null,
-                            visualDensity: VisualDensity.compact,
-                            backgroundColor: cs.errorContainer,
-                            labelStyle: TextStyle(color: cs.onErrorContainer),
-                          ),
-                        )
-                      : <Widget>[
-                          ActionChip(
-                            avatar: const Icon(
-                              Icons.visibility_off_outlined,
-                              size: 14,
-                            ),
-                            label: Text(
-                              '${spoilerTags.length} ${context.t('spoiler tags')}',
-                            ),
-                            onPressed: () =>
-                                setState(() => _spoilersRevealed = true),
-                            visualDensity: VisualDensity.compact,
-                          ),
-                        ],
-              ],
             ),
           ],
         ],
@@ -779,6 +861,8 @@ class _HeroCopy extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final CatalogMode mode = ref.watch(catalogModeProvider);
+    final String formatLabel = _mediaKindLabel(item);
+    final String personalStatusLabel = _personalStatusLabel(ref, item, mode);
     final String aniListTitleLanguage = ref.watch(
       aniListEffectiveTitleLanguageProvider,
     );
@@ -809,8 +893,14 @@ class _HeroCopy extends ConsumerWidget {
                   color: AppColors.accentAmber,
                   onImage: true,
                 ),
-              MetadataChip(label: item.durationLabel, onImage: true),
-              MetadataChip(label: item.sourceProvider, onImage: true),
+              if (mode == CatalogMode.anilist && formatLabel.isNotEmpty)
+                MetadataChip(label: formatLabel, onImage: true),
+              if (personalStatusLabel.isNotEmpty)
+                MetadataChip(label: personalStatusLabel, onImage: true),
+              if (mode != CatalogMode.anilist)
+                MetadataChip(label: item.durationLabel, onImage: true),
+              if (mode != CatalogMode.anilist)
+                MetadataChip(label: item.sourceProvider, onImage: true),
             ],
           ),
           const SizedBox(height: AppSpacing.lg),
@@ -956,67 +1046,17 @@ class _ActionPanel extends ConsumerWidget {
     final bool inLibrary = libraryItem != null;
 
     final bool hasAnilist = anilistToken.isNotEmpty;
-    final String? anilistIdStr = item.externalIds['anilist'];
-    final int? anilistId = anilistIdStr != null
-        ? int.tryParse(anilistIdStr)
-        : null;
-    final bool isAniListManga =
-        item.externalIds['anilist_type'] == 'MANGA' ||
-        item.id.toLowerCase().startsWith('anilist:manga:');
-    final bool isAniListAnime =
-        item.externalIds['anilist_type'] == 'ANIME' ||
-        RegExp(r'^anilist:\d+$').hasMatch(item.id);
+    final int? anilistId = _aniListId(item);
+    final bool isAniListManga = _isAniListManga(item);
+    final bool isAniListAnime = _isAniListAnime(item);
     final bool canWatch =
         mode == CatalogMode.tmdb ||
         (mode == CatalogMode.anilist && isAniListAnime);
     final bool canAddToAniList =
         mode == CatalogMode.anilist && hasAnilist && anilistId != null;
-
-    AniListAnimeListEntry? anilistEntry;
-    if (canAddToAniList) {
-      final List<AniListAnimeListFolder> fullFolders = ref
-          .watch(
-            isAniListManga
-                ? anilistMangaListProvider
-                : anilistAnimeListProvider,
-          )
-          .maybeWhen(
-            skipLoadingOnReload: true,
-            data: (List<AniListAnimeListFolder> d) => d,
-            orElse: () => const <AniListAnimeListFolder>[],
-          );
-      final List<AniListAnimeListFolder> previewFolders = ref
-          .watch(
-            isAniListManga
-                ? anilistMangaPreviewListProvider
-                : anilistAnimePreviewListProvider,
-          )
-          .maybeWhen(
-            skipLoadingOnReload: true,
-            data: (List<AniListAnimeListFolder> d) => d,
-            orElse: () => const <AniListAnimeListFolder>[],
-          );
-      outer:
-      for (final AniListAnimeListFolder folder in fullFolders) {
-        for (final AniListAnimeListEntry entry in folder.entries) {
-          if (entryAniListId(entry) == anilistId) {
-            anilistEntry = entry;
-            break outer;
-          }
-        }
-      }
-      if (anilistEntry == null) {
-        outerPreview:
-        for (final AniListAnimeListFolder folder in previewFolders) {
-          for (final AniListAnimeListEntry entry in folder.entries) {
-            if (entryAniListId(entry) == anilistId) {
-              anilistEntry = entry;
-              break outerPreview;
-            }
-          }
-        }
-      }
-    }
+    final AniListAnimeListEntry? anilistEntry = canAddToAniList
+        ? _findAniListEntry(ref, item)
+        : null;
 
     final List<Widget> actions = <Widget>[
       if (canWatch)
@@ -1030,7 +1070,7 @@ class _ActionPanel extends ConsumerWidget {
         FilledButton.icon(
           onPressed: canAddToAniList
               ? anilistEntry != null
-                    ? () => _editAniListEntry(context, ref, anilistEntry!)
+                    ? () => _editAniListEntry(context, ref, anilistEntry)
                     : () => _addToAniList(
                         context,
                         ref,
@@ -1196,6 +1236,12 @@ MediaItem _seasonAsItem(MediaItem parent, MediaSeason season) {
   }
   if (anilistType != null) {
     externalIds['anilist_type'] = anilistType;
+  }
+  if (season.format.isNotEmpty) {
+    externalIds['anilist_format'] = season.format;
+  }
+  if (season.relationType.isNotEmpty) {
+    externalIds['anilist_relation_type'] = season.relationType;
   }
   return MediaItem(
     id: anilistId != null
