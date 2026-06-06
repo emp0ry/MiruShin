@@ -2048,7 +2048,7 @@ class _CollectionTileState extends ConsumerState<_CollectionTile> {
       );
       if (mounted && result != AniListEntrySaveResult.failed) {
         setState(() {
-          _status = draft.status;
+          _status = draft.status ?? _status;
           _progress = draft.progress;
           _score = draft.score;
           _notes = draft.notes;

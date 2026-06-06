@@ -32,7 +32,6 @@ import '../../metadata/data/shikimori_client.dart';
 import '../../profile/application/anilist_user_settings_provider.dart';
 import '../../tracking/application/anilist_library_provider.dart';
 import '../../settings/presentation/settings_state.dart';
-import '../../tracking/data/anilist_api_client.dart';
 import '../../tracking/presentation/anilist_entry_editor.dart';
 import '../../tracking/presentation/anilist_favorite_button.dart';
 
@@ -863,13 +862,13 @@ class _HeroCopy extends ConsumerWidget {
     final CatalogMode mode = ref.watch(catalogModeProvider);
     final String formatLabel = _mediaKindLabel(item);
     final String personalStatusLabel = _personalStatusLabel(ref, item, mode);
-    final String aniListTitleLanguage = ref.watch(
-      aniListEffectiveTitleLanguageProvider,
-    );
-    final String? secondaryTitle = _secondaryHeroTitle(
-      item,
-      aniListTitleLanguage: aniListTitleLanguage,
-    );
+    // final String aniListTitleLanguage = ref.watch(
+    //   aniListEffectiveTitleLanguageProvider,
+    // );
+    // final String? secondaryTitle = _secondaryHeroTitle(
+    //   item,
+    //   aniListTitleLanguage: aniListTitleLanguage,
+    // );
     return ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 820),
       child: Column(
@@ -922,17 +921,17 @@ class _HeroCopy extends ConsumerWidget {
                       ?.copyWith(color: Colors.white),
             ),
           ),
-          if (secondaryTitle != null) ...<Widget>[
-            const SizedBox(height: AppSpacing.sm),
-            Text(
-              secondaryTitle,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(
-                context,
-              ).textTheme.titleMedium?.copyWith(color: Colors.white70),
-            ),
-          ],
+          // if (secondaryTitle != null) ...<Widget>[
+          //   const SizedBox(height: AppSpacing.sm),
+          //   Text(
+          //     secondaryTitle,
+          //     maxLines: 1,
+          //     overflow: TextOverflow.ellipsis,
+          //     style: Theme.of(
+          //       context,
+          //     ).textTheme.titleMedium?.copyWith(color: Colors.white70),
+          //   ),
+          // ],
           const SizedBox(height: AppSpacing.md),
           Text(
             item.overview,
@@ -948,76 +947,76 @@ class _HeroCopy extends ConsumerWidget {
   }
 }
 
-String? _secondaryHeroTitle(
-  MediaItem item, {
-  required String aniListTitleLanguage,
-}) {
-  final String primaryTitle = item.title.trim();
-  final String originalTitle = item.originalTitle.trim();
-  final String nativeTitle = _firstDistinctTitle(primaryTitle, <String>[
-    item.externalIds['anilist_title_native'] ?? '',
-    originalTitle,
-  ]);
-  final String romajiTitle = _firstDistinctTitle(
-    primaryTitle,
-    <String>[item.externalIds['anilist_title_romaji'] ?? '', ...item.aliases],
-    requireLatin: true,
-    rejectJapanese: true,
-  );
+// String? _secondaryHeroTitle(
+//   MediaItem item, {
+//   required String aniListTitleLanguage,
+// }) {
+//   final String primaryTitle = item.title.trim();
+//   final String originalTitle = item.originalTitle.trim();
+//   final String nativeTitle = _firstDistinctTitle(primaryTitle, <String>[
+//     item.externalIds['anilist_title_native'] ?? '',
+//     originalTitle,
+//   ]);
+//   final String romajiTitle = _firstDistinctTitle(
+//     primaryTitle,
+//     <String>[item.externalIds['anilist_title_romaji'] ?? '', ...item.aliases],
+//     requireLatin: true,
+//     rejectJapanese: true,
+//   );
 
-  if (item.type == MediaType.anime) {
-    if (aniListTitleLanguage == 'NATIVE') {
-      if (romajiTitle.isNotEmpty) return romajiTitle;
-      if (nativeTitle.isNotEmpty) return nativeTitle;
-    } else if (aniListTitleLanguage == 'ROMAJI') {
-      if (nativeTitle.isNotEmpty) return nativeTitle;
-      if (romajiTitle.isNotEmpty) return romajiTitle;
-    } else {
-      if (romajiTitle.isNotEmpty) return romajiTitle;
-      if (nativeTitle.isNotEmpty) return nativeTitle;
-    }
-  }
+//   if (item.type == MediaType.anime) {
+//     if (aniListTitleLanguage == 'NATIVE') {
+//       if (romajiTitle.isNotEmpty) return romajiTitle;
+//       if (nativeTitle.isNotEmpty) return nativeTitle;
+//     } else if (aniListTitleLanguage == 'ROMAJI') {
+//       if (nativeTitle.isNotEmpty) return nativeTitle;
+//       if (romajiTitle.isNotEmpty) return romajiTitle;
+//     } else {
+//       if (romajiTitle.isNotEmpty) return romajiTitle;
+//       if (nativeTitle.isNotEmpty) return nativeTitle;
+//     }
+//   }
 
-  if (originalTitle.isNotEmpty && !_sameTitle(originalTitle, primaryTitle)) {
-    return originalTitle;
-  }
-  return null;
-}
+//   if (originalTitle.isNotEmpty && !_sameTitle(originalTitle, primaryTitle)) {
+//     return originalTitle;
+//   }
+//   return null;
+// }
 
-String _firstDistinctTitle(
-  String primaryTitle,
-  List<String> candidates, {
-  bool requireLatin = false,
-  bool rejectJapanese = false,
-}) {
-  final String normalizedPrimary = primaryTitle.trim();
-  for (final String candidate in candidates) {
-    final String trimmed = candidate.trim();
-    if (trimmed.isEmpty || _sameTitle(trimmed, normalizedPrimary)) {
-      continue;
-    }
-    if (requireLatin && !_containsLatin(trimmed)) {
-      continue;
-    }
-    if (rejectJapanese && _containsJapanese(trimmed)) {
-      continue;
-    }
-    return trimmed;
-  }
-  return '';
-}
+// String _firstDistinctTitle(
+//   String primaryTitle,
+//   List<String> candidates, {
+//   bool requireLatin = false,
+//   bool rejectJapanese = false,
+// }) {
+//   final String normalizedPrimary = primaryTitle.trim();
+//   for (final String candidate in candidates) {
+//     final String trimmed = candidate.trim();
+//     if (trimmed.isEmpty || _sameTitle(trimmed, normalizedPrimary)) {
+//       continue;
+//     }
+//     if (requireLatin && !_containsLatin(trimmed)) {
+//       continue;
+//     }
+//     if (rejectJapanese && _containsJapanese(trimmed)) {
+//       continue;
+//     }
+//     return trimmed;
+//   }
+//   return '';
+// }
 
-bool _sameTitle(String a, String b) {
-  return a.toLowerCase() == b.toLowerCase();
-}
+// bool _sameTitle(String a, String b) {
+//   return a.toLowerCase() == b.toLowerCase();
+// }
 
-bool _containsLatin(String text) {
-  return RegExp(r'[A-Za-z]').hasMatch(text);
-}
+// bool _containsLatin(String text) {
+//   return RegExp(r'[A-Za-z]').hasMatch(text);
+// }
 
-bool _containsJapanese(String text) {
-  return RegExp(r'[぀-ゟ゠-ヿ一-鿿]').hasMatch(text);
-}
+// bool _containsJapanese(String text) {
+//   return RegExp(r'[぀-ゟ゠-ヿ一-鿿]').hasMatch(text);
+// }
 
 class _ActionPanel extends ConsumerWidget {
   const _ActionPanel({required this.item});
@@ -1043,11 +1042,9 @@ class _ActionPanel extends ConsumerWidget {
     final LocalLibraryController controller = ref.read(
       localLibraryProvider.notifier,
     );
-    final bool inLibrary = libraryItem != null;
 
     final bool hasAnilist = anilistToken.isNotEmpty;
     final int? anilistId = _aniListId(item);
-    final bool isAniListManga = _isAniListManga(item);
     final bool isAniListAnime = _isAniListAnime(item);
     final bool canWatch =
         mode == CatalogMode.tmdb ||
@@ -1069,26 +1066,15 @@ class _ActionPanel extends ConsumerWidget {
       if (mode == CatalogMode.anilist)
         FilledButton.icon(
           onPressed: canAddToAniList
-              ? anilistEntry != null
-                    ? () => _editAniListEntry(context, ref, anilistEntry)
-                    : () => _addToAniList(
-                        context,
-                        ref,
-                        anilistToken,
-                        anilistId,
-                        isManga: isAniListManga,
-                      )
+              ? () => _editAniListEntry(
+                  context,
+                  ref,
+                  entry: anilistEntry,
+                  item: item,
+                )
               : null,
-          icon: Icon(
-            anilistEntry != null
-                ? Icons.tune_rounded
-                : Icons.playlist_add_rounded,
-          ),
-          label: Text(
-            anilistEntry != null
-                ? context.t('Edit')
-                : context.t('Add to Library'),
-          ),
+          icon: const Icon(Icons.tune_rounded),
+          label: Text(context.t('Edit')),
         ),
       if (mode == CatalogMode.tmdb)
         FilledButton.icon(
@@ -1115,12 +1101,8 @@ class _ActionPanel extends ConsumerWidget {
               }
             }
           },
-          icon: Icon(
-            inLibrary ? Icons.tune_rounded : Icons.playlist_add_rounded,
-          ),
-          label: Text(
-            inLibrary ? context.t('Edit') : context.t('Add to Library'),
-          ),
+          icon: const Icon(Icons.tune_rounded),
+          label: Text(context.t('Edit')),
         ),
     ];
 
@@ -1152,68 +1134,42 @@ class _ActionPanel extends ConsumerWidget {
 
   Future<void> _editAniListEntry(
     BuildContext context,
-    WidgetRef ref,
-    AniListAnimeListEntry entry,
-  ) async {
+    WidgetRef ref, {
+    required AniListAnimeListEntry? entry,
+    required MediaItem item,
+  }) async {
+    final AniListAnimeListEntry editableEntry =
+        entry ??
+        AniListAnimeListEntry(
+          id: 0,
+          status: AniListListStatus.planning,
+          progress: 0,
+          mediaItem: item,
+        );
     final String scoreFormat = ref.read(aniListEffectiveScoreFormatProvider);
     final AniListEntryEditDraft? draft = await showAniListEntryEditor(
       context,
       ref: ref,
-      entry: entry,
-      status: entry.status,
-      progress: entry.progress,
-      score: entry.score,
-      notes: entry.notes,
-      repeat: entry.repeat,
+      entry: editableEntry,
+      status: entry?.status,
+      progress: editableEntry.progress,
+      score: editableEntry.score,
+      notes: editableEntry.notes,
+      repeat: editableEntry.repeat,
       scoreFormat: scoreFormat,
+      allowRemove: entry != null,
     );
     if (draft == null || !context.mounted) return;
-    if (draft.remove) {
+    if (draft.remove && entry != null) {
       await deleteAniListEntry(context: context, ref: ref, entry: entry);
       return;
     }
     await saveAniListEntryEdit(
       context: context,
       ref: ref,
-      entry: entry,
+      entry: editableEntry,
       draft: draft,
     );
-  }
-
-  Future<void> _addToAniList(
-    BuildContext context,
-    WidgetRef ref,
-    String token,
-    int? anilistId, {
-    bool isManga = false,
-  }) async {
-    if (anilistId == null) return;
-    try {
-      final AniListApiClient client = AniListApiClient(accessToken: token);
-      await client.addToList(anilistId, AniListListStatus.current);
-      try {
-        final AniListAnimeListEntry? entry = await client.fetchMediaListEntry(
-          userId: ref.read(settingsProvider).anilistViewerId,
-          mediaId: anilistId,
-        );
-        if (entry != null) {
-          if (isManga) {
-            invalidateAniListMangaLibraryProviders(ref.invalidate);
-          } else {
-            ref
-                .read(anilistAnimeListProvider.notifier)
-                .replaceEntry(mediaId: anilistId, entry: entry);
-            invalidateAniListAnimePreviewLibraryProvider(ref.invalidate);
-          }
-        }
-      } catch (_) {}
-      if (context.mounted) _showSnack(context, context.t('Added to Library'));
-    } catch (_) {
-      await ref
-          .read(anilistEditQueueProvider)
-          .queueAdd(mediaId: anilistId, status: AniListListStatus.current);
-      if (context.mounted) _showSnack(context, context.t('Added to Library'));
-    }
   }
 
   void _showSnack(BuildContext context, String message) {
@@ -1453,12 +1409,13 @@ class _SeasonsPanel extends ConsumerWidget {
                 context,
                 ref: ref,
                 entry: entry,
-                status: entry.status,
+                status: anilistEntry?.status,
                 progress: entry.progress,
                 score: entry.score,
                 notes: entry.notes,
                 repeat: entry.repeat,
                 scoreFormat: scoreFormat,
+                allowRemove: anilistEntry != null,
               );
               if (draft == null || !context.mounted) return;
               if (draft.remove && anilistEntry != null) {

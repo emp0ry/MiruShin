@@ -26,14 +26,14 @@ class AniListEntryEditDraft {
   }) : remove = false;
 
   const AniListEntryEditDraft.remove()
-    : status = AniListListStatus.dropped,
+    : status = null,
       progress = 0,
       score = null,
       notes = '',
       repeat = 0,
       remove = true;
 
-  final AniListListStatus status;
+  final AniListListStatus? status;
   final int progress;
   final double? score;
   final String notes;
@@ -45,6 +45,16 @@ class AniListEntryEditDraft {
 }
 
 enum AniListEntrySaveResult { saved, queued, failed }
+
+const String _aniListStatusNoneKey = '__none__';
+
+AniListListStatus? _statusFromEditorKey(String key) {
+  if (key == _aniListStatusNoneKey) return null;
+  for (final AniListListStatus status in AniListListStatus.values) {
+    if (status.graphQlValue == key) return status;
+  }
+  return null;
+}
 
 // ─── Entry lookup ─────────────────────────────────────────────────────────────
 
@@ -71,15 +81,16 @@ Future<AniListEntryEditDraft?> showAniListEntryEditor(
   BuildContext context, {
   required WidgetRef ref,
   required AniListAnimeListEntry entry,
-  required AniListListStatus status,
+  required AniListListStatus? status,
   required int progress,
   required double? score,
   required String notes,
   required int repeat,
   required String scoreFormat,
+  bool allowRemove = true,
 }) async {
   final int? total = entry.mediaItem.episodeCount;
-  AniListListStatus draftStatus = status;
+  String draftStatusKey = status?.graphQlValue ?? _aniListStatusNoneKey;
   int draftProgress = progress;
   double draftScore = score ?? 0;
   int draftRepeat = repeat;
@@ -165,24 +176,28 @@ Future<AniListEntryEditDraft?> showAniListEntryEditor(
                           ],
                         ),
                         const SizedBox(height: AppSpacing.md),
-                        DropdownButtonFormField<AniListListStatus>(
-                          initialValue: draftStatus,
+                        DropdownButtonFormField<String>(
+                          initialValue: draftStatusKey,
                           decoration: const InputDecoration(
                             labelText: 'Status',
                             border: OutlineInputBorder(),
                           ),
-                          items: AniListListStatus.values
-                              .map(
-                                (AniListListStatus value) =>
-                                    DropdownMenuItem<AniListListStatus>(
-                                      value: value,
-                                      child: Text(value.label),
-                                    ),
-                              )
-                              .toList(growable: false),
-                          onChanged: (AniListListStatus? value) {
+                          items: <DropdownMenuItem<String>>[
+                            const DropdownMenuItem<String>(
+                              value: _aniListStatusNoneKey,
+                              child: Text('Not chosen'),
+                            ),
+                            ...AniListListStatus.values.map(
+                              (AniListListStatus value) =>
+                                  DropdownMenuItem<String>(
+                                    value: value.graphQlValue,
+                                    child: Text(value.label),
+                                  ),
+                            ),
+                          ],
+                          onChanged: (String? value) {
                             if (value == null) return;
-                            setSheetState(() => draftStatus = value);
+                            setSheetState(() => draftStatusKey = value);
                           },
                         ),
                         const SizedBox(height: AppSpacing.md),
@@ -276,18 +291,20 @@ Future<AniListEntryEditDraft?> showAniListEntryEditor(
                         const SizedBox(height: AppSpacing.lg),
                         Row(
                           children: <Widget>[
-                            TextButton.icon(
-                              onPressed: () => Navigator.pop(
-                                sheetContext,
-                                const AniListEntryEditDraft.remove(),
+                            if (allowRemove) ...<Widget>[
+                              TextButton.icon(
+                                onPressed: () => Navigator.pop(
+                                  sheetContext,
+                                  const AniListEntryEditDraft.remove(),
+                                ),
+                                style: TextButton.styleFrom(
+                                  foregroundColor: AppColors.danger,
+                                ),
+                                icon: const Icon(Icons.delete_outline_rounded),
+                                label: Text(sheetContext.t('Remove')),
                               ),
-                              style: TextButton.styleFrom(
-                                foregroundColor: AppColors.danger,
-                              ),
-                              icon: const Icon(Icons.delete_outline_rounded),
-                              label: Text(sheetContext.t('Remove')),
-                            ),
-                            const SizedBox(width: AppSpacing.sm),
+                              const SizedBox(width: AppSpacing.sm),
+                            ],
                             TextButton(
                               onPressed: () => Navigator.pop(sheetContext),
                               child: Text(sheetContext.t('Cancel')),
@@ -308,7 +325,9 @@ Future<AniListEntryEditDraft?> showAniListEntryEditor(
                                 Navigator.pop(
                                   sheetContext,
                                   AniListEntryEditDraft(
-                                    status: draftStatus,
+                                    status: _statusFromEditorKey(
+                                      draftStatusKey,
+                                    ),
                                     progress: clampProgress(parsedProgress),
                                     score: draftScore <= 0 ? null : draftScore,
                                     notes: notesController.text.trim(),

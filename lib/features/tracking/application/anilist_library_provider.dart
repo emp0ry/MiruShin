@@ -519,7 +519,7 @@ class AniListLibraryNotifier
   void updateEntry({
     required int mediaId,
     required int progress,
-    required AniListListStatus status,
+    AniListListStatus? status,
     double? score,
     required String notes,
     required int repeat,
@@ -531,7 +531,7 @@ class AniListLibraryNotifier
       mediaId: mediaId,
       entry: AniListAnimeListEntry(
         id: current.id,
-        status: status,
+        status: status ?? current.status,
         progress: progress,
         score: score,
         mediaItem: current.mediaItem,
@@ -950,7 +950,7 @@ class AniListEditQueue {
 
   Future<void> queueEntry({
     required int mediaId,
-    required AniListListStatus status,
+    AniListListStatus? status,
     required int progress,
     required double score,
     required String notes,
@@ -984,7 +984,10 @@ class AniListEditQueue {
       try {
         switch (edit.kind) {
           case _QueuedAniListEditKind.add:
-            await client.addToList(edit.mediaId, edit.status);
+            await client.addToList(
+              edit.mediaId,
+              edit.status ?? AniListListStatus.current,
+            );
           case _QueuedAniListEditKind.progress:
             await client.updateProgress(
               mediaId: edit.mediaId,
@@ -1091,14 +1094,14 @@ class _QueuedAniListEdit {
     return _QueuedAniListEdit(
       kind: _QueuedAniListEditKind.progress,
       mediaId: mediaId,
-      status: status ?? AniListListStatus.current,
+      status: status,
       progress: progress,
     );
   }
 
   factory _QueuedAniListEdit.entry({
     required int mediaId,
-    required AniListListStatus status,
+    AniListListStatus? status,
     required int progress,
     required double score,
     required String notes,
@@ -1137,7 +1140,9 @@ class _QueuedAniListEdit {
       ),
       entryId: int.tryParse(json['entryId']?.toString() ?? ''),
       mediaId: int.tryParse(json['mediaId']?.toString() ?? '') ?? 0,
-      status: AniListListStatusLabel.fromGraphQl(json['status']?.toString()),
+      status: json['status'] == null
+          ? null
+          : AniListListStatusLabel.fromGraphQl(json['status']?.toString()),
       progress: int.tryParse(json['progress']?.toString() ?? '') ?? 0,
       score: double.tryParse(json['score']?.toString() ?? ''),
       notes: json['notes']?.toString(),
@@ -1148,7 +1153,7 @@ class _QueuedAniListEdit {
   final _QueuedAniListEditKind kind;
   final int? entryId;
   final int mediaId;
-  final AniListListStatus status;
+  final AniListListStatus? status;
   final int progress;
   final double? score;
   final String? notes;
@@ -1169,7 +1174,7 @@ class _QueuedAniListEdit {
       'kind': kind.name,
       if (entryId != null) 'entryId': entryId,
       'mediaId': mediaId,
-      'status': status.graphQlValue,
+      if (status != null) 'status': status!.graphQlValue,
       'progress': progress,
       if (score != null) 'score': score,
       if (notes != null) 'notes': notes,
