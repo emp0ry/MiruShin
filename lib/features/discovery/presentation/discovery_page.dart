@@ -708,6 +708,17 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
                 itemBuilder: (BuildContext context, int index) {
                   final MediaItem item = items[index];
                   final AniListAnimeListEntry? entry = anilistEntryMap[item.id];
+                  final VoidCallback? editAniListEntry =
+                      mode == CatalogMode.anilist
+                      ? () => unawaited(
+                          _openAniListEntryEditor(
+                            context,
+                            ref,
+                            item: item,
+                            entry: entry,
+                          ),
+                        )
+                      : null;
                   return MediaPosterCard(
                     item: item,
                     statusBadgeLabel: statusBadges[item.id],
@@ -715,16 +726,8 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
                       AppRoutes.mediaDetailsPath(item.id),
                       extra: item,
                     ),
-                    onLongPress: entry == null
-                        ? null
-                        : () => unawaited(
-                            _openAniListEntryEditor(context, ref, entry),
-                          ),
-                    onSecondaryTap: entry == null
-                        ? null
-                        : () => unawaited(
-                            _openAniListEntryEditor(context, ref, entry),
-                          ),
+                    onLongPress: editAniListEntry,
+                    onSecondaryTap: editAniListEntry,
                   );
                 },
               ),
@@ -781,29 +784,39 @@ Map<String, AniListAnimeListEntry> _anilistEntryMap(
 
 Future<void> _openAniListEntryEditor(
   BuildContext context,
-  WidgetRef ref,
-  AniListAnimeListEntry entry,
-) async {
+  WidgetRef ref, {
+  required MediaItem item,
+  required AniListAnimeListEntry? entry,
+}) async {
+  final AniListAnimeListEntry editableEntry =
+      entry ??
+      AniListAnimeListEntry(
+        id: 0,
+        status: AniListListStatus.planning,
+        progress: 0,
+        mediaItem: item,
+      );
   final AniListEntryEditDraft? draft = await showAniListEntryEditor(
     context,
     ref: ref,
-    entry: entry,
-    status: entry.status,
-    progress: entry.progress,
-    score: entry.score,
-    notes: entry.notes,
-    repeat: entry.repeat,
+    entry: editableEntry,
+    status: entry?.status,
+    progress: editableEntry.progress,
+    score: editableEntry.score,
+    notes: editableEntry.notes,
+    repeat: editableEntry.repeat,
     scoreFormat: ref.read(aniListEffectiveScoreFormatProvider),
+    allowRemove: entry != null,
   );
   if (draft == null || !context.mounted) return;
-  if (draft.remove) {
+  if (draft.remove && entry != null) {
     await deleteAniListEntry(context: context, ref: ref, entry: entry);
     return;
   }
   await saveAniListEntryEdit(
     context: context,
     ref: ref,
-    entry: entry,
+    entry: editableEntry,
     draft: draft,
   );
 }

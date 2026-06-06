@@ -135,6 +135,7 @@ class BoardPage extends ConsumerWidget {
                     : continueWatchingProgress,
                 statusBadgeMap: statusBadges,
                 anilistEntryMap: anilistEntryMap,
+                enableAniListEditing: mode == CatalogMode.anilist,
               ),
             ],
             if (rails.recentSeries.isNotEmpty) ...<Widget>[
@@ -154,6 +155,7 @@ class BoardPage extends ConsumerWidget {
                     : null,
                 statusBadgeMap: statusBadges,
                 anilistEntryMap: anilistEntryMap,
+                enableAniListEditing: mode == CatalogMode.anilist,
               ),
             ],
             if (rails.topAnime.isNotEmpty) ...<Widget>[
@@ -169,6 +171,7 @@ class BoardPage extends ConsumerWidget {
                 ),
                 statusBadgeMap: statusBadges,
                 anilistEntryMap: anilistEntryMap,
+                enableAniListEditing: mode == CatalogMode.anilist,
               ),
             ],
             const SizedBox(height: AppSpacing.xxl),
@@ -181,6 +184,7 @@ class BoardPage extends ConsumerWidget {
               items: recentlyAdded,
               statusBadgeMap: statusBadges,
               anilistEntryMap: anilistEntryMap,
+              enableAniListEditing: mode == CatalogMode.anilist,
             ),
             const SizedBox(height: AppSpacing.xxl),
           ],
@@ -229,29 +233,39 @@ Map<String, AniListAnimeListEntry> _anilistEntryMap(
 
 Future<void> _openAniListEntryEditor(
   BuildContext context,
-  WidgetRef ref,
-  AniListAnimeListEntry entry,
-) async {
+  WidgetRef ref, {
+  required MediaItem item,
+  required AniListAnimeListEntry? entry,
+}) async {
+  final AniListAnimeListEntry editableEntry =
+      entry ??
+      AniListAnimeListEntry(
+        id: 0,
+        status: AniListListStatus.planning,
+        progress: 0,
+        mediaItem: item,
+      );
   final AniListEntryEditDraft? draft = await showAniListEntryEditor(
     context,
     ref: ref,
-    entry: entry,
-    status: entry.status,
-    progress: entry.progress,
-    score: entry.score,
-    notes: entry.notes,
-    repeat: entry.repeat,
+    entry: editableEntry,
+    status: entry?.status,
+    progress: editableEntry.progress,
+    score: editableEntry.score,
+    notes: editableEntry.notes,
+    repeat: editableEntry.repeat,
     scoreFormat: ref.read(aniListEffectiveScoreFormatProvider),
+    allowRemove: entry != null,
   );
   if (draft == null || !context.mounted) return;
-  if (draft.remove) {
+  if (draft.remove && entry != null) {
     await deleteAniListEntry(context: context, ref: ref, entry: entry);
     return;
   }
   await saveAniListEntryEdit(
     context: context,
     ref: ref,
-    entry: entry,
+    entry: editableEntry,
     draft: draft,
   );
 }
@@ -482,6 +496,7 @@ class _MediaSection extends ConsumerWidget {
     this.progressMap = const <String, double>{},
     this.statusBadgeMap = const <String, String>{},
     this.anilistEntryMap = const <String, AniListAnimeListEntry>{},
+    this.enableAniListEditing = false,
     this.showMoreLocation,
   });
 
@@ -491,6 +506,7 @@ class _MediaSection extends ConsumerWidget {
   final Map<String, double> progressMap;
   final Map<String, String> statusBadgeMap;
   final Map<String, AniListAnimeListEntry> anilistEntryMap;
+  final bool enableAniListEditing;
   final String? showMoreLocation;
 
   @override
@@ -540,6 +556,17 @@ class _MediaSection extends ConsumerWidget {
                       final MediaItem item = items[index];
                       final AniListAnimeListEntry? entry =
                           anilistEntryMap[item.id];
+                      final VoidCallback? editAniListEntry =
+                          enableAniListEditing
+                          ? () => unawaited(
+                              _openAniListEntryEditor(
+                                context,
+                                ref,
+                                item: item,
+                                entry: entry,
+                              ),
+                            )
+                          : null;
                       return SizedBox(
                         width: 172,
                         child: MediaPosterCard(
@@ -551,16 +578,8 @@ class _MediaSection extends ConsumerWidget {
                             AppRoutes.mediaDetailsPath(item.id),
                             extra: item,
                           ),
-                          onLongPress: entry == null
-                              ? null
-                              : () => unawaited(
-                                  _openAniListEntryEditor(context, ref, entry),
-                                ),
-                          onSecondaryTap: entry == null
-                              ? null
-                              : () => unawaited(
-                                  _openAniListEntryEditor(context, ref, entry),
-                                ),
+                          onLongPress: editAniListEntry,
+                          onSecondaryTap: editAniListEntry,
                         ),
                       );
                     },
@@ -574,6 +593,16 @@ class _MediaSection extends ConsumerWidget {
                     final MediaItem item = items[index];
                     final AniListAnimeListEntry? entry =
                         anilistEntryMap[item.id];
+                    final VoidCallback? editAniListEntry = enableAniListEditing
+                        ? () => unawaited(
+                            _openAniListEntryEditor(
+                              context,
+                              ref,
+                              item: item,
+                              entry: entry,
+                            ),
+                          )
+                        : null;
                     return MediaPosterCard(
                       item: item,
                       watchProgress: progressMap[item.id],
@@ -582,16 +611,8 @@ class _MediaSection extends ConsumerWidget {
                         AppRoutes.mediaDetailsPath(item.id),
                         extra: item,
                       ),
-                      onLongPress: entry == null
-                          ? null
-                          : () => unawaited(
-                              _openAniListEntryEditor(context, ref, entry),
-                            ),
-                      onSecondaryTap: entry == null
-                          ? null
-                          : () => unawaited(
-                              _openAniListEntryEditor(context, ref, entry),
-                            ),
+                      onLongPress: editAniListEntry,
+                      onSecondaryTap: editAniListEntry,
                     );
                   },
                 ),
