@@ -24,7 +24,7 @@ class _SegmentBufferTooLarge implements Exception {
 ///
 /// Why it helps vs. MPV fetching directly:
 ///  - Retries failed segment connections before bytes are sent downstream.
-///  - Reuses a single HttpClient connection pool → fewer TCP handshakes.
+///  - Reuses a single HttpClient connection pool -> fewer TCP handshakes.
 ///  - Forwards all necessary headers on every request (MPV drops them after
 ///    the first playlist fetch when URLs are rewritten to localhost).
 ///  - Resets the connection after long idle to avoid stale keep-alive sockets.
@@ -175,7 +175,7 @@ class LocalHlsProxy {
       debugPrint(
         'HlsProxy playlist OK '
         '(${isMaster ? "master" : "media"}, '
-        '${raw.length} → ${rewritten.length} bytes)',
+        '${raw.length} -> ${rewritten.length} bytes)',
       );
 
       req.response
@@ -188,7 +188,7 @@ class LocalHlsProxy {
       req.response.write(rewritten);
       return req.response.close();
     } catch (e) {
-      debugPrint('HlsProxy playlist FAIL $src → $e');
+      debugPrint('HlsProxy playlist FAIL $src -> $e');
       req.response.statusCode = HttpStatus.badGateway;
       req.response.headers.set(HttpHeaders.contentTypeHeader, 'text/plain');
       req.response.write('proxy error: $e');
@@ -293,7 +293,7 @@ class LocalHlsProxy {
         } catch (_) {}
         return;
       }
-      debugPrint('HlsProxy seg FAIL $uri → $e');
+      debugPrint('HlsProxy seg FAIL $uri -> $e');
       req.response.statusCode = HttpStatus.badGateway;
       req.response.headers.set(HttpHeaders.contentTypeHeader, 'text/plain');
       req.response.write('segment error: $e');
@@ -436,7 +436,7 @@ class LocalHlsProxy {
             } catch (_) {}
             return;
           }
-          debugPrint('HlsProxy seg stream FAIL $uri → $e');
+          debugPrint('HlsProxy seg stream FAIL $uri -> $e');
           try {
             await req.response.close();
           } catch (_) {}
@@ -456,7 +456,7 @@ class LocalHlsProxy {
           await _beforeRetry(attempt);
           continue;
         }
-        debugPrint('HlsProxy seg FAIL $uri → $e');
+        debugPrint('HlsProxy seg FAIL $uri -> $e');
         req.response.statusCode = HttpStatus.badGateway;
         req.response.headers.set(HttpHeaders.contentTypeHeader, 'text/plain');
         req.response.write('segment error: $e');

@@ -26,8 +26,8 @@ class AnimeTitles {
 /// graceful fallback at each step.
 ///
 /// Priority:
-///   English / Romaji / Japanese → AniList first, then Jikan if AniList fails.
-///   Russian                     → Shikimori first; falls back to whatever
+///   English / Romaji / Japanese -> AniList first, then Jikan if AniList fails.
+///   Russian                     -> Shikimori first; falls back to whatever
 ///                                  AniList/Jikan already gave when Shikimori
 ///                                  is unavailable.
 class AnimeTitlesService {
@@ -64,7 +64,7 @@ class AnimeTitlesService {
     String romaji = '';
     String russian = '';
 
-    // ── 1. AniList → English, Romaji, Japanese ──────────────────────────────
+    // ── 1. AniList -> English, Romaji, Japanese ──────────────────────────────
     if (anilistId != null && anilistId.trim().isNotEmpty) {
       try {
         final AnimeTitles al = await _fromAniList(dio, anilistId.trim());
@@ -96,7 +96,7 @@ class AnimeTitlesService {
       }
     }
 
-    // ── 3. Shikimori → Russian (primary); fallback titles if others failed ──
+    // ── 3. Shikimori -> Russian (primary); fallback titles if others failed ──
     if (malId != null && malId.trim().isNotEmpty) {
       try {
         final AnimeTitles sh = await _withRetry429(

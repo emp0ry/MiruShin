@@ -38,8 +38,8 @@ class SoraJsRuntime {
   final List<String> _loadOrder = <String>[];
   Future<void> _jsTail = Future<void>.value();
 
-  // Pending host→JS request bookkeeping. We never hand a Dart Future across the
-  // flutter_js bridge (the `_dartToJs(Future)` → promise-capability → native
+  // Pending host->JS request bookkeeping. We never hand a Dart Future across the
+  // flutter_js bridge (the `_dartToJs(Future)` -> promise-capability -> native
   // resolve-callback path is what corrupts QuickJS under heavy fetch load and
   // SIGSEGVs on Linux). Instead every async hop is a synchronous channel
   // message plus a pure-JS promise resolved later via `evaluate('__miruResolve…')`.
@@ -66,7 +66,7 @@ class SoraJsRuntime {
   // and re-enters QuickJS via the promise-resolve callback in
   // `_dartToJs(Future)` — which enqueues reaction jobs that nothing pumps.
   // Those stale jobs run interleaved with the next evaluation after GC has
-  // moved/freed objects, jumping through a dangling function pointer → SIGSEGV
+  // moved/freed objects, jumping through a dangling function pointer -> SIGSEGV
   // (the libquickjs_c_bridge crash seen on Linux). JavaScriptCore on
   // iOS/macOS has its own internal microtask loop, so it never hits this.
   //

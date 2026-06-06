@@ -104,7 +104,7 @@ final _titleFallbackDetailsProvider =
         }
         if (best == null) return null;
         debugPrint(
-          '[WatchFallback] resolved "${query.title}" via search → ${best.id} "${best.title}"',
+          '[WatchFallback] resolved "${query.title}" via search -> ${best.id} "${best.title}"',
         );
         return repository.details(best.id);
       } catch (_) {
@@ -3300,7 +3300,7 @@ String _fullSeasonTitle(String seriesTitle, String seasonName) {
       seasonName.toLowerCase().trim().contains(seriesLower)) {
     return seasonName;
   }
-  // Different scripts → don't combine (e.g. "Rascal: 青春ブタ野郎は..." is wrong).
+  // Different scripts -> don't combine (e.g. "Rascal: 青春ブタ野郎は..." is wrong).
   if (_containsJapaneseScript(seasonName) !=
       _containsJapaneseScript(seriesTitle)) {
     return seasonName;

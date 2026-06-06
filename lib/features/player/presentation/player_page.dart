@@ -1158,7 +1158,7 @@ class _AutoSkipWorkerState extends ConsumerState<_AutoSkipWorker> {
     _skipInFlight = true;
     // ignore: avoid_print
     print(
-      '[DEBUG] auto-skip ($kind): position=$position → target=$target range=$rangeStart-$rangeEnd',
+      '[DEBUG] auto-skip ($kind): position=$position -> target=$target range=$rangeStart-$rangeEnd',
     );
     unawaited(_skipTo(target));
     return true;
@@ -3671,7 +3671,7 @@ class _PipResizeHandleState extends State<_PipResizeHandle> {
   // The window's current left edge in physical px, tracked across frames so the
   // pointer's true screen X can be reconstructed even while the window is moving
   // (left handles). Accumulating window-relative deltas instead feeds the
-  // window's own movement back into the next delta → jitter.
+  // window's own movement back into the next delta -> jitter.
   double _curX = 0;
 
   bool get _isLeft =>

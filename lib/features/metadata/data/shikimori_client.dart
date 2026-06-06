@@ -333,12 +333,12 @@ class ShikiMoriClient {
   }
 
   static String _stripMarkup(String text) {
-    // [tag=id text content] → "text content"
+    // [tag=id text content] -> "text content"
     String result = text.replaceAllMapped(
       RegExp(r'\[\w+=\d+\s+([^\]]+)\]'),
       (Match m) => m.group(1) ?? '',
     );
-    // [tag=id]content[/tag] → "content"
+    // [tag=id]content[/tag] -> "content"
     result = result.replaceAllMapped(
       RegExp(r'\[\w+=\d+\]([^\[]*)\[/\w+\]'),
       (Match m) => m.group(1) ?? '',

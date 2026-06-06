@@ -802,7 +802,7 @@ Future<List<SoraTitleVariant>> _buildTitleVariants({
     ];
 
     // When a specific season with a distinctive name is selected, run a
-    // second season-specific Shikimori search (no MAL ID → falls through to
+    // second season-specific Shikimori search (no MAL ID -> falls through to
     // title search) so we get the correct season title in all languages.
     // Many multi-season anime have separate MAL entries per season/movie.
     final bool hasDistinctSeasonName =

@@ -438,7 +438,7 @@ final class NativeMacPlayerCoordinator: NSObject, NSWindowDelegate, AVPictureInP
     _ controller: AVPictureInPictureController,
     restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping (Bool) -> Void
   ) {
-    // Expand: bring parent Flutter window to front; PiP then stops → didStop fires.
+    // Expand: bring parent Flutter window to front; PiP then stops -> didStop fires.
     parentWindow?.makeKeyAndOrderFront(nil)
     completionHandler(true)
   }

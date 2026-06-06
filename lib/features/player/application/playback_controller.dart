@@ -414,7 +414,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     EpisodeProgress? progress,
   ) {
     if (progress?.completed == true) {
-      print('[DEBUG] _safeResumePosition: completed=true → 0');
+      print('[DEBUG] _safeResumePosition: completed=true -> 0');
       return Duration.zero;
     }
     final int savedSeconds = progress?.positionSeconds ?? 0;
@@ -426,14 +426,14 @@ class PlaybackController extends Notifier<PlaybackState> {
         : item.startPosition;
 
     print(
-      '[DEBUG] _safeResumePosition: savedSeconds=$savedSeconds item.startPosition=${item.startPosition} → start=$start',
+      '[DEBUG] _safeResumePosition: savedSeconds=$savedSeconds item.startPosition=${item.startPosition} -> start=$start',
     );
 
     final int? durationSeconds = progress?.durationSeconds;
     if (durationSeconds != null && durationSeconds > 0) {
       final Duration duration = Duration(seconds: durationSeconds);
       if (start >= duration - const Duration(seconds: 20)) {
-        print('[DEBUG] _safeResumePosition: near end → 0');
+        print('[DEBUG] _safeResumePosition: near end -> 0');
         return Duration.zero;
       }
     }

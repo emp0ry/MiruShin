@@ -129,7 +129,7 @@ bool _skipSeasonPicker(MediaItem item) {
   if (item.type == MediaType.anime && item.id.startsWith('anilist:')) {
     return true;
   }
-  // No season data yet → show picker while details load.
+  // No season data yet -> show picker while details load.
   if (item.seasons.isEmpty) return false;
   final List<MediaSeason> nonSpecial = _regularSeasons(item);
   if (nonSpecial.isEmpty) return false;

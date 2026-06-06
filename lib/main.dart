@@ -34,9 +34,7 @@ Future<void> main() async {
       FlutterError.presentError(details);
     }
   };
-  // NOTE: MediaKit/mpv is NOT initialized here. On Linux it is disabled
-  // entirely; on the other native platforms MediaKitPlayerEngine initializes it
-  // lazily only when that backend is actually used.
+
   configureMiruShinFvp();
   runApp(ProviderScope(child: MiruShinApp(initialRoute: initialRoute)));
 }

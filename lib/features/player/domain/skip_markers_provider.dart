@@ -23,7 +23,7 @@ final _aniraForPlayerProvider = Provider<AniraClient>(
 /// Fetches OP/ED timeskips for the current playback item.
 ///
 /// Addon-provided markers take priority per field. Remote databases
-/// (AniSkip → Anira) fill in whichever fields the addon left empty.
+/// (AniSkip -> Anira) fill in whichever fields the addon left empty.
 final skipMarkersProvider = FutureProvider.autoDispose<SkipMarkers>((
   Ref ref,
 ) async {
