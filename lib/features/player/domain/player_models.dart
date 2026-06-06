@@ -240,6 +240,22 @@ class MediaServer {
   final List<SubtitleTrack> subtitles;
 }
 
+class PlayerNextEpisodeResult {
+  const PlayerNextEpisodeResult({
+    this.startInFullscreen = false,
+    this.serverId,
+    this.serverTitle,
+    this.voiceoverId,
+    this.voiceoverLabel,
+  });
+
+  final bool startInFullscreen;
+  final String? serverId;
+  final String? serverTitle;
+  final String? voiceoverId;
+  final String? voiceoverLabel;
+}
+
 class PlayerSettings {
   const PlayerSettings({
     this.seekInterval = const Duration(seconds: 10),

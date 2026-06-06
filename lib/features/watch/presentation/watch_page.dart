@@ -40,6 +40,7 @@ import '../../library/application/local_library_provider.dart';
 import '../../settings/presentation/settings_state.dart';
 import '../../tracking/application/anilist_library_provider.dart';
 import '../../../shared/models/anilist_models.dart';
+import '../../player/domain/player_models.dart';
 import '../application/watch_session.dart';
 import '../domain/normalized_models.dart';
 
@@ -136,7 +137,9 @@ class _WatchPageState extends ConsumerState<WatchPage> {
   bool _nextEpisodeInFullscreen = false;
   final AutoNextStreamResolutionState _streamResolutionState =
       AutoNextStreamResolutionState();
+  String? _preferredServerId;
   String? _preferredServerTitle;
+  String? _preferredVoiceOverId;
   String? _preferredVoiceOverLabel;
   DateTime? _lastAutoNextAt;
   final ScrollController _scrollController = ScrollController();
@@ -341,8 +344,20 @@ class _WatchPageState extends ConsumerState<WatchPage> {
   ) {
     NormalizedStreamBundle result = bundle;
 
+    bool matchedServerPreference = false;
+    final String? serverId = _preferredServerId;
+    if (serverId != null) {
+      for (final NormalizedServer s in bundle.availableServers) {
+        if (s.id == serverId) {
+          result = result.withServer(s);
+          matchedServerPreference = true;
+          break;
+        }
+      }
+    }
+
     final String? serverTitle = _preferredServerTitle;
-    if (serverTitle != null) {
+    if (!matchedServerPreference && serverTitle != null) {
       for (final NormalizedServer s in bundle.availableServers) {
         if (s.title == serverTitle) {
           result = result.withServer(s);
@@ -351,8 +366,20 @@ class _WatchPageState extends ConsumerState<WatchPage> {
       }
     }
 
+    bool matchedVoiceOverPreference = false;
+    final String? voId = _preferredVoiceOverId;
+    if (voId != null) {
+      for (final NormalizedVoiceOver vo in bundle.availableVoiceOvers) {
+        if (vo.id == voId) {
+          result = result.withVoiceOver(vo);
+          matchedVoiceOverPreference = true;
+          break;
+        }
+      }
+    }
+
     final String? voLabel = _preferredVoiceOverLabel;
-    if (voLabel != null) {
+    if (!matchedVoiceOverPreference && voLabel != null) {
       for (final NormalizedVoiceOver vo in bundle.availableVoiceOvers) {
         if (vo.label == voLabel) {
           result = result.withVoiceOver(vo);
@@ -404,7 +431,9 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     NormalizedStreamBundle bundle, {
     bool isAutoNext = false,
   }) {
+    _preferredServerId = bundle.selectedServer.id;
     _preferredServerTitle = bundle.selectedServer.title;
+    _preferredVoiceOverId = bundle.selectedVoiceOver?.id;
     _preferredVoiceOverLabel = bundle.selectedVoiceOver?.label;
 
     // For auto-next always start from the beginning regardless of saved progress.
@@ -460,13 +489,48 @@ class _WatchPageState extends ConsumerState<WatchPage> {
             if (!mounted) return;
             _playerRouteInFlight = false;
             _activePlayerEpisodeKey = null;
-            if (result == _nextEpisodeSignal ||
-                result == _nextEpisodeFullscreenSignal) {
-              _nextEpisodeInFullscreen = result == _nextEpisodeFullscreenSignal;
+            final PlayerNextEpisodeResult? nextResult = _nextEpisodeResultFrom(
+              result,
+            );
+            if (nextResult != null) {
+              _rememberPlayerStreamPreferences(nextResult);
+              _nextEpisodeInFullscreen = nextResult.startInFullscreen;
               unawaited(_playNextEpisodeFromPlayer());
             }
           });
     });
+  }
+
+  PlayerNextEpisodeResult? _nextEpisodeResultFrom(Object? result) {
+    if (result is PlayerNextEpisodeResult) {
+      return result;
+    }
+    if (result == _nextEpisodeSignal) {
+      return const PlayerNextEpisodeResult();
+    }
+    if (result == _nextEpisodeFullscreenSignal) {
+      return const PlayerNextEpisodeResult(startInFullscreen: true);
+    }
+    return null;
+  }
+
+  void _rememberPlayerStreamPreferences(PlayerNextEpisodeResult result) {
+    final String? serverId = result.serverId?.trim();
+    if (serverId != null && serverId.isNotEmpty) {
+      _preferredServerId = serverId;
+    }
+    final String? serverTitle = result.serverTitle?.trim();
+    if (serverTitle != null && serverTitle.isNotEmpty) {
+      _preferredServerTitle = serverTitle;
+    }
+    final String? voiceoverId = result.voiceoverId?.trim();
+    if (voiceoverId != null && voiceoverId.isNotEmpty) {
+      _preferredVoiceOverId = voiceoverId;
+    }
+    final String? voiceoverLabel = result.voiceoverLabel?.trim();
+    if (voiceoverLabel != null && voiceoverLabel.isNotEmpty) {
+      _preferredVoiceOverLabel = voiceoverLabel;
+    }
   }
 
   Future<void> _playNextEpisodeFromPlayer() async {

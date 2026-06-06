@@ -46,8 +46,6 @@ class PlayerPage extends ConsumerStatefulWidget {
 
 class _PlayerPageState extends ConsumerState<PlayerPage> {
   static const MethodChannel _windowChannel = MethodChannel('mirushin/window');
-  static const String _nextEpisodeSignal = 'next_episode';
-  static const String _nextEpisodeFullscreenSignal = 'next_episode_fullscreen';
   static const Duration _spaceHoldSpeedDelay = Duration(milliseconds: 260);
   static const Duration _exitCleanupTimeout = Duration(seconds: 2);
 
@@ -396,13 +394,18 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         ]),
       );
     }
+    final PlaybackState playbackState = ref.read(playbackControllerProvider);
+    final Object? result = playNext
+        ? PlayerNextEpisodeResult(
+            startInFullscreen: shouldStartNextFullscreen,
+            serverId: playbackState.server?.id,
+            serverTitle: playbackState.server?.name,
+            voiceoverId: playbackState.voiceover?.id,
+            voiceoverLabel: playbackState.voiceover?.label,
+          )
+        : null;
     unawaited(_stopPlayback());
 
-    final Object? result = playNext
-        ? (shouldStartNextFullscreen
-              ? _nextEpisodeFullscreenSignal
-              : _nextEpisodeSignal)
-        : null;
     setState(() {
       _allowRoutePop = true;
     });
