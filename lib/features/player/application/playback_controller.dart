@@ -337,6 +337,20 @@ class PlaybackController extends Notifier<PlaybackState> {
   }
 
   Future<void> load(MediaPlaybackItem item) async {
+    _progressTimer?.cancel();
+    _undoTimer?.cancel();
+    _clearInteractiveSeek();
+    if (state.autoNextVisible ||
+        state.lastSkippedFrom != null ||
+        state.seekPreviewPosition != null ||
+        state.seekPreviewEngine != null) {
+      state = state.copyWith(
+        autoNextVisible: false,
+        clearLastSkippedFrom: true,
+        clearSeekPreviewPosition: true,
+        clearSeekPreviewEngine: true,
+      );
+    }
     if (item.servers.isEmpty) {
       state = PlaybackState(
         item: item,
@@ -490,6 +504,8 @@ class PlaybackController extends Notifier<PlaybackState> {
     if (!isAutoFallback) {
       _autoFallbackTriedServers.clear();
     }
+    _progressTimer?.cancel();
+    _undoTimer?.cancel();
     final int generation = ++_playbackGeneration;
     _clearInteractiveSeek();
     unawaited(_disposeSeekPreviewEngine());
@@ -507,7 +523,13 @@ class PlaybackController extends Notifier<PlaybackState> {
       clearSubtitle: subtitle == null,
       subtitleCues: subtitle == null ? const <SubtitleCue>[] : null,
       loading: true,
+      controlsVisible: true,
+      autoNextVisible: false,
       clearError: true,
+      clearLastSkippedFrom: true,
+      clearSeekPreviewPosition: true,
+      clearSeekPreviewEngine: true,
+      temporarySpeedActive: false,
     );
     if (subtitle == null) unawaited(_autoSelectSubtitle(server));
 

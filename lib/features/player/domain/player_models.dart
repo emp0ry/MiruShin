@@ -610,6 +610,27 @@ class MediaPlaybackItem {
   }
 }
 
+String playbackItemRouteKey(MediaPlaybackItem item) {
+  final String addonId = item.externalIds['sora_addon_id'] ?? '';
+  final String episodeHref = item.externalIds['sora_episode_href'] ?? '';
+  return <Object?>[
+    item.id,
+    item.seasonNumber,
+    item.episodeNumber,
+    addonId,
+    episodeHref,
+    item.currentEpisodeId,
+  ].join('|');
+}
+
+bool isSamePlaybackRouteItem(
+  MediaPlaybackItem? current,
+  MediaPlaybackItem routeItem,
+) {
+  return current != null &&
+      playbackItemRouteKey(current) == playbackItemRouteKey(routeItem);
+}
+
 int? _episodeCountForPlayback(MediaItem item, int seasonNumber) {
   if (item.type == MediaType.movie) {
     return 1;

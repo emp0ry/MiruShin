@@ -310,10 +310,20 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   }
 
   void _maybeScheduleAutoNext(PlaybackState state, PlayerSettings settings) {
-    final bool shouldAutoNext = settings.autoplayNext && state.autoNextVisible;
+    final bool shouldAutoNext =
+        !_exitingPlayer &&
+        isSamePlaybackRouteItem(state.item, widget.item) &&
+        settings.autoplayNext &&
+        state.autoNextVisible;
     if (shouldAutoNext && _autoNextTimer == null) {
       _autoNextTimer = Timer(const Duration(seconds: 5), () {
         if (!mounted) return;
+        final PlaybackState currentState = ref.read(playbackControllerProvider);
+        if (!isSamePlaybackRouteItem(currentState.item, widget.item)) {
+          _autoNextTimer?.cancel();
+          _autoNextTimer = null;
+          return;
+        }
         _autoNextTimer?.cancel();
         _autoNextTimer = null;
         ref.read(playbackControllerProvider.notifier).dismissAutoNext();
