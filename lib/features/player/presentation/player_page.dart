@@ -1218,15 +1218,14 @@ class _YoutubeTrailerSurface extends StatelessWidget {
                     fit: StackFit.expand,
                     children: <Widget>[
                       Positioned(
-                        top: padding.top + 15,
-                        left: padding.left + 29,
+                        top: padding.top + 16,
+                        left: padding.left + 30,
                         child: _TrailerCircleButton(
                           tooltip: 'Back',
                           icon: Icons.arrow_back_rounded,
                           onPressed: onExit,
                         ),
                       ),
-                      // jksggjdjg
                       Positioned(
                         right: padding.right + fullscreenButtonRight,
                         bottom: padding.bottom + fullscreenButtonBottom,
