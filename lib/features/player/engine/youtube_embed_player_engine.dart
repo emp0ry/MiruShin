@@ -439,7 +439,7 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
       position: fixed;
       width: 36px;
       height: 36px;
-      border: 1px solid rgba(255, 255, 255, 0.24);
+      border: 0;
       border-radius: 999px;
       background: rgba(0, 0, 0, 0.55);
       color: #fff;
@@ -449,13 +449,12 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
       padding: 0;
       z-index: 31;
       cursor: default;
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
       opacity: 1;
       transition: opacity 160ms ease;
       appearance: none;
       -webkit-appearance: none;
       box-sizing: border-box;
+      outline: none;
     }
     .mirushin-trailer-button svg {
       width: 26px;
@@ -511,6 +510,7 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
   </button>
 '''
         : '';
+    final int trailerControlsHideMillis = Platform.isMacOS ? 4000 : 5000;
     final String trailerControlsJs = _renderControlsInHtml
         ? '''
     var mirushinControlsTimer;
@@ -520,7 +520,7 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
       window.clearTimeout(mirushinControlsTimer);
       mirushinControlsTimer = window.setTimeout(function() {
         document.body.classList.add('mirushin-controls-hidden');
-      }, 4000);
+      }, $trailerControlsHideMillis);
     }
     window.mirushinSetFullscreenState = function(active) {
       document.body.dataset.mirushinFullscreen = active ? '1' : '0';
@@ -574,6 +574,7 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
       height: 100%;
       overflow: hidden;
       background: #000;
+      color-scheme: dark;
     }
     iframe {
       display: block;

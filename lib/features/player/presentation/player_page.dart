@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:ui';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -50,7 +50,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   static const Duration _spaceHoldSpeedDelay = Duration(milliseconds: 260);
   static const Duration _exitCleanupTimeout = Duration(seconds: 2);
   static const Duration _controlsHideDelay = Duration(seconds: 4);
-  static const Duration _trailerControlsHideDelay = Duration(seconds: 4);
+  static const Duration _macosTrailerControlsHideDelay = Duration(seconds: 4);
+  static const Duration _defaultTrailerControlsHideDelay = Duration(seconds: 5);
 
   Timer? _hideTimer;
   Timer? _autoNextTimer;
@@ -81,6 +82,13 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   DateTime? _lastTrailerEscapeShortcutAt;
   late final bool _isMobile;
   late final PlaybackController _playbackNotifier;
+
+  Duration get _trailerControlsHideDelay {
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.macOS) {
+      return _macosTrailerControlsHideDelay;
+    }
+    return _defaultTrailerControlsHideDelay;
+  }
 
   @override
   void initState() {
@@ -1268,27 +1276,18 @@ class _TrailerCircleButton extends StatelessWidget {
       child: Semantics(
         button: true,
         label: tooltip,
-        child: SizedBox.square(
-          dimension: 36,
-          child: ClipOval(
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-              child: Material(
-                color: Colors.black.withValues(alpha: 0.55),
-                shape: CircleBorder(
-                  side: BorderSide(
-                    color: Colors.white.withValues(alpha: 0.24),
-                    width: 1,
-                  ),
-                ),
-                clipBehavior: Clip.antiAlias,
-                child: InkWell(
-                  customBorder: const CircleBorder(),
-                  onTap: onPressed,
-                  child: Icon(icon, color: Colors.white, size: 26),
-                ),
-              ),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: onPressed,
+          child: Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.55),
+              shape: BoxShape.circle,
             ),
+            alignment: Alignment.center,
+            child: Icon(icon, color: Colors.white, size: 26),
           ),
         ),
       ),
