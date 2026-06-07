@@ -9,8 +9,6 @@ import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 
 import 'player_engine.dart';
 
-enum YoutubeEmbedUiCommand { showControls, toggleFullscreen, exitFullscreen }
-
 class YoutubeEmbedPlayerEngine extends PlayerEngine {
   YoutubeEmbedPlayerEngine({double? initialAspectRatio})
     : _state = ValueNotifier<PlayerEngineState>(
@@ -25,8 +23,8 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
   );
 
   final ValueNotifier<PlayerEngineState> _state;
-  final StreamController<YoutubeEmbedUiCommand> _uiCommands =
-      StreamController<YoutubeEmbedUiCommand>.broadcast();
+  final StreamController<PlayerEngineUiCommand> _uiCommands =
+      StreamController<PlayerEngineUiCommand>.broadcast();
   WebViewController? _controller;
   bool _disposed = false;
   double _volume = 1;
@@ -35,7 +33,8 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
   @override
   ValueListenable<PlayerEngineState> get state => _state;
 
-  Stream<YoutubeEmbedUiCommand> get uiCommands => _uiCommands.stream;
+  @override
+  Stream<PlayerEngineUiCommand> get uiCommands => _uiCommands.stream;
 
   @override
   void addListener(VoidCallback listener) => _state.addListener(listener);
@@ -182,13 +181,13 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
     if (_disposed || _uiCommands.isClosed) return;
     switch (raw.trim()) {
       case 'activity':
-        _uiCommands.add(YoutubeEmbedUiCommand.showControls);
+        _uiCommands.add(PlayerEngineUiCommand.showControls);
         break;
       case 'toggleFullscreen':
-        _uiCommands.add(YoutubeEmbedUiCommand.toggleFullscreen);
+        _uiCommands.add(PlayerEngineUiCommand.toggleFullscreen);
         break;
       case 'exitFullscreen':
-        _uiCommands.add(YoutubeEmbedUiCommand.exitFullscreen);
+        _uiCommands.add(PlayerEngineUiCommand.exitFullscreen);
         break;
     }
   }

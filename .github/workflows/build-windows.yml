@@ -27,9 +27,13 @@ jobs:
       - name: Flutter pub get
         run: flutter pub get
 
+      - name: Preload Windows MDK SDK
+        shell: pwsh
+        run: .github/scripts/setup-windows-mdk.ps1
+
       - name: Build Windows (release)
         env:
-          FVP_DEPS_URL: https://github.com/wang-bin/mdk-sdk/releases/latest/download
+          FVP_DEPS_URL: https://github.com/wang-bin/mdk-sdk/releases/download/v0.36.0
         run: flutter build windows --release
 
       - name: Read version from pubspec.yaml

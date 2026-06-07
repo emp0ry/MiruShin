@@ -18,7 +18,6 @@ import '../data/subtitle_parser.dart';
 import '../domain/auto_skip.dart';
 import '../domain/player_models.dart';
 import '../engine/player_engine.dart';
-import '../engine/youtube_embed_player_engine.dart';
 import '../domain/skip_markers_provider.dart';
 import 'widgets/auto_next_overlay.dart';
 import 'widgets/gesture_overlay.dart';
@@ -59,8 +58,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   Timer? _spaceHoldTimer;
   StreamSubscription<bool>? _pipSub;
   StreamSubscription<NativePlayerEvent>? _nativePlayerSub;
-  StreamSubscription<YoutubeEmbedUiCommand>? _youtubeCommandSub;
-  PlayerEngine? _youtubeCommandEngine;
+  StreamSubscription<PlayerEngineUiCommand>? _trailerCommandSub;
+  PlayerEngine? _trailerCommandEngine;
   bool _inPipMode = false;
   bool _nativePipActive = false;
   bool? _lastPipIsPlaying;
@@ -295,7 +294,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleGlobalKeyEvent);
     _nativePlayerSub?.cancel();
-    _youtubeCommandSub?.cancel();
+    _trailerCommandSub?.cancel();
     _pipSub?.cancel();
     _wakelockTimer?.cancel();
     unawaited(WakelockPlus.disable());
@@ -425,26 +424,26 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     return true;
   }
 
-  void _attachYoutubeTrailerCommands(PlayerEngine? engine) {
-    if (_youtubeCommandEngine == engine) return;
-    unawaited(_youtubeCommandSub?.cancel());
-    _youtubeCommandSub = null;
-    _youtubeCommandEngine = engine;
-    if (engine is YoutubeEmbedPlayerEngine) {
-      _youtubeCommandSub = engine.uiCommands.listen(_handleYoutubeCommand);
+  void _attachTrailerCommands(PlayerEngine? engine) {
+    if (_trailerCommandEngine == engine) return;
+    unawaited(_trailerCommandSub?.cancel());
+    _trailerCommandSub = null;
+    _trailerCommandEngine = engine;
+    if (engine != null) {
+      _trailerCommandSub = engine.uiCommands.listen(_handleTrailerCommand);
     }
   }
 
-  void _handleYoutubeCommand(YoutubeEmbedUiCommand command) {
+  void _handleTrailerCommand(PlayerEngineUiCommand command) {
     if (!mounted) return;
     switch (command) {
-      case YoutubeEmbedUiCommand.showControls:
+      case PlayerEngineUiCommand.showControls:
         _showTrailerControls();
         break;
-      case YoutubeEmbedUiCommand.toggleFullscreen:
+      case PlayerEngineUiCommand.toggleFullscreen:
         _handleTrailerFullscreenShortcut();
         break;
-      case YoutubeEmbedUiCommand.exitFullscreen:
+      case PlayerEngineUiCommand.exitFullscreen:
         _handleTrailerEscapeShortcut();
         break;
     }
@@ -753,11 +752,11 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     );
     final bool isYoutubeTrailer = _isYoutubeTrailerPlayback(state, widget.item);
     if (isYoutubeTrailer) {
-      _attachYoutubeTrailerCommands(state.engine);
+      _attachTrailerCommands(state.engine);
       _autoNextTimer?.cancel();
       _autoNextTimer = null;
     } else {
-      _attachYoutubeTrailerCommands(null);
+      _attachTrailerCommands(null);
       _maybeScheduleAutoNext(state, settings);
     }
 

@@ -16,8 +16,8 @@ env:
   # *nightly* at build time (see fvp cmake/deps.cmake), so the bundled libmdk
   # silently changes day to day; a June 1 nightly regressed and crashes on
   # playback (SIGSEGV at 0x0 in a libmdk FrameReader/MediaIO::createForProtocol
-  # worker thread). Using releases/latest avoids the unstable nightly channel.
-  FVP_DEPS_URL: https://github.com/wang-bin/mdk-sdk/releases/latest/download
+  # worker thread). Using a tagged release avoids the unstable nightly channel.
+  FVP_DEPS_URL: https://github.com/wang-bin/mdk-sdk/releases/download/v0.36.0
 
 jobs:
   build-linux:

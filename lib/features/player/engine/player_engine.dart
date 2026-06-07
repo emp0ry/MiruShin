@@ -3,6 +3,8 @@ import 'package:flutter/widgets.dart';
 
 import '../domain/player_models.dart';
 
+enum PlayerEngineUiCommand { showControls, toggleFullscreen, exitFullscreen }
+
 class PlayerSource {
   const PlayerSource({
     required this.url,
@@ -93,6 +95,9 @@ abstract class PlayerEngine implements Listenable {
   ValueListenable<PlayerEngineState> get state;
 
   PlayerEngineState get value => state.value;
+
+  Stream<PlayerEngineUiCommand> get uiCommands =>
+      const Stream<PlayerEngineUiCommand>.empty();
 
   /// URL that native desktop PiP should use when taking over playback.
   ///

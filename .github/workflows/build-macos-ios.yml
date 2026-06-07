@@ -31,7 +31,7 @@ jobs:
         run: |
           set -e
           MDK_SF_URL="https://sourceforge.net/projects/mdk-sdk/files/nightly/mdk-sdk-apple.tar.xz"
-          MDK_GH_URL="https://github.com/wang-bin/mdk-sdk/releases/latest/download/mdk-sdk-apple.tar.xz"
+          MDK_GH_URL="https://github.com/wang-bin/mdk-sdk/releases/download/v0.36.0/mdk-sdk-apple.tar.xz"
           # CocoaPods caches HTTP pod downloads keyed by MD5({:http=>"url"}).
           # Pre-populate the cache with the GitHub binary so pod install never
           # touches SourceForge.
