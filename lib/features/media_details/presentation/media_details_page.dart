@@ -29,28 +29,47 @@ import '../../library/application/local_library_provider.dart';
 import '../../library/presentation/local_library_editor.dart';
 import '../../metadata/application/metadata_providers.dart';
 import '../../metadata/data/shikimori_client.dart';
+import '../../player/data/youtube_trailer_resolver.dart';
+import '../../player/domain/player_models.dart';
 import '../../profile/application/anilist_user_settings_provider.dart';
 import '../../tracking/application/anilist_library_provider.dart';
 import '../../settings/presentation/settings_state.dart';
 import '../../tracking/presentation/anilist_entry_editor.dart';
 import '../../tracking/presentation/anilist_favorite_button.dart';
 
-class MediaDetailsPage extends ConsumerWidget {
+class MediaDetailsPage extends ConsumerStatefulWidget {
   const MediaDetailsPage({required this.id, this.initialItem, super.key});
 
   final String id;
   final MediaItem? initialItem;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<MediaDetailsPage> createState() => _MediaDetailsPageState();
+}
+
+class _MediaDetailsPageState extends ConsumerState<MediaDetailsPage> {
+  String? _stickyTrailerItemId;
+  MediaTrailer? _stickyTrailer;
+
+  @override
+  void didUpdateWidget(covariant MediaDetailsPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.id != widget.id) {
+      _stickyTrailerItemId = null;
+      _stickyTrailer = null;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final AsyncValue<MediaItem?> asyncDetails = ref.watch(
-      mediaDetailsProvider(id),
+      mediaDetailsProvider(widget.id),
     );
     final MediaItem? details = asyncDetails.maybeWhen(
       data: (MediaItem? item) => item,
       orElse: () => null,
     );
-    final MediaItem? item = details ?? initialItem;
+    final MediaItem? item = _withStickyTrailer(details ?? widget.initialItem);
 
     return AdaptivePage(
       child: SingleChildScrollView(
@@ -83,6 +102,26 @@ class MediaDetailsPage extends ConsumerWidget {
         ),
       ),
     );
+  }
+
+  MediaItem? _withStickyTrailer(MediaItem? item) {
+    if (item == null) {
+      return null;
+    }
+
+    final MediaTrailer? trailer = item.trailer;
+    if (trailer != null && trailer.isYouTube && trailer.youtubeId.isNotEmpty) {
+      _stickyTrailerItemId = item.id;
+      _stickyTrailer = trailer;
+      return item;
+    }
+
+    final MediaTrailer? sticky = _stickyTrailer;
+    if (sticky != null && _stickyTrailerItemId == item.id) {
+      return item.copyWith(trailer: sticky);
+    }
+
+    return item;
   }
 }
 
@@ -1049,6 +1088,9 @@ class _ActionPanel extends ConsumerWidget {
     final bool canWatch =
         mode == CatalogMode.tmdb ||
         (mode == CatalogMode.anilist && isAniListAnime);
+    final bool canPlayTrailer =
+        item.trailer?.isYouTube == true &&
+        (item.trailer?.youtubeId.isNotEmpty ?? false);
     final bool canAddToAniList =
         mode == CatalogMode.anilist && hasAnilist && anilistId != null;
     final AniListAnimeListEntry? anilistEntry = canAddToAniList
@@ -1062,6 +1104,12 @@ class _ActionPanel extends ConsumerWidget {
               context.push(AppRoutes.watchPath(item.id), extra: item),
           icon: const Icon(Icons.play_arrow_rounded),
           label: Text(context.t('Watch')),
+        ),
+      if (canPlayTrailer)
+        FilledButton.icon(
+          onPressed: () => _playTrailer(context, ref, item),
+          icon: const Icon(Icons.smart_display_rounded),
+          label: Text(context.t('Trailer')),
         ),
       if (mode == CatalogMode.anilist)
         FilledButton.icon(
@@ -1130,6 +1178,26 @@ class _ActionPanel extends ConsumerWidget {
         },
       ),
     );
+  }
+
+  Future<void> _playTrailer(
+    BuildContext context,
+    WidgetRef ref,
+    MediaItem item,
+  ) async {
+    try {
+      final MediaPlaybackItem playbackItem = await ref
+          .read(youtubeTrailerResolverProvider)
+          .resolve(item);
+      if (!context.mounted) {
+        return;
+      }
+      context.push(AppRoutes.watchPlay, extra: playbackItem);
+    } on Object {
+      if (context.mounted) {
+        _showSnack(context, context.t('Trailer unavailable'));
+      }
+    }
   }
 
   Future<void> _editAniListEntry(

@@ -32,11 +32,42 @@ class _SegmentBufferTooLarge implements Exception {
 /// Architecture: one `LocalHlsProxy` instance per `MediaKitPlayerEngine`.
 /// The engine calls `start()` / `stop()` around each network stream open.
 class LocalHlsProxy {
+  static const String inlineDashScheme = 'mirushin-dash';
+
+  static bool isInlineDashUrl(String url) {
+    return Uri.tryParse(url)?.scheme == inlineDashScheme;
+  }
+
+  static String inlineDashSourceUrl(String manifest) {
+    final String encoded = base64Url.encode(utf8.encode(manifest));
+    return '$inlineDashScheme:$encoded';
+  }
+
+  static String decodeInlineDashSourceUrl(String url) {
+    final Uri? uri = Uri.tryParse(url);
+    if (uri == null || uri.scheme != inlineDashScheme) {
+      return '';
+    }
+    final String encoded = url.substring('$inlineDashScheme:'.length);
+    if (encoded.isEmpty) {
+      return '';
+    }
+    try {
+      return utf8.decode(base64Url.decode(encoded));
+    } on Object {
+      return '';
+    }
+  }
+
   HttpServer? _server;
   int? _port;
   HttpClient? _httpClient;
   DateTime? _lastRequestAt;
   Map<String, String> _forwardHeaders = <String, String>{};
+  final Map<String, String> _inlineDashManifests = <String, String>{};
+  final Map<String, Map<String, String>> _inlineDashHeaders =
+      <String, Map<String, String>>{};
+  int _inlineDashCounter = 0;
   bool _stopping = false;
 
   bool get isRunning => _server != null;
@@ -66,6 +97,8 @@ class LocalHlsProxy {
     _server = null;
     _port = null;
     _forwardHeaders = <String, String>{};
+    _inlineDashManifests.clear();
+    _inlineDashHeaders.clear();
     _lastRequestAt = null;
     try {
       await s?.close(force: true);
@@ -109,6 +142,17 @@ class LocalHlsProxy {
     return '$_base/media?u=$u&h=$h';
   }
 
+  String inlineDashUrl(
+    String manifest, {
+    Map<String, String> headers = const <String, String>{},
+  }) {
+    final String id =
+        '${DateTime.now().microsecondsSinceEpoch}-${_inlineDashCounter++}';
+    _inlineDashManifests[id] = manifest;
+    _inlineDashHeaders[id] = Map<String, String>.from(headers);
+    return '$_base/dash?id=${Uri.encodeQueryComponent(id)}';
+  }
+
   // ── Request dispatch ──────────────────────────────────────────────────────
 
   Future<void> _dispatch(HttpRequest req) async {
@@ -120,6 +164,8 @@ class LocalHlsProxy {
           await _serveSegment(req);
         case '/media':
           await _serveSegment(req, preserveContentType: true);
+        case '/dash':
+          await _serveInlineDash(req);
         default:
           req.response.statusCode = HttpStatus.notFound;
           await req.response.close();
@@ -130,6 +176,61 @@ class LocalHlsProxy {
         await req.response.close();
       } catch (_) {}
     }
+  }
+
+  Future<void> _serveInlineDash(HttpRequest req) async {
+    final String? id = req.uri.queryParameters['id'];
+    final String? manifest = id == null ? null : _inlineDashManifests[id];
+    if (id == null || manifest == null) {
+      req.response.statusCode = HttpStatus.notFound;
+      return req.response.close();
+    }
+    final Map<String, String> headers =
+        _inlineDashHeaders[id] ?? const <String, String>{};
+    final String rewritten = _rewriteDashBaseUrls(manifest, headers);
+    req.response
+      ..statusCode = HttpStatus.ok
+      ..headers.set(HttpHeaders.contentTypeHeader, 'application/dash+xml')
+      ..headers.set(HttpHeaders.cacheControlHeader, 'no-cache');
+    req.response.write(rewritten);
+    return req.response.close();
+  }
+
+  String _rewriteDashBaseUrls(String manifest, Map<String, String> headers) {
+    return manifest.replaceAllMapped(
+      RegExp(r'<BaseURL>([^<]+)</BaseURL>', caseSensitive: false),
+      (Match match) {
+        final String rawUrl = _xmlUnescape(match.group(1) ?? '').trim();
+        final Uri? remoteUri = Uri.tryParse(rawUrl);
+        if (remoteUri == null ||
+            (remoteUri.scheme != 'http' && remoteUri.scheme != 'https')) {
+          return match.group(0) ?? '';
+        }
+        final String proxied = mediaUrl(remoteUri, headers: headers);
+        return '<BaseURL>${_xmlEscape(proxied)}</BaseURL>';
+      },
+    );
+  }
+
+  static String _xmlUnescape(String value) {
+    return value
+        .replaceAll('&amp;', '&')
+        .replaceAll('&quot;', '"')
+        .replaceAll('&apos;', "'")
+        .replaceAll('&lt;', '<')
+        .replaceAll('&gt;', '>')
+        .replaceAll('&#47;', '/')
+        .replaceAll('&#x2F;', '/')
+        .replaceAll('&#x2f;', '/');
+  }
+
+  static String _xmlEscape(String value) {
+    return value
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&apos;');
   }
 
   // ── Playlist handler ──────────────────────────────────────────────────────

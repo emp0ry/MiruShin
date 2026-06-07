@@ -19,6 +19,7 @@ import '../../watch/domain/normalized_models.dart';
 import '../data/discord_rpc_service.dart';
 import '../data/media_session_service.dart';
 import '../domain/player_models.dart';
+import '../engine/local_hls_proxy.dart';
 import '../engine/player_engine.dart';
 import '../engine/player_engine_factory.dart';
 import 'player_settings.dart';
@@ -168,6 +169,7 @@ class PlaybackController extends Notifier<PlaybackState> {
   int _retryCount = 0;
   int _playbackGeneration = 0;
   final Set<String> _autoFallbackTriedServers = <String>{};
+  final Set<String> _autoFallbackTriedQualities = <String>{};
   int _seekPreviewGeneration = 0;
   int _manualSeekEpoch = 0;
   Duration _resumeGuardPosition = Duration.zero;
@@ -503,6 +505,7 @@ class PlaybackController extends Notifier<PlaybackState> {
   }) async {
     if (!isAutoFallback) {
       _autoFallbackTriedServers.clear();
+      _autoFallbackTriedQualities.clear();
     }
     _progressTimer?.cancel();
     _undoTimer?.cancel();
@@ -536,13 +539,16 @@ class PlaybackController extends Notifier<PlaybackState> {
     final String url = quality.isAuto || quality.url.isEmpty
         ? server.url
         : quality.url;
+    final StreamType streamType = _streamTypeForUrl(url, server.streamType);
     final PlayerSettings settings =
         ref.read(playerSettingsProvider).value ?? const PlayerSettings();
     final PlayerBackend backend = backendOverride ?? settings.playerBackend;
     final PlayerBackend engineBackend = resolvePlayerEngineBackend(backend);
+    final bool youtubeEmbed = _isYoutubeTrailerServer(server);
     final PlayerEngine engine = createPlayerEngine(
       initialAspectRatio: _safeAspectRatio(preserveAspectRatio),
       backend: engineBackend,
+      youtubeEmbed: youtubeEmbed,
     );
 
     try {
@@ -553,7 +559,7 @@ class PlaybackController extends Notifier<PlaybackState> {
               headers: quality.headers.isNotEmpty
                   ? quality.headers
                   : server.headers,
-              streamType: server.streamType,
+              streamType: streamType,
             ),
             startAt: position,
             autoplay: false,
@@ -606,6 +612,14 @@ class PlaybackController extends Notifier<PlaybackState> {
       )) {
         return;
       }
+      if (_tryAutoFallbackQuality(
+        position: fallbackPosition,
+        autoplay: fallbackAutoplay,
+        preserveAspectRatio: fallbackAspectRatio ?? preserveAspectRatio,
+        backendOverride: engineBackend,
+      )) {
+        return;
+      }
       if (allowSourceFallback &&
           _tryAutoFallbackServer(requestedPosition: fallbackPosition)) {
         return;
@@ -627,6 +641,13 @@ class PlaybackController extends Notifier<PlaybackState> {
     // squeeze a normal 16:9 stream into a narrower frame.
     if (value < 1.2 || value > 2.4) return null;
     return value;
+  }
+
+  bool _isYoutubeTrailerServer(MediaServer server) {
+    final Uri? uri = Uri.tryParse(server.url);
+    final String host = uri?.host.toLowerCase() ?? '';
+    return server.id == 'youtube-trailer' &&
+        (host == 'youtu.be' || host.endsWith('youtube.com'));
   }
 
   void _reinforceInitialSeek(
@@ -804,6 +825,77 @@ class PlaybackController extends Notifier<PlaybackState> {
     return true;
   }
 
+  bool _tryAutoFallbackQuality({
+    required Duration position,
+    required bool autoplay,
+    double? preserveAspectRatio,
+    PlayerBackend? backendOverride,
+  }) {
+    final MediaPlaybackItem? item = state.item;
+    final MediaServer? server = state.server;
+    final StreamQuality? current = state.quality;
+    if (item == null || server == null || current == null) return false;
+    if (server.qualities.length <= 1) return false;
+
+    final String currentUrl = _effectiveQualityUrl(server, current);
+    _autoFallbackTriedQualities.add(_qualityFallbackKey(server, current));
+
+    final List<StreamQuality> explicitCandidates = <StreamQuality>[];
+    final List<StreamQuality> autoCandidates = <StreamQuality>[];
+    for (final StreamQuality quality in server.qualities) {
+      final String url = _effectiveQualityUrl(server, quality);
+      if (url.isEmpty || url == currentUrl) continue;
+      if (_autoFallbackTriedQualities.contains(
+        _qualityFallbackKey(server, quality),
+      )) {
+        continue;
+      }
+      if (quality.isAuto) {
+        autoCandidates.add(quality);
+      } else {
+        explicitCandidates.add(quality);
+      }
+    }
+
+    final List<StreamQuality> candidates = <StreamQuality>[
+      ...explicitCandidates,
+      ...autoCandidates,
+    ];
+    if (candidates.isEmpty) return false;
+
+    final StreamQuality next = candidates.first;
+    debugPrint(
+      'Playback quality fallback: ${current.label} failed; trying ${next.label} for ${server.name}.',
+    );
+    unawaited(
+      _open(
+        item: item,
+        server: server,
+        quality: next,
+        position: position,
+        autoplay: autoplay,
+        voiceover: state.voiceover,
+        subtitle: state.subtitle,
+        preserveAspectRatio: preserveAspectRatio,
+        isAutoFallback: true,
+        backendOverride: backendOverride,
+        allowSourceFallback: false,
+      ),
+    );
+    return true;
+  }
+
+  String _effectiveQualityUrl(MediaServer server, StreamQuality quality) {
+    if (quality.isAuto || quality.url.trim().isEmpty) {
+      return server.url.trim();
+    }
+    return quality.url.trim();
+  }
+
+  String _qualityFallbackKey(MediaServer server, StreamQuality quality) {
+    return '${server.id}|${quality.id}|${_effectiveQualityUrl(server, quality)}';
+  }
+
   bool _tryAutoFallbackServer({Duration requestedPosition = Duration.zero}) {
     final MediaPlaybackItem? item = state.item;
     final MediaServer? current = state.server;
@@ -854,6 +946,14 @@ class PlaybackController extends Notifier<PlaybackState> {
         )) {
           return;
         }
+        if (_tryAutoFallbackQuality(
+          position: _fallbackPositionFor(engine),
+          autoplay: engine.state.value.isPlaying,
+          preserveAspectRatio: engine.state.value.aspectRatio,
+          backendOverride: engineBackend,
+        )) {
+          return;
+        }
         if (allowSourceFallback &&
             _tryAutoFallbackServer(
               requestedPosition: _fallbackPositionFor(engine),
@@ -889,7 +989,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     state = const PlaybackState();
     if (engine == null) return;
 
-    if (item != null) {
+    if (item != null && !item.ignoreProgress) {
       await _saveProgress(item, engine);
     }
     _resumeGuardPosition = Duration.zero;
@@ -913,6 +1013,12 @@ class PlaybackController extends Notifier<PlaybackState> {
     final PlayerSettings settings =
         ref.read(playerSettingsProvider).value ?? const PlayerSettings();
     if (server.qualities.isEmpty) return StreamQuality.auto;
+    if (server.id == 'youtube-trailer') {
+      return server.qualities.firstWhere(
+        (StreamQuality q) => q.isAuto,
+        orElse: () => server.qualities.first,
+      );
+    }
     for (final StreamQuality quality in server.qualities) {
       if (quality.id == settings.preferredQuality ||
           quality.label == settings.preferredQuality) {
@@ -942,6 +1048,7 @@ class PlaybackController extends Notifier<PlaybackState> {
   }) async {
     final MediaPlaybackItem? item = state.item;
     if (item == null) return;
+    if (item.ignoreProgress) return;
 
     final int positionSeconds = positionMs ~/ 1000;
     final int durationSeconds = durationMs ~/ 1000;
@@ -1501,6 +1608,7 @@ class PlaybackController extends Notifier<PlaybackState> {
   }
 
   StreamType _streamTypeForUrl(String url, StreamType fallback) {
+    if (LocalHlsProxy.isInlineDashUrl(url)) return StreamType.dash;
     final String lower = url.toLowerCase();
     if (lower.contains('.m3u8')) return StreamType.hls;
     if (lower.contains('.mpd')) return StreamType.dash;
@@ -2030,10 +2138,15 @@ class PlaybackController extends Notifier<PlaybackState> {
       if (item == null || engine == null || !engine.state.value.isInitialized) {
         return;
       }
-      await _saveProgress(item, engine);
+      if (!item.ignoreProgress) {
+        await _saveProgress(item, engine);
+      }
       _updateMediaSession();
       if (_seekPreviewStreamEnabled) {
         _maybeScheduleSeekPreviewWarmup(engine);
+      }
+      if (item.ignoreProgress) {
+        return;
       }
       final PlayerSettings settings =
           ref.read(playerSettingsProvider).value ?? const PlayerSettings();
@@ -2070,6 +2183,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     MediaPlaybackItem item,
     PlayerEngine engine,
   ) async {
+    if (item.ignoreProgress) return;
     if (!engine.state.value.isInitialized) return;
 
     final Duration position = engine.state.value.position;

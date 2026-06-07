@@ -146,9 +146,26 @@ class FvpPlayerEngine extends PlayerEngine {
       // frames/timestamps are ready. The saved speed is applied after startup.
       player.playbackRate = 1.0;
 
-      final Uri remoteUri = Uri.parse(source.url);
+      final bool isInlineDash = LocalHlsProxy.isInlineDashUrl(source.url);
+      final String inlineDashManifest = isInlineDash
+          ? LocalHlsProxy.decodeInlineDashSourceUrl(source.url)
+          : '';
+      if (isInlineDash && inlineDashManifest.trim().isEmpty) {
+        throw const FormatException('Invalid inline DASH manifest.');
+      }
+      final Uri remoteUri = isInlineDash
+          ? Uri(scheme: 'http', host: InternetAddress.loopbackIPv4.address)
+          : Uri.parse(source.url);
       String playbackUrl = remoteUri.toString();
-      if (!_previewMode && _requiresPinnedProxy(remoteUri)) {
+      if (!_previewMode && isInlineDash) {
+        await _proxy.stop();
+        await _proxy.start();
+        playbackUrl = _proxy.inlineDashUrl(
+          inlineDashManifest,
+          headers: source.headers,
+        );
+        debugPrint('FVP open inline DASH via proxy: $playbackUrl');
+      } else if (!_previewMode && _requiresPinnedProxy(remoteUri)) {
         await _proxy.stop();
         await _proxy.start();
         playbackUrl = _isHlsLikeSource(source)
@@ -159,7 +176,11 @@ class FvpPlayerEngine extends PlayerEngine {
         unawaited(_proxy.stop());
         debugPrint('FVP open direct MDK URL: $playbackUrl');
       }
-      _applyDirectMdkHeaders(player, remoteUri, source.headers);
+      _applyDirectMdkHeaders(
+        player,
+        isInlineDash ? Uri.parse(playbackUrl) : remoteUri,
+        isInlineDash ? const <String, String>{} : source.headers,
+      );
 
       player.media = playbackUrl;
       if (_previewMode) {
@@ -623,7 +644,7 @@ class FvpPlayerEngine extends PlayerEngine {
     );
     headers.putIfAbsent(HttpHeaders.acceptHeader, () => '*/*');
 
-    if (_isOkCdnHost(uri.host)) {
+    if (_isOkCdnHost(uri.host) || _isGoogleVideoHost(uri.host)) {
       headers.remove('Origin');
     }
 
@@ -633,6 +654,7 @@ class FvpPlayerEngine extends PlayerEngine {
     if (referer != null &&
         referer.isNotEmpty &&
         !_isOkCdnHost(uri.host) &&
+        !_isGoogleVideoHost(uri.host) &&
         !headers.containsKey('Origin')) {
       final Uri? refUri = Uri.tryParse(referer);
       if (refUri != null && refUri.hasScheme && refUri.host.isNotEmpty) {
@@ -689,6 +711,11 @@ class FvpPlayerEngine extends PlayerEngine {
         lower.endsWith('.okcdn.ru') ||
         lower == 'mycdn.me' ||
         lower.endsWith('.mycdn.me');
+  }
+
+  bool _isGoogleVideoHost(String host) {
+    final String lower = host.toLowerCase();
+    return lower == 'googlevideo.com' || lower.endsWith('.googlevideo.com');
   }
 
   bool _requiresPinnedProxy(Uri uri) {
@@ -756,7 +783,9 @@ class FvpPlayerEngine extends PlayerEngine {
   }) {
     final String url = source.url.toLowerCase();
     final bool isNetwork =
-        url.startsWith('http://') || url.startsWith('https://');
+        LocalHlsProxy.isInlineDashUrl(source.url) ||
+        url.startsWith('http://') ||
+        url.startsWith('https://');
     final bool isHls =
         source.streamType == StreamType.hls ||
         url.contains('.m3u8') ||

@@ -2234,6 +2234,7 @@ class AniListApiClient {
     final String format = _string(json['format']);
     final int popularity = _int(json['popularity']);
     final int favourites = _int(json['favourites']);
+    final MediaTrailer? trailer = _trailerFromJson(json['trailer']);
 
     // Build full start/end date strings
     final Map<String, dynamic>? startDateMap =
@@ -2335,6 +2336,24 @@ class AniListApiClient {
       seasons: relations,
       statusLabel: _string(json['status'], fallback: 'AniList'),
       aliases: aliases,
+      trailer: trailer,
+    );
+  }
+
+  MediaTrailer? _trailerFromJson(Object? value) {
+    if (value is! Map<String, dynamic>) {
+      return null;
+    }
+    final String id = _string(value['id']).trim();
+    final String site = _string(value['site']).trim();
+    if (id.isEmpty || site.isEmpty) {
+      return null;
+    }
+    return MediaTrailer(
+      id: id,
+      site: site,
+      title: 'Trailer',
+      thumbnailUrl: _string(value['thumbnail']),
     );
   }
 
@@ -2773,6 +2792,7 @@ class AniListApiClient {
     chapters
     volumes
     duration
+    trailer { id site thumbnail }
     status
     isFavourite
     startDate { year }

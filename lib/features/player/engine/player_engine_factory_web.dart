@@ -8,6 +8,7 @@ PlayerEngine createPlayerEngine({
   double? initialAspectRatio,
   bool previewMode = false,
   PlayerBackend backend = PlayerBackend.auto,
+  bool youtubeEmbed = false,
 }) {
   // Web keeps the browser video backend. The native MPV/FVP engines are FFI
   // based and are intentionally not selected in web builds.

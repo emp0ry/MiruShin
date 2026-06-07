@@ -158,6 +158,7 @@ class AniListCatalogRepository implements CatalogRepository {
     required this.client,
     required this.cache,
     required this.cacheScope,
+    this.tmdb,
     this.viewerId,
     this.hasAccessToken = false,
     this.onOffline,
@@ -167,6 +168,7 @@ class AniListCatalogRepository implements CatalogRepository {
   final AniListApiClient client;
   final MetadataCacheStore cache;
   final String cacheScope;
+  final TmdbMetadataProvider? tmdb;
   final int? viewerId;
   final bool hasAccessToken;
   final CatalogOfflineCallback? onOffline;
@@ -270,7 +272,14 @@ class AniListCatalogRepository implements CatalogRepository {
       fallback: null,
       onOffline: onOffline,
       onOnline: onOnline,
-      fetch: () => client.getCatalogDetails(id),
+      fetch: () async {
+        final MediaItem? item = await client.getCatalogDetails(id);
+        if (item == null || item.trailer != null || tmdb == null) {
+          return item;
+        }
+        final MediaTrailer? trailer = await tmdb!.findAnimeTrailer(item);
+        return trailer == null ? item : item.copyWith(trailer: trailer);
+      },
       decode: _mediaFromJsonOrNull,
       encode: _mediaToJsonOrNull,
     );

@@ -32,6 +32,7 @@ class MediaItem {
     required this.statusLabel,
     this.aliases = const <String>[],
     this.originalLanguage = '',
+    this.trailer,
   });
 
   final String id;
@@ -52,6 +53,7 @@ class MediaItem {
   final String statusLabel;
   final List<String> aliases;
   final String originalLanguage;
+  final MediaTrailer? trailer;
 
   factory MediaItem.fromJson(Map<String, dynamic> json) {
     return MediaItem(
@@ -76,6 +78,7 @@ class MediaItem {
       statusLabel: _string(json['statusLabel']),
       aliases: _stringList(json['aliases']),
       originalLanguage: _string(json['originalLanguage']),
+      trailer: MediaTrailer.fromJsonOrNull(json['trailer']),
     );
   }
 
@@ -94,6 +97,7 @@ class MediaItem {
     String? statusLabel,
     List<String>? aliases,
     String? originalLanguage,
+    MediaTrailer? trailer,
   }) {
     return MediaItem(
       id: id,
@@ -114,6 +118,7 @@ class MediaItem {
       statusLabel: statusLabel ?? this.statusLabel,
       aliases: aliases ?? this.aliases,
       originalLanguage: originalLanguage ?? this.originalLanguage,
+      trailer: trailer ?? this.trailer,
     );
   }
 
@@ -149,6 +154,7 @@ class MediaItem {
       'statusLabel': statusLabel,
       'aliases': aliases,
       'originalLanguage': originalLanguage,
+      if (trailer != null) 'trailer': trailer!.toJson(),
     };
   }
 
@@ -211,6 +217,83 @@ class MediaItem {
     return value.map(
       (Object? key, Object? mapValue) =>
           MapEntry<String, String>(key.toString(), mapValue.toString()),
+    );
+  }
+}
+
+class MediaTrailer {
+  const MediaTrailer({
+    required this.id,
+    required this.site,
+    this.title = '',
+    this.thumbnailUrl = '',
+  });
+
+  final String id;
+  final String site;
+  final String title;
+  final String thumbnailUrl;
+
+  bool get isYouTube {
+    final String normalized = site.trim().toLowerCase();
+    return normalized == 'youtube' ||
+        normalized == 'youtu.be' ||
+        normalized == 'youtube.com' ||
+        normalized == 'www.youtube.com';
+  }
+
+  String get youtubeId {
+    final String value = id.trim();
+    if (value.isEmpty) {
+      return '';
+    }
+    final Uri? uri = Uri.tryParse(value);
+    if (uri == null || !uri.hasScheme) {
+      return value;
+    }
+    final String host = uri.host.toLowerCase();
+    if (host == 'youtu.be') {
+      return uri.pathSegments.isEmpty ? '' : uri.pathSegments.first;
+    }
+    if (!host.endsWith('youtube.com')) {
+      return value;
+    }
+    final String? queryId = uri.queryParameters['v'];
+    if (queryId != null && queryId.trim().isNotEmpty) {
+      return queryId.trim();
+    }
+    final int embedIndex = uri.pathSegments.indexWhere(
+      (String segment) => segment == 'embed' || segment == 'shorts',
+    );
+    if (embedIndex >= 0 && embedIndex + 1 < uri.pathSegments.length) {
+      return uri.pathSegments[embedIndex + 1];
+    }
+    return value;
+  }
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'id': id,
+      'site': site,
+      'title': title,
+      'thumbnailUrl': thumbnailUrl,
+    };
+  }
+
+  static MediaTrailer? fromJsonOrNull(Object? value) {
+    if (value is! Map) {
+      return null;
+    }
+    final String id = MediaItem._string(value['id']).trim();
+    final String site = MediaItem._string(value['site']).trim();
+    if (id.isEmpty || site.isEmpty) {
+      return null;
+    }
+    return MediaTrailer(
+      id: id,
+      site: site,
+      title: MediaItem._string(value['title']),
+      thumbnailUrl: MediaItem._string(value['thumbnailUrl']),
     );
   }
 }

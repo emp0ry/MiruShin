@@ -113,6 +113,7 @@ final activeCatalogRepositoryProvider = Provider<CatalogRepository?>((Ref ref) {
       cache: cache,
       cacheScope:
           'anilist.$aniListTitleLanguage.${aniListAdultContent ? 'adult' : 'safe'}',
+      tmdb: ref.watch(tmdbProviderProvider),
       viewerId: settings.anilistViewerId,
       hasAccessToken: settings.anilistAccessToken.trim().isNotEmpty,
       onOffline: offlineCallback(CatalogMode.anilist, 'AniList'),

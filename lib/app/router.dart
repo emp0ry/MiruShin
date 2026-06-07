@@ -169,6 +169,12 @@ GoRouter buildAppRouter(String initialLocation) => GoRouter(
 );
 
 CustomTransitionPage<void> _playerPage(GoRouterState state) {
+  if (state.extra is MediaPlaybackItem) {
+    return _fadePage(
+      state,
+      PlayerPage(item: state.extra! as MediaPlaybackItem),
+    );
+  }
   final PlayerRouteArgs? args = state.extra is PlayerRouteArgs
       ? state.extra! as PlayerRouteArgs
       : null;

@@ -2,6 +2,8 @@ import Cocoa
 import FlutterMacOS
 import MediaPlayer
 import AVKit
+import WebKit
+import webview_flutter_wkwebview
 
 class MainFlutterWindow: NSWindow {
   private static let frameAutosaveName = NSWindow.FrameAutosaveName(
@@ -9,6 +11,7 @@ class MainFlutterWindow: NSWindow {
   )
   private var windowChannel: FlutterMethodChannel?
   private var mediaChannel: FlutterMethodChannel?
+  private var webViewChannel: FlutterMethodChannel?
   private var nativeMacPlayerCoordinator: NativeMacPlayerCoordinator?
   private var commandsRegistered = false
   private var lastArtworkUrl = ""
@@ -44,6 +47,36 @@ class MainFlutterWindow: NSWindow {
           let current = self.styleMask.contains(.fullScreen)
           if fullscreen != current { self.toggleFullScreen(nil) }
           result(fullscreen)
+        }
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+
+    // WebView channel (YouTube trailer fullscreen support)
+    let webch = FlutterMethodChannel(name: "mirushin/webview", binaryMessenger: messenger)
+    self.webViewChannel = webch
+    webch.setMethodCallHandler { call, result in
+      switch call.method {
+      case "enableElementFullscreen":
+        guard let identifier = Self.int64Argument(call.arguments) else {
+          result(FlutterError(code: "bad_args", message: "enableElementFullscreen expects a WebView identifier", details: nil))
+          return
+        }
+        DispatchQueue.main.async {
+          guard let webView = FWFWebViewFlutterWKWebViewExternalAPI.webView(
+            forIdentifier: identifier,
+            withPluginRegistry: flutterViewController
+          ) else {
+            result(false)
+            return
+          }
+          if #available(macOS 12.3, *) {
+            webView.configuration.preferences.isElementFullscreenEnabled = true
+            result(true)
+          } else {
+            result(false)
+          }
         }
       default:
         result(FlutterMethodNotImplemented)
@@ -174,6 +207,12 @@ class MainFlutterWindow: NSWindow {
   private static func boolArgument(_ value: Any?) -> Bool? {
     if let bool = value as? Bool { return bool }
     if let number = value as? NSNumber { return number.boolValue }
+    return nil
+  }
+
+  private static func int64Argument(_ value: Any?) -> Int64? {
+    if let number = value as? NSNumber { return number.int64Value }
+    if let int = value as? Int { return Int64(int) }
     return nil
   }
 }

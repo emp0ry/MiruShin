@@ -281,12 +281,14 @@ class TmdbMetadataProvider implements PagedDiscoveryProvider {
   static String _sortByForFilter(String filter, MediaType type) {
     return switch (filter) {
       'Top Rated' => 'vote_average.desc',
-      'New Releases' => type == MediaType.movie
-          ? 'primary_release_date.desc'
-          : 'first_air_date.desc',
-      'Coming Soon' => type == MediaType.movie
-          ? 'primary_release_date.asc'
-          : 'first_air_date.asc',
+      'New Releases' =>
+        type == MediaType.movie
+            ? 'primary_release_date.desc'
+            : 'first_air_date.desc',
+      'Coming Soon' =>
+        type == MediaType.movie
+            ? 'primary_release_date.asc'
+            : 'first_air_date.asc',
       _ => 'popularity.desc',
     };
   }
@@ -360,13 +362,60 @@ class TmdbMetadataProvider implements PagedDiscoveryProvider {
       return null;
     }
 
+    final String path = parsed.type == MediaType.movie
+        ? '/movie/${parsed.id}'
+        : '/tv/${parsed.id}';
     final Map<String, dynamic> data = await _getDataWithEnglishFallback(
-      parsed.type == MediaType.movie
-          ? '/movie/${parsed.id}'
-          : '/tv/${parsed.id}',
+      path,
       parsed.type,
     );
-    return _fromDetails(data, parsed.type);
+    final MediaItem item = _fromDetails(data, parsed.type);
+    try {
+      final MediaTrailer? trailer = await _getTrailer(path);
+      return trailer == null ? item : item.copyWith(trailer: trailer);
+    } catch (_) {
+      return item;
+    }
+  }
+
+  Future<MediaTrailer?> findAnimeTrailer(MediaItem item) async {
+    if (item.type != MediaType.anime) {
+      return null;
+    }
+    final List<String> queries = _trailerSearchQueries(item);
+    for (final String query in queries) {
+      try {
+        final List<MediaItem> results = await search(query, page: 1);
+        final List<MediaItem> animeResults = results
+            .where((MediaItem result) => result.type == MediaType.anime)
+            .toList(growable: false);
+        if (animeResults.isEmpty) {
+          continue;
+        }
+        final List<MediaItem> ranked = animeResults.toList()
+          ..sort(
+            (MediaItem a, MediaItem b) => _animeTrailerMatchScore(
+              b,
+              item,
+            ).compareTo(_animeTrailerMatchScore(a, item)),
+          );
+        for (final MediaItem candidate in ranked.take(3)) {
+          if (_animeTrailerMatchScore(candidate, item) <= 0) {
+            continue;
+          }
+          final MediaItem? details = await getDetails(candidate.id);
+          final MediaTrailer? trailer = details?.trailer;
+          if (trailer != null &&
+              trailer.isYouTube &&
+              trailer.youtubeId.isNotEmpty) {
+            return trailer;
+          }
+        }
+      } catch (_) {
+        continue;
+      }
+    }
+    return null;
   }
 
   Future<List<MediaItem>> _getList(
@@ -490,6 +539,201 @@ class TmdbMetadataProvider implements PagedDiscoveryProvider {
       }
     } catch (_) {}
     return 0.0;
+  }
+
+  Future<MediaTrailer?> _getTrailer(String detailPath) async {
+    final List<Map<String, dynamic>> youtubeVideos = <Map<String, dynamic>>[
+      ...await _getYouTubeVideos('$detailPath/videos'),
+      if (!_isEnglishLanguage)
+        ...await _getYouTubeVideos('$detailPath/videos', language: 'en-US'),
+      if (!_isJapaneseLanguage)
+        ...await _getYouTubeVideos('$detailPath/videos', language: 'ja-JP'),
+    ];
+    final List<Map<String, dynamic>> uniqueVideos = _uniqueTrailerVideos(
+      youtubeVideos,
+    );
+    if (uniqueVideos.isEmpty) {
+      return null;
+    }
+
+    final List<Map<String, dynamic>> ranked = uniqueVideos.toList()
+      ..sort(_compareTrailerVideos);
+    final Map<String, dynamic> video = ranked.first;
+    final String key = _string(video['key']);
+    return MediaTrailer(
+      id: key,
+      site: 'YouTube',
+      title: _string(video['name'], fallback: 'Trailer'),
+      thumbnailUrl: _youtubeThumbnail(key),
+    );
+  }
+
+  static List<Map<String, dynamic>> _uniqueTrailerVideos(
+    List<Map<String, dynamic>> videos,
+  ) {
+    final Set<String> seen = <String>{};
+    final List<Map<String, dynamic>> unique = <Map<String, dynamic>>[];
+    for (final Map<String, dynamic> video in videos) {
+      final String key = _string(video['key']);
+      if (key.isEmpty || !seen.add(key)) {
+        continue;
+      }
+      unique.add(video);
+    }
+    return unique;
+  }
+
+  Future<List<Map<String, dynamic>>> _getYouTubeVideos(
+    String path, {
+    String? language,
+  }) async {
+    final Response<dynamic> response = await _get(path, <String, dynamic>{
+      'include_video_language': _videoLanguageInclude(),
+    }, language);
+    final Object? data = response.data;
+    if (data is! Map<String, dynamic>) {
+      return const <Map<String, dynamic>>[];
+    }
+    final Object? results = data['results'];
+    if (results is! List<dynamic>) {
+      return const <Map<String, dynamic>>[];
+    }
+    return results
+        .whereType<Map<String, dynamic>>()
+        .where(
+          (Map<String, dynamic> video) =>
+              _string(video['site']).toLowerCase() == 'youtube' &&
+              _string(video['key']).isNotEmpty &&
+              _isTrailerLikeVideo(video),
+        )
+        .toList(growable: false);
+  }
+
+  static int _compareTrailerVideos(
+    Map<String, dynamic> a,
+    Map<String, dynamic> b,
+  ) {
+    final int score = _tmdbVideoScore(b).compareTo(_tmdbVideoScore(a));
+    if (score != 0) {
+      return score;
+    }
+    return _string(b['published_at']).compareTo(_string(a['published_at']));
+  }
+
+  static int _tmdbVideoScore(Map<String, dynamic> video) {
+    int score = 0;
+    final String type = _string(video['type']).toLowerCase();
+    final String name = _string(video['name']).toLowerCase();
+    if (type == 'trailer') score += 100;
+    if (type == 'teaser') score += 80;
+    if (type == 'clip') score += 35;
+    if (name.contains('official')) score += 20;
+    if (_isTrailerLikeName(name)) score += 30;
+    if (name.contains('opening') || name.contains('ending')) score -= 20;
+    if (video['official'] == true) score += 10;
+    final int size = _int(video['size']);
+    if (size > 0) score += size ~/ 100;
+    return score;
+  }
+
+  static bool _isTrailerLikeVideo(Map<String, dynamic> video) {
+    final String type = _string(video['type']).toLowerCase();
+    if (type == 'trailer' || type == 'teaser') {
+      return true;
+    }
+    return _isTrailerLikeName(_string(video['name']).toLowerCase());
+  }
+
+  static bool _isTrailerLikeName(String name) {
+    return name.contains('trailer') ||
+        name.contains('teaser') ||
+        name.contains('preview') ||
+        name.contains('promo') ||
+        name.contains('promotional') ||
+        name.contains('予告') ||
+        name.contains('特報') ||
+        name.contains('ティザー') ||
+        RegExp(r'(^|[^a-z])pv([^a-z]|$)').hasMatch(name);
+  }
+
+  String _videoLanguageInclude() {
+    final Set<String> languages = <String>{
+      language.split('-').first.toLowerCase(),
+      'en',
+      'ja',
+      'null',
+    }..removeWhere((String value) => value.isEmpty);
+    return languages.join(',');
+  }
+
+  static String _youtubeThumbnail(String key) {
+    return key.isEmpty ? '' : 'https://i.ytimg.com/vi/$key/hqdefault.jpg';
+  }
+
+  static List<String> _trailerSearchQueries(MediaItem item) {
+    final Set<String> seen = <String>{};
+    final List<String> queries = <String>[];
+    for (final String value in <String>[
+      item.originalTitle,
+      item.title,
+      ...item.aliases,
+    ]) {
+      final String normalized = value.trim();
+      if (normalized.isEmpty) {
+        continue;
+      }
+      final String key = normalized.toLowerCase();
+      if (seen.add(key)) {
+        queries.add(normalized);
+      }
+      if (queries.length >= 4) {
+        break;
+      }
+    }
+    return queries;
+  }
+
+  static int _animeTrailerMatchScore(MediaItem candidate, MediaItem target) {
+    int score = 0;
+    final Set<String> targetTitles = <String>{
+      _normalizedTitle(target.title),
+      _normalizedTitle(target.originalTitle),
+      ...target.aliases.map(_normalizedTitle),
+    }..remove('');
+    final Set<String> candidateTitles = <String>{
+      _normalizedTitle(candidate.title),
+      _normalizedTitle(candidate.originalTitle),
+      ...candidate.aliases.map(_normalizedTitle),
+    }..remove('');
+    for (final String title in candidateTitles) {
+      if (targetTitles.contains(title)) {
+        score += 100;
+        break;
+      }
+      if (targetTitles.any(
+        (String targetTitle) =>
+            title.length >= 5 &&
+            targetTitle.length >= 5 &&
+            (title.contains(targetTitle) || targetTitle.contains(title)),
+      )) {
+        score += 40;
+        break;
+      }
+    }
+    if (candidate.year == target.year) {
+      score += 20;
+    } else if ((candidate.year - target.year).abs() == 1) {
+      score += 8;
+    }
+    return score;
+  }
+
+  static String _normalizedTitle(String value) {
+    return value
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9\u3040-\u30ff\u3400-\u9fff]+'), ' ')
+        .trim()
+        .replaceAll(RegExp(r'\s+'), ' ');
   }
 
   Future<Response<dynamic>> _get(
@@ -658,6 +902,9 @@ class TmdbMetadataProvider implements PagedDiscoveryProvider {
 
   bool get _isEnglishLanguage =>
       language.split('-').first.toLowerCase() == 'en';
+
+  bool get _isJapaneseLanguage =>
+      language.split('-').first.toLowerCase() == 'ja';
 
   List<MediaItem> _parseList(Object? data, MediaType type) {
     if (data is! Map<String, dynamic>) {

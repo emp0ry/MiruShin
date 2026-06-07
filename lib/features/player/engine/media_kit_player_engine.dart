@@ -231,12 +231,20 @@ class MediaKitPlayerEngine extends PlayerEngine {
       // Configure MPV buffer and network properties before opening.
       await _applyMpvProperties(player, source, _playbackSpeed);
 
-      final Uri remoteUri = Uri.parse(source.url);
-      final Map<String, String> headers = _normalizedHeaders(
-        remoteUri,
-        source.headers,
-      );
-      _directPlaybackUrl = remoteUri.toString();
+      final bool isInlineDash = LocalHlsProxy.isInlineDashUrl(source.url);
+      final String inlineDashManifest = isInlineDash
+          ? LocalHlsProxy.decodeInlineDashSourceUrl(source.url)
+          : '';
+      if (isInlineDash && inlineDashManifest.trim().isEmpty) {
+        throw const FormatException('Invalid inline DASH manifest.');
+      }
+      final Uri remoteUri = isInlineDash
+          ? Uri(scheme: 'http', host: InternetAddress.loopbackIPv4.address)
+          : Uri.parse(source.url);
+      final Map<String, String> headers = isInlineDash
+          ? Map<String, String>.from(source.headers)
+          : _normalizedHeaders(remoteUri, source.headers);
+      _directPlaybackUrl = isInlineDash ? null : remoteUri.toString();
       _currentOpenHeaders = headers;
 
       // For network streams use the local proxy so MPV/FFmpeg always gets a
@@ -244,10 +252,24 @@ class MediaKitPlayerEngine extends PlayerEngine {
       // HLS playlist rewrites. Preview mode skips it to keep decoders cheap.
       final bool isNetwork = _isNetworkUrl(source.url);
       final bool isHls = _isHlsLikeSource(source);
-      final bool useProxy = !_previewMode && isNetwork;
+      final bool useProxy = !_previewMode && (isNetwork || isInlineDash);
 
       String playbackUrl = remoteUri.toString();
-      if (useProxy) {
+      if (useProxy && isInlineDash) {
+        try {
+          await _proxy.stop();
+          await _proxy.start();
+          playbackUrl = _proxy.inlineDashUrl(
+            inlineDashManifest,
+            headers: headers,
+          );
+          _usingProxy = true;
+          debugPrint('MediaKit open inline DASH via proxy: $playbackUrl');
+        } on Object catch (proxyErr) {
+          debugPrint('MediaKit inline DASH proxy failed: $proxyErr');
+          rethrow;
+        }
+      } else if (useProxy) {
         try {
           // Restart proxy on each open so stale CDN headers are not reused.
           await _proxy.stop();
@@ -302,6 +324,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
   }
 
   bool _isNetworkUrl(String url) {
+    if (LocalHlsProxy.isInlineDashUrl(url)) return true;
     final Uri? uri = Uri.tryParse(url);
     return uri != null && (uri.scheme == 'http' || uri.scheme == 'https');
   }
@@ -905,7 +928,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
     );
     headers.putIfAbsent(HttpHeaders.acceptHeader, () => '*/*');
 
-    if (_isOkCdnHost(uri.host)) {
+    if (_isOkCdnHost(uri.host) || _isGoogleVideoHost(uri.host)) {
       headers.remove('Origin');
       return headers;
     }
@@ -936,6 +959,11 @@ class MediaKitPlayerEngine extends PlayerEngine {
         lower.endsWith('.okcdn.ru') ||
         lower == 'mycdn.me' ||
         lower.endsWith('.mycdn.me');
+  }
+
+  bool _isGoogleVideoHost(String host) {
+    final String lower = host.toLowerCase();
+    return lower == 'googlevideo.com' || lower.endsWith('.googlevideo.com');
   }
 
   String _canonicalHeaderName(String name) {
