@@ -956,6 +956,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                         controlsVisible: state.controlsVisible,
                         showFlutterControls:
                             !(state.engine?.rendersOwnTrailerControls ?? false),
+                        showFullscreenButton: !_isMobile,
                         onActivity: _showTrailerControls,
                         onExit: () {
                           _showTrailerControls();
@@ -1172,6 +1173,7 @@ class _YoutubeTrailerSurface extends StatelessWidget {
     required this.isFullscreen,
     required this.controlsVisible,
     required this.showFlutterControls,
+    required this.showFullscreenButton,
     required this.onActivity,
     required this.onExit,
     required this.onToggleFullscreen,
@@ -1184,6 +1186,7 @@ class _YoutubeTrailerSurface extends StatelessWidget {
   final bool isFullscreen;
   final bool controlsVisible;
   final bool showFlutterControls;
+  final bool showFullscreenButton;
   final VoidCallback onActivity;
   final VoidCallback onExit;
   final VoidCallback onToggleFullscreen;
@@ -1234,19 +1237,20 @@ class _YoutubeTrailerSurface extends StatelessWidget {
                           onPressed: onExit,
                         ),
                       ),
-                      Positioned(
-                        right: padding.right + fullscreenButtonRight,
-                        bottom: padding.bottom + fullscreenButtonBottom,
-                        child: _TrailerCircleButton(
-                          tooltip: isFullscreen
-                              ? 'Exit fullscreen'
-                              : 'Fullscreen',
-                          icon: isFullscreen
-                              ? Icons.fullscreen_exit_rounded
-                              : Icons.fullscreen_rounded,
-                          onPressed: onToggleFullscreen,
+                      if (showFullscreenButton)
+                        Positioned(
+                          right: padding.right + fullscreenButtonRight,
+                          bottom: padding.bottom + fullscreenButtonBottom,
+                          child: _TrailerCircleButton(
+                            tooltip: isFullscreen
+                                ? 'Exit fullscreen'
+                                : 'Fullscreen',
+                            icon: isFullscreen
+                                ? Icons.fullscreen_exit_rounded
+                                : Icons.fullscreen_rounded,
+                            onPressed: onToggleFullscreen,
+                          ),
                         ),
-                      ),
                     ],
                   ),
                 ),
