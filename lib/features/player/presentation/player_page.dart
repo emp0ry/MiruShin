@@ -18,6 +18,7 @@ import '../data/subtitle_parser.dart';
 import '../domain/auto_skip.dart';
 import '../domain/player_models.dart';
 import '../engine/player_engine.dart';
+import '../engine/youtube_embed_player_engine.dart';
 import '../domain/skip_markers_provider.dart';
 import 'widgets/auto_next_overlay.dart';
 import 'widgets/gesture_overlay.dart';
@@ -49,6 +50,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   static const MethodChannel _windowChannel = MethodChannel('mirushin/window');
   static const Duration _spaceHoldSpeedDelay = Duration(milliseconds: 260);
   static const Duration _exitCleanupTimeout = Duration(seconds: 2);
+  static const Duration _controlsHideDelay = Duration(seconds: 4);
+  static const Duration _trailerControlsHideDelay = Duration(seconds: 4);
 
   Timer? _hideTimer;
   Timer? _autoNextTimer;
@@ -56,6 +59,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   Timer? _spaceHoldTimer;
   StreamSubscription<bool>? _pipSub;
   StreamSubscription<NativePlayerEvent>? _nativePlayerSub;
+  StreamSubscription<YoutubeEmbedUiCommand>? _youtubeCommandSub;
+  PlayerEngine? _youtubeCommandEngine;
   bool _inPipMode = false;
   bool _nativePipActive = false;
   bool? _lastPipIsPlaying;
@@ -73,6 +78,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   bool _preserveFullscreenForNextRoute = false;
   bool _spacePressed = false;
   bool _spaceTemporarySpeedActive = false;
+  DateTime? _lastTrailerFullscreenShortcutAt;
+  DateTime? _lastTrailerEscapeShortcutAt;
   late final bool _isMobile;
   late final PlaybackController _playbackNotifier;
 
@@ -130,7 +137,14 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       }
       _requestPlayerFocus();
       _playbackNotifier.load(widget.item);
-      _scheduleHide();
+      _scheduleHide(
+        _isYoutubeTrailerPlayback(
+              ref.read(playbackControllerProvider),
+              widget.item,
+            )
+            ? _trailerControlsHideDelay
+            : _controlsHideDelay,
+      );
     });
   }
 
@@ -281,6 +295,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleGlobalKeyEvent);
     _nativePlayerSub?.cancel();
+    _youtubeCommandSub?.cancel();
     _pipSub?.cancel();
     _wakelockTimer?.cancel();
     unawaited(WakelockPlus.disable());
@@ -307,15 +322,11 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     if (!_isYoutubeTrailerPlayback(state, widget.item)) return false;
 
     if (event.logicalKey == LogicalKeyboardKey.keyF) {
-      _toggleFullscreen();
+      _handleTrailerFullscreenShortcut();
       return true;
     }
     if (event.logicalKey == LogicalKeyboardKey.escape) {
-      if (_isFullscreen) {
-        unawaited(_setFullscreen(false));
-      } else {
-        _handleEscape();
-      }
+      _handleTrailerEscapeShortcut();
       return true;
     }
     return false;
@@ -327,9 +338,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     }
   }
 
-  void _scheduleHide() {
+  void _scheduleHide([Duration delay = _controlsHideDelay]) {
     _hideTimer?.cancel();
-    _hideTimer = Timer(const Duration(seconds: 4), () {
+    _hideTimer = Timer(delay, () {
       if (mounted &&
           ref.read(playbackControllerProvider).seekPreviewPosition == null) {
         ref.read(playbackControllerProvider.notifier).setControlsVisible(false);
@@ -367,6 +378,76 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     _requestPlayerFocus();
     ref.read(playbackControllerProvider.notifier).setControlsVisible(true);
     _scheduleHide();
+  }
+
+  void _showTrailerControls() {
+    if (!mounted) return;
+    ref.read(playbackControllerProvider.notifier).setControlsVisible(true);
+    _scheduleHide(_trailerControlsHideDelay);
+  }
+
+  void _handleTrailerFullscreenShortcut() {
+    if (!_acceptTrailerShortcut(ref.read(playbackControllerProvider))) return;
+    _showTrailerControls();
+    _toggleFullscreen();
+  }
+
+  void _handleTrailerEscapeShortcut() {
+    if (!_acceptTrailerShortcut(
+      ref.read(playbackControllerProvider),
+      escape: true,
+    )) {
+      return;
+    }
+    _showTrailerControls();
+    if (_isFullscreen) {
+      unawaited(_setFullscreen(false));
+    } else {
+      _handleEscape();
+    }
+  }
+
+  bool _acceptTrailerShortcut(PlaybackState state, {bool escape = false}) {
+    if (!_isYoutubeTrailerPlayback(state, widget.item)) return false;
+    final DateTime now = DateTime.now();
+    final DateTime? last = escape
+        ? _lastTrailerEscapeShortcutAt
+        : _lastTrailerFullscreenShortcutAt;
+    if (last != null &&
+        now.difference(last) < const Duration(milliseconds: 250)) {
+      return false;
+    }
+    if (escape) {
+      _lastTrailerEscapeShortcutAt = now;
+    } else {
+      _lastTrailerFullscreenShortcutAt = now;
+    }
+    return true;
+  }
+
+  void _attachYoutubeTrailerCommands(PlayerEngine? engine) {
+    if (_youtubeCommandEngine == engine) return;
+    unawaited(_youtubeCommandSub?.cancel());
+    _youtubeCommandSub = null;
+    _youtubeCommandEngine = engine;
+    if (engine is YoutubeEmbedPlayerEngine) {
+      _youtubeCommandSub = engine.uiCommands.listen(_handleYoutubeCommand);
+    }
+  }
+
+  void _handleYoutubeCommand(YoutubeEmbedUiCommand command) {
+    if (!mounted) return;
+    switch (command) {
+      case YoutubeEmbedUiCommand.showControls:
+        _showTrailerControls();
+        break;
+      case YoutubeEmbedUiCommand.toggleFullscreen:
+        _handleTrailerFullscreenShortcut();
+        break;
+      case YoutubeEmbedUiCommand.exitFullscreen:
+        _handleTrailerEscapeShortcut();
+        break;
+    }
   }
 
   void _hideControls() {
@@ -557,6 +638,13 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     } on PlatformException {
       // Leave the player usable even if native fullscreen fails.
     }
+    if (mounted &&
+        _isYoutubeTrailerPlayback(
+          ref.read(playbackControllerProvider),
+          widget.item,
+        )) {
+      _showTrailerControls();
+    }
   }
 
   void _scheduleFullscreenSystemUiReassert() {
@@ -665,9 +753,11 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     );
     final bool isYoutubeTrailer = _isYoutubeTrailerPlayback(state, widget.item);
     if (isYoutubeTrailer) {
+      _attachYoutubeTrailerCommands(state.engine);
       _autoNextTimer?.cancel();
       _autoNextTimer = null;
     } else {
+      _attachYoutubeTrailerCommands(null);
       _maybeScheduleAutoNext(state, settings);
     }
 
@@ -775,13 +865,21 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
           ),
           _BackIntent: CallbackAction<_BackIntent>(
             onInvoke: (_) {
-              _handleEscape();
+              if (isYoutubeTrailer) {
+                _handleTrailerEscapeShortcut();
+              } else {
+                _handleEscape();
+              }
               return null;
             },
           ),
           _FullscreenIntent: CallbackAction<_FullscreenIntent>(
             onInvoke: (_) {
-              _toggleFullscreen();
+              if (isYoutubeTrailer) {
+                _handleTrailerFullscreenShortcut();
+              } else {
+                _toggleFullscreen();
+              }
               return null;
             },
           ),
@@ -808,15 +906,11 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
               if (isYoutubeTrailer) {
                 if (event is! KeyDownEvent) return KeyEventResult.ignored;
                 if (event.logicalKey == LogicalKeyboardKey.keyF) {
-                  _toggleFullscreen();
+                  _handleTrailerFullscreenShortcut();
                   return KeyEventResult.handled;
                 }
                 if (event.logicalKey == LogicalKeyboardKey.escape) {
-                  if (_isFullscreen) {
-                    unawaited(_setFullscreen(false));
-                  } else {
-                    _handleEscape();
-                  }
+                  _handleTrailerEscapeShortcut();
                   return KeyEventResult.handled;
                 }
                 return KeyEventResult.ignored;
@@ -833,10 +927,18 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                         controller: _exitingPlayer ? null : state.engine,
                         loading: state.loading,
                         isFullscreen: _isFullscreen,
-                        onExit: () => unawaited(_exitPlayer()),
-                        onToggleFullscreen: _toggleFullscreen,
+                        controlsVisible: state.controlsVisible,
+                        onActivity: _showTrailerControls,
+                        onExit: () {
+                          _showTrailerControls();
+                          unawaited(_exitPlayer());
+                        },
+                        onToggleFullscreen: () {
+                          _showTrailerControls();
+                          _toggleFullscreen();
+                        },
                         fullscreenButtonRight: 29,
-                        fullscreenButtonBottom: 64,
+                        fullscreenButtonBottom: 85,
                       )
                     else
                       // Player + gesture layer — always present for native streams.
@@ -1035,15 +1137,19 @@ class _YoutubeTrailerSurface extends StatelessWidget {
     required this.controller,
     required this.loading,
     required this.isFullscreen,
+    required this.controlsVisible,
+    required this.onActivity,
     required this.onExit,
     required this.onToggleFullscreen,
     this.fullscreenButtonRight = 29,
-    this.fullscreenButtonBottom = 64,
+    this.fullscreenButtonBottom = 85,
   });
 
   final PlayerEngine? controller;
   final bool loading;
   final bool isFullscreen;
+  final bool controlsVisible;
+  final VoidCallback onActivity;
   final VoidCallback onExit;
   final VoidCallback onToggleFullscreen;
   final double fullscreenButtonRight;
@@ -1053,105 +1159,115 @@ class _YoutubeTrailerSurface extends StatelessWidget {
   Widget build(BuildContext context) {
     final EdgeInsets padding = MediaQuery.paddingOf(context);
 
-    return Stack(
-      fit: StackFit.expand,
-      children: <Widget>[
-        _VideoSurface(
-          controller: controller,
-          stretchVertical: false,
-          fillSurface: true,
-        ),
+    return MouseRegion(
+      cursor: controlsVisible
+          ? SystemMouseCursors.basic
+          : SystemMouseCursors.none,
+      onEnter: (_) => onActivity(),
+      onHover: (_) => onActivity(),
+      child: Listener(
+        behavior: HitTestBehavior.deferToChild,
+        onPointerDown: (_) => onActivity(),
+        onPointerSignal: (_) => onActivity(),
+        child: Stack(
+          fit: StackFit.expand,
+          children: <Widget>[
+            _VideoSurface(
+              controller: controller,
+              stretchVertical: false,
+              fillSurface: true,
+            ),
 
-        if (loading && controller == null)
-          const Center(child: _PlayerLoadingIndicator()),
+            if (loading && controller == null)
+              const Center(child: _PlayerLoadingIndicator()),
 
-        Positioned(
-          top: padding.top + 15,
-          left: padding.left + 29,
-          child: ClipOval(
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-              child: Material(
-                color: Colors.black.withValues(alpha: 0.55),
-                shape: const CircleBorder(),
-                clipBehavior: Clip.antiAlias,
-                child: Container(
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.24),
-                      width: 1,
-                    ),
-                  ),
-                  child: SizedBox(
-                    width: 36,
-                    height: 36,
-                    child: Center(
-                      child: IconButton(
+            AnimatedOpacity(
+              opacity: controlsVisible ? 1 : 0,
+              duration: const Duration(milliseconds: 160),
+              child: IgnorePointer(
+                ignoring: !controlsVisible,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: <Widget>[
+                    Positioned(
+                      top: padding.top + 15,
+                      left: padding.left + 29,
+                      child: _TrailerCircleButton(
                         tooltip: 'Back',
+                        icon: Icons.arrow_back_rounded,
                         onPressed: onExit,
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                        alignment: Alignment.center,
-                        icon: const Icon(
-                          Icons.arrow_back_rounded,
-                          color: Colors.white,
-                          size: 26,
-                        ),
                       ),
                     ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-        Positioned(
-          right: padding.right + fullscreenButtonRight,
-          bottom: padding.bottom + fullscreenButtonBottom + 21,
-          child: ClipOval(
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-              child: Material(
-                color: Colors.black.withValues(alpha: 0.55),
-                shape: const CircleBorder(),
-                clipBehavior: Clip.antiAlias,
-                child: Container(
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.24),
-                      width: 1,
-                    ),
-                  ),
-                  child: SizedBox(
-                    width: 36,
-                    height: 36,
-                    child: Center(
-                      child: IconButton(
+                    // jksggjdjg
+                    Positioned(
+                      right: padding.right + fullscreenButtonRight,
+                      bottom: padding.bottom + fullscreenButtonBottom,
+                      child: _TrailerCircleButton(
                         tooltip: isFullscreen
                             ? 'Exit fullscreen'
                             : 'Fullscreen',
+                        icon: isFullscreen
+                            ? Icons.fullscreen_exit_rounded
+                            : Icons.fullscreen_rounded,
                         onPressed: onToggleFullscreen,
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                        alignment: Alignment.center,
-                        icon: Icon(
-                          isFullscreen
-                              ? Icons.fullscreen_exit_rounded
-                              : Icons.fullscreen_rounded,
-                          color: Colors.white,
-                          size: 26,
-                        ),
                       ),
                     ),
-                  ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TrailerCircleButton extends StatelessWidget {
+  const _TrailerCircleButton({
+    required this.tooltip,
+    required this.icon,
+    required this.onPressed,
+  });
+
+  final String tooltip;
+  final IconData icon;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipOval(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+        child: Material(
+          color: Colors.black.withValues(alpha: 0.55),
+          shape: const CircleBorder(),
+          clipBehavior: Clip.antiAlias,
+          child: Container(
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.24),
+                width: 1,
+              ),
+            ),
+            child: SizedBox(
+              width: 36,
+              height: 36,
+              child: Center(
+                child: IconButton(
+                  tooltip: tooltip,
+                  onPressed: onPressed,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                  alignment: Alignment.center,
+                  icon: Icon(icon, color: Colors.white, size: 26),
                 ),
               ),
             ),
           ),
         ),
-      ],
+      ),
     );
   }
 }

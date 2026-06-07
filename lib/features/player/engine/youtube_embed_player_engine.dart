@@ -9,6 +9,8 @@ import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 
 import 'player_engine.dart';
 
+enum YoutubeEmbedUiCommand { showControls, toggleFullscreen, exitFullscreen }
+
 class YoutubeEmbedPlayerEngine extends PlayerEngine {
   YoutubeEmbedPlayerEngine({double? initialAspectRatio})
     : _state = ValueNotifier<PlayerEngineState>(
@@ -23,6 +25,8 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
   );
 
   final ValueNotifier<PlayerEngineState> _state;
+  final StreamController<YoutubeEmbedUiCommand> _uiCommands =
+      StreamController<YoutubeEmbedUiCommand>.broadcast();
   WebViewController? _controller;
   bool _disposed = false;
   double _volume = 1;
@@ -30,6 +34,8 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
 
   @override
   ValueListenable<PlayerEngineState> get state => _state;
+
+  Stream<YoutubeEmbedUiCommand> get uiCommands => _uiCommands.stream;
 
   @override
   void addListener(VoidCallback listener) => _state.addListener(listener);
@@ -114,6 +120,12 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
             onMessageReceived: (JavaScriptMessage message) {
               _handleYoutubeError(message.message);
             },
+          )
+          ..addJavaScriptChannel(
+            'MiruShinYoutubeCommand',
+            onMessageReceived: (JavaScriptMessage message) {
+              _handleYoutubeCommand(message.message);
+            },
           );
 
     if (controller.platform is AndroidWebViewController) {
@@ -164,6 +176,21 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
       hasError: false,
       clearError: true,
     );
+  }
+
+  void _handleYoutubeCommand(String raw) {
+    if (_disposed || _uiCommands.isClosed) return;
+    switch (raw.trim()) {
+      case 'activity':
+        _uiCommands.add(YoutubeEmbedUiCommand.showControls);
+        break;
+      case 'toggleFullscreen':
+        _uiCommands.add(YoutubeEmbedUiCommand.toggleFullscreen);
+        break;
+      case 'exitFullscreen':
+        _uiCommands.add(YoutubeEmbedUiCommand.exitFullscreen);
+        break;
+    }
   }
 
   @override
@@ -241,6 +268,7 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
         await controller.loadHtmlString('<html><body></body></html>');
       } catch (_) {}
     }
+    await _uiCommands.close();
     _state.dispose();
   }
 
@@ -272,7 +300,9 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
       Uri.https('www.youtube.com', '/embed/$videoId', <String, String>{
         'autoplay': '$autoplayFlag',
         'controls': '1',
+        'disablekb': '1',
         'enablejsapi': '1',
+        'fs': '0',
         'playsinline': '1',
         'rel': '0',
         'start': '$start',
@@ -307,16 +337,44 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
     width="100%"
     height="100%"
     src="$embedUrl"
-    allow="accelerometer; autoplay; clipboard-write; encrypted-media; fullscreen; gyroscope; picture-in-picture; web-share"
-    referrerpolicy="strict-origin-when-cross-origin"
-    allowfullscreen="true"
-    webkitallowfullscreen="true"
-    mozallowfullscreen="true"></iframe>
+    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+    referrerpolicy="strict-origin-when-cross-origin"></iframe>
   <script src="https://www.youtube.com/iframe_api"></script>
   <script>
     var player;
     window.mirushinVolume = ${(_volume * 100).round()};
     window.mirushinPlaybackRate = $_playbackSpeed;
+    function mirushinPostCommand(command) {
+      if (window.MiruShinYoutubeCommand &&
+          window.MiruShinYoutubeCommand.postMessage) {
+        window.MiruShinYoutubeCommand.postMessage(command);
+      }
+    }
+    function mirushinHandleKey(event) {
+      if (event.defaultPrevented || event.repeat) return;
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      var key = String(event.key || '').toLowerCase();
+      if (key === 'f') {
+        event.preventDefault();
+        event.stopPropagation();
+        mirushinPostCommand('toggleFullscreen');
+        return false;
+      }
+      if (key === 'escape' || key === 'esc') {
+        event.preventDefault();
+        event.stopPropagation();
+        mirushinPostCommand('exitFullscreen');
+        return false;
+      }
+    }
+    window.addEventListener('keydown', mirushinHandleKey, true);
+    document.addEventListener('keydown', mirushinHandleKey, true);
+    window.addEventListener('mousemove', function() {
+      mirushinPostCommand('activity');
+    }, { passive: true });
+    window.addEventListener('pointerdown', function() {
+      mirushinPostCommand('activity');
+    }, true);
     function onYouTubeIframeAPIReady() {
       player = new YT.Player('player', {
         events: {
