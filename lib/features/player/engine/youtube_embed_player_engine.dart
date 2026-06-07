@@ -1,5 +1,6 @@
 import 'dart:async';
-import 'dart:io' show Platform;
+import 'dart:io'
+    show ContentType, HttpRequest, HttpServer, InternetAddress, Platform;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -47,6 +48,8 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
   final StreamController<PlayerEngineUiCommand> _uiCommands =
       StreamController<PlayerEngineUiCommand>.broadcast();
   WebViewController? _controller;
+  HttpServer? _htmlServer;
+  StreamSubscription<HttpRequest>? _htmlServerSub;
   bool _disposed = false;
   double _volume = 1;
   double _playbackSpeed = 1;
@@ -96,14 +99,29 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
     final WebViewController controller = await _createController();
     await _enableElementFullscreen(controller);
     _controller = controller;
-    await controller.loadHtmlString(
-      _youtubeHtml(
-        videoId: videoId,
-        startAt: startAt ?? Duration.zero,
-        autoplay: autoplay,
-      ),
-      baseUrl: _embedOrigin,
-    );
+    final Duration safeStartAt = startAt ?? Duration.zero;
+    if (_usesHostedTrailerPage) {
+      final Uri pageUri = await _serveTrailerPage((String origin) {
+        return _youtubeHtml(
+          videoId: videoId,
+          startAt: safeStartAt,
+          autoplay: autoplay,
+          embedOrigin: origin,
+        );
+      });
+      await controller.loadRequest(pageUri);
+    } else {
+      await _stopHtmlServer();
+      await controller.loadHtmlString(
+        _youtubeHtml(
+          videoId: videoId,
+          startAt: safeStartAt,
+          autoplay: autoplay,
+          embedOrigin: _embedOrigin,
+        ),
+        baseUrl: _embedOrigin,
+      );
+    }
 
     if (_disposed) return;
     _state.value = _state.value.copyWith(
@@ -187,6 +205,49 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
       profileName: profileName,
       suspendDuringDeactive: false,
     );
+  }
+
+  bool get _usesHostedTrailerPage => Platform.isWindows || Platform.isLinux;
+
+  Future<Uri> _serveTrailerPage(String Function(String origin) buildHtml) async {
+    await _stopHtmlServer();
+    final HttpServer server = await HttpServer.bind(
+      InternetAddress.loopbackIPv4,
+      0,
+    );
+    final String origin = 'http://${server.address.address}:${server.port}';
+    final String html = buildHtml(origin);
+    _htmlServer = server;
+    _htmlServerSub = server.listen((HttpRequest request) {
+      final String path = request.uri.path;
+      if (path == '/favicon.ico') {
+        request.response.statusCode = 204;
+        unawaited(request.response.close());
+        return;
+      }
+      request.response.headers.contentType = ContentType.html;
+      request.response.headers.set(
+        'Referrer-Policy',
+        'strict-origin-when-cross-origin',
+      );
+      request.response.headers.set('Cache-Control', 'no-store');
+      request.response.write(html);
+      unawaited(request.response.close());
+    });
+    return Uri.parse('$origin/trailer.html');
+  }
+
+  Future<void> _stopHtmlServer() async {
+    final StreamSubscription<HttpRequest>? sub = _htmlServerSub;
+    final HttpServer? server = _htmlServer;
+    _htmlServerSub = null;
+    _htmlServer = null;
+    try {
+      await sub?.cancel();
+    } catch (_) {}
+    try {
+      await server?.close(force: true);
+    } catch (_) {}
   }
 
   Future<void> _enableElementFullscreen(WebViewController controller) async {
@@ -310,6 +371,7 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
   @override
   Future<void> dispose() async {
     _disposed = true;
+    await _stopHtmlServer();
     final WebViewController? controller = _controller;
     _controller = null;
     if (controller != null) {
@@ -347,6 +409,7 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
     required String videoId,
     required Duration startAt,
     required bool autoplay,
+    required String embedOrigin,
   }) {
     final int start = startAt.inSeconds;
     final int autoplayFlag = autoplay ? 1 : 0;
@@ -360,8 +423,8 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
         'playsinline': '1',
         'rel': '0',
         'start': '$start',
-        'origin': _embedOrigin,
-        'widget_referrer': _embedOrigin,
+        'origin': embedOrigin,
+        'widget_referrer': embedOrigin,
       }).toString(),
     );
     final String trailerControlsCss = _renderControlsInHtml
@@ -537,10 +600,29 @@ $trailerControlsHtml
     window.mirushinVolume = ${(_volume * 100).round()};
     window.mirushinPlaybackRate = $_playbackSpeed;
     function mirushinPostCommand(command) {
-      if (window.MiruShinYoutubeCommand &&
-          window.MiruShinYoutubeCommand.postMessage) {
-        window.MiruShinYoutubeCommand.postMessage(command);
+      mirushinPostToFlutter('MiruShinYoutubeCommand', command);
+    }
+    function mirushinPostToFlutter(channelName, message) {
+      var channel = window[channelName];
+      if (!channel) {
+        try {
+          channel = window.eval(channelName);
+        } catch (error) {}
       }
+      if (channel && channel.postMessage) {
+        channel.postMessage(message);
+        return true;
+      }
+      if (window.chrome &&
+          window.chrome.webview &&
+          window.chrome.webview.postMessage) {
+        window.chrome.webview.postMessage({
+          JkChannelName: channelName,
+          msg: message
+        });
+        return true;
+      }
+      return false;
     }
     function mirushinHandleKey(event) {
       if (event.defaultPrevented || event.repeat) return;
@@ -579,10 +661,10 @@ $trailerControlsJs
             }
           },
           onStateChange: function(event) {
-            MiruShinYoutubeState.postMessage(String(event.data));
+            mirushinPostToFlutter('MiruShinYoutubeState', String(event.data));
           },
           onError: function(event) {
-            MiruShinYoutubeError.postMessage(String(event.data));
+            mirushinPostToFlutter('MiruShinYoutubeError', String(event.data));
           }
         }
       });
