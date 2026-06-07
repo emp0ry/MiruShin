@@ -431,6 +431,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     _trailerCommandEngine = engine;
     if (engine != null) {
       _trailerCommandSub = engine.uiCommands.listen(_handleTrailerCommand);
+      unawaited(engine.setHostFullscreen(_isFullscreen));
     }
   }
 
@@ -445,6 +446,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         break;
       case PlayerEngineUiCommand.exitFullscreen:
         _handleTrailerEscapeShortcut();
+        break;
+      case PlayerEngineUiCommand.exitPlayer:
+        _showTrailerControls();
+        unawaited(_exitPlayer());
         break;
     }
   }
@@ -543,6 +548,16 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       );
       if (mounted && fullscreen != null) {
         setState(() => _isFullscreen = fullscreen);
+        final PlayerEngine? engine = ref
+            .read(playbackControllerProvider)
+            .engine;
+        if (engine != null &&
+            _isYoutubeTrailerPlayback(
+              ref.read(playbackControllerProvider),
+              widget.item,
+            )) {
+          unawaited(engine.setHostFullscreen(fullscreen));
+        }
       }
     } on MissingPluginException {
       // Non-desktop platforms do not need a native window toggle.
@@ -642,6 +657,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
           ref.read(playbackControllerProvider),
           widget.item,
         )) {
+      final PlayerEngine? engine = ref.read(playbackControllerProvider).engine;
+      if (engine != null) {
+        unawaited(engine.setHostFullscreen(_isFullscreen));
+      }
       _showTrailerControls();
     }
   }
@@ -927,6 +946,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                         loading: state.loading,
                         isFullscreen: _isFullscreen,
                         controlsVisible: state.controlsVisible,
+                        showFlutterControls:
+                            !(state.engine?.rendersOwnTrailerControls ?? false),
                         onActivity: _showTrailerControls,
                         onExit: () {
                           _showTrailerControls();
@@ -1107,6 +1128,11 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                           ),
                         ),
                       ),
+                    if (isYoutubeTrailer && state.error != null)
+                      _PlayerErrorOverlay(
+                        error: state.error!,
+                        onExit: () => unawaited(_exitPlayer()),
+                      ),
                     // Native PiP overlay sits OUTSIDE GestureOverlay so AbsorbPointer
                     // actually blocks mouse events before they reach it.
                     if (_nativePipActive)
@@ -1137,6 +1163,7 @@ class _YoutubeTrailerSurface extends StatelessWidget {
     required this.loading,
     required this.isFullscreen,
     required this.controlsVisible,
+    required this.showFlutterControls,
     required this.onActivity,
     required this.onExit,
     required this.onToggleFullscreen,
@@ -1148,6 +1175,7 @@ class _YoutubeTrailerSurface extends StatelessWidget {
   final bool loading;
   final bool isFullscreen;
   final bool controlsVisible;
+  final bool showFlutterControls;
   final VoidCallback onActivity;
   final VoidCallback onExit;
   final VoidCallback onToggleFullscreen;
@@ -1180,41 +1208,42 @@ class _YoutubeTrailerSurface extends StatelessWidget {
             if (loading && controller == null)
               const Center(child: _PlayerLoadingIndicator()),
 
-            AnimatedOpacity(
-              opacity: controlsVisible ? 1 : 0,
-              duration: const Duration(milliseconds: 160),
-              child: IgnorePointer(
-                ignoring: !controlsVisible,
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: <Widget>[
-                    Positioned(
-                      top: padding.top + 15,
-                      left: padding.left + 29,
-                      child: _TrailerCircleButton(
-                        tooltip: 'Back',
-                        icon: Icons.arrow_back_rounded,
-                        onPressed: onExit,
+            if (showFlutterControls)
+              AnimatedOpacity(
+                opacity: controlsVisible ? 1 : 0,
+                duration: const Duration(milliseconds: 160),
+                child: IgnorePointer(
+                  ignoring: !controlsVisible,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: <Widget>[
+                      Positioned(
+                        top: padding.top + 15,
+                        left: padding.left + 29,
+                        child: _TrailerCircleButton(
+                          tooltip: 'Back',
+                          icon: Icons.arrow_back_rounded,
+                          onPressed: onExit,
+                        ),
                       ),
-                    ),
-                    // jksggjdjg
-                    Positioned(
-                      right: padding.right + fullscreenButtonRight,
-                      bottom: padding.bottom + fullscreenButtonBottom,
-                      child: _TrailerCircleButton(
-                        tooltip: isFullscreen
-                            ? 'Exit fullscreen'
-                            : 'Fullscreen',
-                        icon: isFullscreen
-                            ? Icons.fullscreen_exit_rounded
-                            : Icons.fullscreen_rounded,
-                        onPressed: onToggleFullscreen,
+                      // jksggjdjg
+                      Positioned(
+                        right: padding.right + fullscreenButtonRight,
+                        bottom: padding.bottom + fullscreenButtonBottom,
+                        child: _TrailerCircleButton(
+                          tooltip: isFullscreen
+                              ? 'Exit fullscreen'
+                              : 'Fullscreen',
+                          icon: isFullscreen
+                              ? Icons.fullscreen_exit_rounded
+                              : Icons.fullscreen_rounded,
+                          onPressed: onToggleFullscreen,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
-            ),
           ],
         ),
       ),
@@ -1235,32 +1264,29 @@ class _TrailerCircleButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ClipOval(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-        child: Material(
-          color: Colors.black.withValues(alpha: 0.55),
-          shape: const CircleBorder(),
-          clipBehavior: Clip.antiAlias,
-          child: Container(
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: Colors.white.withValues(alpha: 0.24),
-                width: 1,
-              ),
-            ),
-            child: SizedBox(
-              width: 36,
-              height: 36,
-              child: Center(
-                child: IconButton(
-                  tooltip: tooltip,
-                  onPressed: onPressed,
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                  alignment: Alignment.center,
-                  icon: Icon(icon, color: Colors.white, size: 26),
+    return Tooltip(
+      message: tooltip,
+      child: Semantics(
+        button: true,
+        label: tooltip,
+        child: SizedBox.square(
+          dimension: 36,
+          child: ClipOval(
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+              child: Material(
+                color: Colors.black.withValues(alpha: 0.55),
+                shape: CircleBorder(
+                  side: BorderSide(
+                    color: Colors.white.withValues(alpha: 0.24),
+                    width: 1,
+                  ),
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: onPressed,
+                  child: Icon(icon, color: Colors.white, size: 26),
                 ),
               ),
             ),

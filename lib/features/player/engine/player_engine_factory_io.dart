@@ -5,7 +5,6 @@ import 'fvp_player_engine.dart';
 import 'media_kit_player_engine.dart';
 import 'player_engine.dart';
 import 'youtube_embed_player_engine.dart';
-import 'youtube_trailer_fallback_player_engine.dart';
 
 PlayerBackend resolvePlayerEngineBackend(PlayerBackend backend) {
   if (Platform.isLinux) return PlayerBackend.fvp;
@@ -19,12 +18,10 @@ PlayerEngine createPlayerEngine({
   bool youtubeEmbed = false,
 }) {
   if (youtubeEmbed) {
-    if (!_supportsYoutubeEmbedPlayer) {
-      return YoutubeTrailerFallbackPlayerEngine(
-        initialAspectRatio: initialAspectRatio,
-      );
-    }
-    return YoutubeEmbedPlayerEngine(initialAspectRatio: initialAspectRatio);
+    return YoutubeEmbedPlayerEngine(
+      initialAspectRatio: initialAspectRatio,
+      renderControlsInHtml: Platform.isWindows || Platform.isLinux,
+    );
   }
   switch (resolvePlayerEngineBackend(backend)) {
     case PlayerBackend.auto:
@@ -40,6 +37,3 @@ PlayerEngine createPlayerEngine({
       );
   }
 }
-
-bool get _supportsYoutubeEmbedPlayer =>
-    Platform.isAndroid || Platform.isIOS || Platform.isMacOS;

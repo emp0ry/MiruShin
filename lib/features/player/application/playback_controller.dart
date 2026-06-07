@@ -542,9 +542,11 @@ class PlaybackController extends Notifier<PlaybackState> {
     final StreamType streamType = _streamTypeForUrl(url, server.streamType);
     final PlayerSettings settings =
         ref.read(playerSettingsProvider).value ?? const PlayerSettings();
-    final PlayerBackend backend = backendOverride ?? settings.playerBackend;
-    final PlayerBackend engineBackend = resolvePlayerEngineBackend(backend);
     final bool youtubeEmbed = _isYoutubeTrailerServer(server);
+    final PlayerBackend backend = youtubeEmbed
+        ? PlayerBackend.auto
+        : backendOverride ?? settings.playerBackend;
+    final PlayerBackend engineBackend = resolvePlayerEngineBackend(backend);
     final PlayerEngine engine = createPlayerEngine(
       initialAspectRatio: _safeAspectRatio(preserveAspectRatio),
       backend: engineBackend,
@@ -604,6 +606,19 @@ class PlaybackController extends Notifier<PlaybackState> {
       );
       await engine.dispose();
       if (generation != _playbackGeneration) return;
+      if (youtubeEmbed) {
+        debugPrint('YouTube trailer WebView open failed: $error');
+        state = state.copyWith(
+          engine: previous,
+          loading: false,
+          error: PlayerError(
+            title: 'Trailer failed',
+            message: error.toString(),
+            canRetry: true,
+          ),
+        );
+        return;
+      }
       if (_tryAutoBackendFallback(
         failedBackend: engineBackend,
         position: fallbackPosition,
@@ -644,10 +659,7 @@ class PlaybackController extends Notifier<PlaybackState> {
   }
 
   bool _isYoutubeTrailerServer(MediaServer server) {
-    final Uri? uri = Uri.tryParse(server.url);
-    final String host = uri?.host.toLowerCase() ?? '';
-    return server.id == 'youtube-trailer' &&
-        (host == 'youtu.be' || host.endsWith('youtube.com'));
+    return server.id == 'youtube-trailer';
   }
 
   void _reinforceInitialSeek(
@@ -803,6 +815,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     final MediaServer? server = state.server;
     final StreamQuality? quality = state.quality;
     if (item == null || server == null || quality == null) return false;
+    if (_isYoutubeTrailerServer(server)) return false;
 
     debugPrint(
       'Playback auto backend fallback: MPV failed; trying FVP for ${server.name}.',
@@ -835,6 +848,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     final MediaServer? server = state.server;
     final StreamQuality? current = state.quality;
     if (item == null || server == null || current == null) return false;
+    if (_isYoutubeTrailerServer(server)) return false;
     if (server.qualities.length <= 1) return false;
 
     final String currentUrl = _effectiveQualityUrl(server, current);
@@ -900,6 +914,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     final MediaPlaybackItem? item = state.item;
     final MediaServer? current = state.server;
     if (item == null || current == null) return false;
+    if (_isYoutubeTrailerServer(current)) return false;
     _autoFallbackTriedServers.add(current.id);
     final Iterable<MediaServer> untried = item.servers.where(
       (MediaServer s) => !_autoFallbackTriedServers.contains(s.id),

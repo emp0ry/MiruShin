@@ -1,21 +1,42 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
+import 'package:webview_win_floating/webview_win_floating.dart'
+    as desktop_webview;
 
 import 'player_engine.dart';
 
 class YoutubeEmbedPlayerEngine extends PlayerEngine {
-  YoutubeEmbedPlayerEngine({double? initialAspectRatio})
-    : _state = ValueNotifier<PlayerEngineState>(
-        PlayerEngineState(
-          aspectRatio: _usableAspectRatio(initialAspectRatio) ?? 16 / 9,
-        ),
-      );
+  YoutubeEmbedPlayerEngine({
+    double? initialAspectRatio,
+    bool renderControlsInHtml = false,
+  }) : _renderControlsInHtml = renderControlsInHtml,
+       _state = ValueNotifier<PlayerEngineState>(
+         PlayerEngineState(
+           aspectRatio: _usableAspectRatio(initialAspectRatio) ?? 16 / 9,
+         ),
+       );
+
+  final bool _renderControlsInHtml;
+
+  @override
+  bool get rendersOwnTrailerControls => _renderControlsInHtml;
+
+  @override
+  Future<void> setHostFullscreen(bool fullscreen) async {
+    await _runJavaScript(
+      'if (window.mirushinSetFullscreenState) '
+      'window.mirushinSetFullscreenState(${fullscreen ? 'true' : 'false'});',
+    );
+  }
 
   static const String _embedOrigin = 'https://mirushin.app';
   static const MethodChannel _webViewChannel = MethodChannel(
@@ -72,7 +93,7 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
       clearError: true,
     );
 
-    final WebViewController controller = _createController();
+    final WebViewController controller = await _createController();
     await _enableElementFullscreen(controller);
     _controller = controller;
     await controller.loadHtmlString(
@@ -94,9 +115,15 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
     );
   }
 
-  WebViewController _createController() {
+  Future<WebViewController> _createController() async {
+    if (Platform.isWindows || Platform.isLinux) {
+      desktop_webview.WindowsWebViewPlatform.registerWith();
+    }
+
     late final PlatformWebViewControllerCreationParams params;
-    if (WebViewPlatform.instance is WebKitWebViewPlatform) {
+    if (WebViewPlatform.instance is desktop_webview.WindowsWebViewPlatform) {
+      params = await _desktopCreationParams();
+    } else if (WebViewPlatform.instance is WebKitWebViewPlatform) {
       params = WebKitWebViewControllerCreationParams(
         allowsInlineMediaPlayback: true,
         mediaTypesRequiringUserAction: const <PlaybackMediaTypes>{},
@@ -134,7 +161,32 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
       );
     }
 
+    if (controller.platform
+        is desktop_webview.WindowsPlatformWebViewController) {
+      unawaited(
+        (controller.platform
+                as desktop_webview.WindowsPlatformWebViewController)
+            .enableZoom(false),
+      );
+    }
+
     return controller;
+  }
+
+  Future<PlatformWebViewControllerCreationParams>
+  _desktopCreationParams() async {
+    String? userDataFolder;
+    String? profileName;
+    if (Platform.isWindows) {
+      final directory = await getApplicationSupportDirectory();
+      userDataFolder = p.join(directory.path, 'youtube_trailer_webview');
+      profileName = 'MiruShinYoutubeTrailer';
+    }
+    return desktop_webview.WindowsWebViewControllerCreationParams(
+      userDataFolder: userDataFolder,
+      profileName: profileName,
+      suspendDuringDeactive: false,
+    );
   }
 
   Future<void> _enableElementFullscreen(WebViewController controller) async {
@@ -172,8 +224,8 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
     _state.value = _state.value.copyWith(
       isBuffering: false,
       isPlaying: false,
-      hasError: false,
-      clearError: true,
+      hasError: true,
+      errorDescription: 'YouTube embedded player error: $code',
     );
   }
 
@@ -188,6 +240,9 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
         break;
       case 'exitFullscreen':
         _uiCommands.add(PlayerEngineUiCommand.exitFullscreen);
+        break;
+      case 'exitPlayer':
+        _uiCommands.add(PlayerEngineUiCommand.exitPlayer);
         break;
     }
   }
@@ -309,6 +364,140 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
         'widget_referrer': _embedOrigin,
       }).toString(),
     );
+    final String trailerControlsCss = _renderControlsInHtml
+        ? '''
+    #mirushinWakeLayer {
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      pointer-events: none;
+    }
+    .mirushin-trailer-button {
+      position: fixed;
+      width: 36px;
+      height: 36px;
+      border: 1px solid rgba(255, 255, 255, 0.24);
+      border-radius: 999px;
+      background: rgba(0, 0, 0, 0.55);
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      z-index: 31;
+      cursor: default;
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      opacity: 1;
+      transition: opacity 160ms ease;
+      appearance: none;
+      -webkit-appearance: none;
+      box-sizing: border-box;
+    }
+    .mirushin-trailer-button svg {
+      width: 26px;
+      height: 26px;
+      fill: currentColor;
+      pointer-events: none;
+    }
+    #mirushinBackButton {
+      top: 15px;
+      left: 29px;
+    }
+    #mirushinFullscreenButton {
+      right: 29px;
+      bottom: 85px;
+    }
+    .mirushin-controls-hidden {
+      cursor: none;
+    }
+    .mirushin-controls-hidden #mirushinWakeLayer {
+      pointer-events: auto;
+      cursor: none;
+    }
+    .mirushin-controls-hidden .mirushin-trailer-button {
+      opacity: 0;
+      pointer-events: none;
+    }
+    .mirushin-fullscreen-exit-icon {
+      display: none;
+    }
+    body[data-mirushin-fullscreen="1"] .mirushin-fullscreen-enter-icon {
+      display: none;
+    }
+    body[data-mirushin-fullscreen="1"] .mirushin-fullscreen-exit-icon {
+      display: block;
+    }
+'''
+        : '';
+    final String trailerControlsHtml = _renderControlsInHtml
+        ? '''
+  <div id="mirushinWakeLayer" aria-hidden="true"></div>
+  <button id="mirushinBackButton" class="mirushin-trailer-button" aria-label="Back" type="button">
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M20 11H7.8l5.6-5.6L12 4 4 12l8 8 1.4-1.4L7.8 13H20v-2z"></path>
+    </svg>
+  </button>
+  <button id="mirushinFullscreenButton" class="mirushin-trailer-button" aria-label="Fullscreen" type="button">
+    <svg class="mirushin-fullscreen-enter-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M5 5h6v2H7v4H5V5zm8 0h6v6h-2V7h-4V5zM5 13h2v4h4v2H5v-6zm12 0h2v6h-6v-2h4v-4z"></path>
+    </svg>
+    <svg class="mirushin-fullscreen-exit-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M9 5h2v6H5V9h4V5zm4 0h2v4h4v2h-6V5zM5 13h6v6H9v-4H5v-2zm8 0h6v2h-4v4h-2v-6z"></path>
+    </svg>
+  </button>
+'''
+        : '';
+    final String trailerControlsJs = _renderControlsInHtml
+        ? '''
+    var mirushinControlsTimer;
+    function mirushinShowControls() {
+      document.body.classList.remove('mirushin-controls-hidden');
+      mirushinPostCommand('activity');
+      window.clearTimeout(mirushinControlsTimer);
+      mirushinControlsTimer = window.setTimeout(function() {
+        document.body.classList.add('mirushin-controls-hidden');
+      }, 4000);
+    }
+    window.mirushinSetFullscreenState = function(active) {
+      document.body.dataset.mirushinFullscreen = active ? '1' : '0';
+    };
+    function mirushinBindButton(id, command) {
+      var button = document.getElementById(id);
+      if (!button) return;
+      button.addEventListener('click', function(event) {
+        event.preventDefault();
+        event.stopPropagation();
+        mirushinShowControls();
+        mirushinPostCommand(command);
+      }, true);
+      button.addEventListener('pointerdown', function(event) {
+        event.stopPropagation();
+        mirushinShowControls();
+      }, true);
+    }
+    var wakeLayer = document.getElementById('mirushinWakeLayer');
+    if (wakeLayer) {
+      wakeLayer.addEventListener('mousemove', mirushinShowControls, true);
+      wakeLayer.addEventListener('pointerdown', function(event) {
+        event.preventDefault();
+        mirushinShowControls();
+      }, true);
+      wakeLayer.addEventListener('touchstart', function(event) {
+        event.preventDefault();
+        mirushinShowControls();
+      }, true);
+    }
+    mirushinBindButton('mirushinBackButton', 'exitPlayer');
+    mirushinBindButton('mirushinFullscreenButton', 'toggleFullscreen');
+    window.addEventListener('mousemove', mirushinShowControls, true);
+    window.addEventListener('pointerdown', mirushinShowControls, true);
+    document.addEventListener('visibilitychange', mirushinShowControls, true);
+    mirushinShowControls();
+'''
+        : '''
+    window.mirushinSetFullscreenState = function(active) {};
+''';
     return '''
 <!DOCTYPE html>
 <html>
@@ -327,17 +516,21 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
       display: block;
       border: 0;
     }
+$trailerControlsCss
   </style>
 </head>
 <body>
   <iframe
     id="player"
+    title="YouTube trailer player"
     type="text/html"
     width="100%"
     height="100%"
     src="$embedUrl"
-    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+    allow="accelerometer; autoplay; clipboard-write; encrypted-media; fullscreen; gyroscope; picture-in-picture; web-share"
+    allowfullscreen
     referrerpolicy="strict-origin-when-cross-origin"></iframe>
+$trailerControlsHtml
   <script src="https://www.youtube.com/iframe_api"></script>
   <script>
     var player;
@@ -368,6 +561,7 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
     }
     window.addEventListener('keydown', mirushinHandleKey, true);
     document.addEventListener('keydown', mirushinHandleKey, true);
+$trailerControlsJs
     window.addEventListener('mousemove', function() {
       mirushinPostCommand('activity');
     }, { passive: true });
