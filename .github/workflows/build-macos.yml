@@ -26,6 +26,9 @@ jobs:
       - name: Flutter pub get
         run: flutter pub get
 
+      - name: Pre-cache Apple MDK SDK
+        run: bash .github/scripts/precache-apple-mdk.sh
+
       - name: Build macOS (release)
         run: flutter build macos --release
 

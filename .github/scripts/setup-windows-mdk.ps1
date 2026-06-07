@@ -34,7 +34,7 @@ foreach ($url in $urls) {
     $downloaded = $true
     break
   } catch {
-    Write-Warning "MDK SDK download failed from $url: $_"
+    Write-Warning "MDK SDK download failed from ${url}: $_"
     if (Test-Path $archivePath) { Remove-Item $archivePath -Force }
   }
 }
