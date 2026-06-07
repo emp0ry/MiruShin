@@ -835,6 +835,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                         isFullscreen: _isFullscreen,
                         onExit: () => unawaited(_exitPlayer()),
                         onToggleFullscreen: _toggleFullscreen,
+                        fullscreenButtonRight: 29,
+                        fullscreenButtonBottom: 64,
                       )
                     else
                       // Player + gesture layer — always present for native streams.
@@ -1068,10 +1070,7 @@ class _YoutubeTrailerSurface extends StatelessWidget {
           left: padding.left + 29,
           child: ClipOval(
             child: BackdropFilter(
-              filter: ImageFilter.blur(
-                sigmaX: 20,
-                sigmaY: 20,
-              ),
+              filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
               child: Material(
                 color: Colors.black.withValues(alpha: 0.55),
                 shape: const CircleBorder(),
@@ -1112,10 +1111,7 @@ class _YoutubeTrailerSurface extends StatelessWidget {
           bottom: padding.bottom + fullscreenButtonBottom + 21,
           child: ClipOval(
             child: BackdropFilter(
-              filter: ImageFilter.blur(
-                sigmaX: 20,
-                sigmaY: 20,
-              ),
+              filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
               child: Material(
                 color: Colors.black.withValues(alpha: 0.55),
                 shape: const CircleBorder(),

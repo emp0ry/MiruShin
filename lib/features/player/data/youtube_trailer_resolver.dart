@@ -31,9 +31,10 @@ class YoutubeTrailerResolver {
             ),
           );
 
-  static const String _fallbackApiKey =
-      'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
-  static const String _fallbackClientVersion = '2.20240510.00.00';
+  static const String _configuredApiKey = String.fromEnvironment(
+    'YOUTUBE_INNERTUBE_API_KEY',
+  );
+  static const String _defaultClientVersion = '2.20240510.00.00';
   static const String _userAgent =
       'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
       'AppleWebKit/537.36 (KHTML, like Gecko) '
@@ -232,23 +233,36 @@ class YoutubeTrailerResolver {
         ),
       );
       final String html = response.data ?? '';
+      final String apiKey = _firstMatch(
+        html,
+        RegExp(r'"INNERTUBE_API_KEY"\s*:\s*"([^"]+)"'),
+        fallback: _configuredApiKey,
+      );
+      if (apiKey.isEmpty) {
+        throw const YoutubeTrailerException(
+          'YouTube metadata did not expose an API key.',
+        );
+      }
       return _YoutubeBootstrap(
-        apiKey: _firstMatch(
-          html,
-          RegExp(r'"INNERTUBE_API_KEY"\s*:\s*"([^"]+)"'),
-          fallback: _fallbackApiKey,
-        ),
+        apiKey: apiKey,
         clientVersion: _firstMatch(
           html,
           RegExp(r'"INNERTUBE_CONTEXT_CLIENT_VERSION"\s*:\s*"([^"]+)"'),
-          fallback: _fallbackClientVersion,
+          fallback: _defaultClientVersion,
         ),
         initialPlayerResponse: _initialPlayerResponse(html),
       );
+    } on YoutubeTrailerException {
+      rethrow;
     } on Object {
+      if (_configuredApiKey.isEmpty) {
+        throw const YoutubeTrailerException(
+          'YouTube metadata API key is unavailable.',
+        );
+      }
       return const _YoutubeBootstrap(
-        apiKey: _fallbackApiKey,
-        clientVersion: _fallbackClientVersion,
+        apiKey: _configuredApiKey,
+        clientVersion: _defaultClientVersion,
       );
     }
   }
