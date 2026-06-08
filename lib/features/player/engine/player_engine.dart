@@ -15,11 +15,17 @@ class PlayerSource {
     required this.url,
     this.headers = const <String, String>{},
     this.streamType = StreamType.unknown,
+    this.disableProxy = false,
   });
 
   final String url;
   final Map<String, String> headers;
   final StreamType streamType;
+
+  /// Forces the backend to open the original URL directly instead of routing
+  /// it through the local HLS/media proxy. Used as a playback fallback after a
+  /// proxied attempt fails.
+  final bool disableProxy;
 }
 
 class PlayerBufferedRange {

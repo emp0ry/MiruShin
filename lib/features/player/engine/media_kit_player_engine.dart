@@ -252,7 +252,8 @@ class MediaKitPlayerEngine extends PlayerEngine {
       // HLS playlist rewrites. Preview mode skips it to keep decoders cheap.
       final bool isNetwork = _isNetworkUrl(source.url);
       final bool isHls = _isHlsLikeSource(source);
-      final bool useProxy = !_previewMode && (isNetwork || isInlineDash);
+      final bool useProxy =
+          !source.disableProxy && !_previewMode && (isNetwork || isInlineDash);
 
       String playbackUrl = remoteUri.toString();
       if (useProxy && isInlineDash) {
@@ -289,7 +290,11 @@ class MediaKitPlayerEngine extends PlayerEngine {
       } else {
         // Stop any running proxy so it does not keep a stale HTTP server open.
         unawaited(_proxy.stop());
-        debugPrint('MediaKit open direct: $playbackUrl');
+        debugPrint(
+          source.disableProxy
+              ? 'MediaKit open direct after proxy fallback: $playbackUrl'
+              : 'MediaKit open direct: $playbackUrl',
+        );
       }
       _nativePlaybackUrl = playbackUrl;
       _nativePlaybackHeaders = headers;

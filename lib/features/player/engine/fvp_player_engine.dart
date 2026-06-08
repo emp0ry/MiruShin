@@ -157,7 +157,7 @@ class FvpPlayerEngine extends PlayerEngine {
           ? Uri(scheme: 'http', host: InternetAddress.loopbackIPv4.address)
           : Uri.parse(source.url);
       String playbackUrl = remoteUri.toString();
-      if (!_previewMode && isInlineDash) {
+      if (!source.disableProxy && !_previewMode && isInlineDash) {
         await _proxy.stop();
         await _proxy.start();
         playbackUrl = _proxy.inlineDashUrl(
@@ -165,7 +165,9 @@ class FvpPlayerEngine extends PlayerEngine {
           headers: source.headers,
         );
         debugPrint('FVP open inline DASH via proxy: $playbackUrl');
-      } else if (!_previewMode && _requiresPinnedProxy(remoteUri)) {
+      } else if (!source.disableProxy &&
+          !_previewMode &&
+          _requiresPinnedProxy(remoteUri)) {
         await _proxy.stop();
         await _proxy.start();
         playbackUrl = _isHlsLikeSource(source)
@@ -174,7 +176,11 @@ class FvpPlayerEngine extends PlayerEngine {
         debugPrint('FVP open via proxy: $playbackUrl');
       } else {
         unawaited(_proxy.stop());
-        debugPrint('FVP open direct MDK URL: $playbackUrl');
+        debugPrint(
+          source.disableProxy
+              ? 'FVP open direct after proxy fallback: $playbackUrl'
+              : 'FVP open direct MDK URL: $playbackUrl',
+        );
       }
       _applyDirectMdkHeaders(
         player,

@@ -502,6 +502,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     bool isAutoFallback = false,
     PlayerBackend? backendOverride,
     bool allowSourceFallback = true,
+    bool disableProxy = false,
   }) async {
     if (!isAutoFallback) {
       _autoFallbackTriedServers.clear();
@@ -562,6 +563,7 @@ class PlaybackController extends Notifier<PlaybackState> {
                   ? quality.headers
                   : server.headers,
               streamType: streamType,
+              disableProxy: disableProxy,
             ),
             startAt: position,
             autoplay: false,
@@ -590,6 +592,7 @@ class PlaybackController extends Notifier<PlaybackState> {
         engine,
         generation,
         engineBackend,
+        proxyDisabled: disableProxy,
         allowSourceFallback: allowSourceFallback,
       );
       if (_seekPreviewStreamEnabled) {
@@ -617,6 +620,15 @@ class PlaybackController extends Notifier<PlaybackState> {
             canRetry: true,
           ),
         );
+        return;
+      }
+      if (_tryDirectAfterProxyFallback(
+        failedBackend: engineBackend,
+        proxyDisabled: disableProxy,
+        position: fallbackPosition,
+        autoplay: fallbackAutoplay,
+        preserveAspectRatio: fallbackAspectRatio ?? preserveAspectRatio,
+      )) {
         return;
       }
       if (_tryAutoBackendFallback(
@@ -798,6 +810,49 @@ class PlaybackController extends Notifier<PlaybackState> {
     return position;
   }
 
+  bool _tryDirectAfterProxyFallback({
+    required PlayerBackend failedBackend,
+    required bool proxyDisabled,
+    required Duration position,
+    required bool autoplay,
+    double? preserveAspectRatio,
+  }) {
+    if (proxyDisabled) return false;
+
+    final MediaPlaybackItem? item = state.item;
+    final MediaServer? server = state.server;
+    final StreamQuality? quality = state.quality;
+    if (item == null || server == null || quality == null) return false;
+    if (_isYoutubeTrailerServer(server)) return false;
+
+    final String url = _effectiveQualityUrl(server, quality);
+    final Uri? uri = Uri.tryParse(url);
+    final String scheme = uri?.scheme.toLowerCase() ?? '';
+    if (scheme != 'http' && scheme != 'https') return false;
+
+    debugPrint(
+      'Playback proxy fallback: ${failedBackend.name.toUpperCase()} proxy failed; '
+      'trying ${failedBackend.name.toUpperCase()} direct for ${server.name}.',
+    );
+    unawaited(
+      _open(
+        item: item,
+        server: server,
+        quality: quality,
+        position: position,
+        autoplay: autoplay,
+        voiceover: state.voiceover,
+        subtitle: state.subtitle,
+        preserveAspectRatio: preserveAspectRatio,
+        isAutoFallback: true,
+        backendOverride: failedBackend,
+        allowSourceFallback: false,
+        disableProxy: true,
+      ),
+    );
+    return true;
+  }
+
   bool _tryAutoBackendFallback({
     required PlayerBackend failedBackend,
     required Duration position,
@@ -942,6 +997,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     PlayerEngine engine,
     int generation,
     PlayerBackend engineBackend, {
+    required bool proxyDisabled,
     required bool allowSourceFallback,
   }) {
     late void Function() listener;
@@ -953,6 +1009,15 @@ class PlaybackController extends Notifier<PlaybackState> {
       }
       if (engine.state.value.hasError && state.error == null) {
         engine.removeListener(listener);
+        if (_tryDirectAfterProxyFallback(
+          failedBackend: engineBackend,
+          proxyDisabled: proxyDisabled,
+          position: _fallbackPositionFor(engine),
+          autoplay: engine.state.value.isPlaying,
+          preserveAspectRatio: engine.state.value.aspectRatio,
+        )) {
+          return;
+        }
         if (_tryAutoBackendFallback(
           failedBackend: engineBackend,
           position: _fallbackPositionFor(engine),
