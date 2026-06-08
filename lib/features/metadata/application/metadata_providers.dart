@@ -13,6 +13,7 @@ import '../data/tmdb_metadata_provider.dart';
 import '../../tracking/data/anilist_api_client.dart';
 import '../domain/anime_episode_metadata.dart';
 import '../domain/metadata_provider.dart';
+import '../domain/tmdb_episode_metadata.dart';
 import 'media_catalog.dart';
 
 export 'media_catalog.dart' show BoardRails, MediaCatalog;
@@ -205,6 +206,35 @@ final animeEpisodeMetadataProvider =
       return bundle;
     });
 
+final tmdbSeasonEpisodeMetadataProvider =
+    FutureProvider.family<
+      TmdbSeasonEpisodeMetadataBundle,
+      TmdbSeasonEpisodeMetadataRequest
+    >((Ref ref, TmdbSeasonEpisodeMetadataRequest request) async {
+      if (request.tmdbId <= 0 || request.seasonNumber <= 0) {
+        return TmdbSeasonEpisodeMetadataBundle.empty;
+      }
+      final TmdbMetadataProvider? tmdb = ref.watch(tmdbProviderProvider);
+      if (tmdb == null) return TmdbSeasonEpisodeMetadataBundle.empty;
+
+      final MetadataCacheStore cache = ref.watch(metadataCacheStoreProvider);
+      final String cacheKey =
+          'tmdb.seasonEpisodes.${request.tmdbId}.${request.seasonNumber}';
+      final Map<String, dynamic>? cached = await cache.read(cacheKey);
+      if (cached != null) return _tmdbSeasonMetadataFromJson(cached);
+      if (!request.loadNetwork) return TmdbSeasonEpisodeMetadataBundle.empty;
+
+      final TmdbSeasonEpisodeMetadataBundle bundle = await tmdb
+          .getSeasonEpisodes(
+            tmdbId: request.tmdbId,
+            seasonNumber: request.seasonNumber,
+          );
+      if (!bundle.isEmpty) {
+        await cache.write(cacheKey, _tmdbSeasonMetadataToJson(bundle));
+      }
+      return bundle;
+    });
+
 class AnimeEpisodeMetadataRequest {
   const AnimeEpisodeMetadataRequest({
     required this.anilistId,
@@ -226,6 +256,29 @@ class AnimeEpisodeMetadataRequest {
 
   @override
   int get hashCode => Object.hash(anilistId, languageCode, loadNetwork);
+}
+
+class TmdbSeasonEpisodeMetadataRequest {
+  const TmdbSeasonEpisodeMetadataRequest({
+    required this.tmdbId,
+    required this.seasonNumber,
+    this.loadNetwork = true,
+  });
+
+  final int tmdbId;
+  final int seasonNumber;
+  final bool loadNetwork;
+
+  @override
+  bool operator ==(Object other) {
+    return other is TmdbSeasonEpisodeMetadataRequest &&
+        other.tmdbId == tmdbId &&
+        other.seasonNumber == seasonNumber &&
+        other.loadNetwork == loadNetwork;
+  }
+
+  @override
+  int get hashCode => Object.hash(tmdbId, seasonNumber, loadNetwork);
 }
 
 class DiscoveryMetadataQuery {
@@ -294,5 +347,47 @@ AnimeEpisodeMetadataBundle _episodeMetadataFromJson(Map<String, dynamic> json) {
     anilistId: int.tryParse(json['anilistId']?.toString() ?? '') ?? 0,
     languageCode: json['languageCode']?.toString() ?? '',
     episodes: Map<int, AnimeEpisodeMetadata>.unmodifiable(parsed),
+  );
+}
+
+Map<String, dynamic> _tmdbSeasonMetadataToJson(
+  TmdbSeasonEpisodeMetadataBundle bundle,
+) {
+  return <String, dynamic>{
+    'seasonNumber': bundle.seasonNumber,
+    'episodes': bundle.episodes.map(
+      (int number, TmdbEpisodeMetadata metadata) =>
+          MapEntry<String, dynamic>(number.toString(), <String, dynamic>{
+            'title': metadata.title,
+            'overview': metadata.overview,
+            'imageUrl': metadata.imageUrl,
+            if (metadata.runtimeMinutes != null)
+              'runtimeMinutes': metadata.runtimeMinutes,
+          }),
+    ),
+  };
+}
+
+TmdbSeasonEpisodeMetadataBundle _tmdbSeasonMetadataFromJson(
+  Map<String, dynamic> json,
+) {
+  final Object? episodes = json['episodes'];
+  final Map<int, TmdbEpisodeMetadata> parsed = <int, TmdbEpisodeMetadata>{};
+  if (episodes is Map) {
+    episodes.forEach((Object? key, Object? value) {
+      final int? number = int.tryParse(key.toString());
+      if (number == null || value is! Map) return;
+      parsed[number] = TmdbEpisodeMetadata(
+        number: number,
+        title: value['title']?.toString() ?? '',
+        overview: value['overview']?.toString() ?? '',
+        imageUrl: value['imageUrl']?.toString() ?? '',
+        runtimeMinutes: int.tryParse(value['runtimeMinutes']?.toString() ?? ''),
+      );
+    });
+  }
+  return TmdbSeasonEpisodeMetadataBundle(
+    seasonNumber: int.tryParse(json['seasonNumber']?.toString() ?? '') ?? 0,
+    episodes: Map<int, TmdbEpisodeMetadata>.unmodifiable(parsed),
   );
 }

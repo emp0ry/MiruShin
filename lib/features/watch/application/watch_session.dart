@@ -4,6 +4,7 @@ import '../../addons/domain/sora_models.dart';
 enum WatchStep {
   pickSeason,
   pickSource,
+  pickSourceSeason,
   pickEpisode,
   resolveStream,
   streamReady,
@@ -33,6 +34,12 @@ class WatchSession {
   final bool seasonPicked;
 
   factory WatchSession.initial(MediaItem item) {
+    if (_usesTmdbSourceFirstFlow(item)) {
+      return WatchSession(
+        step: WatchStep.pickSource,
+        seasonNumber: _defaultSeason(item),
+      );
+    }
     final bool skipSeason = _skipSeasonPicker(item);
     return WatchSession(
       step: skipSeason ? WatchStep.pickSource : WatchStep.pickSeason,
@@ -136,6 +143,12 @@ bool _skipSeasonPicker(MediaItem item) {
   if (nonSpecial.length > 1) return false;
   final MediaSeason only = nonSpecial.first;
   return only.seasonNumber == 1 && only.episodeCount > 0;
+}
+
+bool _usesTmdbSourceFirstFlow(MediaItem item) {
+  if (item.type == MediaType.movie) return false;
+  if (item.id.startsWith('tmdb:')) return true;
+  return item.sourceProvider.trim().toLowerCase() == 'tmdb';
 }
 
 int _defaultSeason(MediaItem item) {

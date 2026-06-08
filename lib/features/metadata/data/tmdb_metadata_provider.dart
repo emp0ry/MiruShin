@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 
 import '../../../shared/models/calendar_item.dart';
 import '../../../shared/models/media_item.dart';
+import '../domain/tmdb_episode_metadata.dart';
 import '../domain/metadata_provider.dart';
 
 class TmdbConfigurationException implements Exception {
@@ -418,6 +419,44 @@ class TmdbMetadataProvider implements PagedDiscoveryProvider {
     return null;
   }
 
+  Future<TmdbSeasonEpisodeMetadataBundle> getSeasonEpisodes({
+    required int tmdbId,
+    required int seasonNumber,
+  }) async {
+    _assertConfigured();
+    if (tmdbId <= 0 || seasonNumber <= 0) {
+      return TmdbSeasonEpisodeMetadataBundle.empty;
+    }
+    final Map<String, dynamic> data = await _getSeasonDataWithEnglishFallback(
+      tmdbId: tmdbId,
+      seasonNumber: seasonNumber,
+    );
+    final Object? episodesJson = data['episodes'];
+    if (episodesJson is! List<dynamic>) {
+      return TmdbSeasonEpisodeMetadataBundle.empty;
+    }
+    final Map<int, TmdbEpisodeMetadata> episodes = <int, TmdbEpisodeMetadata>{};
+    for (final Map<String, dynamic> json
+        in episodesJson.whereType<Map<String, dynamic>>()) {
+      final int number = _int(json['episode_number']);
+      if (number <= 0) continue;
+      episodes[number] = TmdbEpisodeMetadata(
+        number: number,
+        title: _string(json['name']),
+        overview: _string(json['overview']),
+        imageUrl: _imageUrl(
+          _string(json['still_path']),
+          fallbackSeed: 'tmdb-episode-$tmdbId-$seasonNumber-$number',
+        ),
+        runtimeMinutes: _nullableInt(json['runtime']),
+      );
+    }
+    return TmdbSeasonEpisodeMetadataBundle(
+      seasonNumber: seasonNumber,
+      episodes: Map<int, TmdbEpisodeMetadata>.unmodifiable(episodes),
+    );
+  }
+
   Future<List<MediaItem>> _getList(
     String path,
     MediaType type, [
@@ -832,6 +871,89 @@ class TmdbMetadataProvider implements PagedDiscoveryProvider {
     };
   }
 
+  Future<Map<String, dynamic>> _getSeasonDataWithEnglishFallback({
+    required int tmdbId,
+    required int seasonNumber,
+  }) async {
+    final String path = '/tv/$tmdbId/season/$seasonNumber';
+    final Response<dynamic> localized = await _get(path);
+    final Object? localizedData = localized.data;
+    if (_isEnglishLanguage || localizedData is! Map<String, dynamic>) {
+      return localizedData is Map<String, dynamic>
+          ? localizedData
+          : <String, dynamic>{};
+    }
+
+    final Response<dynamic> english = await _get(
+      path,
+      const <String, dynamic>{},
+      'en-US',
+    );
+    final Object? englishData = english.data;
+    if (englishData is! Map<String, dynamic>) {
+      return localizedData;
+    }
+    return _mergeEnglishSeasonEpisodeFallback(localizedData, englishData);
+  }
+
+  Map<String, dynamic> _mergeEnglishSeasonEpisodeFallback(
+    Map<String, dynamic> localized,
+    Map<String, dynamic> english,
+  ) {
+    final Map<String, dynamic> merged = <String, dynamic>{...localized};
+    if (_string(merged['name']).isEmpty &&
+        _string(english['name']).isNotEmpty) {
+      merged['name'] = _string(english['name']);
+    }
+    if (_string(merged['overview']).isEmpty &&
+        _string(english['overview']).isNotEmpty) {
+      merged['overview'] = _string(english['overview']);
+    }
+
+    final Object? localizedEpisodes = localized['episodes'];
+    final Object? englishEpisodes = english['episodes'];
+    if (localizedEpisodes is! List<dynamic> ||
+        englishEpisodes is! List<dynamic>) {
+      return merged;
+    }
+    final Map<int, Map<String, dynamic>> englishByNumber =
+        <int, Map<String, dynamic>>{};
+    for (final Map<String, dynamic> episode
+        in englishEpisodes.whereType<Map<String, dynamic>>()) {
+      final int number = _int(episode['episode_number']);
+      if (number > 0) {
+        englishByNumber[number] = episode;
+      }
+    }
+    merged['episodes'] = localizedEpisodes
+        .map((Object? item) {
+          if (item is! Map<String, dynamic>) return item;
+          final int number = _int(item['episode_number']);
+          final Map<String, dynamic>? englishEpisode = englishByNumber[number];
+          if (englishEpisode == null) return item;
+          final Map<String, dynamic> episode = <String, dynamic>{...item};
+          if (_string(episode['name']).isEmpty &&
+              _string(englishEpisode['name']).isNotEmpty) {
+            episode['name'] = _string(englishEpisode['name']);
+          }
+          if (_string(episode['overview']).isEmpty &&
+              _string(englishEpisode['overview']).isNotEmpty) {
+            episode['overview'] = _string(englishEpisode['overview']);
+          }
+          if (_string(episode['still_path']).isEmpty &&
+              _string(englishEpisode['still_path']).isNotEmpty) {
+            episode['still_path'] = _string(englishEpisode['still_path']);
+          }
+          if (_int(episode['runtime']) <= 0 &&
+              _int(englishEpisode['runtime']) > 0) {
+            episode['runtime'] = _int(englishEpisode['runtime']);
+          }
+          return episode;
+        })
+        .toList(growable: false);
+    return merged;
+  }
+
   Map<String, dynamic> _mergeEnglishFallbackPayload(
     Map<String, dynamic> localized,
     Map<String, dynamic> english,
@@ -1139,6 +1261,14 @@ class TmdbMetadataProvider implements PagedDiscoveryProvider {
       return int.tryParse(value) ?? 0;
     }
     return 0;
+  }
+
+  static int? _nullableInt(Object? value) {
+    if (value == null) {
+      return null;
+    }
+    final int parsed = _int(value);
+    return parsed == 0 ? null : parsed;
   }
 
   static num _num(Object? value) {

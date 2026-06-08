@@ -36,6 +36,7 @@ import '../../catalog/application/catalog_repository.dart';
 import '../../catalog/application/catalog_mode.dart';
 import '../../metadata/application/metadata_providers.dart';
 import '../../metadata/domain/anime_episode_metadata.dart';
+import '../../metadata/domain/tmdb_episode_metadata.dart';
 import '../../library/application/local_library_provider.dart';
 import '../../settings/presentation/settings_state.dart';
 import '../../tracking/application/anilist_library_provider.dart';
@@ -149,7 +150,11 @@ class _WatchPageState extends ConsumerState<WatchPage> {
   int _visibleTab = 0; // 0 = Find Sources, 1 = Choose Episode
   SoraEpisode? _continueEpisode;
   AnimeEpisodeMetadata? _continueEpisodeMeta;
+  TmdbEpisodeMetadata? _continueTmdbEpisodeMeta;
   int _continueDisplayNum = 0;
+  SoraSourceRequest? _sourceEpisodesRequest;
+  Future<List<SoraEpisode>>? _sourceEpisodesFuture;
+  List<SoraEpisode>? _sourceEpisodes;
 
   @override
   void didUpdateWidget(covariant WatchPage oldWidget) {
@@ -160,6 +165,13 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     _session = null;
     _lastItem = null;
     _lastWatchDebugSignature = null;
+    _sourceEpisodesRequest = null;
+    _sourceEpisodesFuture = null;
+    _sourceEpisodes = null;
+    _continueEpisode = null;
+    _continueEpisodeMeta = null;
+    _continueTmdbEpisodeMeta = null;
+    _continueDisplayNum = 0;
   }
 
   @override
@@ -227,39 +239,139 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     // Synchronously bump the epoch so every in-flight search loop sees a stale
     // epoch on its next await and breaks out — without restarting providers.
     cancelAllSoraSearches(ref.read(soraJsRuntimeProvider));
+    final bool sourceSeasonFlow = _usesSourceSeasonFlow(_lastItem);
+    final SoraSourceRequest request = SoraSourceRequest(
+      addonId: result.addonId,
+      result: result,
+    );
+    final Future<List<SoraEpisode>> episodesFuture = _loadSourceEpisodes(
+      request,
+    );
     setState(() {
-      _visibleTab = 1;
+      _visibleTab = sourceSeasonFlow ? 0 : 1;
       _continueEpisode = null;
       _continueEpisodeMeta = null;
+      _continueTmdbEpisodeMeta = null;
       _continueDisplayNum = 0;
+      _sourceEpisodesRequest = request;
+      _sourceEpisodesFuture = episodesFuture;
+      _sourceEpisodes = null;
       _streamResolutionState.clear();
       _session = _session!.copyWith(
-        step: WatchStep.pickEpisode,
+        step: sourceSeasonFlow
+            ? WatchStep.pickSourceSeason
+            : WatchStep.pickEpisode,
         source: result,
         clearEpisode: true,
         clearCandidate: true,
         clearError: true,
       );
     });
-    _scrollToKey(_sourceKey);
+    _watchSourceEpisodeLoad(request, episodesFuture, sourceSeasonFlow);
+    _scrollToKey(sourceSeasonFlow ? _episodeKey : _sourceKey);
   }
 
   void _onContinueResolved(
     SoraEpisode? ep,
     AnimeEpisodeMetadata? meta,
+    TmdbEpisodeMetadata? tmdbMeta,
     int effectiveContinued,
   ) {
     final int displayNum = effectiveContinued > 0 ? effectiveContinued + 1 : 0;
     if (_continueEpisode?.href == ep?.href &&
-        _continueDisplayNum == displayNum) {
+        _continueDisplayNum == displayNum &&
+        _continueTmdbEpisodeMeta?.imageUrl == tmdbMeta?.imageUrl &&
+        _continueTmdbEpisodeMeta?.title == tmdbMeta?.title) {
       return;
     }
     if (!mounted) return;
     setState(() {
       _continueEpisode = ep;
       _continueEpisodeMeta = meta;
+      _continueTmdbEpisodeMeta = tmdbMeta;
       _continueDisplayNum = displayNum;
     });
+  }
+
+  Future<List<SoraEpisode>> _loadSourceEpisodes(
+    SoraSourceRequest request,
+  ) async {
+    final SoraInstalledAddon? addon = ref
+        .read(soraAddonsProvider)
+        .byId(request.addonId);
+    if (addon == null) {
+      throw const SoraAddonException('Addon is no longer installed.');
+    }
+    return ref
+        .read(soraJsRuntimeProvider)
+        .extractEpisodes(addon: addon, result: request.result);
+  }
+
+  void _watchSourceEpisodeLoad(
+    SoraSourceRequest request,
+    Future<List<SoraEpisode>> future,
+    bool sourceSeasonFlow,
+  ) {
+    unawaited(
+      future
+          .then((List<SoraEpisode> episodes) {
+            if (!mounted || !_isCurrentSourceEpisodeRequest(request)) return;
+            final List<List<SoraEpisode>> groups = groupSoraEpisodesBySeason(
+              episodes,
+            );
+            setState(() {
+              _sourceEpisodes = episodes;
+              if (sourceSeasonFlow &&
+                  groups.length <= 1 &&
+                  _session?.step == WatchStep.pickSourceSeason) {
+                _visibleTab = 1;
+                _session = _session?.copyWith(
+                  step: WatchStep.pickEpisode,
+                  seasonNumber: 1,
+                  clearEpisode: true,
+                  clearCandidate: true,
+                  clearError: true,
+                  seasonPicked: true,
+                );
+              }
+            });
+            if (sourceSeasonFlow && groups.length <= 1) {
+              _scrollToKey(_episodeKey);
+            }
+          })
+          .catchError((Object _) {
+            if (!mounted || !_isCurrentSourceEpisodeRequest(request)) return;
+            setState(() {
+              _sourceEpisodes = const <SoraEpisode>[];
+            });
+          }),
+    );
+  }
+
+  bool _isCurrentSourceEpisodeRequest(SoraSourceRequest request) {
+    final SoraSourceRequest? current = _sourceEpisodesRequest;
+    return current != null &&
+        current.addonId == request.addonId &&
+        current.result.href == request.result.href;
+  }
+
+  void _pickSourceSeason(int seasonNumber) {
+    setState(() {
+      _visibleTab = 1;
+      _continueEpisode = null;
+      _continueEpisodeMeta = null;
+      _continueTmdbEpisodeMeta = null;
+      _continueDisplayNum = 0;
+      _session = _session!.copyWith(
+        step: WatchStep.pickEpisode,
+        seasonNumber: seasonNumber,
+        clearEpisode: true,
+        clearCandidate: true,
+        clearError: true,
+        seasonPicked: true,
+      );
+    });
+    _scrollToKey(_episodeKey);
   }
 
   void _pickEpisode(SoraEpisode episode, {bool isAutoNext = false}) {
@@ -489,6 +601,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
             if (!mounted) return;
             _playerRouteInFlight = false;
             _activePlayerEpisodeKey = null;
+            setState(() {});
             final PlayerNextEpisodeResult? nextResult = _nextEpisodeResultFrom(
               result,
             );
@@ -598,7 +711,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     );
     if (!mounted) return;
 
-    final SoraEpisode next = _episodeForPlayback(rawNext, nextMetadata);
+    final SoraEpisode next = _episodeForPlayback(rawNext, nextMetadata, null);
     // Discard any stale cached stream for the next episode so resolution
     // always uses a fresh URL (avoids instant failure from expired cache).
     ref.invalidate(
@@ -794,8 +907,22 @@ class _WatchPageState extends ConsumerState<WatchPage> {
                         onSeasonPicked: _pickSeason,
                       ),
 
+                    if (session.step == WatchStep.pickSourceSeason &&
+                        session.source != null)
+                      KeyedSubtree(
+                        key: _episodeKey,
+                        child: _SourceSeasonPickerSection(
+                          item: item,
+                          source: session.source!,
+                          selectedSeason: session.seasonNumber,
+                          episodesFuture: _sourceEpisodesFuture,
+                          onSeasonPicked: _pickSourceSeason,
+                        ),
+                      ),
+
                     // Tab bar (Find Sources / Choose Episode)
-                    if (session.step != WatchStep.pickSeason) ...<Widget>[
+                    if (session.step != WatchStep.pickSeason &&
+                        session.step != WatchStep.pickSourceSeason) ...<Widget>[
                       _WatchTabBar(
                         selectedTab: _visibleTab,
                         hasEpisodes: session.source != null,
@@ -808,6 +935,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
                     // Tab 0 — Source search (hidden when on episode tab so searches
                     // stop after picking a source and restart if the user returns)
                     if (session.step != WatchStep.pickSeason &&
+                        session.step != WatchStep.pickSourceSeason &&
                         _visibleTab == 0)
                       KeyedSubtree(
                         key: _sourceKey,
@@ -820,6 +948,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
 
                     // Tab 1 — Episode picker
                     if (session.step != WatchStep.pickSeason &&
+                        session.step != WatchStep.pickSourceSeason &&
                         _visibleTab == 1 &&
                         session.source != null)
                       KeyedSubtree(
@@ -831,6 +960,9 @@ class _WatchPageState extends ConsumerState<WatchPage> {
                           onEpisodePicked: _pickEpisode,
                           seasonNumber: session.seasonNumber,
                           onContinueResolved: _onContinueResolved,
+                          episodesFuture: _sourceEpisodesFuture,
+                          sourceEpisodes: _sourceEpisodes,
+                          useSourceSeasonGroups: _usesSourceSeasonFlow(item),
                         ),
                       ),
 
@@ -867,7 +999,11 @@ class _WatchPageState extends ConsumerState<WatchPage> {
             child: SafeArea(
               child: FilledButton.icon(
                 onPressed: () => _pickEpisode(
-                  _episodeForPlayback(_continueEpisode!, _continueEpisodeMeta),
+                  _episodeForPlayback(
+                    _continueEpisode!,
+                    _continueEpisodeMeta,
+                    _continueTmdbEpisodeMeta,
+                  ),
                 ),
                 icon: const Icon(Icons.play_arrow_rounded, size: 18),
                 label: Text('Continue EP $_continueDisplayNum'),
@@ -1268,6 +1404,199 @@ class _SeasonPosterFallback extends StatelessWidget {
             fontWeight: FontWeight.w800,
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _SourceSeasonPickerSection extends ConsumerWidget {
+  const _SourceSeasonPickerSection({
+    required this.item,
+    required this.source,
+    required this.selectedSeason,
+    required this.episodesFuture,
+    required this.onSeasonPicked,
+  });
+
+  final MediaItem item;
+  final SoraSearchResult source;
+  final int selectedSeason;
+  final Future<List<SoraEpisode>>? episodesFuture;
+  final ValueChanged<int> onSeasonPicked;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final Future<List<SoraEpisode>>? future = episodesFuture;
+    return GlassCard(
+      padding: const EdgeInsets.all(AppSpacing.xl),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          SectionHeader(
+            title: context.t('Choose Season'),
+            subtitle: context.t('Select a season to find sources for.'),
+          ),
+          if (future == null)
+            const SkeletonBox(height: 196, radius: AppRadius.lg)
+          else
+            FutureBuilder<List<SoraEpisode>>(
+              future: future,
+              builder:
+                  (
+                    BuildContext context,
+                    AsyncSnapshot<List<SoraEpisode>> snapshot,
+                  ) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const SkeletonBox(
+                        height: 196,
+                        radius: AppRadius.lg,
+                      );
+                    }
+                    if (snapshot.hasError) {
+                      return Text(
+                        snapshot.error.toString(),
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: AppColors.danger,
+                        ),
+                      );
+                    }
+
+                    final List<List<SoraEpisode>> groups =
+                        groupSoraEpisodesBySeason(
+                          snapshot.data ?? const <SoraEpisode>[],
+                        );
+                    if (groups.length <= 1) {
+                      return const SkeletonBox(
+                        height: 132,
+                        radius: AppRadius.lg,
+                      );
+                    }
+
+                    final Set<String> watchedSet = ref.watch(
+                      soraEpisodeProgressProvider,
+                    );
+                    final LocalLibraryController libraryNotifier = ref.read(
+                      localLibraryProvider.notifier,
+                    );
+
+                    return SizedBox(
+                      height: 196,
+                      child: ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        itemCount: groups.length,
+                        separatorBuilder: (BuildContext context, int index) =>
+                            const SizedBox(width: AppSpacing.md),
+                        itemBuilder: (BuildContext context, int index) {
+                          final int seasonNumber = index + 1;
+                          final List<SoraEpisode> episodes = groups[index];
+                          final bool selected = seasonNumber == selectedSeason;
+                          final String label = _sourceSeasonLabel(
+                            context,
+                            item,
+                            seasonNumber,
+                          );
+                          final String posterUrl = _sourceSeasonPosterUrl(
+                            item,
+                            seasonNumber,
+                          );
+                          final bool watched = _sourceSeasonWatched(
+                            watchedSet: watchedSet,
+                            libraryNotifier: libraryNotifier,
+                            item: item,
+                            source: source,
+                            seasonNumber: seasonNumber,
+                            episodes: episodes,
+                            ref: ref,
+                          );
+                          return GestureDetector(
+                            onTap: () => onSeasonPicked(seasonNumber),
+                            child: SizedBox(
+                              width: 108,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: <Widget>[
+                                  Expanded(
+                                    child: AnimatedContainer(
+                                      duration: const Duration(
+                                        milliseconds: 160,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        borderRadius: AppRadius.all(
+                                          AppRadius.lg,
+                                        ),
+                                        border: Border.all(
+                                          color: selected
+                                              ? Theme.of(
+                                                  context,
+                                                ).colorScheme.primary
+                                              : AppColors.border,
+                                          width: selected ? 2.5 : 1,
+                                        ),
+                                      ),
+                                      child: ClipRRect(
+                                        borderRadius: AppRadius.all(
+                                          selected
+                                              ? AppRadius.md
+                                              : AppRadius.lg,
+                                        ),
+                                        child: Stack(
+                                          fit: StackFit.expand,
+                                          children: <Widget>[
+                                            posterUrl.isEmpty
+                                                ? _SeasonPosterFallback(
+                                                    label: label,
+                                                  )
+                                                : CachedNetworkImage(
+                                                    imageUrl: posterUrl,
+                                                    fit: BoxFit.cover,
+                                                    placeholder:
+                                                        (context, url) =>
+                                                            const SkeletonBox(),
+                                                    errorWidget:
+                                                        (context, url, err) =>
+                                                            _SeasonPosterFallback(
+                                                              label: label,
+                                                            ),
+                                                  ),
+                                            if (watched)
+                                              const _WatchedBadge(
+                                                isContinue: false,
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(height: AppSpacing.xs),
+                                  Text(
+                                    '$label · ${episodes.length}',
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    textAlign: TextAlign.center,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .labelSmall
+                                        ?.copyWith(
+                                          color: selected
+                                              ? Theme.of(
+                                                  context,
+                                                ).colorScheme.primary
+                                              : null,
+                                          fontWeight: selected
+                                              ? FontWeight.w700
+                                              : null,
+                                        ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    );
+                  },
+            ),
+        ],
       ),
     );
   }
@@ -2084,6 +2413,9 @@ class _EpisodePickerSection extends ConsumerStatefulWidget {
     this.selectedEpisodeHref,
     this.seasonNumber = 1,
     this.onContinueResolved,
+    this.episodesFuture,
+    this.sourceEpisodes,
+    this.useSourceSeasonGroups = false,
   });
 
   final MediaItem item;
@@ -2091,8 +2423,16 @@ class _EpisodePickerSection extends ConsumerStatefulWidget {
   final String? selectedEpisodeHref;
   final ValueChanged<SoraEpisode> onEpisodePicked;
   final int seasonNumber;
-  final void Function(SoraEpisode?, AnimeEpisodeMetadata?, int)?
+  final void Function(
+    SoraEpisode?,
+    AnimeEpisodeMetadata?,
+    TmdbEpisodeMetadata?,
+    int,
+  )?
   onContinueResolved;
+  final Future<List<SoraEpisode>>? episodesFuture;
+  final List<SoraEpisode>? sourceEpisodes;
+  final bool useSourceSeasonGroups;
 
   @override
   ConsumerState<_EpisodePickerSection> createState() =>
@@ -2126,7 +2466,11 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.item.id != widget.item.id ||
         oldWidget.source.addonId != widget.source.addonId ||
-        oldWidget.source.href != widget.source.href) {
+        oldWidget.source.href != widget.source.href ||
+        oldWidget.seasonNumber != widget.seasonNumber ||
+        oldWidget.useSourceSeasonGroups != widget.useSourceSeasonGroups ||
+        oldWidget.episodesFuture != widget.episodesFuture ||
+        oldWidget.sourceEpisodes != widget.sourceEpisodes) {
       _restartEpisodeLoad();
       _resetEpisodeMetadataLoad();
     }
@@ -2141,7 +2485,11 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
 
   void _restartEpisodeLoad() {
     _episodesRequest = _requestForWidget();
-    _episodesFuture = _loadEpisodes(_episodesRequest);
+    _episodesFuture =
+        widget.episodesFuture ??
+        (widget.sourceEpisodes == null
+            ? _loadEpisodes(_episodesRequest)
+            : Future<List<SoraEpisode>>.value(widget.sourceEpisodes));
   }
 
   Future<List<SoraEpisode>> _loadEpisodes(SoraSourceRequest request) async {
@@ -2275,6 +2623,32 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
     return progress;
   }
 
+  TmdbSeasonEpisodeMetadataBundle _tmdbEpisodeMetadata({
+    required MediaItem item,
+    required int seasonNumber,
+  }) {
+    if (!_usesSourceSeasonFlow(item)) {
+      return TmdbSeasonEpisodeMetadataBundle.empty;
+    }
+    final int? tmdbId = _tmdbId(item);
+    if (tmdbId == null || seasonNumber <= 0) {
+      return TmdbSeasonEpisodeMetadataBundle.empty;
+    }
+    return ref
+        .watch(
+          tmdbSeasonEpisodeMetadataProvider(
+            TmdbSeasonEpisodeMetadataRequest(
+              tmdbId: tmdbId,
+              seasonNumber: seasonNumber,
+            ),
+          ),
+        )
+        .maybeWhen(
+          data: (TmdbSeasonEpisodeMetadataBundle value) => value,
+          orElse: () => TmdbSeasonEpisodeMetadataBundle.empty,
+        );
+  }
+
   @override
   Widget build(BuildContext context) {
     final Future<List<SoraEpisode>> episodesFuture = _episodesFuture;
@@ -2317,8 +2691,13 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
                 );
               }
 
-              final List<SoraEpisode> episodes =
+              final List<SoraEpisode> rawEpisodes =
                   snapshot.data ?? const <SoraEpisode>[];
+              final List<SoraEpisode> episodes = _sourceSeasonEpisodes(
+                rawEpisodes,
+                widget.seasonNumber,
+                widget.useSourceSeasonGroups,
+              );
               final String episodeMetadataLanguage = _episodeMetadataLanguage(
                 settings,
               );
@@ -2334,6 +2713,11 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
                     externalVisualsEnabled: externalVisualsEnabled,
                     useAniListProgress: useAniListProgress,
                     anilistId: anilistId,
+                  );
+              final TmdbSeasonEpisodeMetadataBundle tmdbEpisodeMetadata =
+                  _tmdbEpisodeMetadata(
+                    item: widget.item,
+                    seasonNumber: widget.seasonNumber,
                   );
 
               if (episodes.isEmpty) {
@@ -2352,6 +2736,7 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
                       _episodeForPlayback(
                         episode,
                         episodeMetadata.forNumber(episode.number),
+                        tmdbEpisodeMetadata.forNumber(episode.number),
                       ),
                     ),
                     icon: const Icon(Icons.play_arrow_rounded),
@@ -2427,6 +2812,9 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
                   }
                 }
               }
+              final TmdbEpisodeMetadata? continueTmdbMeta = continueEp == null
+                  ? null
+                  : tmdbEpisodeMetadata.forNumber(continueEp.number);
 
               // Notify parent about continue episode (deduplicated).
               final String? newHref = continueEp?.href;
@@ -2439,6 +2827,7 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
                     widget.onContinueResolved?.call(
                       continueEp,
                       continueEpMeta,
+                      continueTmdbMeta,
                       effectiveContinued,
                     );
                   }
@@ -2454,6 +2843,8 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
                 itemBuilder: (BuildContext context, int index) {
                   final SoraEpisode episode = episodes[index];
                   final AnimeEpisodeMetadata? metadata = episodeMetadata
+                      .forNumber(episode.number);
+                  final TmdbEpisodeMetadata? tmdbMetadata = tmdbEpisodeMetadata
                       .forNumber(episode.number);
                   final int epNum = episode.number.round();
 
@@ -2502,10 +2893,15 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
 
                   return _EpisodeTile(
                     episode: episode,
-                    displayTitle: _episodeCardTitle(episode, metadata),
+                    displayTitle: _episodeCardTitle(
+                      episode,
+                      metadata,
+                      tmdbMetadata,
+                    ),
                     imageUrl: _episodeImageUrl(
                       episode: episode,
                       metadata: metadata,
+                      tmdbMetadata: tmdbMetadata,
                       item: widget.item,
                       allowExternalVisuals: externalVisualsEnabled,
                     ),
@@ -2514,7 +2910,7 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
                     isContinue: isContinue,
                     localProgress: localProg,
                     onTap: () => widget.onEpisodePicked(
-                      _episodeForPlayback(episode, metadata),
+                      _episodeForPlayback(episode, metadata, tmdbMetadata),
                     ),
                   );
                 },
@@ -2738,11 +3134,20 @@ String _episodeMetadataLanguage(SettingsState settings) {
       settings.effectiveTmdbLanguage.split('-').first.toLowerCase();
 }
 
-String _episodeCardTitle(SoraEpisode episode, AnimeEpisodeMetadata? metadata) {
+String _episodeCardTitle(
+  SoraEpisode episode,
+  AnimeEpisodeMetadata? metadata,
+  TmdbEpisodeMetadata? tmdbMetadata,
+) {
   final String moduleTitle = episode.title.trim();
   if (moduleTitle.isNotEmpty &&
       !isGenericEpisodeTitle(moduleTitle, episode.number)) {
     return moduleTitle;
+  }
+
+  final String tmdbTitle = tmdbMetadata?.title.trim() ?? '';
+  if (tmdbTitle.isNotEmpty) {
+    return _cleanEpisodePrefix(tmdbTitle);
   }
 
   final String fallbackTitle = metadata == null
@@ -2766,10 +3171,12 @@ String _cleanEpisodePrefix(String title) {
 String _episodeImageUrl({
   required SoraEpisode episode,
   required AnimeEpisodeMetadata? metadata,
+  required TmdbEpisodeMetadata? tmdbMetadata,
   required MediaItem item,
   required bool allowExternalVisuals,
 }) {
   for (final String image in <String>[
+    tmdbMetadata?.imageUrl ?? '',
     if (allowExternalVisuals) metadata?.aniZipImage ?? '',
     if (allowExternalVisuals) metadata?.aniListThumbnail ?? '',
     episode.image,
@@ -2789,10 +3196,12 @@ String? _streamRequestKey(SoraSearchResult? source, SoraEpisode? episode) {
 SoraEpisode _episodeForPlayback(
   SoraEpisode episode,
   AnimeEpisodeMetadata? metadata,
+  TmdbEpisodeMetadata? tmdbMetadata,
 ) {
   return episode.copyWith(
-    metadataTitle: metadata?.fallbackTitle(episode.number) ?? '',
-    metadataImage: metadata?.preferredImage ?? '',
+    metadataTitle:
+        metadata?.fallbackTitle(episode.number) ?? tmdbMetadata?.title ?? '',
+    metadataImage: metadata?.preferredImage ?? tmdbMetadata?.imageUrl ?? '',
     tvdbTitle: metadata?.tvdbTitle ?? '',
   );
 }
@@ -3097,6 +3506,134 @@ List<MediaSeason> _selectableSeasons(MediaItem item) {
     return a.name.compareTo(b.name);
   });
   return seasons;
+}
+
+List<List<SoraEpisode>> groupSoraEpisodesBySeason(List<SoraEpisode> episodes) {
+  if (episodes.isEmpty) return const <List<SoraEpisode>>[];
+  final List<List<SoraEpisode>> groups = <List<SoraEpisode>>[];
+  List<SoraEpisode> current = <SoraEpisode>[episodes.first];
+  for (final SoraEpisode episode in episodes.skip(1)) {
+    final SoraEpisode last = current.last;
+    if (episode.number > 0 && last.number > 0 && episode.number < last.number) {
+      groups.add(current);
+      current = <SoraEpisode>[episode];
+    } else {
+      current.add(episode);
+    }
+  }
+  groups.add(current);
+  return groups;
+}
+
+List<SoraEpisode> _sourceSeasonEpisodes(
+  List<SoraEpisode> episodes,
+  int seasonNumber,
+  bool useSourceSeasonGroups,
+) {
+  if (!useSourceSeasonGroups) return episodes;
+  final List<List<SoraEpisode>> groups = groupSoraEpisodesBySeason(episodes);
+  if (groups.length <= 1) return episodes;
+  final int index = seasonNumber - 1;
+  if (index < 0 || index >= groups.length) return groups.first;
+  return groups[index];
+}
+
+bool _usesSourceSeasonFlow(MediaItem? item) {
+  if (item == null || item.type == MediaType.movie) return false;
+  if (item.id.startsWith('tmdb:')) return true;
+  return item.sourceProvider.trim().toLowerCase() == 'tmdb';
+}
+
+String _sourceSeasonLabel(
+  BuildContext context,
+  MediaItem item,
+  int seasonNumber,
+) {
+  final MediaSeason? season = _seasonByNumber(item, seasonNumber);
+  if (season != null) {
+    return _seasonPickerLabel(context, season);
+  }
+  return '${context.t('Season')} $seasonNumber';
+}
+
+String _sourceSeasonPosterUrl(MediaItem item, int seasonNumber) {
+  final MediaSeason? season = _seasonByNumber(item, seasonNumber);
+  final String seasonPoster = season?.posterUrl.trim() ?? '';
+  if (seasonPoster.isNotEmpty) return seasonPoster;
+  return item.posterUrl;
+}
+
+MediaSeason? _seasonByNumber(MediaItem item, int seasonNumber) {
+  for (final MediaSeason season in item.seasons) {
+    if (season.seasonNumber == seasonNumber) return season;
+  }
+  return null;
+}
+
+bool _sourceSeasonWatched({
+  required Set<String> watchedSet,
+  required LocalLibraryController libraryNotifier,
+  required MediaItem item,
+  required SoraSearchResult source,
+  required int seasonNumber,
+  required List<SoraEpisode> episodes,
+  required WidgetRef ref,
+}) {
+  final List<SoraEpisode> numbered = episodes
+      .where((SoraEpisode episode) => episode.number >= 1)
+      .toList(growable: false);
+  final List<SoraEpisode> check = numbered.isEmpty ? episodes : numbered;
+  if (check.isEmpty) return false;
+  for (final SoraEpisode episode in check) {
+    if (!_sourceEpisodeWatched(
+      watchedSet: watchedSet,
+      libraryNotifier: libraryNotifier,
+      item: item,
+      source: source,
+      seasonNumber: seasonNumber,
+      episode: episode,
+      ref: ref,
+    )) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool _sourceEpisodeWatched({
+  required Set<String> watchedSet,
+  required LocalLibraryController libraryNotifier,
+  required MediaItem item,
+  required SoraSearchResult source,
+  required int seasonNumber,
+  required SoraEpisode episode,
+  required WidgetRef ref,
+}) {
+  final String watchedKey = ref
+      .read(soraEpisodeProgressProvider.notifier)
+      .keyFor(mediaId: item.id, result: source, episode: episode);
+  if (watchedSet.contains(watchedKey)) return true;
+  final String progressMediaId =
+      soraEpisodeProgressMediaId(
+        addonId: source.addonId,
+        episodeHref: episode.href,
+      ) ??
+      item.id;
+  return libraryNotifier
+          .episodeProgress(progressMediaId, seasonNumber, episode.number)
+          ?.isWatched ==
+      true;
+}
+
+int? _tmdbId(MediaItem item) {
+  final int? external = int.tryParse(item.externalIds['tmdb'] ?? '');
+  if (external != null && external > 0) return external;
+  final List<String> parts = item.id.split(':');
+  if (parts.length >= 3 && parts.first == 'tmdb') {
+    final int? id = int.tryParse(parts[2]);
+    if (id != null && id > 0) return id;
+  }
+  return null;
 }
 
 String _seasonPickerLabel(BuildContext context, MediaSeason season) {

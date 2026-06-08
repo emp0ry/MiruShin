@@ -4,7 +4,7 @@ import 'package:mirushin/features/watch/domain/title_variants.dart';
 import 'package:mirushin/shared/models/media_item.dart';
 
 void main() {
-  test('initial session shows picker when multiple seasons are known', () {
+  test('TMDB initial session starts at source search', () {
     final WatchSession session = WatchSession.initial(
       _item(<MediaSeason>[
         _season(1, 'Blue Box'),
@@ -12,31 +12,28 @@ void main() {
       ]),
     );
 
-    expect(session.step, WatchStep.pickSeason);
+    expect(session.step, WatchStep.pickSource);
     expect(session.seasonNumber, 1);
   });
 
-  test(
-    'initial session defaults to the first season even if metadata is latest-first',
-    () {
-      final WatchSession session = WatchSession.initial(
-        _item(<MediaSeason>[
-          _season(2, 'Blue Box Season 2'),
-          _season(1, 'Blue Box'),
-        ]),
-      );
+  test('TMDB initial session still defaults to the first known season', () {
+    final WatchSession session = WatchSession.initial(
+      _item(<MediaSeason>[
+        _season(2, 'Blue Box Season 2'),
+        _season(1, 'Blue Box'),
+      ]),
+    );
 
-      expect(session.step, WatchStep.pickSeason);
-      expect(session.seasonNumber, 1);
-    },
-  );
+    expect(session.step, WatchStep.pickSource);
+    expect(session.seasonNumber, 1);
+  });
 
-  test('initial session does not auto-skip an isolated season 2', () {
+  test('TMDB initial session keeps isolated season 2 as the default', () {
     final WatchSession session = WatchSession.initial(
       _item(<MediaSeason>[_season(2, 'Blue Box Season 2')]),
     );
 
-    expect(session.step, WatchStep.pickSeason);
+    expect(session.step, WatchStep.pickSource);
     expect(session.seasonNumber, 2);
   });
 
@@ -49,7 +46,19 @@ void main() {
     expect(session.seasonNumber, 1);
   });
 
-  test('resync returns stale auto-selected season 2 to picker', () {
+  test('AniList season entries stay source-first', () {
+    final WatchSession session = WatchSession.initial(
+      _anilistItem(<MediaSeason>[
+        _season(1, 'Blue Box'),
+        _season(2, 'Blue Box Season 2'),
+      ]),
+    );
+
+    expect(session.step, WatchStep.pickSource);
+    expect(session.seasonNumber, 1);
+  });
+
+  test('resync returns stale TMDB season 2 to source search default', () {
     const WatchSession stale = WatchSession(
       step: WatchStep.pickSource,
       seasonNumber: 2,
@@ -62,7 +71,7 @@ void main() {
       ]),
     );
 
-    expect(synced.step, WatchStep.pickSeason);
+    expect(synced.step, WatchStep.pickSource);
     expect(synced.seasonNumber, 1);
     expect(synced.seasonPicked, isFalse);
   });
@@ -98,6 +107,29 @@ void main() {
     expect(titles, isNot(contains('Blue Box Season 2')));
     expect(titles, isNot(contains('Blue Box S2')));
   });
+}
+
+MediaItem _anilistItem(List<MediaSeason> seasons) {
+  return MediaItem(
+    id: 'anilist:123',
+    title: 'Blue Box',
+    originalTitle: 'Ao no Hako',
+    overview: '',
+    type: MediaType.anime,
+    year: 2024,
+    posterUrl: '',
+    backdropUrl: '',
+    rating: 0,
+    genres: const <String>[],
+    sourceProvider: 'AniList',
+    externalIds: const <String, String>{},
+    episodeCount: seasons.fold<int>(
+      0,
+      (int sum, MediaSeason season) => sum + season.episodeCount,
+    ),
+    seasons: seasons,
+    statusLabel: '',
+  );
 }
 
 MediaItem _item(List<MediaSeason> seasons) {

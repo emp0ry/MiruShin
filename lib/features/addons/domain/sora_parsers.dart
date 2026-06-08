@@ -162,13 +162,33 @@ List<SoraEpisode> parseSoraEpisodes(Object? payload) {
       ),
     );
   }
-  episodes.sort((SoraEpisode a, SoraEpisode b) {
-    if (a.number <= 0 || b.number <= 0) {
-      return 0;
-    }
-    return a.number.compareTo(b.number);
-  });
+  if (!_containsSeasonReset(episodes)) {
+    episodes.sort((SoraEpisode a, SoraEpisode b) {
+      if (a.number <= 0 || b.number <= 0) {
+        return 0;
+      }
+      return a.number.compareTo(b.number);
+    });
+  }
   return episodes;
+}
+
+bool _containsSeasonReset(List<SoraEpisode> episodes) {
+  if (episodes.length < 3) return false;
+  double? lastNumber;
+  int currentRunLength = 0;
+  for (final SoraEpisode episode in episodes) {
+    if (episode.number <= 0) continue;
+    final double number = episode.number;
+    if (lastNumber != null && number < lastNumber) {
+      if (currentRunLength > 1) return true;
+      currentRunLength = 1;
+    } else {
+      currentRunLength += 1;
+    }
+    lastNumber = number;
+  }
+  return false;
 }
 
 List<SoraStreamCandidate> parseSoraStreamCandidates(Object? payload) {
@@ -719,8 +739,9 @@ List<SoraSubtitle> _subtitles(Map<String, dynamic> json) {
       json['subtitles'] ?? json['subtitle'] ?? json['subs'] ?? json['tracks'];
 
   // Top-level headers for a bare string subtitle URL (e.g. BingeBox subtitlesHeaders).
-  final Map<String, String> topLevelHeaders =
-      _headers(json['subtitlesHeaders'] ?? json['subtitleHeaders']);
+  final Map<String, String> topLevelHeaders = _headers(
+    json['subtitlesHeaders'] ?? json['subtitleHeaders'],
+  );
 
   List<SoraSubtitle> primary = const <SoraSubtitle>[];
 
@@ -749,7 +770,10 @@ List<SoraSubtitle> _subtitles(Map<String, dynamic> json) {
         : <SoraSubtitle>[
             SoraSubtitle(
               url: url,
-              language: _string(map['language'], fallback: _string(map['lang'])),
+              language: _string(
+                map['language'],
+                fallback: _string(map['lang']),
+              ),
               label: _string(
                 map['label'],
                 fallback: _string(map['title'], fallback: 'Subtitle'),
@@ -796,8 +820,10 @@ List<SoraSubtitle> _subtitles(Map<String, dynamic> json) {
     final List<SoraSubtitle> extras = allSubs
         .map<SoraSubtitle?>((Object? item) {
           final Map<String, dynamic> map = _map(item);
-          final String url = _string(map['url'],
-              fallback: _string(map['file'], fallback: _string(map['src'])));
+          final String url = _string(
+            map['url'],
+            fallback: _string(map['file'], fallback: _string(map['src'])),
+          );
           if (url.isEmpty || !seen.add(url)) return null;
           return SoraSubtitle(
             url: url,

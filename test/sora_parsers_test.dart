@@ -41,6 +41,24 @@ void main() {
     expect(episodes.last.description, 'Mini description');
   });
 
+  test('episode parser preserves source order when episode numbers reset', () {
+    final List<SoraEpisode> episodes = parseSoraEpisodes(<String, dynamic>{
+      'episodes': <Map<String, dynamic>>[
+        <String, dynamic>{'number': 1, 'href': 's1-e1'},
+        <String, dynamic>{'number': 2, 'href': 's1-e2'},
+        <String, dynamic>{'number': 1, 'href': 's2-e1'},
+        <String, dynamic>{'number': 2, 'href': 's2-e2'},
+      ],
+    });
+
+    expect(episodes.map((SoraEpisode episode) => episode.href), <String>[
+      's1-e1',
+      's1-e2',
+      's2-e1',
+      's2-e2',
+    ]);
+  });
+
   test('stream parser accepts streams, headers, and subtitles', () {
     final List<SoraStreamCandidate> streams = parseSoraStreamCandidates(
       <String, dynamic>{
