@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/icons/adaptive.png" alt="MiruShin logo" width="120">
+  <img src="assets/icons/logo.png" alt="MiruShin logo" width="120">
 </p>
 
 <h1 align="center">MiruShin</h1>
