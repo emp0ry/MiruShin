@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import '../../../app/localization/app_localizations.dart';
+import '../../catalog/application/catalog_mode.dart';
 import '../application/playback_controller.dart';
 import '../application/player_settings.dart';
 import '../data/cast_controller.dart';
@@ -3599,15 +3600,18 @@ class _PlayerSettingsTiles extends ConsumerWidget {
                 .read(playerSettingsProvider.notifier)
                 .setDiscordRpcEnabled(value),
           ),
-        SwitchListTile(
-          value: settings.autoAnilistSync,
-          secondary: const Icon(Icons.sync_rounded),
-          title: Text(context.t('Auto AniList progress')),
-          subtitle: Text(context.t('Sync episode progress to AniList at 85%')),
-          onChanged: (bool value) => ref
-              .read(playerSettingsProvider.notifier)
-              .setAutoAnilistSync(value),
-        ),
+        if (ref.watch(catalogModeProvider) == CatalogMode.anilist)
+          SwitchListTile(
+            value: settings.autoAnilistSync,
+            secondary: const Icon(Icons.sync_rounded),
+            title: Text(context.t('Auto AniList progress')),
+            subtitle: Text(
+              context.t('Sync episode progress to AniList at 85%'),
+            ),
+            onChanged: (bool value) => ref
+                .read(playerSettingsProvider.notifier)
+                .setAutoAnilistSync(value),
+          ),
         ListTile(
           leading: const Icon(Icons.keyboard_double_arrow_right_rounded),
           title: Text(context.t('Seek interval')),
