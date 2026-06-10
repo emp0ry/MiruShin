@@ -2237,11 +2237,17 @@ class PlaybackController extends Notifier<PlaybackState> {
       if (showNextOverlay && !state.autoNextVisible) {
         final Duration dur = engine.state.value.duration;
         final Duration pos = engine.state.value.position;
-        // Require at least 2 minutes of reported duration before showing
-        // auto-next. Some HLS/DASH streams report a very small initial
-        // duration before the full manifest is parsed, which would otherwise
-        // trigger the next-episode overlay within the first few seconds.
-        if (dur >= const Duration(minutes: 2)) {
+        final bool ended = engine.state.value.isCompleted;
+        // The backend reaching end-of-stream is the most reliable trigger:
+        // some streams snap the reported position back to 0:00 on completion,
+        // so a pure position-vs-duration check would never fire auto-next.
+        if (ended) {
+          state = state.copyWith(autoNextVisible: true);
+        } else if (dur >= const Duration(minutes: 2)) {
+          // Require at least 2 minutes of reported duration before showing
+          // auto-next. Some HLS/DASH streams report a very small initial
+          // duration before the full manifest is parsed, which would otherwise
+          // trigger the next-episode overlay within the first few seconds.
           if (showAfterEnd) {
             const Duration endThreshold = Duration(seconds: 1);
             if (pos + endThreshold >= dur) {
@@ -2267,15 +2273,20 @@ class PlaybackController extends Notifier<PlaybackState> {
     if (!engine.state.value.isInitialized) return;
 
     final Duration position = engine.state.value.position;
+    final bool engineCompleted = engine.state.value.isCompleted;
     final DateTime? guardUntil = _resumeGuardUntil;
-    if (guardUntil != null && DateTime.now().isBefore(guardUntil)) {
+    if (!engineCompleted &&
+        guardUntil != null &&
+        DateTime.now().isBefore(guardUntil)) {
       if (position + const Duration(seconds: 2) < _resumeGuardPosition) {
         return;
       }
       _resumeGuardUntil = null;
     }
 
-    if (position <= const Duration(seconds: 1)) {
+    // When the backend signals end-of-stream the reported position can snap
+    // back to 0:00, so don't bail out on the early-position guard in that case.
+    if (!engineCompleted && position <= const Duration(seconds: 1)) {
       return;
     }
 
@@ -2290,12 +2301,13 @@ class PlaybackController extends Notifier<PlaybackState> {
     final bool hasReliableCompletionDuration =
         durationSeconds != null && durationSeconds >= 120;
 
-    // Save position=0 with completed=true when near the end.
-    // This resets the resume point to 0:00 (start fresh next time) while
-    // keeping isWatched=true via the completed flag.
+    // Save position=0 with completed=true when near the end (or when the
+    // backend reports the stream finished). This resets the resume point to
+    // 0:00 (start fresh next time) while keeping isWatched=true via completed.
     final bool isNearEnd =
-        hasReliableCompletionDuration &&
-        position.inSeconds >= durationSeconds - 20;
+        engineCompleted ||
+        (hasReliableCompletionDuration &&
+            position.inSeconds >= durationSeconds - 20);
     final int savePosition = isNearEnd ? 0 : position.inSeconds;
     final int? savedDurationSeconds = hasReliableCompletionDuration
         ? durationSeconds
@@ -2314,17 +2326,14 @@ class PlaybackController extends Notifier<PlaybackState> {
           );
     }
 
-    if (hasReliableCompletionDuration) {
-      final double fraction = (position.inSeconds / durationSeconds).clamp(
-        0.0,
-        1.0,
-      );
-      final bool syncEnabled =
-          (ref.read(playerSettingsProvider).value ?? const PlayerSettings())
-              .autoAnilistSync;
-      if (fraction >= 0.85 && syncEnabled) {
-        unawaited(_trySyncAniList(item, item.episodeNumber.round()));
-      }
+    final bool syncEnabled =
+        (ref.read(playerSettingsProvider).value ?? const PlayerSettings())
+            .autoAnilistSync;
+    final bool fractionReached =
+        hasReliableCompletionDuration &&
+        (position.inSeconds / durationSeconds) >= 0.85;
+    if (syncEnabled && (engineCompleted || fractionReached)) {
+      unawaited(_trySyncAniList(item, item.episodeNumber.round()));
     }
   }
 

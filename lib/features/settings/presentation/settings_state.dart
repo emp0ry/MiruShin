@@ -407,6 +407,8 @@ class SettingsController extends Notifier<SettingsState> {
       themeMode: _themeModeFromName(themeModeName),
       appLocale: appLocale,
       accentColor: accentColor == null ? null : Color(accentColor),
+      posterCardStyle: preferences.readPosterCardStyle(),
+      compactMode: preferences.readCompactMode(),
       discordRpcEnabled: preferences.readDiscordRpcEnabled(),
       tmdbEnabled: preferences.readTmdbEnabled(),
       tmdbUseCustomKey: preferences.readTmdbUseCustomKey(),
@@ -496,6 +498,9 @@ class SettingsController extends Notifier<SettingsState> {
 
   void setPosterCardStyle(String style) {
     state = state.copyWith(posterCardStyle: style);
+    unawaited(
+      _save((SettingsPreferences prefs) => prefs.savePosterCardStyle(style)),
+    );
   }
 
   void setCompactMode(bool value) {

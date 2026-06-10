@@ -711,6 +711,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
 
     listen<bool>(player.stream.playing);
     listen<bool>(player.stream.buffering);
+    listen<bool>(player.stream.completed);
     listen<Duration>(player.stream.position);
     listen<Duration>(player.stream.duration);
     listen<Duration>(player.stream.buffer);
@@ -882,6 +883,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
       isInitialized: initialized,
       isPlaying: native.playing,
       isBuffering: !initialized || native.buffering,
+      isCompleted: native.completed && initialized,
       hasVideoSurface: hasVideoSize,
       hasError: hasError,
       errorDescription: _lastError,

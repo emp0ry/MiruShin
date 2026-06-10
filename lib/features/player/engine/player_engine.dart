@@ -47,6 +47,7 @@ class PlayerEngineState {
     this.isInitialized = false,
     this.isPlaying = false,
     this.isBuffering = false,
+    this.isCompleted = false,
     this.hasVideoSurface = false,
     this.hasError = false,
     this.errorDescription,
@@ -62,6 +63,11 @@ class PlayerEngineState {
   final bool isInitialized;
   final bool isPlaying;
   final bool isBuffering;
+
+  /// `true` once the backend reaches end-of-stream (playback finished). Used to
+  /// reliably drive auto-progress / auto-next even when the final reported
+  /// position does not land exactly on [duration].
+  final bool isCompleted;
   final bool hasVideoSurface;
   final bool hasError;
   final String? errorDescription;
@@ -77,6 +83,7 @@ class PlayerEngineState {
     bool? isInitialized,
     bool? isPlaying,
     bool? isBuffering,
+    bool? isCompleted,
     bool? hasVideoSurface,
     bool? hasError,
     String? errorDescription,
@@ -93,6 +100,7 @@ class PlayerEngineState {
       isInitialized: isInitialized ?? this.isInitialized,
       isPlaying: isPlaying ?? this.isPlaying,
       isBuffering: isBuffering ?? this.isBuffering,
+      isCompleted: isCompleted ?? this.isCompleted,
       hasVideoSurface: hasVideoSurface ?? this.hasVideoSurface,
       hasError: clearError ? false : hasError ?? this.hasError,
       errorDescription: clearError

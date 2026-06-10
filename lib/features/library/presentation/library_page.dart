@@ -1983,6 +1983,20 @@ class _CollectionTileState extends ConsumerState<_CollectionTile> {
 
     final int nextProgress = _progress + delta;
 
+    // Reaching the final episode marks the entry completed — but only when the
+    // total episode count is actually known. For an unknown count (shown as
+    // "?") "12 of ?" never means finished, so leave the status untouched.
+    final int? total = _total;
+    AniListListStatus nextStatus = _status;
+    if (delta > 0 &&
+        total != null &&
+        total > 0 &&
+        nextProgress >= total &&
+        _status != AniListListStatus.completed &&
+        _status != AniListListStatus.repeating) {
+      nextStatus = AniListListStatus.completed;
+    }
+
     setState(() {
       _syncing = true;
     });
@@ -1993,7 +2007,7 @@ class _CollectionTileState extends ConsumerState<_CollectionTile> {
         ref: ref,
         entry: widget.entry,
         draft: AniListEntryEditDraft(
-          status: _status,
+          status: nextStatus,
           progress: nextProgress,
           score: _score,
           notes: _notes,
@@ -2002,7 +2016,10 @@ class _CollectionTileState extends ConsumerState<_CollectionTile> {
         showSuccessSnack: false,
       );
       if (mounted && result != AniListEntrySaveResult.failed) {
-        setState(() => _progress = nextProgress);
+        setState(() {
+          _progress = nextProgress;
+          _status = nextStatus;
+        });
       }
     } finally {
       if (mounted) setState(() => _syncing = false);

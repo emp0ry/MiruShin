@@ -348,10 +348,16 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   void _scheduleHide([Duration delay = _controlsHideDelay]) {
     _hideTimer?.cancel();
     _hideTimer = Timer(delay, () {
-      if (mounted &&
-          ref.read(playbackControllerProvider).seekPreviewPosition == null) {
-        ref.read(playbackControllerProvider.notifier).setControlsVisible(false);
+      if (!mounted) return;
+      // A seek-preview / scrub is in progress: keep the controls (and cursor)
+      // visible and re-arm the timer instead of giving up. Otherwise a preview
+      // that lingers would strand the chrome and cursor on screen until the
+      // user toggles fullscreen, which is exactly the reported bug.
+      if (ref.read(playbackControllerProvider).seekPreviewPosition != null) {
+        _scheduleHide(delay);
+        return;
       }
+      ref.read(playbackControllerProvider.notifier).setControlsVisible(false);
     });
   }
 
@@ -1638,11 +1644,6 @@ class _PlayerChrome extends ConsumerWidget {
         state.seekPreviewPosition != null &&
         (state.seekPreviewBufferedEnd != null ||
             _isPositionBuffered(controller, state.seekPreviewPosition!));
-    final bool showLoading =
-        state.loading ||
-        controller == null ||
-        !controller.value.isInitialized ||
-        (controller.value.isBuffering && !seekPreviewBuffered);
     final EdgeInsets padding = MediaQuery.paddingOf(context);
     final double topScrimHeight = padding.top + 96;
     final double bottomScrimHeight = padding.bottom + 132;
@@ -1781,10 +1782,35 @@ class _PlayerChrome extends ConsumerWidget {
                 ),
               ),
               const Spacer(),
-              if (showLoading)
+              // Listen to the engine state directly so the buffering spinner
+              // clears the moment playback resumes. Reading controller.value
+              // only on Riverpod rebuilds left a stale spinner spinning over a
+              // stream that was already playing until the user toggled
+              // play/pause or fullscreen.
+              if (controller == null)
                 const _PlayerLoadingIndicator()
-              else if (isMobile)
-                _CenterPlayPauseButton(controller: controller),
+              else
+                ValueListenableBuilder<PlayerEngineState>(
+                  valueListenable: controller.state,
+                  builder:
+                      (
+                        BuildContext context,
+                        PlayerEngineState engineState,
+                        Widget? _,
+                      ) {
+                        final bool showLoading =
+                            state.loading ||
+                            !engineState.isInitialized ||
+                            (engineState.isBuffering && !seekPreviewBuffered);
+                        if (showLoading) {
+                          return const _PlayerLoadingIndicator();
+                        }
+                        if (isMobile) {
+                          return _CenterPlayPauseButton(controller: controller);
+                        }
+                        return const SizedBox.shrink();
+                      },
+                ),
               const Spacer(),
               Padding(
                 padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),

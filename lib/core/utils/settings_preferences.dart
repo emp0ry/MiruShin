@@ -13,6 +13,7 @@ class SettingsPreferences {
   static const String appLanguageKey = 'settings.appLanguage';
   static const String metadataLanguageKey = 'settings.metadataLanguage';
   static const String accentColorKey = 'settings.accentColor';
+  static const String posterCardStyleKey = 'settings.posterCardStyle';
   static const String compactModeKey = 'settings.compactMode';
   static const String discordRpcEnabledKey = 'settings.discordRpcEnabled';
   static const String tmdbEnabledKey = 'settings.tmdbEnabled';
@@ -49,6 +50,8 @@ class SettingsPreferences {
   String? readMetadataLanguage() => _preferences.getString(metadataLanguageKey);
 
   int? readAccentColor() => _preferences.getInt(accentColorKey);
+
+  String? readPosterCardStyle() => _preferences.getString(posterCardStyleKey);
 
   bool readCompactMode() => _preferences.getBool(compactModeKey) ?? false;
 
@@ -150,6 +153,10 @@ class SettingsPreferences {
 
   Future<void> saveAccentColor(int value) {
     return _preferences.setInt(accentColorKey, value);
+  }
+
+  Future<void> savePosterCardStyle(String value) {
+    return _preferences.setString(posterCardStyleKey, value);
   }
 
   Future<void> saveCompactMode(bool value) {

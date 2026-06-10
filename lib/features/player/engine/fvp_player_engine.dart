@@ -943,6 +943,7 @@ class FvpPlayerEngine extends PlayerEngine {
         status.test(mdk.MediaStatus.buffering) ||
         status.test(mdk.MediaStatus.loading) ||
         status.test(mdk.MediaStatus.stalled);
+    final bool nativeEnded = status.test(mdk.MediaStatus.end);
     final bool initialized = !nativeInvalid && _hasMedia && hasContent;
 
     // Only consider the stream truly opened once it has real content or a
@@ -988,6 +989,7 @@ class FvpPlayerEngine extends PlayerEngine {
           !initialized ||
           (status.test(mdk.MediaStatus.seeking) && !seekIsBuffered) ||
           (isPlaying && nativeBuffering),
+      isCompleted: nativeEnded && initialized,
       hasVideoSurface: hasTexture,
       hasError: hasError,
       errorDescription: _lastError ?? (invalid ? status.toString() : null),
