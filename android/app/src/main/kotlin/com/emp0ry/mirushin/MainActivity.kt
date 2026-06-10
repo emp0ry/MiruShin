@@ -52,6 +52,36 @@ class MainActivity : FlutterActivity() {
     private var pipIsPlaying = true
     private var pipHasNext = false
 
+    // Android TVs frequently report a small logical resolution (high density),
+    // which makes a phone-designed UI look zoomed-in on the big screen. Override
+    // the density so Flutter lays out at a sane ~1280dp-wide logical canvas.
+    // Flutter reads its devicePixelRatio from the activity's resources, so this
+    // takes effect for the whole UI. No-op on phones/tablets.
+    override fun attachBaseContext(base: Context) {
+        super.attachBaseContext(adjustDensityForTelevision(base))
+    }
+
+    private fun adjustDensityForTelevision(context: Context): Context {
+        val config = context.resources.configuration
+        val isTv =
+            (config.uiMode and Configuration.UI_MODE_TYPE_MASK) ==
+                Configuration.UI_MODE_TYPE_TELEVISION ||
+                context.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK) ||
+                context.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK_ONLY)
+        if (!isTv) return context
+
+        val metrics = context.resources.displayMetrics
+        val widthPx = maxOf(metrics.widthPixels, metrics.heightPixels)
+        if (widthPx <= 0) return context
+
+        val targetWidthDp = 1280f
+        val overridden = Configuration(config)
+        overridden.densityDpi =
+            (160f * widthPx / targetWidthDp).toInt().coerceIn(120, 640)
+        overridden.fontScale = 1f
+        return context.createConfigurationContext(overridden)
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 

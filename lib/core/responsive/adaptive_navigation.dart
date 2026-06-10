@@ -60,6 +60,7 @@ class AdaptiveNavigation extends StatelessWidget {
     required this.catalogMode,
     required this.onLogoPressed,
     this.isTv = false,
+    this.navFocusNode,
     super.key,
   });
 
@@ -70,6 +71,7 @@ class AdaptiveNavigation extends StatelessWidget {
   final CatalogMode catalogMode;
   final VoidCallback onLogoPressed;
   final bool isTv;
+  final FocusNode? navFocusNode;
 
   int get _selectedIndex {
     final int index = items.indexWhere(
@@ -104,6 +106,7 @@ class AdaptiveNavigation extends StatelessWidget {
         catalogMode: catalogMode,
         onLogoPressed: onLogoPressed,
         isTv: isTv,
+        navFocusNode: navFocusNode,
       ),
     };
   }
@@ -515,6 +518,7 @@ class _SidebarNavigation extends StatelessWidget {
     required this.catalogMode,
     required this.onLogoPressed,
     this.isTv = false,
+    this.navFocusNode,
   });
 
   final List<AppNavigationItem> items;
@@ -523,6 +527,7 @@ class _SidebarNavigation extends StatelessWidget {
   final CatalogMode catalogMode;
   final VoidCallback onLogoPressed;
   final bool isTv;
+  final FocusNode? navFocusNode;
 
   @override
   Widget build(BuildContext context) {
@@ -591,6 +596,9 @@ class _SidebarNavigation extends StatelessWidget {
                         selected: selected,
                         accent: accent,
                         autofocus: index == autofocusIndex,
+                        focusNode: index == autofocusIndex
+                            ? navFocusNode
+                            : null,
                         onTap: () => onDestinationSelected(item.path),
                       ),
                     );
@@ -703,6 +711,7 @@ class _SidebarButton extends StatelessWidget {
     required this.accent,
     required this.onTap,
     this.autofocus = false,
+    this.focusNode,
   });
 
   final AppNavigationItem item;
@@ -710,6 +719,7 @@ class _SidebarButton extends StatelessWidget {
   final Color accent;
   final VoidCallback onTap;
   final bool autofocus;
+  final FocusNode? focusNode;
 
   @override
   Widget build(BuildContext context) {
@@ -718,6 +728,7 @@ class _SidebarButton extends StatelessWidget {
       message: context.t(item.labelKey),
       child: InkWell(
         autofocus: autofocus,
+        focusNode: focusNode,
         borderRadius: AppRadius.all(AppRadius.lg),
         onTap: onTap,
         child: AnimatedContainer(

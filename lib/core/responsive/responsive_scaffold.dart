@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -14,7 +15,7 @@ import 'adaptive_navigation.dart';
 import 'app_breakpoints.dart';
 import 'app_navigation_item.dart';
 
-class ResponsiveScaffold extends ConsumerWidget {
+class ResponsiveScaffold extends ConsumerStatefulWidget {
   const ResponsiveScaffold({
     required this.child,
     required this.currentLocation,
@@ -27,7 +28,43 @@ class ResponsiveScaffold extends ConsumerWidget {
   final ValueChanged<String> onDestinationSelected;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ResponsiveScaffold> createState() => _ResponsiveScaffoldState();
+}
+
+class _ResponsiveScaffoldState extends ConsumerState<ResponsiveScaffold> {
+  // Anchored to the selected sidebar destination so the content area can bounce
+  // D-pad focus back to the navigation when LEFT is pressed at its left edge.
+  final FocusNode _navFocusNode = FocusNode(debugLabel: 'TvSidebarFocus');
+
+  @override
+  void dispose() {
+    _navFocusNode.dispose();
+    super.dispose();
+  }
+
+  // On TV, LEFT inside the content first tries to move within the content; if
+  // it can't (we are at the left edge), focus jumps to the navigation sidebar.
+  KeyEventResult _handleContentKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+    if (event.logicalKey != LogicalKeyboardKey.arrowLeft) {
+      return KeyEventResult.ignored;
+    }
+    final FocusNode? primary = FocusManager.instance.primaryFocus;
+    final bool moved =
+        primary != null && primary.focusInDirection(TraversalDirection.left);
+    if (!moved && _navFocusNode.canRequestFocus) {
+      _navFocusNode.requestFocus();
+    }
+    return KeyEventResult.handled;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final String currentLocation = widget.currentLocation;
+    final ValueChanged<String> onDestinationSelected =
+        widget.onDestinationSelected;
     final AppThemeExtension palette = AppThemeExtension.of(context);
     final CatalogMode catalogMode = ref.watch(catalogModeProvider);
     final bool isTv = ref.watch(isAndroidTvProvider);
@@ -55,6 +92,26 @@ class ResponsiveScaffold extends ConsumerWidget {
             ? WindowSizeClass.expanded
             : AppBreakpoints.classify(constraints.maxWidth);
 
+        Widget content = Stack(
+          children: <Widget>[
+            widget.child,
+            const Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: StartupUpdatePopup(),
+            ),
+          ],
+        );
+        if (isTv) {
+          content = Focus(
+            canRequestFocus: false,
+            skipTraversal: true,
+            onKeyEvent: _handleContentKey,
+            child: content,
+          );
+        }
+
         final Widget bodyRow = Row(
           children: <Widget>[
             if (sizeClass != WindowSizeClass.compact)
@@ -66,20 +123,9 @@ class ResponsiveScaffold extends ConsumerWidget {
                 catalogMode: catalogMode,
                 onLogoPressed: switchCatalogMode,
                 isTv: isTv,
+                navFocusNode: _navFocusNode,
               ),
-            Expanded(
-              child: Stack(
-                children: <Widget>[
-                  child,
-                  const Positioned(
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    child: StartupUpdatePopup(),
-                  ),
-                ],
-              ),
-            ),
+            Expanded(child: content),
           ],
         );
 
