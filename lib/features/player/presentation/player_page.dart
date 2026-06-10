@@ -379,8 +379,17 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         }
         _autoNextTimer?.cancel();
         _autoNextTimer = null;
-        ref.read(playbackControllerProvider.notifier).dismissAutoNext();
-        unawaited(_exitPlayer(playNext: true));
+        final PlaybackController notifier = ref.read(
+          playbackControllerProvider.notifier,
+        );
+        notifier.dismissAutoNext();
+        // Mark the finishing episode watched before advancing, so it is never
+        // left unwatched when the next episode starts.
+        unawaited(
+          notifier.markCurrentEpisodeWatched().whenComplete(
+            () => unawaited(_exitPlayer(playNext: true)),
+          ),
+        );
       });
     } else if (!shouldAutoNext && _autoNextTimer != null) {
       _autoNextTimer?.cancel();
@@ -805,9 +814,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       (bool? previous, bool next) {
         if (previous == true && !next && mounted) {
           _scheduleHide(
-            isYoutubeTrailer
-                ? _trailerControlsHideDelay
-                : _controlsHideDelay,
+            isYoutubeTrailer ? _trailerControlsHideDelay : _controlsHideDelay,
           );
         }
       },

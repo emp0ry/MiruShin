@@ -162,6 +162,11 @@ class PlaybackController extends Notifier<PlaybackState> {
 
   Timer? _progressTimer;
   Timer? _undoTimer;
+  // Latched when the user seeks to (or plays past) the very end of a reliable
+  // stream. Some backends snap the reported position back to 0:00 at
+  // end-of-stream, which would otherwise hide completion from both the progress
+  // saver (episode never marked watched) and the auto-next trigger.
+  bool _reachedNearEnd = false;
   Timer? _interactiveSeekTimer;
   Timer? _seekPreviewTimer;
   Timer? _seekPreviewWarmupTimer;
@@ -341,6 +346,7 @@ class PlaybackController extends Notifier<PlaybackState> {
   Future<void> load(MediaPlaybackItem item) async {
     _progressTimer?.cancel();
     _undoTimer?.cancel();
+    _reachedNearEnd = false;
     _clearInteractiveSeek();
     if (state.autoNextVisible ||
         state.lastSkippedFrom != null ||
@@ -1185,6 +1191,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       _seekBaseFor(engine) + offset,
       duration,
     );
+    _noteManualSeekTarget(target, duration);
     _queueInteractiveSeek(
       engine,
       target,
@@ -1195,11 +1202,48 @@ class PlaybackController extends Notifier<PlaybackState> {
   Future<void> seekTo(Duration position) async {
     final PlayerEngine? engine = state.engine;
     if (engine == null || !engine.state.value.isInitialized) return;
-    _queueInteractiveSeek(
-      engine,
-      _clampSeekPosition(position, engine.state.value.duration),
-      delay: Duration.zero,
-    );
+    final Duration duration = engine.state.value.duration;
+    final Duration target = _clampSeekPosition(position, duration);
+    _noteManualSeekTarget(target, duration);
+    _queueInteractiveSeek(engine, target, delay: Duration.zero);
+  }
+
+  // Treat a seek to the last few seconds of a reliable stream as completion:
+  // mark the episode watched right away (the backend may snap position back to
+  // 0:00 at end-of-stream, hiding it from the periodic saver) and surface the
+  // auto-next overlay. Seeking back well before the end clears the latch so a
+  // re-watch doesn't instantly re-trigger completion.
+  void _noteManualSeekTarget(Duration target, Duration duration) {
+    if (duration < const Duration(minutes: 2)) return;
+    if (target >= duration - const Duration(seconds: 3)) {
+      if (_reachedNearEnd) return;
+      _reachedNearEnd = true;
+      _markCurrentCompleted(showNext: true);
+    } else if (target < duration - const Duration(seconds: 30)) {
+      _reachedNearEnd = false;
+    }
+  }
+
+  /// Persist the current episode as watched immediately, bypassing the periodic
+  /// saver. Used before auto-advancing and on seek-to-end so the episode is
+  /// never left unwatched when the next one starts.
+  Future<void> markCurrentEpisodeWatched() async {
+    _reachedNearEnd = true;
+    await _markCurrentCompleted(showNext: false);
+  }
+
+  Future<void> _markCurrentCompleted({required bool showNext}) async {
+    final MediaPlaybackItem? item = state.item;
+    final PlayerEngine? engine = state.engine;
+    if (item == null || engine == null || item.ignoreProgress) return;
+    await _saveProgress(item, engine);
+    if (!showNext) return;
+    final PlayerSettings settings =
+        ref.read(playerSettingsProvider).value ?? const PlayerSettings();
+    if ((settings.autoplayNext || settings.showNextEpisodeButton) &&
+        !state.autoNextVisible) {
+      state = state.copyWith(autoNextVisible: true);
+    }
   }
 
   void previewSeekTo(Duration position) {
@@ -2237,7 +2281,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       if (showNextOverlay && !state.autoNextVisible) {
         final Duration dur = engine.state.value.duration;
         final Duration pos = engine.state.value.position;
-        final bool ended = engine.state.value.isCompleted;
+        final bool ended = engine.state.value.isCompleted || _reachedNearEnd;
         // The backend reaching end-of-stream is the most reliable trigger:
         // some streams snap the reported position back to 0:00 on completion,
         // so a pure position-vs-duration check would never fire auto-next.
@@ -2273,7 +2317,10 @@ class PlaybackController extends Notifier<PlaybackState> {
     if (!engine.state.value.isInitialized) return;
 
     final Duration position = engine.state.value.position;
-    final bool engineCompleted = engine.state.value.isCompleted;
+    // Treat a latched seek-to-end the same as a backend-reported completion so
+    // the episode is still marked watched even when the position snapped to 0.
+    final bool engineCompleted =
+        engine.state.value.isCompleted || _reachedNearEnd;
     final DateTime? guardUntil = _resumeGuardUntil;
     if (!engineCompleted &&
         guardUntil != null &&

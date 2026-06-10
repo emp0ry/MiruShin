@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../core/constants/app_constants.dart';
+import '../core/platform/tv_platform.dart';
 import '../features/addons/application/sora_addons_provider.dart';
 import 'app_routes.dart';
 import '../features/profile/application/anilist_user_settings_provider.dart';
@@ -45,7 +46,7 @@ class _MiruShinAppState extends ConsumerState<MiruShinApp> {
       title: AppConstants.appName,
       debugShowCheckedModeBanner: false,
       builder: (BuildContext context, Widget? child) {
-        return Shortcuts(
+        Widget content = Shortcuts(
           // Map the Android TV remote's centre/select key (and gamepad A) to
           // the standard "activate" action, so a D-pad press triggers the
           // focused button/card exactly like Enter does. Arrow-key directional
@@ -62,6 +63,15 @@ class _MiruShinAppState extends ConsumerState<MiruShinApp> {
             ],
           ),
         );
+        if (TvPlatform.isAndroidTv) {
+          // Some TVs apply a large system font scale that blows the 10-foot UI
+          // up; pin text to 1.0x so layout stays predictable on television.
+          content = MediaQuery.withClampedTextScaling(
+            maxScaleFactor: 1.0,
+            child: content,
+          );
+        }
+        return content;
       },
       theme: AppTheme.light(accent: settings.accentColor),
       darkTheme: settings.themeMode == AppThemeMode.oled

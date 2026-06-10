@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../app/app_routes.dart';
 import '../../app/theme/app_spacing.dart';
@@ -82,37 +83,56 @@ class ResponsiveScaffold extends ConsumerWidget {
           ],
         );
 
-        return DecoratedBox(
-          decoration: BoxDecoration(gradient: palette.shellGradient),
-          child: Scaffold(
-            backgroundColor: Colors.transparent,
-            body: SafeArea(
-              bottom: sizeClass != WindowSizeClass.compact,
-              // Keep content inside the TV-safe (overscan) area so nothing is
-              // clipped by the bezel on televisions that still overscan.
-              child: isTv
-                  ? Padding(
-                      padding: const EdgeInsets.fromLTRB(
-                        AppSpacing.lg,
-                        AppSpacing.lg,
-                        AppSpacing.xl,
-                        AppSpacing.lg,
-                      ),
-                      child: bodyRow,
+        final GoRouter router = GoRouter.of(context);
+        final bool atHome =
+            currentLocation == AppRoutes.board || currentLocation == '/';
+
+        return PopScope<void>(
+          // Only let the system pop (which exits the app) when we are on the
+          // home tab with nothing pushed on top. Everywhere else, BACK navigates
+          // within the app — pop the pushed route, otherwise return to the home
+          // tab — instead of jumping straight to the Android TV launcher.
+          canPop: atHome && !router.canPop(),
+          onPopInvokedWithResult: (bool didPop, void result) {
+            if (didPop) return;
+            if (router.canPop()) {
+              router.pop();
+            } else if (!atHome) {
+              onDestinationSelected(AppRoutes.board);
+            }
+          },
+          child: DecoratedBox(
+            decoration: BoxDecoration(gradient: palette.shellGradient),
+            child: Scaffold(
+              backgroundColor: Colors.transparent,
+              body: SafeArea(
+                bottom: sizeClass != WindowSizeClass.compact,
+                // Keep content inside the TV-safe (overscan) area so nothing is
+                // clipped by the bezel on televisions that still overscan.
+                child: isTv
+                    ? Padding(
+                        padding: const EdgeInsets.fromLTRB(
+                          AppSpacing.lg,
+                          AppSpacing.lg,
+                          AppSpacing.xl,
+                          AppSpacing.lg,
+                        ),
+                        child: bodyRow,
+                      )
+                    : bodyRow,
+              ),
+              bottomNavigationBar: sizeClass == WindowSizeClass.compact
+                  ? AdaptiveNavigation(
+                      items: items,
+                      currentLocation: currentLocation,
+                      onDestinationSelected: onDestinationSelected,
+                      sizeClass: sizeClass,
+                      catalogMode: catalogMode,
+                      onLogoPressed: switchCatalogMode,
+                      isTv: isTv,
                     )
-                  : bodyRow,
+                  : null,
             ),
-            bottomNavigationBar: sizeClass == WindowSizeClass.compact
-                ? AdaptiveNavigation(
-                    items: items,
-                    currentLocation: currentLocation,
-                    onDestinationSelected: onDestinationSelected,
-                    sizeClass: sizeClass,
-                    catalogMode: catalogMode,
-                    onLogoPressed: switchCatalogMode,
-                    isTv: isTv,
-                  )
-                : null,
           ),
         );
       },

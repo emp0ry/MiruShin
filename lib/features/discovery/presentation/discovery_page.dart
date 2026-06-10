@@ -14,6 +14,7 @@ import '../../../core/widgets/media_poster_card.dart';
 import '../../../core/widgets/neutral_placeholder.dart';
 import '../../../core/widgets/section_header.dart';
 import '../../../core/widgets/skeleton_box.dart';
+import '../../../core/widgets/tv_text_field_focus.dart';
 import '../../catalog/application/catalog_mode.dart';
 import '../../catalog/application/catalog_repository.dart';
 import '../../catalog/presentation/catalog_offline_banner.dart';
@@ -584,14 +585,16 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  TextField(
-                    onChanged: _setQuery,
-                    textInputAction: TextInputAction.search,
-                    decoration: InputDecoration(
-                      hintText: context.t(
-                        'Search media, genres, people, moods',
+                  TvTextFieldFocus(
+                    child: TextField(
+                      onChanged: _setQuery,
+                      textInputAction: TextInputAction.search,
+                      decoration: InputDecoration(
+                        hintText: context.t(
+                          'Search media, genres, people, moods',
+                        ),
+                        prefixIcon: const Icon(Icons.search_rounded),
                       ),
-                      prefixIcon: const Icon(Icons.search_rounded),
                     ),
                   ),
                   const SizedBox(height: AppSpacing.md),

@@ -17,12 +17,14 @@ import '../../../app/theme/app_radius.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../app/theme/app_theme_extension.dart';
 import '../../../core/platform/io_compat.dart' if (dart.library.io) 'dart:io';
+import '../../../core/platform/tv_platform.dart';
 import '../../../core/widgets/adaptive_page.dart';
 import '../../../core/widgets/glass_card.dart';
 import '../../../core/widgets/metadata_chip.dart';
 import '../../../core/widgets/neutral_placeholder.dart';
 import '../../../core/widgets/section_header.dart';
 import '../../../core/widgets/skeleton_box.dart';
+import '../../../core/widgets/tv_text_field_focus.dart';
 import '../application/sora_addons_provider.dart';
 import '../domain/sora_models.dart';
 
@@ -639,14 +641,33 @@ Future<void> _exportAddons(BuildContext context, WidgetRef ref) async {
 
 Future<void> _importAddons(BuildContext context, WidgetRef ref) async {
   try {
-    final XFile? file = await openFile(
-      acceptedTypeGroups: const <XTypeGroup>[_addonsJsonTypeGroup],
-    );
-    if (file == null) {
-      if (context.mounted) _showSnack(context, context.t('Import cancelled'));
-      return;
+    final String raw;
+    if (_useTvFileFallback) {
+      // Android TV has no Storage Access Framework picker, so read the newest
+      // exported file from the app's own exports folder instead.
+      final File? file = await _newestTvAddonExport();
+      if (file == null) {
+        if (context.mounted) {
+          _showSnack(
+            context,
+            context.t(
+              'No addon file found. Export first, or copy a .json into the app exports folder.',
+            ),
+          );
+        }
+        return;
+      }
+      raw = await file.readAsString();
+    } else {
+      final XFile? file = await openFile(
+        acceptedTypeGroups: const <XTypeGroup>[_addonsJsonTypeGroup],
+      );
+      if (file == null) {
+        if (context.mounted) _showSnack(context, context.t('Import cancelled'));
+        return;
+      }
+      raw = await file.readAsString();
     }
-    final String raw = await file.readAsString();
     if (context.mounted) {
       _showSnack(context, context.t('Importing addons...'));
     }
@@ -678,6 +699,43 @@ Future<void> _importAddons(BuildContext context, WidgetRef ref) async {
   }
 }
 
+// Android TV cannot open the Storage Access Framework file picker, so both
+// import and export fall back to a fixed, permission-free folder in the app's
+// external storage that the user can reach with a file manager or adb.
+bool get _useTvFileFallback =>
+    !kIsWeb && Platform.isAndroid && TvPlatform.isAndroidTv;
+
+// Returns the path of the app's TV exports folder (created on demand), or null
+// if external storage is unavailable. Uses `dynamic` because path_provider
+// returns a dart:io Directory which doesn't unify with the conditional io
+// shim used for web builds.
+Future<String?> _tvFallbackDirPath() async {
+  final dynamic base = await getExternalStorageDirectory();
+  if (base == null) return null;
+  final String dirPath = p.join(base.path as String, 'exports');
+  final Directory dir = Directory(dirPath);
+  if (!await dir.exists()) {
+    await dir.create(recursive: true);
+  }
+  return dirPath;
+}
+
+Future<File?> _newestTvAddonExport() async {
+  final String? dirPath = await _tvFallbackDirPath();
+  if (dirPath == null) return null;
+  final List<File> candidates = <File>[
+    await for (final FileSystemEntity entity in Directory(dirPath).list())
+      if (entity is File &&
+          p.basename(entity.path).toLowerCase().endsWith('.json'))
+        entity,
+  ];
+  if (candidates.isEmpty) return null;
+  // Export filenames embed a sortable yyyyMMdd_HHmmss stamp, so the
+  // lexicographically last name is the most recent export.
+  candidates.sort((File a, File b) => b.path.compareTo(a.path));
+  return candidates.first;
+}
+
 Future<String?> _saveAddonJson(
   Uint8List bytes,
   String filename,
@@ -694,6 +752,16 @@ Future<String?> _saveAddonJson(
       ),
     );
     return '';
+  }
+
+  if (_useTvFileFallback) {
+    // Android TV has no SAF "save" picker; write into the app's exports folder
+    // and surface the path so the file can be retrieved (file manager / adb).
+    final String? dirPath = await _tvFallbackDirPath();
+    if (dirPath == null) return null;
+    final String path = p.join(dirPath, filename);
+    await File(path).writeAsBytes(bytes, flush: true);
+    return path;
   }
 
   if (!kIsWeb && Platform.isAndroid) {
@@ -796,21 +864,23 @@ class _AddAddonDialogState extends ConsumerState<_AddAddonDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              TextField(
-                controller: _controller,
-                autofocus: true,
-                keyboardType: TextInputType.url,
-                decoration: InputDecoration(
-                  labelText: context.t('Manifest JSON URL'),
-                  hintText: 'https://example.com/addon.json',
-                  prefixIcon: const Icon(Icons.link_rounded),
+              TvTextFieldFocus(
+                child: TextField(
+                  controller: _controller,
+                  autofocus: true,
+                  keyboardType: TextInputType.url,
+                  decoration: InputDecoration(
+                    labelText: context.t('Manifest JSON URL'),
+                    hintText: 'https://example.com/addon.json',
+                    prefixIcon: const Icon(Icons.link_rounded),
+                  ),
+                  onChanged: (_) {
+                    if (_preview != null) {
+                      setState(() => _preview = null);
+                    }
+                  },
+                  onSubmitted: (_) => _loading ? null : _previewUrl(),
                 ),
-                onChanged: (_) {
-                  if (_preview != null) {
-                    setState(() => _preview = null);
-                  }
-                },
-                onSubmitted: (_) => _loading ? null : _previewUrl(),
               ),
               if (_error != null) ...<Widget>[
                 const SizedBox(height: AppSpacing.md),
