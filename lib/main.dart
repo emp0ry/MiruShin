@@ -5,12 +5,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'app/app.dart';
 import 'bootstrap/mirushin_fvp_bootstrap.dart';
 import 'core/constants/app_constants.dart';
+import 'core/platform/tv_platform.dart';
 import 'core/utils/settings_preferences.dart';
 import 'features/settings/presentation/settings_state.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await AppConstants.init();
+  await TvPlatform.ensureInitialized();
   final SharedPreferences prefs = await SharedPreferences.getInstance();
   final String initialRoute = AppStartupPage.fromName(
     prefs.getString(SettingsPreferences.startupPageKey),

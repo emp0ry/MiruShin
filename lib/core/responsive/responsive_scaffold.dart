@@ -4,9 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/app_routes.dart';
+import '../../app/theme/app_spacing.dart';
 import '../../app/theme/app_theme_extension.dart';
 import '../../features/catalog/application/catalog_mode.dart';
 import '../../features/settings/presentation/startup_update_popup.dart';
+import '../platform/tv_platform.dart';
 import 'adaptive_navigation.dart';
 import 'app_breakpoints.dart';
 import 'app_navigation_item.dart';
@@ -27,6 +29,7 @@ class ResponsiveScaffold extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final AppThemeExtension palette = AppThemeExtension.of(context);
     final CatalogMode catalogMode = ref.watch(catalogModeProvider);
+    final bool isTv = ref.watch(isAndroidTvProvider);
     final List<AppNavigationItem> items = appNavigationItemsForMode(
       catalogMode,
     );
@@ -45,8 +48,38 @@ class ResponsiveScaffold extends ConsumerWidget {
 
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
-        final WindowSizeClass sizeClass = AppBreakpoints.classify(
-          constraints.maxWidth,
+        // On Android TV always use the labelled sidebar (the 10-foot nav) and
+        // never the bottom bar, regardless of the reported window width.
+        final WindowSizeClass sizeClass = isTv
+            ? WindowSizeClass.expanded
+            : AppBreakpoints.classify(constraints.maxWidth);
+
+        final Widget bodyRow = Row(
+          children: <Widget>[
+            if (sizeClass != WindowSizeClass.compact)
+              AdaptiveNavigation(
+                items: items,
+                currentLocation: currentLocation,
+                onDestinationSelected: onDestinationSelected,
+                sizeClass: sizeClass,
+                catalogMode: catalogMode,
+                onLogoPressed: switchCatalogMode,
+                isTv: isTv,
+              ),
+            Expanded(
+              child: Stack(
+                children: <Widget>[
+                  child,
+                  const Positioned(
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    child: StartupUpdatePopup(),
+                  ),
+                ],
+              ),
+            ),
+          ],
         );
 
         return DecoratedBox(
@@ -55,32 +88,19 @@ class ResponsiveScaffold extends ConsumerWidget {
             backgroundColor: Colors.transparent,
             body: SafeArea(
               bottom: sizeClass != WindowSizeClass.compact,
-              child: Row(
-                children: <Widget>[
-                  if (sizeClass != WindowSizeClass.compact)
-                    AdaptiveNavigation(
-                      items: items,
-                      currentLocation: currentLocation,
-                      onDestinationSelected: onDestinationSelected,
-                      sizeClass: sizeClass,
-                      catalogMode: catalogMode,
-                      onLogoPressed: switchCatalogMode,
-                    ),
-                  Expanded(
-                    child: Stack(
-                      children: <Widget>[
-                        child,
-                        const Positioned(
-                          top: 0,
-                          left: 0,
-                          right: 0,
-                          child: StartupUpdatePopup(),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
+              // Keep content inside the TV-safe (overscan) area so nothing is
+              // clipped by the bezel on televisions that still overscan.
+              child: isTv
+                  ? Padding(
+                      padding: const EdgeInsets.fromLTRB(
+                        AppSpacing.lg,
+                        AppSpacing.lg,
+                        AppSpacing.xl,
+                        AppSpacing.lg,
+                      ),
+                      child: bodyRow,
+                    )
+                  : bodyRow,
             ),
             bottomNavigationBar: sizeClass == WindowSizeClass.compact
                 ? AdaptiveNavigation(
@@ -90,6 +110,7 @@ class ResponsiveScaffold extends ConsumerWidget {
                     sizeClass: sizeClass,
                     catalogMode: catalogMode,
                     onLogoPressed: switchCatalogMode,
+                    isTv: isTv,
                   )
                 : null,
           ),

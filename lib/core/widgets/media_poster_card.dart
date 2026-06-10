@@ -11,6 +11,7 @@ import '../../features/catalog/application/catalog_mode.dart';
 import '../../shared/models/media_item.dart';
 import 'metadata_chip.dart';
 import 'skeleton_box.dart';
+import 'tv_focusable.dart';
 
 class MediaPosterCard extends ConsumerStatefulWidget {
   const MediaPosterCard({
@@ -21,6 +22,7 @@ class MediaPosterCard extends ConsumerStatefulWidget {
     this.onTap,
     this.onLongPress,
     this.onSecondaryTap,
+    this.autofocus = false,
     super.key,
   });
 
@@ -31,6 +33,7 @@ class MediaPosterCard extends ConsumerStatefulWidget {
   final VoidCallback? onTap;
   final VoidCallback? onLongPress;
   final VoidCallback? onSecondaryTap;
+  final bool autofocus;
 
   @override
   ConsumerState<MediaPosterCard> createState() => _MediaPosterCardState();
@@ -43,16 +46,20 @@ class _MediaPosterCardState extends ConsumerState<MediaPosterCard> {
   Widget build(BuildContext context) {
     final CatalogMode mode = ref.watch(catalogModeProvider);
     final MediaItem item = widget.item;
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
-      child: FocusableActionDetector(
-        mouseCursor: SystemMouseCursors.click,
+    return TvFocusable(
+      onTap: widget.onTap,
+      autofocus: widget.autofocus,
+      borderRadius: AppRadius.all(AppRadius.lg),
+      interactPointer: false,
+      child: MouseRegion(
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() => _hovered = false),
         child: AnimatedScale(
           duration: const Duration(milliseconds: 160),
           curve: Curves.easeOutCubic,
           scale: _hovered ? 1.025 : 1,
           child: InkWell(
+            canRequestFocus: false,
             borderRadius: AppRadius.all(AppRadius.lg),
             onTap: widget.onTap,
             onLongPress: widget.onLongPress,

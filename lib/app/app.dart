@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -44,11 +45,22 @@ class _MiruShinAppState extends ConsumerState<MiruShinApp> {
       title: AppConstants.appName,
       debugShowCheckedModeBanner: false,
       builder: (BuildContext context, Widget? child) {
-        return Stack(
-          children: <Widget>[
-            child ?? const SizedBox.shrink(),
-            const _AniListLibraryWarmup(),
-          ],
+        return Shortcuts(
+          // Map the Android TV remote's centre/select key (and gamepad A) to
+          // the standard "activate" action, so a D-pad press triggers the
+          // focused button/card exactly like Enter does. Arrow-key directional
+          // focus and Enter/Space activation already come from WidgetsApp
+          // defaults; unmatched keys fall through to those.
+          shortcuts: const <ShortcutActivator, Intent>{
+            SingleActivator(LogicalKeyboardKey.select): ActivateIntent(),
+            SingleActivator(LogicalKeyboardKey.gameButtonA): ActivateIntent(),
+          },
+          child: Stack(
+            children: <Widget>[
+              child ?? const SizedBox.shrink(),
+              const _AniListLibraryWarmup(),
+            ],
+          ),
         );
       },
       theme: AppTheme.light(accent: settings.accentColor),
@@ -73,10 +85,10 @@ class _MiruShinAppState extends ConsumerState<MiruShinApp> {
 class _MouseDragScrollBehavior extends MaterialScrollBehavior {
   @override
   Set<PointerDeviceKind> get dragDevices => {
-        PointerDeviceKind.touch,
-        PointerDeviceKind.mouse,
-        PointerDeviceKind.trackpad,
-      };
+    PointerDeviceKind.touch,
+    PointerDeviceKind.mouse,
+    PointerDeviceKind.trackpad,
+  };
 }
 
 class _AniListLibraryWarmup extends ConsumerStatefulWidget {

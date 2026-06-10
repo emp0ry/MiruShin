@@ -3,10 +3,12 @@ package com.emp0ry.mirushin
 import android.app.PendingIntent
 import android.app.PictureInPictureParams
 import android.app.RemoteAction
+import android.app.UiModeManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -112,7 +114,28 @@ class MainActivity : FlutterActivity() {
             }
         }
 
+        // ── Device / form-factor channel ───────────────────────────────────
+        val dch = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger, "mirushin/device"
+        )
+        dch.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "isTelevision" -> result.success(isRunningOnTelevision())
+                else -> result.notImplemented()
+            }
+        }
+
         registerPipActionReceiver()
+    }
+
+    /** True when the app is running on an Android TV / leanback device. */
+    private fun isRunningOnTelevision(): Boolean {
+        val uiModeManager = getSystemService(Context.UI_MODE_SERVICE) as? UiModeManager
+        if (uiModeManager?.currentModeType == Configuration.UI_MODE_TYPE_TELEVISION) {
+            return true
+        }
+        return packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK) ||
+            packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK_ONLY)
     }
 
     // ── PiP enter ─────────────────────────────────────────────────────────

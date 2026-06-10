@@ -91,6 +91,12 @@ abstract final class AppTheme {
       cardColor: palette.glassColor,
       dividerColor: palette.borderColor,
       splashFactory: InkSparkle.splashFactory,
+      // Strong, accent-tinted focus highlight so D-pad / keyboard navigation is
+      // clearly visible on every ink-based surface (InkWell, ListTile, etc.).
+      // This is the backbone of the 10-foot (Android TV) experience and is
+      // inert on touch, where widgets never take focus. InkResponse falls back
+      // to this color when a widget doesn't set its own focusColor.
+      focusColor: colorScheme.primary.withValues(alpha: 0.30),
       extensions: <ThemeExtension<dynamic>>[palette],
       appBarTheme: AppBarTheme(
         elevation: 0,
@@ -124,9 +130,20 @@ abstract final class AppTheme {
           foregroundColor: WidgetStatePropertyAll<Color>(
             palette.textSecondaryColor,
           ),
-          overlayColor: WidgetStatePropertyAll<Color>(
-            colorScheme.primary.withValues(alpha: 0.10),
-          ),
+          overlayColor: WidgetStateProperty.resolveWith<Color>((
+            Set<WidgetState> states,
+          ) {
+            if (states.contains(WidgetState.pressed)) {
+              return colorScheme.primary.withValues(alpha: 0.22);
+            }
+            if (states.contains(WidgetState.focused)) {
+              return colorScheme.primary.withValues(alpha: 0.30);
+            }
+            if (states.contains(WidgetState.hovered)) {
+              return colorScheme.primary.withValues(alpha: 0.12);
+            }
+            return Colors.transparent;
+          }),
           shape: WidgetStatePropertyAll<OutlinedBorder>(
             RoundedRectangleBorder(borderRadius: AppRadius.all(AppRadius.md)),
           ),
@@ -155,28 +172,70 @@ abstract final class AppTheme {
         ),
       ),
       filledButtonTheme: FilledButtonThemeData(
-        style: FilledButton.styleFrom(
-          minimumSize: const Size(48, 48),
-          padding: const EdgeInsets.symmetric(
-            horizontal: AppSpacing.xl,
-            vertical: AppSpacing.md,
-          ),
-          shape: RoundedRectangleBorder(
-            borderRadius: AppRadius.all(AppRadius.md),
-          ),
-          textStyle: const TextStyle(fontWeight: FontWeight.w800),
-        ),
+        style:
+            FilledButton.styleFrom(
+              minimumSize: const Size(48, 48),
+              padding: const EdgeInsets.symmetric(
+                horizontal: AppSpacing.xl,
+                vertical: AppSpacing.md,
+              ),
+              shape: RoundedRectangleBorder(
+                borderRadius: AppRadius.all(AppRadius.md),
+              ),
+              textStyle: const TextStyle(fontWeight: FontWeight.w800),
+            ).copyWith(
+              // Brighten the fill on focus so the D-pad selection reads clearly.
+              overlayColor: WidgetStateProperty.resolveWith<Color?>((
+                Set<WidgetState> states,
+              ) {
+                if (states.contains(WidgetState.pressed)) {
+                  return colorScheme.onPrimary.withValues(alpha: 0.20);
+                }
+                if (states.contains(WidgetState.focused)) {
+                  return colorScheme.onPrimary.withValues(alpha: 0.26);
+                }
+                if (states.contains(WidgetState.hovered)) {
+                  return colorScheme.onPrimary.withValues(alpha: 0.12);
+                }
+                return null;
+              }),
+            ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
-        style: OutlinedButton.styleFrom(
-          minimumSize: const Size(48, 48),
-          foregroundColor: palette.textPrimaryColor,
-          side: BorderSide(color: palette.borderColor),
-          shape: RoundedRectangleBorder(
-            borderRadius: AppRadius.all(AppRadius.md),
-          ),
-          textStyle: const TextStyle(fontWeight: FontWeight.w800),
-        ),
+        style:
+            OutlinedButton.styleFrom(
+              minimumSize: const Size(48, 48),
+              foregroundColor: palette.textPrimaryColor,
+              side: BorderSide(color: palette.borderColor),
+              shape: RoundedRectangleBorder(
+                borderRadius: AppRadius.all(AppRadius.md),
+              ),
+              textStyle: const TextStyle(fontWeight: FontWeight.w800),
+            ).copyWith(
+              overlayColor: WidgetStateProperty.resolveWith<Color?>((
+                Set<WidgetState> states,
+              ) {
+                if (states.contains(WidgetState.pressed)) {
+                  return colorScheme.primary.withValues(alpha: 0.18);
+                }
+                if (states.contains(WidgetState.focused)) {
+                  return colorScheme.primary.withValues(alpha: 0.22);
+                }
+                if (states.contains(WidgetState.hovered)) {
+                  return colorScheme.primary.withValues(alpha: 0.10);
+                }
+                return null;
+              }),
+              // Accent ring around the outline when focused via remote/keyboard.
+              side: WidgetStateProperty.resolveWith<BorderSide>((
+                Set<WidgetState> states,
+              ) {
+                if (states.contains(WidgetState.focused)) {
+                  return BorderSide(color: colorScheme.primary, width: 2);
+                }
+                return BorderSide(color: palette.borderColor);
+              }),
+            ),
       ),
       chipTheme: ChipThemeData(
         backgroundColor: palette.glassStrongColor,

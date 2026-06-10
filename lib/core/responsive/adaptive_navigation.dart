@@ -59,6 +59,7 @@ class AdaptiveNavigation extends StatelessWidget {
     required this.sizeClass,
     required this.catalogMode,
     required this.onLogoPressed,
+    this.isTv = false,
     super.key,
   });
 
@@ -68,6 +69,7 @@ class AdaptiveNavigation extends StatelessWidget {
   final WindowSizeClass sizeClass;
   final CatalogMode catalogMode;
   final VoidCallback onLogoPressed;
+  final bool isTv;
 
   int get _selectedIndex {
     final int index = items.indexWhere(
@@ -93,6 +95,7 @@ class AdaptiveNavigation extends StatelessWidget {
         onDestinationSelected: onDestinationSelected,
         catalogMode: catalogMode,
         onLogoPressed: onLogoPressed,
+        isTv: isTv,
       ),
       WindowSizeClass.expanded => _SidebarNavigation(
         items: items,
@@ -100,6 +103,7 @@ class AdaptiveNavigation extends StatelessWidget {
         onDestinationSelected: onDestinationSelected,
         catalogMode: catalogMode,
         onLogoPressed: onLogoPressed,
+        isTv: isTv,
       ),
     };
   }
@@ -406,6 +410,7 @@ class _NavigationRail extends StatelessWidget {
     required this.onDestinationSelected,
     required this.catalogMode,
     required this.onLogoPressed,
+    this.isTv = false,
   });
 
   final List<AppNavigationItem> items;
@@ -414,13 +419,17 @@ class _NavigationRail extends StatelessWidget {
   final ValueChanged<String> onDestinationSelected;
   final CatalogMode catalogMode;
   final VoidCallback onLogoPressed;
+  final bool isTv;
 
   @override
   Widget build(BuildContext context) {
     final AppThemeExtension palette = AppThemeExtension.of(context);
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
-        final bool useMore = constraints.maxHeight < _railMoreHeightBreakpoint;
+        // Never collapse destinations into a modal sheet on TV — every
+        // destination must be directly reachable with the D-pad.
+        final bool useMore =
+            !isTv && constraints.maxHeight < _railMoreHeightBreakpoint;
         final List<AppNavigationItem> visibleItems = useMore
             ? items.take(_visibleDestinationCount).toList(growable: false)
             : items;
@@ -505,6 +514,7 @@ class _SidebarNavigation extends StatelessWidget {
     required this.onDestinationSelected,
     required this.catalogMode,
     required this.onLogoPressed,
+    this.isTv = false,
   });
 
   final List<AppNavigationItem> items;
@@ -512,6 +522,7 @@ class _SidebarNavigation extends StatelessWidget {
   final ValueChanged<String> onDestinationSelected;
   final CatalogMode catalogMode;
   final VoidCallback onLogoPressed;
+  final bool isTv;
 
   @override
   Widget build(BuildContext context) {
@@ -521,7 +532,10 @@ class _SidebarNavigation extends StatelessWidget {
       builder: (BuildContext context, BoxConstraints constraints) {
         final double contentHeight =
             constraints.maxHeight - (AppSpacing.lg * 4);
-        final bool useMore = contentHeight < _sidebarMoreHeightBreakpoint;
+        // On TV keep every destination visible so it is directly D-pad
+        // reachable instead of hidden behind a modal "More" sheet.
+        final bool useMore =
+            !isTv && contentHeight < _sidebarMoreHeightBreakpoint;
         final List<AppNavigationItem> visibleItems = useMore
             ? items.take(_visibleDestinationCount).toList(growable: false)
             : items;
@@ -531,6 +545,14 @@ class _SidebarNavigation extends StatelessWidget {
         final bool moreSelected = moreItems.any(
           (AppNavigationItem item) => _matchesLocation(item, currentLocation),
         );
+        // On TV, give the remote an initial anchor: focus the current
+        // destination (or the first one) so the D-pad has somewhere to start.
+        final int selectedItemIndex = visibleItems.indexWhere(
+          (AppNavigationItem item) => _matchesLocation(item, currentLocation),
+        );
+        final int autofocusIndex = isTv
+            ? (selectedItemIndex < 0 ? 0 : selectedItemIndex)
+            : -1;
 
         return Container(
           width: 256,
@@ -555,7 +577,9 @@ class _SidebarNavigation extends StatelessWidget {
               ),
               SliverList(
                 delegate: SliverChildListDelegate(<Widget>[
-                  ...visibleItems.map((AppNavigationItem item) {
+                  ...visibleItems.indexed.map(((int, AppNavigationItem) entry) {
+                    final int index = entry.$1;
+                    final AppNavigationItem item = entry.$2;
                     final bool selected = _matchesLocation(
                       item,
                       currentLocation,
@@ -566,6 +590,7 @@ class _SidebarNavigation extends StatelessWidget {
                         item: item,
                         selected: selected,
                         accent: accent,
+                        autofocus: index == autofocusIndex,
                         onTap: () => onDestinationSelected(item.path),
                       ),
                     );
@@ -677,12 +702,14 @@ class _SidebarButton extends StatelessWidget {
     required this.selected,
     required this.accent,
     required this.onTap,
+    this.autofocus = false,
   });
 
   final AppNavigationItem item;
   final bool selected;
   final Color accent;
   final VoidCallback onTap;
+  final bool autofocus;
 
   @override
   Widget build(BuildContext context) {
@@ -690,6 +717,7 @@ class _SidebarButton extends StatelessWidget {
     return Tooltip(
       message: context.t(item.labelKey),
       child: InkWell(
+        autofocus: autofocus,
         borderRadius: AppRadius.all(AppRadius.lg),
         onTap: onTap,
         child: AnimatedContainer(

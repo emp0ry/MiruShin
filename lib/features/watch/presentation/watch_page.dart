@@ -20,6 +20,7 @@ import '../../../app/router.dart' show PlayerRouteArgs;
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_radius.dart';
 import '../../../app/theme/app_spacing.dart';
+import '../../../core/widgets/tv_focusable.dart';
 import '../../../app/theme/app_theme_extension.dart';
 import '../../../core/widgets/adaptive_page.dart';
 import '../../../core/widgets/glass_card.dart';
@@ -1209,8 +1210,9 @@ class _WatchTab extends StatelessWidget {
         : enabled
         ? scheme.onSurface.withValues(alpha: 0.65)
         : scheme.onSurface.withValues(alpha: 0.3);
-    return GestureDetector(
+    return InkWell(
       onTap: onTap,
+      borderRadius: AppRadius.all(AppRadius.lg),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 160),
         padding: const EdgeInsets.symmetric(
@@ -1315,8 +1317,9 @@ class _SeasonPickerSection extends StatelessWidget {
                 final MediaSeason season = all[index];
                 final bool selected = selectedSeason == season.seasonNumber;
                 final String label = _seasonPickerLabel(context, season);
-                return GestureDetector(
+                return TvFocusable(
                   onTap: () => onSeasonPicked(season.seasonNumber),
+                  borderRadius: AppRadius.all(AppRadius.lg),
                   child: SizedBox(
                     width: 108,
                     child: Column(
@@ -1508,8 +1511,9 @@ class _SourceSeasonPickerSection extends ConsumerWidget {
                             episodes: episodes,
                             ref: ref,
                           );
-                          return GestureDetector(
+                          return TvFocusable(
                             onTap: () => onSeasonPicked(seasonNumber),
+                            borderRadius: AppRadius.all(AppRadius.lg),
                             child: SizedBox(
                               width: 108,
                               child: Column(
@@ -2675,10 +2679,7 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
           ),
           FutureBuilder<List<SoraEpisode>>(
             future: episodesFuture,
-            builder: (
-              BuildContext context,
-              AsyncSnapshot<List<SoraEpisode>> snapshot,
-            ) {
+            builder: (BuildContext context, AsyncSnapshot<List<SoraEpisode>> snapshot) {
               if (snapshot.connectionState == ConnectionState.waiting) {
                 return const SkeletonBox(height: 200, radius: AppRadius.lg);
               }
