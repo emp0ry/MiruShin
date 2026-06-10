@@ -746,7 +746,7 @@ Future<List<SoraTitleVariant>> _buildTitleVariants({
   final bool canReadTmdbTranslations =
       catalogMode == CatalogMode.tmdb &&
       settings.tmdbEnabled &&
-      settings.tmdbReadAccessToken.trim().isNotEmpty &&
+      settings.effectiveTmdbReadAccessToken.isNotEmpty &&
       media.externalIds['tmdb'] != null;
   Map<String, String> translated = const <String, String>{};
   Map<String, String> seasonTranslated = const <String, String>{};
@@ -994,7 +994,7 @@ Future<Map<String, String>> _fetchTmdbTranslations({
         path,
         options: Options(
           headers: <String, String>{
-            'Authorization': 'Bearer ${settings.tmdbReadAccessToken}',
+            'Authorization': 'Bearer ${settings.effectiveTmdbReadAccessToken}',
             'accept': 'application/json',
           },
         ),
@@ -1046,7 +1046,7 @@ Future<Map<String, String>> _fetchTmdbSeasonTranslations({
         '/tv/$tmdbId/season/$seasonNumber/translations',
         options: Options(
           headers: <String, String>{
-            'Authorization': 'Bearer ${settings.tmdbReadAccessToken}',
+            'Authorization': 'Bearer ${settings.effectiveTmdbReadAccessToken}',
             'accept': 'application/json',
           },
         ),
@@ -1104,7 +1104,7 @@ Future<String> _fetchTmdbTitleForLanguage({
         },
         options: Options(
           headers: <String, String>{
-            'Authorization': 'Bearer ${settings.tmdbReadAccessToken}',
+            'Authorization': 'Bearer ${settings.effectiveTmdbReadAccessToken}',
             'accept': 'application/json',
           },
         ),

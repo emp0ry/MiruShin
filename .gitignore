@@ -193,6 +193,8 @@ app.*.map.json
 # =====================
 .env
 .env.*
+# envied output embeds the obfuscation key + token; regenerate in CI, never commit.
+lib/core/env/env.g.dart
 *.pem
 *.p12
 *.pfx

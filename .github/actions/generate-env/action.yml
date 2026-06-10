@@ -1,0 +1,28 @@
+name: Generate .env
+description: >
+  Recreate the gitignored .env from repository secrets and generate the
+  envied sources (lib/core/env/env.g.dart) before building.
+
+inputs:
+  tmdb-read-access-token:
+    description: TMDB v4 Read Access Token bundled as the default API key.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Write .env
+      shell: bash
+      env:
+        TMDB_READ_ACCESS_TOKEN: ${{ inputs.tmdb-read-access-token }}
+      run: |
+        if [ -z "$TMDB_READ_ACCESS_TOKEN" ]; then
+          echo "::error::TMDB_READ_ACCESS_TOKEN secret is empty. Add it under Settings → Secrets and variables → Actions."
+          exit 1
+        fi
+        printf 'TMDB_READ_ACCESS_TOKEN=%s\n' "$TMDB_READ_ACCESS_TOKEN" > .env
+        echo "Wrote .env ($(wc -c < .env) bytes)."
+
+    - name: Generate envied sources
+      shell: bash
+      run: dart run build_runner build --delete-conflicting-outputs

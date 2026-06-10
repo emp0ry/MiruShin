@@ -201,17 +201,30 @@ class _ApiConnectionsSection extends ConsumerWidget {
           ),
         ),
         SettingsRow(
-          title: context.t('TMDB Read Access Token'),
+          title: context.t('Use custom API key'),
           subtitle: context.t(
-            'Stored in secure platform storage. Do not commit secrets.',
+            'Off: use the built-in TMDB key. On: enter your own TMDB Read Access Token.',
           ),
-          trailing: _TextSettingField(
-            initialValue: settings.tmdbReadAccessToken,
-            hintText: 'duHahLci2pJIZbQ2MoJ0...',
-            obscureText: true,
-            onChanged: controller.setTmdbReadAccessToken,
+          trailing: Switch(
+            value: settings.tmdbUseCustomKey,
+            onChanged: settings.tmdbEnabled
+                ? controller.setTmdbUseCustomKey
+                : null,
           ),
         ),
+        if (settings.tmdbUseCustomKey)
+          SettingsRow(
+            title: context.t('TMDB Read Access Token'),
+            subtitle: context.t(
+              'Stored in secure platform storage. Do not commit secrets.',
+            ),
+            trailing: _TextSettingField(
+              initialValue: settings.tmdbReadAccessToken,
+              hintText: 'duHahLci2pJIZbQ2MoJ0...',
+              obscureText: true,
+              onChanged: controller.setTmdbReadAccessToken,
+            ),
+          ),
         SettingsRow(
           title: context.t('TMDB language'),
           subtitle: context.t(
@@ -301,7 +314,7 @@ class _ApiConnectionsSection extends ConsumerWidget {
     final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
     try {
       final List<dynamic> results = await TmdbMetadataProvider(
-        readAccessToken: settings.tmdbReadAccessToken,
+        readAccessToken: settings.effectiveTmdbReadAccessToken,
         language: settings.effectiveTmdbLanguage,
         region: settings.tmdbRegion,
       ).getTrending();

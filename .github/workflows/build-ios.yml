@@ -27,6 +27,11 @@ jobs:
       - name: Flutter pub get
         run: flutter pub get
 
+      - name: Generate .env (TMDB key)
+        uses: ./.github/actions/generate-env
+        with:
+          tmdb-read-access-token: ${{ secrets.TMDB_READ_ACCESS_TOKEN }}
+
       - name: Prepare iOS no-codesign config
         shell: bash
         run: |

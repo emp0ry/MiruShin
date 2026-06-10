@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../app/theme/app_colors.dart';
 import '../../../core/constants/app_constants.dart';
+import '../../../core/env/env.dart';
 import '../../../core/security/app_secure_storage.dart';
 import '../../../core/utils/settings_preferences.dart';
 import '../../../shared/models/anilist_models.dart';
@@ -96,7 +97,8 @@ class SettingsState {
     this.posterCardStyle = 'Cinematic',
     this.compactMode = false,
     this.discordRpcEnabled = true,
-    this.tmdbEnabled = false,
+    this.tmdbEnabled = true,
+    this.tmdbUseCustomKey = false,
     this.tmdbReadAccessToken = '',
     this.tmdbLanguage = 'en-US',
     this.tmdbRegion = 'US',
@@ -130,6 +132,10 @@ class SettingsState {
   final bool compactMode;
   final bool discordRpcEnabled;
   final bool tmdbEnabled;
+
+  /// When `true`, [tmdbReadAccessToken] (the user's own key) is used. When
+  /// `false`, the bundled default key from [Env.tmdbReadAccessToken] is used.
+  final bool tmdbUseCustomKey;
   final String tmdbReadAccessToken;
   final String tmdbLanguage;
   final String tmdbRegion;
@@ -154,7 +160,16 @@ class SettingsState {
   final String soraWebProxyUrl;
   final AppStartupPage startupPage;
 
-  bool get hasTmdbToken => tmdbReadAccessToken.trim().isNotEmpty;
+  /// The token actually used for TMDB requests: the user's custom token when
+  /// [tmdbUseCustomKey] is enabled, otherwise the bundled default key.
+  String get effectiveTmdbReadAccessToken {
+    if (tmdbUseCustomKey) {
+      return tmdbReadAccessToken.trim();
+    }
+    return Env.tmdbReadAccessToken.trim();
+  }
+
+  bool get hasTmdbToken => effectiveTmdbReadAccessToken.isNotEmpty;
 
   bool get hasTvdbApiKey => tvdbApiKey.trim().isNotEmpty;
 
@@ -198,6 +213,7 @@ class SettingsState {
     bool? compactMode,
     bool? discordRpcEnabled,
     bool? tmdbEnabled,
+    bool? tmdbUseCustomKey,
     String? tmdbReadAccessToken,
     String? tmdbLanguage,
     String? tmdbRegion,
@@ -236,6 +252,7 @@ class SettingsState {
       compactMode: compactMode ?? this.compactMode,
       discordRpcEnabled: discordRpcEnabled ?? this.discordRpcEnabled,
       tmdbEnabled: tmdbEnabled ?? this.tmdbEnabled,
+      tmdbUseCustomKey: tmdbUseCustomKey ?? this.tmdbUseCustomKey,
       tmdbReadAccessToken: tmdbReadAccessToken ?? this.tmdbReadAccessToken,
       tmdbLanguage: tmdbLanguage ?? this.tmdbLanguage,
       tmdbRegion: tmdbRegion ?? this.tmdbRegion,
@@ -392,6 +409,7 @@ class SettingsController extends Notifier<SettingsState> {
       accentColor: accentColor == null ? null : Color(accentColor),
       discordRpcEnabled: preferences.readDiscordRpcEnabled(),
       tmdbEnabled: preferences.readTmdbEnabled(),
+      tmdbUseCustomKey: preferences.readTmdbUseCustomKey(),
       tmdbReadAccessToken: tmdbToken ?? '',
       tmdbLanguage: tmdbLanguage,
       metadataLocale: metadataLocale,
@@ -498,6 +516,13 @@ class SettingsController extends Notifier<SettingsState> {
     state = state.copyWith(tmdbEnabled: value);
     unawaited(
       _save((SettingsPreferences prefs) => prefs.saveTmdbEnabled(value)),
+    );
+  }
+
+  void setTmdbUseCustomKey(bool value) {
+    state = state.copyWith(tmdbUseCustomKey: value);
+    unawaited(
+      _save((SettingsPreferences prefs) => prefs.saveTmdbUseCustomKey(value)),
     );
   }
 

@@ -270,7 +270,7 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
     return Object.hash(
       mode,
       settings.tmdbEnabled,
-      settings.tmdbReadAccessToken,
+      settings.effectiveTmdbReadAccessToken,
       settings.effectiveTmdbLanguage,
       settings.anilistAccessToken,
       settings.anilistViewerId,

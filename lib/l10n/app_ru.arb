@@ -166,6 +166,8 @@
   "Enable addons": "Включить аддоны",
   "Enable Discord Rich Presence": "Включить Discord Rich Presence",
   "Enable TMDB metadata": "Включить метаданные TMDB",
+  "Use custom API key": "Использовать свой API-ключ",
+  "Off: use the built-in TMDB key. On: enter your own TMDB Read Access Token.": "Выкл: используется встроенный ключ TMDB. Вкл: введите свой Read Access Token TMDB.",
   "enabled": "включено",
   "Enabled": "Включено",
   "English": "Английский",

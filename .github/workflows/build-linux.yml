@@ -49,6 +49,11 @@ jobs:
       - name: Flutter pub get
         run: flutter pub get
 
+      - name: Generate .env (TMDB key)
+        uses: ./.github/actions/generate-env
+        with:
+          tmdb-read-access-token: ${{ secrets.TMDB_READ_ACCESS_TOKEN }}
+
       - name: Force fresh pinned MDK SDK
         run: |
           # fvp's cmake/deps.cmake skips re-downloading libmdk if an mdk-sdk is

@@ -166,6 +166,8 @@
   "Enable addons": "アドオンを有効化",
   "Enable Discord Rich Presence": "Discord Rich Presenceを有効化",
   "Enable TMDB metadata": "TMDBメタデータを有効化",
+  "Use custom API key": "カスタムAPIキーを使用",
+  "Off: use the built-in TMDB key. On: enter your own TMDB Read Access Token.": "オフ：内蔵のTMDBキーを使用します。オン：自分のTMDB Read Access Tokenを入力します。",
   "enabled": "有効",
   "Enabled": "有効",
   "English": "英語",

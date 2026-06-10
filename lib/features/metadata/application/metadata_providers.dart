@@ -22,11 +22,11 @@ export 'media_catalog.dart' show BoardRails, MediaCatalog;
 
 final tmdbProviderProvider = Provider<TmdbMetadataProvider?>((Ref ref) {
   final SettingsState settings = ref.watch(settingsProvider);
-  if (!settings.tmdbEnabled || settings.tmdbReadAccessToken.trim().isEmpty) {
+  if (!settings.tmdbEnabled || settings.effectiveTmdbReadAccessToken.isEmpty) {
     return null;
   }
   return TmdbMetadataProvider(
-    readAccessToken: settings.tmdbReadAccessToken,
+    readAccessToken: settings.effectiveTmdbReadAccessToken,
     language: settings.effectiveTmdbLanguage,
     region: settings.tmdbRegion,
   );
