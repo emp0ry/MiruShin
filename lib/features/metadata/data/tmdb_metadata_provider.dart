@@ -386,7 +386,7 @@ class TmdbMetadataProvider implements PagedDiscoveryProvider {
     final List<String> queries = _trailerSearchQueries(item);
     for (final String query in queries) {
       try {
-        final List<MediaItem> results = await search(query, page: 1);
+        final List<MediaItem> results = await _searchForTrailerMatch(query);
         final List<MediaItem> animeResults = results
             .where((MediaItem result) => result.type == MediaType.anime)
             .toList(growable: false);
@@ -417,6 +417,38 @@ class TmdbMetadataProvider implements PagedDiscoveryProvider {
       }
     }
     return null;
+  }
+
+  /// Searches TMDB for trailer matching, pinned to English regardless of the
+  /// user's system locale. TMDB search matches across all translations, so the
+  /// candidate set is locale-independent; the localized `name`, however, is
+  /// not, and [_animeTrailerMatchScore] relies on it. On a non-Latin locale the
+  /// localized title normalizes to empty (see [_normalizedTitle]) and matching
+  /// can fail, which made the Trailer button appear on some devices but not
+  /// others for the same build. Forcing en-US keeps the result deterministic.
+  Future<List<MediaItem>> _searchForTrailerMatch(String query) async {
+    final String trimmed = query.trim();
+    if (trimmed.isEmpty) {
+      return const <MediaItem>[];
+    }
+    final List<Response<dynamic>> responses = await Future.wait(
+      <Future<Response<dynamic>>>[
+        _get('/search/movie', <String, dynamic>{
+          'query': trimmed,
+          'include_adult': false,
+          'page': 1,
+        }, 'en-US'),
+        _get('/search/tv', <String, dynamic>{
+          'query': trimmed,
+          'include_adult': false,
+          'page': 1,
+        }, 'en-US'),
+      ],
+    );
+    return <MediaItem>[
+      ..._parseList(responses[0].data, MediaType.movie),
+      ..._parseTvSearchList(responses[1].data),
+    ];
   }
 
   Future<TmdbSeasonEpisodeMetadataBundle> getSeasonEpisodes({
