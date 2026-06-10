@@ -793,6 +793,25 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       _maybeScheduleAutoNext(state, settings);
     }
 
+    // Opening a stream forces the controls visible (see _open). The one-shot
+    // hide timer armed in initState races the source resolution and is already
+    // spent by the time a (slow) stream finishes opening — which on an
+    // auto-advance leaves the chrome + cursor stranded because there is no user
+    // interaction to re-arm it. Re-arm the hide whenever a stream finishes
+    // opening (loading: true -> false).
+    ref.listen<bool>(
+      playbackControllerProvider.select((PlaybackState s) => s.loading),
+      (bool? previous, bool next) {
+        if (previous == true && !next && mounted) {
+          _scheduleHide(
+            isYoutubeTrailer
+                ? _trailerControlsHideDelay
+                : _controlsHideDelay,
+          );
+        }
+      },
+    );
+
     // Keep PiP overlay actions in sync with playback state changes.
     if (_inPipMode) {
       final bool nowPlaying = state.engine?.value.isPlaying ?? false;
