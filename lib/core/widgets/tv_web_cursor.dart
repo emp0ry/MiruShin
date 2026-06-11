@@ -46,7 +46,53 @@ class TvWebCursor extends StatefulWidget {
 }
 
 class _TvWebCursorState extends State<TvWebCursor> {
+  final FocusNode _focusNode = FocusNode(debugLabel: 'TvWebCursor');
   bool _textInputMode = false;
+  bool _channelRegistered = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _registerChannel();
+  }
+
+  @override
+  void didUpdateWidget(covariant TvWebCursor oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      _channelRegistered = false;
+      _registerChannel();
+    }
+  }
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  void _registerChannel() {
+    if (_channelRegistered) return;
+    _channelRegistered = true;
+    try {
+      widget.controller.addJavaScriptChannel(
+        'MiruShinTvCursor',
+        onMessageReceived: (JavaScriptMessage message) {
+          if (!mounted) return;
+          switch (message.message) {
+            case 'editing':
+              _enterTextInputMode();
+              break;
+            case 'idle':
+              _restoreCursorMode();
+              break;
+          }
+        },
+      );
+    } catch (_) {
+      // The channel may already exist on reused controllers.
+    }
+  }
 
   void _run(String body) {
     // Guard so a not-yet-injected page can't throw.
@@ -74,14 +120,11 @@ class _TvWebCursorState extends State<TvWebCursor> {
     }
 
     bool wantsKeyboard = tap.editable;
-    if (!nativeTapped) {
+    if (tap.editable || !nativeTapped) {
       wantsKeyboard = await _fallbackJsClick() || wantsKeyboard;
     }
     if (!wantsKeyboard) return;
-    if (mounted) {
-      setState(() => _textInputMode = true);
-    }
-    _run('setEditing(true)');
+    _enterTextInputMode();
     await Future<void>.delayed(const Duration(milliseconds: 80));
     try {
       await TvWebCursor._deviceChannel.invokeMethod<void>('showSoftKeyboard');
@@ -133,10 +176,27 @@ class _TvWebCursorState extends State<TvWebCursor> {
     return false;
   }
 
-  void _leaveTextInputMode() {
+  void _enterTextInputMode() {
+    if (!_textInputMode && mounted) {
+      setState(() => _textInputMode = true);
+    }
+    _run('setEditing(true)');
+    _focusNode.unfocus();
+  }
+
+  void _restoreCursorMode() {
     if (!_textInputMode) return;
     setState(() => _textInputMode = false);
-    _run('blurActive();setEditing(false)');
+    _run('setEditing(false)');
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && widget.enabled) _focusNode.requestFocus();
+    });
+  }
+
+  void _leaveTextInputMode() {
+    if (!_textInputMode) return;
+    _restoreCursorMode();
+    _run('blurActive()');
     unawaited(
       TvWebCursor._deviceChannel
           .invokeMethod<void>('hideSoftKeyboard')
@@ -196,6 +256,7 @@ class _TvWebCursorState extends State<TvWebCursor> {
   Widget build(BuildContext context) {
     if (!widget.enabled) return widget.child;
     return Focus(
+      focusNode: _focusNode,
       autofocus: !_textInputMode,
       onKeyEvent: _onKey,
       child: widget.child,
@@ -246,7 +307,7 @@ const String _cursorScript = r'''
   function place() { dot.style.left = x + 'px'; dot.style.top = y + 'px'; }
   function setEditing(editing) {
     ensure();
-    dot.style.display = editing ? 'none' : 'block';
+    dot.style.opacity = editing ? '0.38' : '1';
   }
   function move(dx, dy) {
     ensure();
@@ -288,6 +349,48 @@ const String _cursorScript = r'''
       if (node.isContentEditable) return node;
     }
     return null;
+  }
+  function notify(state) {
+    try {
+      if (window.MiruShinTvCursor && window.MiruShinTvCursor.postMessage) {
+        window.MiruShinTvCursor.postMessage(state);
+      }
+    } catch (e) {}
+  }
+  function activeEditable() {
+    return editableTarget(document.activeElement);
+  }
+  function installEditListeners() {
+    if (window.__tvCursorEditListenersInstalled) return;
+    window.__tvCursorEditListenersInstalled = true;
+    document.addEventListener('focusin', function (event) {
+      if (editableTarget(event.target)) {
+        setEditing(true);
+        notify('editing');
+      }
+    }, true);
+    document.addEventListener('focusout', function (event) {
+      if (editableTarget(event.target)) {
+        setTimeout(function () {
+          if (!activeEditable()) {
+            setEditing(false);
+            notify('idle');
+          }
+        }, 80);
+      }
+    }, true);
+    document.addEventListener('keydown', function (event) {
+      var editable = activeEditable();
+      if (!editable) return;
+      var name = (editable.tagName || '').toLowerCase();
+      if (event.key === 'Escape' || (event.key === 'Enter' && name !== 'textarea')) {
+        setTimeout(function () {
+          try { editable.blur(); } catch (e) {}
+          setEditing(false);
+          notify('idle');
+        }, 120);
+      }
+    }, true);
   }
   function tapInfo() {
     ensure();
@@ -337,6 +440,7 @@ const String _cursorScript = r'''
     blurActive: blurActive,
     setEditing: setEditing
   };
+  installEditListeners();
   ensure();
 })();
 ''';

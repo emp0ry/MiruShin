@@ -874,28 +874,19 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
 
   KeyEventResult _moveTvPlayerFocus(LogicalKeyboardKey key, KeyEvent event) {
     if (event is KeyUpEvent) return KeyEventResult.handled;
-    final TraversalDirection direction = switch (key) {
-      LogicalKeyboardKey.arrowLeft => TraversalDirection.left,
-      LogicalKeyboardKey.arrowRight => TraversalDirection.right,
-      LogicalKeyboardKey.arrowUp => TraversalDirection.up,
-      LogicalKeyboardKey.arrowDown => TraversalDirection.down,
-      _ => TraversalDirection.down,
-    };
+    final bool forward =
+        key == LogicalKeyboardKey.arrowRight ||
+        key == LogicalKeyboardKey.arrowDown;
     _hideTimer?.cancel();
     final FocusNode? primary = FocusManager.instance.primaryFocus;
     bool moved = false;
     if (primary != null && primary != _playerFocusNode) {
-      moved = primary.focusInDirection(direction);
-    }
-    if (!moved && (primary == null || primary == _playerFocusNode)) {
-      moved = _playerFocusNode.nextFocus();
+      moved = forward ? primary.nextFocus() : primary.previousFocus();
     }
     if (!moved) {
-      moved =
-          direction == TraversalDirection.left ||
-              direction == TraversalDirection.up
-          ? _playerFocusNode.previousFocus()
-          : _playerFocusNode.nextFocus();
+      moved = forward
+          ? _playerFocusNode.nextFocus()
+          : _playerFocusNode.previousFocus();
     }
     if (!moved) {
       _playerFocusNode.nextFocus();
@@ -3950,29 +3941,108 @@ Future<void> _showMenuSheet(
   String title,
   List<Widget> children,
 ) {
+  Widget sheet = SafeArea(
+    child: ConstrainedBox(
+      constraints: const BoxConstraints(maxHeight: 560),
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
+        children: <Widget>[
+          Text(
+            context.t(title),
+            style: Theme.of(
+              context,
+            ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 10),
+          ...children,
+        ],
+      ),
+    ),
+  );
+  if (TvPlatform.isAndroidTv) {
+    sheet = _TvMenuSheetFocus(child: sheet);
+  }
   return showModalBottomSheet<void>(
     context: context,
     backgroundColor: Theme.of(context).colorScheme.surface,
     showDragHandle: true,
-    builder: (BuildContext context) => SafeArea(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxHeight: 560),
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
-          children: <Widget>[
-            Text(
-              context.t(title),
-              style: Theme.of(
-                context,
-              ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 10),
-            ...children,
-          ],
-        ),
-      ),
-    ),
+    builder: (BuildContext context) => sheet,
   );
+}
+
+class _TvMenuSheetFocus extends StatefulWidget {
+  const _TvMenuSheetFocus({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_TvMenuSheetFocus> createState() => _TvMenuSheetFocusState();
+}
+
+class _TvMenuSheetFocusState extends State<_TvMenuSheetFocus> {
+  final FocusNode _focusNode = FocusNode(debugLabel: 'TvPlayerMenuSheet');
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _focusNode.requestFocus();
+      _focusNode.nextFocus();
+    });
+  }
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  KeyEventResult _onKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+    final bool forward =
+        event.logicalKey == LogicalKeyboardKey.arrowDown ||
+        event.logicalKey == LogicalKeyboardKey.arrowRight;
+    final bool backward =
+        event.logicalKey == LogicalKeyboardKey.arrowUp ||
+        event.logicalKey == LogicalKeyboardKey.arrowLeft;
+    if (!forward && !backward) return KeyEventResult.ignored;
+
+    final FocusNode? primary = FocusManager.instance.primaryFocus;
+    final bool moved = forward
+        ? (primary?.nextFocus() ?? node.nextFocus())
+        : (primary?.previousFocus() ?? node.previousFocus());
+    if (moved) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final BuildContext? focusedContext =
+            FocusManager.instance.primaryFocus?.context;
+        if (focusedContext == null) return;
+        Scrollable.ensureVisible(
+          focusedContext,
+          duration: const Duration(milliseconds: 140),
+          curve: Curves.easeOutCubic,
+          alignmentPolicy: forward
+              ? ScrollPositionAlignmentPolicy.keepVisibleAtEnd
+              : ScrollPositionAlignmentPolicy.keepVisibleAtStart,
+        );
+      });
+    }
+    return KeyEventResult.handled;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FocusTraversalGroup(
+      policy: ReadingOrderTraversalPolicy(),
+      child: Focus(
+        focusNode: _focusNode,
+        onKeyEvent: _onKey,
+        child: widget.child,
+      ),
+    );
+  }
 }
 
 class _NativePipOverlay extends StatelessWidget {
