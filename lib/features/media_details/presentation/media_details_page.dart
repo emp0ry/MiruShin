@@ -341,7 +341,10 @@ class _OverviewPanel extends ConsumerWidget {
               'Metadata, progress, and library actions only.',
             ),
           ),
-          Text(item.overview, style: Theme.of(context).textTheme.bodyLarge),
+          Text(
+            _localizedOverview(ref, item),
+            style: Theme.of(context).textTheme.bodyLarge,
+          ),
           if (chips.isNotEmpty) ...<Widget>[
             const SizedBox(height: AppSpacing.lg),
             Wrap(
@@ -973,7 +976,7 @@ class _HeroCopy extends ConsumerWidget {
           // ],
           const SizedBox(height: AppSpacing.md),
           Text(
-            item.overview,
+            _localizedOverview(ref, item),
             maxLines: compact ? 4 : 5,
             overflow: TextOverflow.ellipsis,
             style: Theme.of(
@@ -1307,6 +1310,60 @@ final _shikimoriRussianTitleProvider = FutureProvider.autoDispose
           .watch(_shikimoriForDetailsProvider)
           .findRussianTitleByMalId(malId);
     });
+
+// Query candidates are joined with a unit-separator so the family key stays a
+// value type (records don't give List<String> structural equality).
+const String _querySeparator = '';
+
+final _shikimoriRussianDescriptionProvider = FutureProvider.autoDispose
+    .family<String?, ({int malId, String queryBlob, bool isManga})>((
+      Ref ref,
+      ({int malId, String queryBlob, bool isManga}) key,
+    ) async {
+      final List<String> queries = key.queryBlob
+          .split(_querySeparator)
+          .where((String q) => q.isNotEmpty)
+          .toList(growable: false);
+      if (key.malId <= 0 && queries.isEmpty) return null;
+      final ({String title, String description})? details = await ref
+          .watch(_shikimoriForDetailsProvider)
+          .getRussianDetailsForMedia(
+            malId: key.malId > 0 ? key.malId : null,
+            queries: queries,
+            isManga: key.isManga,
+          );
+      final String description = details?.description.trim() ?? '';
+      return description.isEmpty ? null : description;
+    });
+
+/// The media synopsis localized for the chosen AniList title language: when the
+/// user picked "Russian (Shikimori)", pull the Russian description from
+/// Shikimori — by MAL id with original/romaji/alias title fallbacks, the same
+/// lookup the Russian *title* uses — falling back to the original overview while
+/// it loads or when Shikimori has none.
+String _localizedOverview(WidgetRef ref, MediaItem item) {
+  final bool wantsRussian =
+      ref.watch(catalogModeProvider) == CatalogMode.anilist &&
+      ref.watch(aniListEffectiveTitleLanguageProvider) == 'RUSSIAN';
+  if (!wantsRussian) return item.overview;
+  final int malId = int.tryParse(item.externalIds['mal'] ?? '') ?? 0;
+  final List<String> queries = <String>{
+    item.originalTitle.trim(),
+    item.title.trim(),
+    ...item.aliases.map((String a) => a.trim()),
+  }.where((String q) => q.isNotEmpty).toList(growable: false);
+  if (malId <= 0 && queries.isEmpty) return item.overview;
+  final String? russian = ref
+      .watch(
+        _shikimoriRussianDescriptionProvider((
+          malId: malId,
+          queryBlob: queries.join(_querySeparator),
+          isManga: _isAniListManga(item),
+        )),
+      )
+      .maybeWhen(data: (String? value) => value, orElse: () => null);
+  return (russian != null && russian.isNotEmpty) ? russian : item.overview;
+}
 
 /// Interleaves side-content (OVA/Special/Movie/SideStory/SpinOff) near the
 /// main-story entry (Prequel/Sequel) whose air year is closest and prior.

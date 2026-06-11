@@ -28,6 +28,7 @@ class ShikiMoriClient {
   final Map<String, _CacheEntry> _cache = <String, _CacheEntry>{};
 
   static const String _restUrl = 'https://shikimori.one/api/animes';
+  static const String _mangasUrl = 'https://shikimori.one/api/mangas';
   static const String _graphqlUrl = 'https://shikimori.one/api/graphql';
   static const Duration _cacheTtl = Duration(hours: 12);
   static const int _maxCacheSize = 300;
@@ -118,16 +119,17 @@ class ShikiMoriClient {
     }
   }
 
-  // Search anime by Russian (or any) query; returns up to [limit] hits.
+  // Search anime/manga by Russian (or any) query; returns up to [limit] hits.
   Future<List<ShikimoriSearchHit>> searchByQuery(
     String query, {
     int limit = 20,
+    bool isManga = false,
   }) async {
     final String trimmed = query.trim();
     if (trimmed.isEmpty) return const <ShikimoriSearchHit>[];
     try {
       final Response<dynamic> response = await _dio.get<dynamic>(
-        _restUrl,
+        isManga ? _mangasUrl : _restUrl,
         queryParameters: <String, String>{
           'search': trimmed,
           'limit': limit.toString(),
@@ -250,10 +252,11 @@ class ShikiMoriClient {
   Future<({String title, String description})?> getRussianDetails(
     int id, {
     int? expectedMalId,
+    bool isManga = false,
   }) async {
     try {
       final Response<dynamic> response = await _dio.get<dynamic>(
-        '$_restUrl/$id',
+        '${isManga ? _mangasUrl : _restUrl}/$id',
         options: Options(
           headers: const <String, String>{
             'Accept': 'application/json',
@@ -265,7 +268,11 @@ class ShikiMoriClient {
       if (data is! Map) return null;
       if (expectedMalId != null && expectedMalId > 0) {
         final int? actualMalId = _parseInt(data['id_mal']);
-        if (actualMalId != expectedMalId) return null;
+        // Shikimori's REST detail endpoint omits `id_mal`, so only reject when
+        // it is actually present AND disagrees. Rejecting on a missing id_mal
+        // (the common case) discarded every valid response, which is why the
+        // Russian description never came through while titles did.
+        if (actualMalId != null && actualMalId != expectedMalId) return null;
       }
       final String russian = data['russian']?.toString().trim() ?? '';
       final String description = _stripMarkup(
@@ -281,10 +288,15 @@ class ShikiMoriClient {
   Future<({String title, String description})?> getRussianDetailsForMedia({
     int? malId,
     Iterable<String> queries = const <String>[],
+    bool isManga = false,
   }) async {
     if (malId != null && malId > 0) {
       final ({String title, String description})? direct =
-          await getRussianDetails(malId, expectedMalId: malId);
+          await getRussianDetails(
+            malId,
+            expectedMalId: malId,
+            isManga: isManga,
+          );
       if (_hasDetails(direct)) return direct;
     }
 
@@ -295,6 +307,7 @@ class ShikiMoriClient {
       final List<ShikimoriSearchHit> hits = await searchByQuery(
         query,
         limit: 5,
+        isManga: isManga,
       );
       if (hits.isEmpty) continue;
       final ShikimoriSearchHit hit = _bestHit(hits, malId);
@@ -305,6 +318,7 @@ class ShikiMoriClient {
           await getRussianDetails(
             detailId,
             expectedMalId: malId != null && malId > 0 ? malId : null,
+            isManga: isManga,
           );
       if (_hasDetails(details)) return details;
       if (exactMalMatch && hit.russian.isNotEmpty) {
