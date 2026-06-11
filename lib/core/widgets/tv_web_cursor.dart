@@ -21,7 +21,7 @@ class TvWebCursor extends StatefulWidget {
     required this.controller,
     required this.child,
     this.enabled = true,
-    this.step = 30,
+    this.step = 16,
     super.key,
   });
 
@@ -49,6 +49,15 @@ class _TvWebCursorState extends State<TvWebCursor> {
   final FocusNode _focusNode = FocusNode(debugLabel: 'TvWebCursor');
   bool _textInputMode = false;
   bool _channelRegistered = false;
+
+  // Coalesced cursor movement: at most one runJavaScript call is in flight and
+  // key repeats accumulate into it, so the platform channel never builds a
+  // backlog (the old fire-per-event approach made the dot lag further and
+  // further behind while a D-pad direction was held).
+  int _pendingDx = 0;
+  int _pendingDy = 0;
+  bool _moveInFlight = false;
+  int _repeatStreak = 0;
 
   @override
   void initState() {
@@ -103,8 +112,43 @@ class _TvWebCursorState extends State<TvWebCursor> {
     );
   }
 
+  void _queueMove(int dx, int dy, {required bool isRepeat}) {
+    // Gentle acceleration: single presses stay precise, holding a direction
+    // ramps the step up so crossing the page doesn't take forever.
+    _repeatStreak = isRepeat ? _repeatStreak + 1 : 0;
+    final double boost = (1 + _repeatStreak * 0.25).clamp(1.0, 3.0);
+    _pendingDx += (dx * boost).round();
+    _pendingDy += (dy * boost).round();
+    _flushMove();
+  }
+
+  void _flushMove() {
+    if (_moveInFlight || (_pendingDx == 0 && _pendingDy == 0)) return;
+    final int dx = _pendingDx;
+    final int dy = _pendingDy;
+    _pendingDx = 0;
+    _pendingDy = 0;
+    _moveInFlight = true;
+    widget.controller
+        .runJavaScript('window.__tvCursor && window.__tvCursor.move($dx,$dy)')
+        .catchError((_) {})
+        .whenComplete(() {
+          _moveInFlight = false;
+          if (mounted) _flushMove();
+        });
+  }
+
   Future<void> _click() async {
     final _TapInfo tap = await _tapInfo();
+
+    // For an editable target, hand the keys over to the IME *before* the tap:
+    // the real tap focuses the input inside the WebView and raises the
+    // keyboard, and nothing on the Flutter side must fight it for focus while
+    // that happens.
+    if (tap.valid && tap.editable) {
+      _enterTextInputMode();
+    }
+
     bool nativeTapped = false;
     if (tap.valid) {
       try {
@@ -119,17 +163,47 @@ class _TvWebCursorState extends State<TvWebCursor> {
       }
     }
 
-    bool wantsKeyboard = tap.editable;
-    if (tap.editable || !nativeTapped) {
+    // Only synthesise a JS click when the real tap could not be delivered.
+    // Re-clicking after a successful native tap re-fired focus/blur on the
+    // page and was what made the keyboard pop up and immediately close (or
+    // stay open with the focus knocked out of the text box).
+    bool wantsKeyboard = tap.valid && tap.editable;
+    if (!nativeTapped) {
       wantsKeyboard = await _fallbackJsClick() || wantsKeyboard;
     }
-    if (!wantsKeyboard) return;
-    _enterTextInputMode();
-    await Future<void>.delayed(const Duration(milliseconds: 80));
+
+    if (!wantsKeyboard) {
+      if (_textInputMode) _restoreCursorMode();
+      return;
+    }
+    if (!_textInputMode) _enterTextInputMode();
+    // Safety net: a real tap on an editable normally raises the IME by
+    // itself. Give it a moment, then ask explicitly (no-op if already shown).
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    if (!mounted || !_textInputMode) return;
+    if (!await _hasEditableFocus()) {
+      // The tap didn't actually land in a text box — give the D-pad back to
+      // the cursor instead of stranding it in typing mode.
+      _leaveTextInputMode();
+      return;
+    }
     try {
       await TvWebCursor._deviceChannel.invokeMethod<void>('showSoftKeyboard');
     } catch (_) {
       // Non-Android platforms or WebView implementations without the hook.
+    }
+  }
+
+  Future<bool> _hasEditableFocus() async {
+    try {
+      final Object result = await widget.controller
+          .runJavaScriptReturningResult(
+            'window.__tvCursor ? window.__tvCursor.hasEditableFocus() : false',
+          );
+      return result == true || result.toString() == 'true';
+    } catch (_) {
+      // Can't tell — assume the editable focus is fine and keep typing mode.
+      return true;
     }
   }
 
@@ -220,16 +294,17 @@ class _TvWebCursorState extends State<TvWebCursor> {
     if (_textInputMode) {
       return _handleTextInputMode(key, event);
     }
+    final bool isRepeat = event is KeyRepeatEvent;
     if (key == LogicalKeyboardKey.arrowLeft) {
-      _run('move(-${widget.step},0)');
+      _queueMove(-widget.step, 0, isRepeat: isRepeat);
     } else if (key == LogicalKeyboardKey.arrowRight) {
-      _run('move(${widget.step},0)');
+      _queueMove(widget.step, 0, isRepeat: isRepeat);
     } else if (key == LogicalKeyboardKey.arrowUp) {
-      _run('move(0,-${widget.step})');
+      _queueMove(0, -widget.step, isRepeat: isRepeat);
     } else if (key == LogicalKeyboardKey.arrowDown) {
-      _run('move(0,${widget.step})');
+      _queueMove(0, widget.step, isRepeat: isRepeat);
     } else if (_activateKeys.contains(key)) {
-      unawaited(_click());
+      if (!isRepeat) unawaited(_click());
     } else {
       // Let BACK and everything else bubble up (so the page can be closed).
       return KeyEventResult.ignored;
@@ -292,30 +367,37 @@ const String _cursorScript = r'''
   var x = window.innerWidth / 2, y = window.innerHeight / 2;
   var dot = document.createElement('div');
   dot.setAttribute('data-tv-cursor', '1');
+  // Positioned exclusively via transform: compositor-only updates, no layout
+  // work per move, so the dot keeps up with held D-pad repeats.
   dot.style.cssText =
-    'position:fixed;width:20px;height:20px;border-radius:50%;' +
+    'position:fixed;left:0;top:0;width:20px;height:20px;border-radius:50%;' +
     'background:rgba(139,92,246,0.85);border:2px solid #ffffff;' +
     'box-shadow:0 0 10px rgba(0,0,0,0.6);z-index:2147483647;' +
-    'pointer-events:none;transform:translate3d(-50%,-50%,0);' +
-    'will-change:left,top;';
+    'pointer-events:none;will-change:transform;';
   function ensure() {
     if (!dot.parentNode && document.body) {
       document.body.appendChild(dot);
       place();
     }
   }
-  function place() { dot.style.left = x + 'px'; dot.style.top = y + 'px'; }
+  function place() {
+    dot.style.transform =
+      'translate3d(' + (x - 12) + 'px,' + (y - 12) + 'px,0)';
+  }
   function setEditing(editing) {
     ensure();
-    dot.style.opacity = editing ? '0.38' : '1';
+    // Hide the dot entirely while typing so it never sits over the text box.
+    dot.style.opacity = editing ? '0' : '1';
   }
   function move(dx, dy) {
     ensure();
     var margin = 70;
-    if (dx < 0 && x <= margin) window.scrollBy(-28, 0);
-    if (dx > 0 && x >= window.innerWidth - margin) window.scrollBy(28, 0);
-    if (dy < 0 && y <= margin) window.scrollBy(0, -28);
-    if (dy > 0 && y >= window.innerHeight - margin) window.scrollBy(0, 28);
+    var hScroll = Math.max(24, Math.abs(dx) * 2);
+    var vScroll = Math.max(24, Math.abs(dy) * 2);
+    if (dx < 0 && x <= margin) window.scrollBy(-hScroll, 0);
+    if (dx > 0 && x >= window.innerWidth - margin) window.scrollBy(hScroll, 0);
+    if (dy < 0 && y <= margin) window.scrollBy(0, -vScroll);
+    if (dy > 0 && y >= window.innerHeight - margin) window.scrollBy(0, vScroll);
     x = Math.max(6, Math.min(window.innerWidth - 6, x + dx));
     y = Math.max(6, Math.min(window.innerHeight - 6, y + dy));
     place();
@@ -371,12 +453,15 @@ const String _cursorScript = r'''
     }, true);
     document.addEventListener('focusout', function (event) {
       if (editableTarget(event.target)) {
+        // Generous debounce: while the soft keyboard is coming up the input
+        // can transiently lose focus; reporting 'idle' for that instant made
+        // the Flutter side yank focus back and close the keyboard.
         setTimeout(function () {
           if (!activeEditable()) {
             setEditing(false);
             notify('idle');
           }
-        }, 80);
+        }, 250);
       }
     }, true);
     document.addEventListener('keydown', function (event) {
@@ -438,7 +523,8 @@ const String _cursorScript = r'''
     ensure: ensure,
     tapInfo: tapInfo,
     blurActive: blurActive,
-    setEditing: setEditing
+    setEditing: setEditing,
+    hasEditableFocus: function () { return !!activeEditable(); }
   };
   installEditListeners();
   ensure();

@@ -1,0 +1,45 @@
+name: Set up Android release signing
+description: >
+  Recreate the gitignored android/key.properties and keystore from repository
+  secrets so every CI APK is signed with the same stable release key. Without
+  it the build falls back to the runner's freshly generated debug keystore,
+  which gives every APK a different signature — Android then refuses to
+  install an update over an existing install until the app is uninstalled.
+
+inputs:
+  keystore-base64:
+    description: Base64-encoded release keystore (ANDROID_KEYSTORE_BASE64).
+    required: true
+  keystore-password:
+    description: Keystore password (ANDROID_KEYSTORE_PASSWORD).
+    required: true
+  key-alias:
+    description: Key alias inside the keystore (ANDROID_KEY_ALIAS).
+    required: true
+  key-password:
+    description: Password of the key alias (ANDROID_KEY_PASSWORD).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Write keystore and key.properties
+      shell: bash
+      env:
+        KEYSTORE_BASE64: ${{ inputs.keystore-base64 }}
+        KEYSTORE_PASSWORD: ${{ inputs.keystore-password }}
+        KEY_ALIAS: ${{ inputs.key-alias }}
+        KEY_PASSWORD: ${{ inputs.key-password }}
+      run: |
+        if [ -z "$KEYSTORE_BASE64" ]; then
+          echo "::error::ANDROID_KEYSTORE_BASE64 secret is empty. Generate a keystore with 'keytool -genkey -v -keystore release.keystore -alias mirushin -keyalg RSA -keysize 2048 -validity 10000', then add it as a secret with 'base64 -i release.keystore'. Debug-signed CI APKs cannot be installed over each other."
+          exit 1
+        fi
+        printf '%s' "$KEYSTORE_BASE64" | base64 -d > android/release.keystore
+        {
+          printf 'storeFile=../release.keystore\n'
+          printf 'storePassword=%s\n' "$KEYSTORE_PASSWORD"
+          printf 'keyAlias=%s\n' "$KEY_ALIAS"
+          printf 'keyPassword=%s\n' "$KEY_PASSWORD"
+        } > android/key.properties
+        echo "Wrote android/key.properties and android/release.keystore ($(wc -c < android/release.keystore) bytes)."

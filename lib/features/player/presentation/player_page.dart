@@ -9,6 +9,7 @@ import 'package:go_router/go_router.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import '../../../app/localization/app_localizations.dart';
 import '../../../core/platform/tv_platform.dart';
+import '../../../core/widgets/tv_focusable.dart';
 import '../../catalog/application/catalog_mode.dart';
 import '../application/playback_controller.dart';
 import '../application/player_settings.dart';
@@ -70,8 +71,16 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   // Windows mini-player PiP (shrinks the main window, keeps the current
   // player engine running) instead of the native AVPlayer PiP used on iOS/macOS.
   late final bool _windowPipSupported;
+  // skipTraversal keeps the full-screen surface node out of D-pad traversal on
+  // TV (it would otherwise be a whole-screen "invisible" stop), while still
+  // allowing requestFocus() to put keys back on the surface.
   final FocusNode _playerFocusNode = FocusNode(
     debugLabel: 'MiruShinPlayerFocus',
+    skipTraversal: true,
+  );
+  // First chrome control the D-pad lands on (the centre play/pause button).
+  final FocusNode _tvChromeSeedFocus = FocusNode(
+    debugLabel: 'MiruShinTvChromeSeed',
   );
   bool _stoppedPlayback = false;
   bool _exitingPlayer = false;
@@ -321,6 +330,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     _playbackNotifier.setNextEpisodeHandler(null);
     unawaited(_stopPlayback());
     _playerFocusNode.dispose();
+    _tvChromeSeedFocus.dispose();
     SystemChrome.setEnabledSystemUIMode(
       _preserveFullscreenForNextRoute
           ? SystemUiMode.immersiveSticky
@@ -378,6 +388,17 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     if (!isPlaying) {
       notifier.setControlsVisible(true);
       _hideTimer?.cancel();
+      // Land the D-pad on the centre play/pause button right away, so the
+      // chrome is navigable without a "dead" first key press.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final PlayerEngine? current = _tvObservedEngine;
+        if (current == null || current.state.value.isPlaying) return;
+        if (_tvChromeSeedFocus.context != null &&
+            _tvChromeSeedFocus.canRequestFocus) {
+          _tvChromeSeedFocus.requestFocus();
+        }
+      });
     } else {
       _requestPlayerFocus();
       _scheduleHide();
@@ -524,6 +545,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   void _hideControls() {
     _hideTimer?.cancel();
     ref.read(playbackControllerProvider.notifier).setControlsVisible(false);
+    // Never leave the D-pad on a hidden chrome button.
+    if (_isTv) _requestPlayerFocus();
   }
 
   void _toggleControls() {
@@ -874,23 +897,31 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
 
   KeyEventResult _moveTvPlayerFocus(LogicalKeyboardKey key, KeyEvent event) {
     if (event is KeyUpEvent) return KeyEventResult.handled;
-    final bool forward =
-        key == LogicalKeyboardKey.arrowRight ||
-        key == LogicalKeyboardKey.arrowDown;
-    _hideTimer?.cancel();
+    // Keep the chrome up while navigating; _scheduleHide is a no-op while
+    // paused and re-arms the auto-hide while playing.
+    _scheduleHide();
     final FocusNode? primary = FocusManager.instance.primaryFocus;
-    bool moved = false;
-    if (primary != null && primary != _playerFocusNode) {
-      moved = forward ? primary.nextFocus() : primary.previousFocus();
+    // From the bare video surface the first press seeds the chrome at the
+    // centre play/pause button; after that the D-pad moves geometrically
+    // (up/down between rows, left/right along a row).
+    if (primary == null ||
+        primary == _playerFocusNode ||
+        primary is FocusScopeNode) {
+      if (_tvChromeSeedFocus.context != null &&
+          _tvChromeSeedFocus.canRequestFocus) {
+        _tvChromeSeedFocus.requestFocus();
+      } else {
+        _playerFocusNode.nextFocus();
+      }
+      return KeyEventResult.handled;
     }
-    if (!moved) {
-      moved = forward
-          ? _playerFocusNode.nextFocus()
-          : _playerFocusNode.previousFocus();
-    }
-    if (!moved) {
-      _playerFocusNode.nextFocus();
-    }
+    final TraversalDirection direction = switch (key) {
+      LogicalKeyboardKey.arrowUp => TraversalDirection.up,
+      LogicalKeyboardKey.arrowDown => TraversalDirection.down,
+      LogicalKeyboardKey.arrowLeft => TraversalDirection.left,
+      _ => TraversalDirection.right,
+    };
+    primary.focusInDirection(direction);
     return KeyEventResult.handled;
   }
 
@@ -1067,9 +1098,21 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
           onPopInvokedWithResult: (bool didPop, Object? result) {
             if (didPop) {
               unawaited(_stopPlayback());
-            } else {
-              unawaited(_exitPlayer());
+              return;
             }
+            // Standard TV pattern: BACK first dismisses the on-screen chrome,
+            // a second BACK exits. While loading or on error the chrome is
+            // force-visible, so BACK must still exit directly.
+            final PlaybackState popState = ref.read(playbackControllerProvider);
+            if (_isTv &&
+                !_exitingPlayer &&
+                popState.controlsVisible &&
+                !popState.loading &&
+                popState.error == null) {
+              _hideControls();
+              return;
+            }
+            unawaited(_exitPlayer());
           },
           child: Focus(
             focusNode: _playerFocusNode,
@@ -1196,6 +1239,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                                       child: _PlayerChrome(
                                         isFullscreen: _isFullscreen,
                                         isMobile: _isMobile,
+                                        tvSeedFocusNode: _isTv
+                                            ? _tvChromeSeedFocus
+                                            : null,
                                         onExit: () => unawaited(_exitPlayer()),
                                         onToggleFullscreen: _toggleFullscreen,
                                         onEnterNativePip: _nativePipSupported
@@ -1769,6 +1815,7 @@ class _PlayerChrome extends ConsumerWidget {
     required this.onExit,
     required this.onToggleFullscreen,
     this.onEnterNativePip,
+    this.tvSeedFocusNode,
   });
 
   final bool isFullscreen;
@@ -1776,6 +1823,10 @@ class _PlayerChrome extends ConsumerWidget {
   final VoidCallback onExit;
   final VoidCallback onToggleFullscreen;
   final VoidCallback? onEnterNativePip;
+
+  /// On Android TV: attached to the centre play/pause button so the page can
+  /// land D-pad focus there when the chrome appears.
+  final FocusNode? tvSeedFocusNode;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1798,284 +1849,333 @@ class _PlayerChrome extends ConsumerWidget {
     final EdgeInsets padding = MediaQuery.paddingOf(context);
     final double topScrimHeight = padding.top + 96;
     final double bottomScrimHeight = padding.bottom + 132;
-    return Stack(
-      fit: StackFit.expand,
-      children: <Widget>[
-        Positioned(
-          top: 0,
-          left: 0,
-          right: 0,
-          height: topScrimHeight,
-          child: const DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: <Color>[Colors.black87, Colors.transparent],
-              ),
-            ),
-          ),
-        ),
-        Positioned(
-          left: 0,
-          right: 0,
-          bottom: 0,
-          height: bottomScrimHeight,
-          child: const DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.bottomCenter,
-                end: Alignment.topCenter,
-                colors: <Color>[Colors.black87, Colors.transparent],
-              ),
-            ),
-          ),
-        ),
-        SafeArea(
-          child: Column(
-            children: <Widget>[
-              Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 8,
+    return _TvChromeFocusTheme(
+      child: Stack(
+        fit: StackFit.expand,
+        children: <Widget>[
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            height: topScrimHeight,
+            child: const DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: <Color>[Colors.black87, Colors.transparent],
                 ),
-                child: Row(
-                  children: <Widget>[
-                    IconButton(
-                      onPressed: onExit,
-                      icon: const Icon(
-                        Icons.arrow_back_rounded,
-                        color: Colors.white,
+              ),
+            ),
+          ),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            height: bottomScrimHeight,
+            child: const DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.bottomCenter,
+                  end: Alignment.topCenter,
+                  colors: <Color>[Colors.black87, Colors.transparent],
+                ),
+              ),
+            ),
+          ),
+          SafeArea(
+            child: Column(
+              children: <Widget>[
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 8,
+                  ),
+                  child: Row(
+                    children: <Widget>[
+                      IconButton(
+                        onPressed: onExit,
+                        icon: const Icon(
+                          Icons.arrow_back_rounded,
+                          color: Colors.white,
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: <Widget>[
-                          Text(
-                            item?.title ?? 'MiruShin Player',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 18,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                          if (item != null)
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: <Widget>[
                             Text(
-                              _episodeLabel(item),
+                              item?.title ?? 'MiruShin Player',
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: Colors.white.withValues(alpha: .72),
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 18,
+                                fontWeight: FontWeight.w800,
                               ),
                             ),
-                        ],
-                      ),
-                    ),
-                    if (MediaQuery.sizeOf(context).width >= 480) ...<Widget>[
-                      _TopChip(label: state.server?.name ?? 'Server'),
-                      const SizedBox(width: 8),
-                      _TopChip(label: state.quality?.label ?? 'Auto'),
-                    ],
-                    if (onEnterNativePip != null)
-                      IconButton(
-                        tooltip: 'Picture in Picture',
-                        onPressed: onEnterNativePip,
-                        icon: const Icon(
-                          Icons.picture_in_picture_alt_rounded,
-                          color: Colors.white,
-                        ),
-                      )
-                    else if (pipSupported)
-                      IconButton(
-                        onPressed: () {
-                          final double rawAr =
-                              controller?.value.aspectRatio ?? 0;
-                          final double ar = rawAr > 0 ? rawAr : 16 / 9;
-                          final bool playing =
-                              controller?.value.isPlaying ?? true;
-                          unawaited(
-                            ref
-                                .read(pipControllerProvider)
-                                .enter(
-                                  aspectRatio: ar,
-                                  isPlaying: playing,
-                                  hasNext: true,
+                            if (item != null)
+                              Text(
+                                _episodeLabel(item),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: Colors.white.withValues(alpha: .72),
                                 ),
-                          );
-                        },
-                        icon: const Icon(
-                          Icons.picture_in_picture_alt_rounded,
-                          color: Colors.white,
+                              ),
+                          ],
                         ),
                       ),
-                    if (castSupported)
-                      IconButton(
-                        onPressed: () =>
-                            ref.read(castControllerProvider).startSession(),
-                        icon: const Icon(
-                          Icons.cast_rounded,
-                          color: Colors.white,
-                        ),
-                      ),
-                    IconButton(
-                      tooltip: 'Settings',
-                      onPressed: () => _showSettings(context, ref),
-                      icon: const Icon(
-                        Icons.settings_rounded,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const Spacer(),
-              // Listen to the engine state directly so the buffering spinner
-              // clears the moment playback resumes. Reading controller.value
-              // only on Riverpod rebuilds left a stale spinner spinning over a
-              // stream that was already playing until the user toggled
-              // play/pause or fullscreen.
-              if (controller == null)
-                const _PlayerLoadingIndicator()
-              else
-                ValueListenableBuilder<PlayerEngineState>(
-                  valueListenable: controller.state,
-                  builder:
-                      (
-                        BuildContext context,
-                        PlayerEngineState engineState,
-                        Widget? _,
-                      ) {
-                        final bool showLoading =
-                            state.loading ||
-                            !engineState.isInitialized ||
-                            (engineState.isBuffering && !seekPreviewBuffered);
-                        if (showLoading) {
-                          return const _PlayerLoadingIndicator();
-                        }
-                        if (isMobile) {
-                          return _CenterPlayPauseButton(controller: controller);
-                        }
-                        return const SizedBox.shrink();
-                      },
-                ),
-              const Spacer(),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
-                child: Column(
-                  children: <Widget>[
-                    if (controller != null)
-                      _PositionBar(
-                        controller: controller,
-                        skipMarkers: markers,
-                      ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: <Widget>[
-                        _BottomLeftControls(
-                          controller: controller,
-                          isMobile: isMobile,
-                        ),
-                        const SizedBox(width: 18),
-                        Expanded(
-                          child: LayoutBuilder(
-                            builder:
-                                (
-                                  BuildContext context,
-                                  BoxConstraints constraints,
-                                ) {
-                                  final double width = constraints.maxWidth;
-                                  final bool compactStreams = width < 520;
-                                  final bool compactSubs = width < 470;
-                                  final bool compactZoom = width < 420;
-                                  final bool compactSpeed = width < 365;
-                                  final bool compactQuality = width < 315;
-                                  final String speedLabel =
-                                      '${settings.playbackSpeed.toStringAsFixed(settings.playbackSpeed == settings.playbackSpeed.roundToDouble() ? 0 : 2)}x';
-
-                                  return Align(
-                                    alignment: Alignment.centerRight,
-                                    child: SingleChildScrollView(
-                                      scrollDirection: Axis.horizontal,
-                                      reverse: true,
-                                      child: Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: <Widget>[
-                                          _ChromeButton(
-                                            icon: Icons.dns_rounded,
-                                            label: 'Streams',
-                                            showLabel: !compactStreams,
-                                            onTap: () =>
-                                                _showStreamsMenu(context, ref),
-                                          ),
-                                          _ChromeButton(
-                                            icon: Icons.subtitles_rounded,
-                                            label: 'Subs',
-                                            showLabel: !compactSubs,
-                                            onTap: () =>
-                                                _showSubtitleMenu(context, ref),
-                                          ),
-                                          _ChromeButton(
-                                            icon: settings.verticalStretch
-                                                ? Icons.fullscreen_exit_rounded
-                                                : Icons.zoom_out_map_rounded,
-                                            label: settings.verticalStretch
-                                                ? 'Normal'
-                                                : 'Zoom',
-                                            showLabel: !compactZoom,
-                                            onTap: () => ref
-                                                .read(
-                                                  playerSettingsProvider
-                                                      .notifier,
-                                                )
-                                                .setVerticalStretch(
-                                                  !settings.verticalStretch,
-                                                ),
-                                          ),
-                                          _ChromeButton(
-                                            icon: Icons.speed_rounded,
-                                            label: speedLabel,
-                                            showLabel: !compactSpeed,
-                                            onTap: () =>
-                                                _showSpeedMenu(context, ref),
-                                          ),
-                                          _ChromeButton(
-                                            icon: Icons.high_quality_rounded,
-                                            label: 'Quality',
-                                            showLabel: !compactQuality,
-                                            onTap: () =>
-                                                _showQualityMenu(context, ref),
-                                          ),
-                                          if (!isMobile)
-                                            _ChromeIconButton(
-                                              icon: isFullscreen
-                                                  ? Icons
-                                                        .fullscreen_exit_rounded
-                                                  : Icons.fullscreen_rounded,
-                                              tooltip: isFullscreen
-                                                  ? 'Exit fullscreen'
-                                                  : 'Fullscreen',
-                                              onTap: onToggleFullscreen,
-                                            ),
-                                        ],
-                                      ),
-                                    ),
-                                  );
-                                },
+                      if (MediaQuery.sizeOf(context).width >= 480) ...<Widget>[
+                        _TopChip(label: state.server?.name ?? 'Server'),
+                        const SizedBox(width: 8),
+                        _TopChip(label: state.quality?.label ?? 'Auto'),
+                      ],
+                      if (onEnterNativePip != null)
+                        IconButton(
+                          tooltip: 'Picture in Picture',
+                          onPressed: onEnterNativePip,
+                          icon: const Icon(
+                            Icons.picture_in_picture_alt_rounded,
+                            color: Colors.white,
+                          ),
+                        )
+                      else if (pipSupported)
+                        IconButton(
+                          onPressed: () {
+                            final double rawAr =
+                                controller?.value.aspectRatio ?? 0;
+                            final double ar = rawAr > 0 ? rawAr : 16 / 9;
+                            final bool playing =
+                                controller?.value.isPlaying ?? true;
+                            unawaited(
+                              ref
+                                  .read(pipControllerProvider)
+                                  .enter(
+                                    aspectRatio: ar,
+                                    isPlaying: playing,
+                                    hasNext: true,
+                                  ),
+                            );
+                          },
+                          icon: const Icon(
+                            Icons.picture_in_picture_alt_rounded,
+                            color: Colors.white,
                           ),
                         ),
-                      ],
-                    ),
-                  ],
+                      if (castSupported)
+                        IconButton(
+                          onPressed: () =>
+                              ref.read(castControllerProvider).startSession(),
+                          icon: const Icon(
+                            Icons.cast_rounded,
+                            color: Colors.white,
+                          ),
+                        ),
+                      IconButton(
+                        tooltip: 'Settings',
+                        onPressed: () => _showSettings(context, ref),
+                        icon: const Icon(
+                          Icons.settings_rounded,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-            ],
+                const Spacer(),
+                // Listen to the engine state directly so the buffering spinner
+                // clears the moment playback resumes. Reading controller.value
+                // only on Riverpod rebuilds left a stale spinner spinning over a
+                // stream that was already playing until the user toggled
+                // play/pause or fullscreen.
+                if (controller == null)
+                  const _PlayerLoadingIndicator()
+                else
+                  ValueListenableBuilder<PlayerEngineState>(
+                    valueListenable: controller.state,
+                    builder:
+                        (
+                          BuildContext context,
+                          PlayerEngineState engineState,
+                          Widget? _,
+                        ) {
+                          final bool showLoading =
+                              state.loading ||
+                              !engineState.isInitialized ||
+                              (engineState.isBuffering && !seekPreviewBuffered);
+                          if (showLoading) {
+                            return const _PlayerLoadingIndicator();
+                          }
+                          if (isMobile) {
+                            return _CenterPlayPauseButton(
+                              controller: controller,
+                              focusNode: tvSeedFocusNode,
+                            );
+                          }
+                          return const SizedBox.shrink();
+                        },
+                  ),
+                const Spacer(),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+                  child: Column(
+                    children: <Widget>[
+                      if (controller != null)
+                        _PositionBar(
+                          controller: controller,
+                          skipMarkers: markers,
+                        ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: <Widget>[
+                          _BottomLeftControls(
+                            controller: controller,
+                            isMobile: isMobile,
+                          ),
+                          const SizedBox(width: 18),
+                          Expanded(
+                            child: LayoutBuilder(
+                              builder:
+                                  (
+                                    BuildContext context,
+                                    BoxConstraints constraints,
+                                  ) {
+                                    final double width = constraints.maxWidth;
+                                    final bool compactStreams = width < 520;
+                                    final bool compactSubs = width < 470;
+                                    final bool compactZoom = width < 420;
+                                    final bool compactSpeed = width < 365;
+                                    final bool compactQuality = width < 315;
+                                    final String speedLabel =
+                                        '${settings.playbackSpeed.toStringAsFixed(settings.playbackSpeed == settings.playbackSpeed.roundToDouble() ? 0 : 2)}x';
+
+                                    return Align(
+                                      alignment: Alignment.centerRight,
+                                      child: SingleChildScrollView(
+                                        scrollDirection: Axis.horizontal,
+                                        reverse: true,
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: <Widget>[
+                                            _ChromeButton(
+                                              icon: Icons.dns_rounded,
+                                              label: 'Streams',
+                                              showLabel: !compactStreams,
+                                              onTap: () => _showStreamsMenu(
+                                                context,
+                                                ref,
+                                              ),
+                                            ),
+                                            _ChromeButton(
+                                              icon: Icons.subtitles_rounded,
+                                              label: 'Subs',
+                                              showLabel: !compactSubs,
+                                              onTap: () => _showSubtitleMenu(
+                                                context,
+                                                ref,
+                                              ),
+                                            ),
+                                            _ChromeButton(
+                                              icon: settings.verticalStretch
+                                                  ? Icons
+                                                        .fullscreen_exit_rounded
+                                                  : Icons.zoom_out_map_rounded,
+                                              label: settings.verticalStretch
+                                                  ? 'Normal'
+                                                  : 'Zoom',
+                                              showLabel: !compactZoom,
+                                              onTap: () => ref
+                                                  .read(
+                                                    playerSettingsProvider
+                                                        .notifier,
+                                                  )
+                                                  .setVerticalStretch(
+                                                    !settings.verticalStretch,
+                                                  ),
+                                            ),
+                                            _ChromeButton(
+                                              icon: Icons.speed_rounded,
+                                              label: speedLabel,
+                                              showLabel: !compactSpeed,
+                                              onTap: () =>
+                                                  _showSpeedMenu(context, ref),
+                                            ),
+                                            _ChromeButton(
+                                              icon: Icons.high_quality_rounded,
+                                              label: 'Quality',
+                                              showLabel: !compactQuality,
+                                              onTap: () => _showQualityMenu(
+                                                context,
+                                                ref,
+                                              ),
+                                            ),
+                                            if (!isMobile)
+                                              _ChromeIconButton(
+                                                icon: isFullscreen
+                                                    ? Icons
+                                                          .fullscreen_exit_rounded
+                                                    : Icons.fullscreen_rounded,
+                                                tooltip: isFullscreen
+                                                    ? 'Exit fullscreen'
+                                                    : 'Fullscreen',
+                                                onTap: onToggleFullscreen,
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                    );
+                                  },
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// On Android TV, gives every chrome button a clearly visible focus state
+/// (accent ring + fill) so the D-pad position is readable from the couch.
+/// Everywhere else it is a no-op.
+class _TvChromeFocusTheme extends StatelessWidget {
+  const _TvChromeFocusTheme({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!TvPlatform.isAndroidTv) return child;
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    final ButtonStyle style = ButtonStyle(
+      overlayColor: WidgetStateProperty.resolveWith(
+        (Set<WidgetState> states) => states.contains(WidgetState.focused)
+            ? scheme.primary.withValues(alpha: 0.45)
+            : null,
+      ),
+      side: WidgetStateProperty.resolveWith(
+        (Set<WidgetState> states) => states.contains(WidgetState.focused)
+            ? BorderSide(color: scheme.primary, width: 2.5)
+            : null,
+      ),
+    );
+    return IconButtonTheme(
+      data: IconButtonThemeData(style: style),
+      child: TextButtonTheme(
+        data: TextButtonThemeData(style: style),
+        child: FilledButtonTheme(
+          data: FilledButtonThemeData(style: style),
+          child: child,
         ),
-      ],
+      ),
     );
   }
 }
@@ -2158,9 +2258,10 @@ class _PositionLabelState extends ConsumerState<_PositionLabel> {
 }
 
 class _CenterPlayPauseButton extends ConsumerWidget {
-  const _CenterPlayPauseButton({required this.controller});
+  const _CenterPlayPauseButton({required this.controller, this.focusNode});
 
   final PlayerEngine? controller;
+  final FocusNode? focusNode;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -2172,6 +2273,7 @@ class _CenterPlayPauseButton extends ConsumerWidget {
       padding: EdgeInsets.zero,
       color: Colors.white,
       disabledColor: Colors.white38,
+      focusNode: focusNode,
       onPressed: enabled
           ? ref.read(playbackControllerProvider.notifier).togglePlay
           : null,
@@ -2306,35 +2408,44 @@ class _InlineVolumeControlState extends ConsumerState<_InlineVolumeControl> {
                 .setVolume(volume > 0 ? 0 : 1),
             icon: Icon(icon),
           ),
-          ClipRect(
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 180),
-              curve: Curves.easeOutCubic,
-              width: _hovered ? 96 : 0,
-              child: AnimatedOpacity(
-                duration: const Duration(milliseconds: 140),
-                opacity: _hovered ? 1 : 0,
-                child: Padding(
-                  padding: const EdgeInsets.only(left: 8, right: 8),
-                  child: SliderTheme(
-                    data: SliderTheme.of(context).copyWith(
-                      trackHeight: 3,
-                      activeTrackColor: Colors.white,
-                      inactiveTrackColor: Colors.white.withValues(alpha: 0.35),
-                      thumbColor: Colors.white,
-                      overlayColor: Colors.white.withValues(alpha: 0.12),
-                      thumbShape: const RoundSliderThumbShape(
-                        enabledThumbRadius: 6,
+          // While collapsed (width 0) the slider is invisible but would still
+          // be focusable — on TV that makes the D-pad vanish into it and the
+          // slider then eats all four arrow keys. Keep it out of focus until
+          // it is actually shown.
+          ExcludeFocus(
+            excluding: !_hovered,
+            child: ClipRect(
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                curve: Curves.easeOutCubic,
+                width: _hovered ? 96 : 0,
+                child: AnimatedOpacity(
+                  duration: const Duration(milliseconds: 140),
+                  opacity: _hovered ? 1 : 0,
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: 8, right: 8),
+                    child: SliderTheme(
+                      data: SliderTheme.of(context).copyWith(
+                        trackHeight: 3,
+                        activeTrackColor: Colors.white,
+                        inactiveTrackColor: Colors.white.withValues(
+                          alpha: 0.35,
+                        ),
+                        thumbColor: Colors.white,
+                        overlayColor: Colors.white.withValues(alpha: 0.12),
+                        thumbShape: const RoundSliderThumbShape(
+                          enabledThumbRadius: 6,
+                        ),
+                        overlayShape: const RoundSliderOverlayShape(
+                          overlayRadius: 10,
+                        ),
                       ),
-                      overlayShape: const RoundSliderOverlayShape(
-                        overlayRadius: 10,
+                      child: Slider(
+                        value: volume,
+                        onChanged: (double next) => ref
+                            .read(playbackControllerProvider.notifier)
+                            .setVolume(next),
                       ),
-                    ),
-                    child: Slider(
-                      value: volume,
-                      onChanged: (double next) => ref
-                          .read(playbackControllerProvider.notifier)
-                          .setVolume(next),
                     ),
                   ),
                 ),
@@ -2490,100 +2601,108 @@ class _PositionBarState extends ConsumerState<_PositionBar> {
                     ),
                   ),
                 ),
-              SliderTheme(
-                data: sliderTheme,
-                child: TweenAnimationBuilder<double>(
-                  tween: Tween<double>(end: value),
-                  duration: isInteracting
-                      ? Duration.zero
-                      : const Duration(milliseconds: 140),
-                  curve: Curves.linear,
-                  builder:
-                      (
-                        BuildContext context,
-                        double animatedValue,
-                        Widget? child,
-                      ) {
-                        final double displayedValue = isInteracting
-                            ? value
-                            : animatedValue.clamp(0, 1).toDouble();
-                        return TweenAnimationBuilder<double>(
-                          tween: Tween<double>(end: bufferedValue),
-                          duration: isInteracting
-                              ? Duration.zero
-                              : const Duration(milliseconds: 220),
-                          curve: Curves.easeOutCubic,
-                          builder:
-                              (
-                                BuildContext context,
-                                double animatedBufferedValue,
-                                Widget? child,
-                              ) {
-                                final double displayedBufferedValue =
-                                    animatedBufferedValue
-                                        .clamp(0, 1)
-                                        .toDouble();
-                                return Slider(
-                                  value: displayedValue,
-                                  secondaryTrackValue:
-                                      displayedBufferedValue > displayedValue
-                                      ? displayedBufferedValue
-                                      : null,
-                                  onChangeStart: duration.inMilliseconds <= 0
-                                      ? null
-                                      : (double startValue) {
-                                          final Duration pos =
-                                              _positionFromValue(
-                                                duration,
-                                                startValue,
-                                              );
-                                          setState(() {
-                                            _dragValue = startValue;
-                                            _lastDragPosition = pos;
-                                          });
-                                          final PlaybackController
-                                          notifier = ref.read(
-                                            playbackControllerProvider.notifier,
-                                          );
-                                          notifier.beginSeekPreview();
-                                          notifier.previewSeekTo(pos);
-                                        },
-                                  onChanged: duration.inMilliseconds <= 0
-                                      ? null
-                                      : (double v) {
-                                          final Duration pos =
-                                              _positionFromValue(duration, v);
-                                          setState(() {
-                                            _dragValue = v;
-                                            _lastDragPosition = pos;
-                                          });
-                                          ref
-                                              .read(
-                                                playbackControllerProvider
-                                                    .notifier,
-                                              )
-                                              .previewSeekTo(pos);
-                                        },
-                                  onChangeEnd: duration.inMilliseconds <= 0
-                                      ? null
-                                      : (double v) {
-                                          final Duration pos =
-                                              _positionFromValue(duration, v);
-                                          setState(() {
-                                            _dragValue = null;
-                                            _lastDragPosition = pos;
-                                          });
-                                          final PlaybackController
-                                          notifier = ref.read(
-                                            playbackControllerProvider.notifier,
-                                          );
-                                          notifier.seekTo(pos);
-                                          notifier.endSeekPreview();
-                                        },
-                                );
-                              },
-                        );
-                      },
+              // On TV the timeline is driven with Left/Right seek on the
+              // playback surface; a focused Slider would swallow every arrow
+              // key and strand the D-pad, so keep it out of traversal there.
+              ExcludeFocus(
+                excluding: TvPlatform.isAndroidTv,
+                child: SliderTheme(
+                  data: sliderTheme,
+                  child: TweenAnimationBuilder<double>(
+                    tween: Tween<double>(end: value),
+                    duration: isInteracting
+                        ? Duration.zero
+                        : const Duration(milliseconds: 140),
+                    curve: Curves.linear,
+                    builder:
+                        (
+                          BuildContext context,
+                          double animatedValue,
+                          Widget? child,
+                        ) {
+                          final double displayedValue = isInteracting
+                              ? value
+                              : animatedValue.clamp(0, 1).toDouble();
+                          return TweenAnimationBuilder<double>(
+                            tween: Tween<double>(end: bufferedValue),
+                            duration: isInteracting
+                                ? Duration.zero
+                                : const Duration(milliseconds: 220),
+                            curve: Curves.easeOutCubic,
+                            builder:
+                                (
+                                  BuildContext context,
+                                  double animatedBufferedValue,
+                                  Widget? child,
+                                ) {
+                                  final double displayedBufferedValue =
+                                      animatedBufferedValue
+                                          .clamp(0, 1)
+                                          .toDouble();
+                                  return Slider(
+                                    value: displayedValue,
+                                    secondaryTrackValue:
+                                        displayedBufferedValue > displayedValue
+                                        ? displayedBufferedValue
+                                        : null,
+                                    onChangeStart: duration.inMilliseconds <= 0
+                                        ? null
+                                        : (double startValue) {
+                                            final Duration pos =
+                                                _positionFromValue(
+                                                  duration,
+                                                  startValue,
+                                                );
+                                            setState(() {
+                                              _dragValue = startValue;
+                                              _lastDragPosition = pos;
+                                            });
+                                            final PlaybackController notifier =
+                                                ref.read(
+                                                  playbackControllerProvider
+                                                      .notifier,
+                                                );
+                                            notifier.beginSeekPreview();
+                                            notifier.previewSeekTo(pos);
+                                          },
+                                    onChanged: duration.inMilliseconds <= 0
+                                        ? null
+                                        : (double v) {
+                                            final Duration pos =
+                                                _positionFromValue(duration, v);
+                                            setState(() {
+                                              _dragValue = v;
+                                              _lastDragPosition = pos;
+                                            });
+                                            ref
+                                                .read(
+                                                  playbackControllerProvider
+                                                      .notifier,
+                                                )
+                                                .previewSeekTo(pos);
+                                          },
+                                    onChangeEnd: duration.inMilliseconds <= 0
+                                        ? null
+                                        : (double v) {
+                                            final Duration pos =
+                                                _positionFromValue(duration, v);
+                                            setState(() {
+                                              _dragValue = null;
+                                              _lastDragPosition = pos;
+                                            });
+                                            final PlaybackController notifier =
+                                                ref.read(
+                                                  playbackControllerProvider
+                                                      .notifier,
+                                                );
+                                            notifier.seekTo(pos);
+                                            notifier.endSeekPreview();
+                                          },
+                                  );
+                                },
+                          );
+                        },
+                  ),
                 ),
               ),
               Positioned(
@@ -3808,18 +3927,39 @@ class _SubtitleAppearanceTiles extends ConsumerWidget {
                 : null,
           ),
         ),
-        ListTile(
-          leading: const Icon(Icons.vertical_align_bottom_rounded),
-          title: Text(context.t('Position')),
-          subtitle: Slider(
-            value: s.subtitleBottomOffset.clamp(20.0, 300.0),
-            min: 20,
-            max: 300,
-            divisions: 28,
-            label: s.subtitleBottomOffset.round().toString(),
-            onChanged: (double v) => ctrl.setSubtitleBottomOffset(v),
+        // A focused Slider consumes every D-pad arrow, so on TV the slider
+        // tiles become +/- steppers instead.
+        if (TvPlatform.isAndroidTv)
+          ListTile(
+            leading: const Icon(Icons.vertical_align_bottom_rounded),
+            title: Text(context.t('Position')),
+            trailing: _StepRow(
+              value: s.subtitleBottomOffset.round().toString(),
+              onDecrement: s.subtitleBottomOffset > 20
+                  ? () => ctrl.setSubtitleBottomOffset(
+                      (s.subtitleBottomOffset - 10).clamp(20.0, 300.0),
+                    )
+                  : null,
+              onIncrement: s.subtitleBottomOffset < 300
+                  ? () => ctrl.setSubtitleBottomOffset(
+                      (s.subtitleBottomOffset + 10).clamp(20.0, 300.0),
+                    )
+                  : null,
+            ),
+          )
+        else
+          ListTile(
+            leading: const Icon(Icons.vertical_align_bottom_rounded),
+            title: Text(context.t('Position')),
+            subtitle: Slider(
+              value: s.subtitleBottomOffset.clamp(20.0, 300.0),
+              min: 20,
+              max: 300,
+              divisions: 28,
+              label: s.subtitleBottomOffset.round().toString(),
+              onChanged: (double v) => ctrl.setSubtitleBottomOffset(v),
+            ),
           ),
-        ),
         ListTile(
           leading: const Icon(Icons.palette_rounded),
           title: Text(context.t('Text color')),
@@ -3830,8 +3970,9 @@ class _SubtitleAppearanceTiles extends ConsumerWidget {
                   final bool selected = s.subtitleTextColor == c.$2;
                   return Padding(
                     padding: const EdgeInsets.only(left: 6),
-                    child: GestureDetector(
+                    child: TvFocusable(
                       onTap: () => ctrl.setSubtitleTextColor(c.$2),
+                      borderRadius: BorderRadius.circular(999),
                       child: Container(
                         width: 26,
                         height: 26,
@@ -3858,7 +3999,25 @@ class _SubtitleAppearanceTiles extends ConsumerWidget {
           value: s.subtitleHasBackground,
           onChanged: (bool v) => ctrl.setSubtitleHasBackground(v),
         ),
-        if (s.subtitleHasBackground)
+        if (s.subtitleHasBackground && TvPlatform.isAndroidTv)
+          ListTile(
+            leading: const Icon(Icons.blur_on_rounded),
+            title: Text(context.t('Background opacity')),
+            trailing: _StepRow(
+              value: '${(s.subtitleBackgroundOpacity * 100).round()}%',
+              onDecrement: s.subtitleBackgroundOpacity > 0
+                  ? () => ctrl.setSubtitleBackgroundOpacity(
+                      (s.subtitleBackgroundOpacity - 0.05).clamp(0.0, 1.0),
+                    )
+                  : null,
+              onIncrement: s.subtitleBackgroundOpacity < 1
+                  ? () => ctrl.setSubtitleBackgroundOpacity(
+                      (s.subtitleBackgroundOpacity + 0.05).clamp(0.0, 1.0),
+                    )
+                  : null,
+            ),
+          )
+        else if (s.subtitleHasBackground)
           ListTile(
             leading: const Icon(Icons.blur_on_rounded),
             title: Text(context.t('Background opacity')),

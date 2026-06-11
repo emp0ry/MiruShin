@@ -183,14 +183,26 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun showSoftKeyboard(): Boolean {
-        val focused = currentFocus ?: window.decorView.findFocus() ?: return false
-        focused.requestFocus()
-        focused.requestFocusFromTouch()
+        // Prefer the WebView: after a synthesised tap on a page input the IME
+        // must attach to the WebView's input connection, not whatever Flutter
+        // view happens to hold focus — that is what left the keyboard typing
+        // "outside" the text box on Android TV.
+        val target = (currentFocus as? WebView)
+            ?: findWebView(window.decorView)
+            ?: currentFocus
+            ?: window.decorView.findFocus()
+            ?: return false
         val inputMethodManager =
             getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
                 ?: return false
-        focused.post {
-            inputMethodManager.showSoftInput(focused, InputMethodManager.SHOW_IMPLICIT)
+        if (!target.hasFocus()) {
+            target.requestFocus()
+            target.requestFocusFromTouch()
+        }
+        target.post {
+            // Explicit request (no SHOW_IMPLICIT): TVs treat implicit requests
+            // as ignorable because a "hard keyboard" (the remote) is present.
+            inputMethodManager.showSoftInput(target, 0)
         }
         return true
     }
