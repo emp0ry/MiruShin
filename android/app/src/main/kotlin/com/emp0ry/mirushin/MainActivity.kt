@@ -19,6 +19,7 @@ import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.os.Build
 import android.util.Rational
+import android.view.inputmethod.InputMethodManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -151,6 +152,7 @@ class MainActivity : FlutterActivity() {
         dch.setMethodCallHandler { call, result ->
             when (call.method) {
                 "isTelevision" -> result.success(isRunningOnTelevision())
+                "showSoftKeyboard" -> result.success(showSoftKeyboard())
                 else -> result.notImplemented()
             }
         }
@@ -166,6 +168,19 @@ class MainActivity : FlutterActivity() {
         }
         return packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK) ||
             packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK_ONLY)
+    }
+
+    private fun showSoftKeyboard(): Boolean {
+        val focused = currentFocus ?: window.decorView.findFocus() ?: return false
+        focused.requestFocus()
+        focused.requestFocusFromTouch()
+        val inputMethodManager =
+            getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+                ?: return false
+        focused.post {
+            inputMethodManager.showSoftInput(focused, InputMethodManager.SHOW_IMPLICIT)
+        }
+        return true
     }
 
     // ── PiP enter ─────────────────────────────────────────────────────────

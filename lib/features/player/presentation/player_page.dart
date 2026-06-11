@@ -770,26 +770,35 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     );
 
     if (_isTv) {
-      // D-pad centre / OK toggles play & pause. (When a control button holds
-      // focus this handler isn't called, so OK still activates that button.)
+      // D-pad centre / OK toggles play & pause from the video surface. If a
+      // chrome control owns focus, leave activation to that control.
       if (key == LogicalKeyboardKey.select ||
           key == LogicalKeyboardKey.enter ||
           key == LogicalKeyboardKey.numpadEnter ||
           key == LogicalKeyboardKey.gameButtonA) {
+        if (state.controlsVisible &&
+            !state.locked &&
+            FocusManager.instance.primaryFocus != _playerFocusNode) {
+          return KeyEventResult.ignored;
+        }
         if (event is! KeyDownEvent) return KeyEventResult.handled;
         unawaited(notifier.togglePlay());
         return KeyEventResult.handled;
       }
-      // While paused with the controls visible, let the D-pad traverse the
-      // on-screen controls instead of seeking / changing volume.
-      final bool isPlaying = state.engine?.state.value.isPlaying ?? false;
-      if (!isPlaying &&
-          state.controlsVisible &&
+      // On Android TV, Up/Down are navigation, not volume. When the chrome is
+      // visible, Left/Right should also move through controls instead of seek.
+      if (key == LogicalKeyboardKey.arrowUp ||
+          key == LogicalKeyboardKey.arrowDown) {
+        if (!state.controlsVisible && !state.locked) {
+          if (event is KeyDownEvent) _showControls();
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      }
+      if (state.controlsVisible &&
           !state.locked &&
           (key == LogicalKeyboardKey.arrowLeft ||
-              key == LogicalKeyboardKey.arrowRight ||
-              key == LogicalKeyboardKey.arrowUp ||
-              key == LogicalKeyboardKey.arrowDown)) {
+              key == LogicalKeyboardKey.arrowRight)) {
         return KeyEventResult.ignored;
       }
     }
@@ -909,33 +918,37 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       _lastPipIsPlaying = null;
     }
 
+    final playerShortcuts = <ShortcutActivator, Intent>{
+      const SingleActivator(LogicalKeyboardKey.space): _TogglePlayIntent(),
+      if (!_isTv ||
+          !state.controlsVisible ||
+          state.locked) ...const <ShortcutActivator, Intent>{
+        SingleActivator(LogicalKeyboardKey.arrowLeft): _SeekIntent(
+          backward: true,
+        ),
+        SingleActivator(LogicalKeyboardKey.arrowRight): _SeekIntent(
+          backward: false,
+        ),
+      },
+      if (!_isTv) ...const <ShortcutActivator, Intent>{
+        SingleActivator(LogicalKeyboardKey.arrowUp): _VolumeIntent(up: true),
+        SingleActivator(LogicalKeyboardKey.arrowDown): _VolumeIntent(up: false),
+      },
+      const SingleActivator(LogicalKeyboardKey.keyM): _MuteIntent(),
+      const SingleActivator(LogicalKeyboardKey.keyS): _SubtitlesIntent(),
+      const SingleActivator(LogicalKeyboardKey.keyE): _EpisodesIntent(),
+      const SingleActivator(LogicalKeyboardKey.keyQ): _QualityIntent(),
+      const SingleActivator(LogicalKeyboardKey.keyF): _FullscreenIntent(),
+      const SingleActivator(LogicalKeyboardKey.escape): _BackIntent(),
+    };
+
     return Shortcuts(
       shortcuts: isYoutubeTrailer
           ? const <ShortcutActivator, Intent>{
               SingleActivator(LogicalKeyboardKey.keyF): _FullscreenIntent(),
               SingleActivator(LogicalKeyboardKey.escape): _BackIntent(),
             }
-          : const <ShortcutActivator, Intent>{
-              SingleActivator(LogicalKeyboardKey.space): _TogglePlayIntent(),
-              SingleActivator(LogicalKeyboardKey.arrowLeft): _SeekIntent(
-                backward: true,
-              ),
-              SingleActivator(LogicalKeyboardKey.arrowRight): _SeekIntent(
-                backward: false,
-              ),
-              SingleActivator(LogicalKeyboardKey.arrowUp): _VolumeIntent(
-                up: true,
-              ),
-              SingleActivator(LogicalKeyboardKey.arrowDown): _VolumeIntent(
-                up: false,
-              ),
-              SingleActivator(LogicalKeyboardKey.keyM): _MuteIntent(),
-              SingleActivator(LogicalKeyboardKey.keyS): _SubtitlesIntent(),
-              SingleActivator(LogicalKeyboardKey.keyE): _EpisodesIntent(),
-              SingleActivator(LogicalKeyboardKey.keyQ): _QualityIntent(),
-              SingleActivator(LogicalKeyboardKey.keyF): _FullscreenIntent(),
-              SingleActivator(LogicalKeyboardKey.escape): _BackIntent(),
-            },
+          : playerShortcuts,
       child: Actions(
         actions: <Type, Action<Intent>>{
           _TogglePlayIntent: CallbackAction<_TogglePlayIntent>(

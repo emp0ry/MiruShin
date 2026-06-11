@@ -200,6 +200,7 @@ import AVKit
 
 final class MiruShinAVPlayerViewController: AVPlayerViewController {
   weak var channel: FlutterMethodChannel?
+  var onDismissed: ((MiruShinAVPlayerViewController) -> Void)?
   var pipActive = false
   var didReachEnd = false
   var didSendTerminalEvent = false
@@ -214,12 +215,26 @@ final class MiruShinAVPlayerViewController: AVPlayerViewController {
   var endObserver: NSObjectProtocol?
 
   deinit {
+    cleanupForRelease()
+  }
+
+  func cleanupForRelease() {
     if let token = timeObserverToken {
       player?.removeTimeObserver(token)
+      timeObserverToken = nil
     }
     statusObserver?.invalidate()
+    statusObserver = nil
     rateObserver?.invalidate()
-    if let eo = endObserver { NotificationCenter.default.removeObserver(eo) }
+    rateObserver = nil
+    if let eo = endObserver {
+      NotificationCenter.default.removeObserver(eo)
+      endObserver = nil
+    }
+    player?.pause()
+    player = nil
+    channel = nil
+    onDismissed = nil
   }
 
   override func viewDidDisappear(_ animated: Bool) {
@@ -238,6 +253,7 @@ final class MiruShinAVPlayerViewController: AVPlayerViewController {
       "durationMs": durMs.isFinite ? durMs : 0.0,
       "wasPlaying": player.rate > 0,
     ])
+    onDismissed?(self)
   }
 
   override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
@@ -331,6 +347,13 @@ final class NativePlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
     // We handle dismissal ourselves so we control the event timing.
     vc.exitsFullScreenWhenPlaybackEnds = false
     vc.desiredRate = playbackRate
+    vc.onDismissed = { [weak self] dismissedVC in
+      guard let self = self else { return }
+      if let active = self.currentVC, active === dismissedVC {
+        self.currentVC = nil
+      }
+      dismissedVC.cleanupForRelease()
+    }
     currentVC = vc
 
     // Track non-zero rate so skip/stall resume preserves user intent.
@@ -490,7 +513,7 @@ final class NativePlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
       guard let self = self else { return }
       if vc.didReachEnd || vc.didSendTerminalEvent || vc.pipRestoreInFlight || vc.didRestoreFromPip { return }
       self.emitDismissed(vc, wasPlaying: false, pause: true)
-      vc.player = nil
+      vc.cleanupForRelease()
     }
   }
 

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
@@ -18,7 +20,7 @@ class TvWebCursor extends StatelessWidget {
     required this.controller,
     required this.child,
     this.enabled = true,
-    this.step = 38,
+    this.step = 56,
     super.key,
   });
 
@@ -26,6 +28,8 @@ class TvWebCursor extends StatelessWidget {
   final Widget child;
   final bool enabled;
   final int step;
+
+  static const MethodChannel _deviceChannel = MethodChannel('mirushin/device');
 
   /// Injects (idempotently) the cursor into the currently loaded page.
   static Future<void> inject(WebViewController controller) async {
@@ -38,7 +42,34 @@ class TvWebCursor extends StatelessWidget {
 
   void _run(String body) {
     // Guard so a not-yet-injected page can't throw.
-    controller.runJavaScript('window.__tvCursor && window.__tvCursor.$body');
+    unawaited(
+      controller
+          .runJavaScript('window.__tvCursor && window.__tvCursor.$body')
+          .catchError((_) {}),
+    );
+  }
+
+  Future<void> _click() async {
+    bool wantsKeyboard = false;
+    try {
+      final Object result = await controller.runJavaScriptReturningResult(
+        'window.__tvCursor ? window.__tvCursor.click() : false',
+      );
+      wantsKeyboard = result == true || result.toString() == 'true';
+    } catch (_) {
+      try {
+        await controller.runJavaScript(
+          'window.__tvCursor && window.__tvCursor.click()',
+        );
+      } catch (_) {}
+    }
+    if (!wantsKeyboard) return;
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+    try {
+      await _deviceChannel.invokeMethod<void>('showSoftKeyboard');
+    } catch (_) {
+      // Non-Android platforms or WebView implementations without the hook.
+    }
   }
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
@@ -55,7 +86,7 @@ class TvWebCursor extends StatelessWidget {
     } else if (key == LogicalKeyboardKey.arrowDown) {
       _run('move(0,$step)');
     } else if (_activateKeys.contains(key)) {
-      _run('click()');
+      unawaited(_click());
     } else {
       // Let BACK and everything else bubble up (so the page can be closed).
       return KeyEventResult.ignored;
@@ -88,8 +119,8 @@ const String _cursorScript = r'''
     'position:fixed;width:20px;height:20px;border-radius:50%;' +
     'background:rgba(139,92,246,0.85);border:2px solid #ffffff;' +
     'box-shadow:0 0 10px rgba(0,0,0,0.6);z-index:2147483647;' +
-    'pointer-events:none;transform:translate(-50%,-50%);' +
-    'transition:left .04s linear, top .04s linear;';
+    'pointer-events:none;transform:translate3d(-50%,-50%,0);' +
+    'will-change:left,top;';
   function ensure() {
     if (!dot.parentNode && document.body) {
       document.body.appendChild(dot);
@@ -108,21 +139,59 @@ const String _cursorScript = r'''
     y = Math.max(6, Math.min(window.innerHeight - 6, y + dy));
     place();
   }
-  function fire(el, type) {
-    var ev = new MouseEvent(type, {
-      bubbles: true, cancelable: true, view: window, clientX: x, clientY: y
+  function firePointer(el, type, buttons) {
+    if (!window.PointerEvent) return true;
+    var ev = new PointerEvent(type, {
+      bubbles: true, cancelable: true, view: window, clientX: x, clientY: y,
+      pointerId: 1, pointerType: 'mouse', isPrimary: true,
+      button: 0, buttons: buttons || 0
     });
-    el.dispatchEvent(ev);
+    return el.dispatchEvent(ev);
+  }
+  function fire(el, type, buttons) {
+    var ev = new MouseEvent(type, {
+      bubbles: true, cancelable: true, view: window, clientX: x, clientY: y,
+      button: 0, buttons: buttons || 0
+    });
+    return el.dispatchEvent(ev);
+  }
+  function editableTarget(el) {
+    for (var node = el; node && node !== document.documentElement; node = node.parentElement) {
+      var name = (node.tagName || '').toLowerCase();
+      if (name === 'textarea') return node;
+      if (name === 'input') {
+        var type = (node.type || 'text').toLowerCase();
+        if (['button', 'checkbox', 'color', 'file', 'hidden', 'image', 'radio', 'range', 'reset', 'submit'].indexOf(type) === -1) {
+          return node;
+        }
+      }
+      if (node.isContentEditable) return node;
+    }
+    return null;
   }
   function click() {
     ensure();
     var el = document.elementFromPoint(x, y);
-    if (!el) return;
-    fire(el, 'mouseover');
-    fire(el, 'mousedown');
-    fire(el, 'mouseup');
-    fire(el, 'click');
-    try { if (el.focus) el.focus(); } catch (e) {}
+    if (!el) return false;
+    var editable = editableTarget(el);
+    var target = editable || el;
+    firePointer(target, 'pointerover', 0);
+    fire(target, 'mouseover', 0);
+    firePointer(target, 'pointerdown', 1);
+    fire(target, 'mousedown', 1);
+    try { if (target.focus) target.focus({ preventScroll: true }); } catch (e) {
+      try { if (target.focus) target.focus(); } catch (_) {}
+    }
+    firePointer(target, 'pointerup', 0);
+    fire(target, 'mouseup', 0);
+    fire(target, 'click', 0);
+    if (editable) {
+      setTimeout(function () {
+        try { editable.focus(); } catch (e) {}
+      }, 0);
+      return true;
+    }
+    return false;
   }
   window.__tvCursor = { move: move, click: click, ensure: ensure };
   ensure();
