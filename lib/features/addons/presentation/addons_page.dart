@@ -846,6 +846,17 @@ class _AddAddonDialogState extends ConsumerState<_AddAddonDialog> {
     super.dispose();
   }
 
+  Future<void> _pasteFromClipboard() async {
+    final ClipboardData? data = await Clipboard.getData(Clipboard.kTextPlain);
+    final String text = data?.text?.trim() ?? '';
+    if (text.isEmpty) return;
+    _controller.text = text;
+    _controller.selection = TextSelection.collapsed(offset: text.length);
+    if (_preview != null) {
+      setState(() => _preview = null);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final AppThemeExtension palette = AppThemeExtension.of(context);
@@ -873,6 +884,11 @@ class _AddAddonDialogState extends ConsumerState<_AddAddonDialog> {
                     labelText: context.t('Manifest JSON URL'),
                     hintText: 'https://example.com/addon.json',
                     prefixIcon: const Icon(Icons.link_rounded),
+                    suffixIcon: IconButton(
+                      tooltip: context.t('Paste'),
+                      icon: const Icon(Icons.content_paste_rounded),
+                      onPressed: _loading ? null : _pasteFromClipboard,
+                    ),
                   ),
                   onChanged: (_) {
                     if (_preview != null) {

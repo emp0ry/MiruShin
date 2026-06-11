@@ -21,6 +21,7 @@ import '../../../core/platform/io_compat.dart' if (dart.library.io) 'dart:io';
 import '../../../core/widgets/adaptive_page.dart';
 import '../../../core/widgets/glass_card.dart';
 import '../../../core/widgets/section_header.dart';
+import '../../../core/widgets/tv_text_field_focus.dart';
 import '../../calendar/application/calendar_items_provider.dart';
 import '../../catalog/application/catalog_mode.dart';
 import '../../metadata/data/tmdb_metadata_provider.dart';
@@ -48,7 +49,7 @@ class SettingsPage extends ConsumerWidget {
       child: SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[ 
+          children: <Widget>[
             SectionHeader(title: context.t('Settings')),
             const SizedBox(height: AppSpacing.lg),
             const _UpdateSection(),
@@ -498,13 +499,15 @@ class _TextSettingField extends StatelessWidget {
   Widget build(BuildContext context) {
     return ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 340),
-      child: TextFormField(
-        key: ValueKey<String>('$hintText:$initialValue'),
-        initialValue: initialValue,
-        obscureText: obscureText,
-        keyboardType: keyboardType,
-        decoration: InputDecoration(hintText: hintText),
-        onChanged: onChanged,
+      child: TvTextFieldFocus(
+        child: TextFormField(
+          key: ValueKey<String>('$hintText:$initialValue'),
+          initialValue: initialValue,
+          obscureText: obscureText,
+          keyboardType: keyboardType,
+          decoration: InputDecoration(hintText: hintText),
+          onChanged: onChanged,
+        ),
       ),
     );
   }
@@ -934,7 +937,7 @@ class _SegmentedColorCirclePainter extends CustomPainter {
   }
 }
 
-class _AccentColorPickerDialog extends StatefulWidget{
+class _AccentColorPickerDialog extends StatefulWidget {
   const _AccentColorPickerDialog({required this.initialColor});
 
   final Color initialColor;
@@ -968,9 +971,7 @@ class _AccentColorPickerDialogState extends State<_AccentColorPickerDialog> {
                 value: _color.value,
                 onChanged: (double saturation, double value) {
                   setState(() {
-                    _color = _color
-                        .withSaturation(saturation)
-                        .withValue(value);
+                    _color = _color.withSaturation(saturation).withValue(value);
                   });
                 },
               ),
@@ -1068,10 +1069,14 @@ class _ColorPickerArea extends StatelessWidget {
   void _handlePosition(Offset localPosition, Size size) {
     if (size.width <= 0 || size.height <= 0) return;
 
-    final double nextSaturation =
-        (localPosition.dx / size.width).clamp(0.0, 1.0);
-    final double nextValue =
-        (1.0 - localPosition.dy / size.height).clamp(0.0, 1.0);
+    final double nextSaturation = (localPosition.dx / size.width).clamp(
+      0.0,
+      1.0,
+    );
+    final double nextValue = (1.0 - localPosition.dy / size.height).clamp(
+      0.0,
+      1.0,
+    );
 
     onChanged(nextSaturation, nextValue);
   }
@@ -1154,10 +1159,9 @@ class _ColorPickerArea extends StatelessWidget {
                       decoration: BoxDecoration(
                         borderRadius: AppRadius.all(AppRadius.lg),
                         border: Border.all(
-                          color: Theme.of(context)
-                              .colorScheme
-                              .outlineVariant
-                              .withValues(alpha: 0.45),
+                          color: Theme.of(
+                            context,
+                          ).colorScheme.outlineVariant.withValues(alpha: 0.45),
                         ),
                       ),
                     ),
@@ -1194,10 +1198,7 @@ class _ColorPickerArea extends StatelessWidget {
 }
 
 class _HueSlider extends StatelessWidget {
-  const _HueSlider({
-    required this.value,
-    required this.onChanged,
-  });
+  const _HueSlider({required this.value, required this.onChanged});
 
   final double value;
   final ValueChanged<double> onChanged;
@@ -1239,12 +1240,7 @@ class _BrightnessSlider extends StatelessWidget {
     return _GradientSlider(
       value: value,
       max: 1,
-      gradient: LinearGradient(
-        colors: <Color>[
-          Colors.black,
-          color,
-        ],
-      ),
+      gradient: LinearGradient(colors: <Color>[Colors.black, color]),
       onChanged: onChanged,
     );
   }
@@ -1301,10 +1297,9 @@ class _GradientSlider extends StatelessWidget {
                     gradient: gradient,
                     borderRadius: AppRadius.all(99),
                     border: Border.all(
-                      color: Theme.of(context)
-                          .colorScheme
-                          .outlineVariant
-                          .withValues(alpha: 0.35),
+                      color: Theme.of(
+                        context,
+                      ).colorScheme.outlineVariant.withValues(alpha: 0.35),
                     ),
                   ),
                 ),
@@ -1355,38 +1350,23 @@ class _ColorValueFields extends StatelessWidget {
       children: <Widget>[
         Expanded(
           flex: 2,
-          child: _ColorValueBox(
-            label: 'HEX',
-            value: _hexColor(color),
-          ),
+          child: _ColorValueBox(label: 'HEX', value: _hexColor(color)),
         ),
         const SizedBox(width: AppSpacing.sm),
         Expanded(
-          child: _ColorValueBox(
-            label: 'R',
-            value: r.toString(),
-          ),
+          child: _ColorValueBox(label: 'R', value: r.toString()),
         ),
         const SizedBox(width: AppSpacing.sm),
         Expanded(
-          child: _ColorValueBox(
-            label: 'G',
-            value: g.toString(),
-          ),
+          child: _ColorValueBox(label: 'G', value: g.toString()),
         ),
         const SizedBox(width: AppSpacing.sm),
         Expanded(
-          child: _ColorValueBox(
-            label: 'B',
-            value: b.toString(),
-          ),
+          child: _ColorValueBox(label: 'B', value: b.toString()),
         ),
         const SizedBox(width: AppSpacing.sm),
         const Expanded(
-          child: _ColorValueBox(
-            label: 'A',
-            value: '100%',
-          ),
+          child: _ColorValueBox(label: 'A', value: '100%'),
         ),
       ],
     );
@@ -1394,10 +1374,7 @@ class _ColorValueFields extends StatelessWidget {
 }
 
 class _ColorValueBox extends StatelessWidget {
-  const _ColorValueBox({
-    required this.label,
-    required this.value,
-  });
+  const _ColorValueBox({required this.label, required this.value});
 
   final String label;
   final String value;
@@ -1423,16 +1400,14 @@ class _ColorValueBox extends StatelessWidget {
             vertical: AppSpacing.sm,
           ),
           decoration: BoxDecoration(
-            color: Theme.of(context)
-                .colorScheme
-                .surfaceContainerHighest
-                .withValues(alpha: 0.42),
+            color: Theme.of(
+              context,
+            ).colorScheme.surfaceContainerHighest.withValues(alpha: 0.42),
             borderRadius: AppRadius.all(AppRadius.sm),
             border: Border.all(
-              color: Theme.of(context)
-                  .colorScheme
-                  .outlineVariant
-                  .withValues(alpha: 0.45),
+              color: Theme.of(
+                context,
+              ).colorScheme.outlineVariant.withValues(alpha: 0.45),
             ),
           ),
           child: Text(
@@ -1440,9 +1415,7 @@ class _ColorValueBox extends StatelessWidget {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             textAlign: TextAlign.center,
-            style: textTheme.bodyMedium?.copyWith(
-              fontWeight: FontWeight.w700,
-            ),
+            style: textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
           ),
         ),
       ],

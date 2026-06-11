@@ -3,6 +3,8 @@ import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../../app/localization/app_localizations.dart';
 import '../../../core/constants/app_constants.dart';
+import '../../../core/platform/tv_platform.dart';
+import '../../../core/widgets/tv_web_cursor.dart';
 import '../../../shared/models/anilist_models.dart';
 
 class AniListLoginPage extends StatefulWidget {
@@ -36,6 +38,9 @@ class _AniListLoginPageState extends State<AniListLoginPage> {
           onPageFinished: (_) async {
             if (mounted) {
               setState(() => _loading = false);
+            }
+            if (TvPlatform.isAndroidTv) {
+              await TvWebCursor.inject(_controller);
             }
             await _tryCaptureFromPage();
           },
@@ -132,7 +137,11 @@ class _AniListLoginPageState extends State<AniListLoginPage> {
       appBar: AppBar(title: Text(context.t('AniList Login'))),
       body: Stack(
         children: <Widget>[
-          WebViewWidget(controller: _controller),
+          TvWebCursor(
+            controller: _controller,
+            enabled: TvPlatform.isAndroidTv,
+            child: WebViewWidget(controller: _controller),
+          ),
           if (_loading) const LinearProgressIndicator(minHeight: 2),
         ],
       ),

@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import '../../../app/localization/app_localizations.dart';
+import '../../../core/platform/tv_platform.dart';
 import '../../catalog/application/catalog_mode.dart';
 import '../application/playback_controller.dart';
 import '../application/player_settings.dart';
@@ -82,6 +83,11 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   DateTime? _lastTrailerFullscreenShortcutAt;
   DateTime? _lastTrailerEscapeShortcutAt;
   late final bool _isMobile;
+  late final bool _isTv;
+  // Engine we are watching for play/pause transitions on Android TV, so we can
+  // keep the controls up while paused and let the D-pad reach them.
+  PlayerEngine? _tvObservedEngine;
+  bool _tvWasPlaying = true;
   late final PlaybackController _playbackNotifier;
 
   Duration get _trailerControlsHideDelay {
@@ -106,6 +112,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         !kIsWeb &&
         (defaultTargetPlatform == TargetPlatform.android ||
             defaultTargetPlatform == TargetPlatform.iOS);
+    _isTv = TvPlatform.isAndroidTv;
     _nativePipSupported = NativePlayerService.isSupported;
     _windowPipSupported =
         !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
@@ -302,6 +309,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   @override
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleGlobalKeyEvent);
+    _tvObservedEngine?.state.removeListener(_onTvPlaybackTick);
     _nativePlayerSub?.cancel();
     _trailerCommandSub?.cancel();
     _pipSub?.cancel();
@@ -346,8 +354,43 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     }
   }
 
+  // Android TV: watch the active engine so pausing keeps the controls on screen
+  // (and the D-pad can reach them), while resuming hands keys back to the
+  // playback surface and re-arms the auto-hide. No-op on every other platform.
+  void _syncTvPlaybackObserver(PlayerEngine? engine) {
+    if (!_isTv || identical(_tvObservedEngine, engine)) return;
+    _tvObservedEngine?.state.removeListener(_onTvPlaybackTick);
+    _tvObservedEngine = engine;
+    _tvObservedEngine?.state.addListener(_onTvPlaybackTick);
+    _tvWasPlaying = engine?.state.value.isPlaying ?? true;
+  }
+
+  void _onTvPlaybackTick() {
+    if (!mounted) return;
+    final PlayerEngine? engine = _tvObservedEngine;
+    if (engine == null) return;
+    final bool isPlaying = engine.state.value.isPlaying;
+    if (isPlaying == _tvWasPlaying) return;
+    _tvWasPlaying = isPlaying;
+    final PlaybackController notifier = ref.read(
+      playbackControllerProvider.notifier,
+    );
+    if (!isPlaying) {
+      notifier.setControlsVisible(true);
+      _hideTimer?.cancel();
+    } else {
+      _requestPlayerFocus();
+      _scheduleHide();
+    }
+  }
+
   void _scheduleHide([Duration delay = _controlsHideDelay]) {
     _hideTimer?.cancel();
+    // On Android TV keep the controls up while paused so the user can navigate
+    // them with the D-pad; they only auto-hide again once playback resumes.
+    if (_isTv && !(_tvObservedEngine?.state.value.isPlaying ?? true)) {
+      return;
+    }
     _hideTimer = Timer(delay, () {
       if (!mounted) return;
       // A seek-preview / scrub is in progress: keep the controls (and cursor)
@@ -721,6 +764,31 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       playbackControllerProvider.notifier,
     );
 
+    if (_isTv) {
+      // D-pad centre / OK toggles play & pause. (When a control button holds
+      // focus this handler isn't called, so OK still activates that button.)
+      if (key == LogicalKeyboardKey.select ||
+          key == LogicalKeyboardKey.enter ||
+          key == LogicalKeyboardKey.numpadEnter ||
+          key == LogicalKeyboardKey.gameButtonA) {
+        if (event is! KeyDownEvent) return KeyEventResult.handled;
+        unawaited(notifier.togglePlay());
+        return KeyEventResult.handled;
+      }
+      // While paused with the controls visible, let the D-pad traverse the
+      // on-screen controls instead of seeking / changing volume.
+      final bool isPlaying = state.engine?.state.value.isPlaying ?? false;
+      if (!isPlaying &&
+          state.controlsVisible &&
+          !state.locked &&
+          (key == LogicalKeyboardKey.arrowLeft ||
+              key == LogicalKeyboardKey.arrowRight ||
+              key == LogicalKeyboardKey.arrowUp ||
+              key == LogicalKeyboardKey.arrowDown)) {
+        return KeyEventResult.ignored;
+      }
+    }
+
     if (key == LogicalKeyboardKey.space) {
       return _handleSpaceKeyEvent(event, notifier);
     }
@@ -787,6 +855,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   @override
   Widget build(BuildContext context) {
     final PlaybackState state = ref.watch(playbackControllerProvider);
+    _syncTvPlaybackObserver(state.engine);
     final PlayerSettings settings =
         ref.watch(playerSettingsProvider).value ?? const PlayerSettings();
     final SkipMarkers markers = _effectiveSkipMarkers(

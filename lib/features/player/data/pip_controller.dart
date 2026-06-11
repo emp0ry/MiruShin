@@ -3,6 +3,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/platform/tv_platform.dart';
+
 abstract class PipController {
   bool get isSupported;
   bool get isInPipMode;
@@ -103,8 +105,11 @@ class AndroidPipController implements PipController {
     });
   }
 
+  // Picture-in-Picture is intentionally disabled on Android TV: the leanback
+  // experience is full-screen and a floating PiP window is undesirable there.
+  // Regular Android phones/tablets keep PiP.
   @override
-  bool get isSupported => true;
+  bool get isSupported => !TvPlatform.isAndroidTv;
 
   @override
   bool get isInPipMode => _inPip;
@@ -118,6 +123,7 @@ class AndroidPipController implements PipController {
     bool isPlaying = true,
     bool hasNext = false,
   }) async {
+    if (TvPlatform.isAndroidTv) return;
     // Clamp to Android's valid Rational range (1–239 for both w/h).
     // We express the ratio as (ratio*100 / 100) to get integer numerator/denom.
     final int w = (aspectRatio * 100).round().clamp(1, 23900);
