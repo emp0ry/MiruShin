@@ -645,7 +645,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       unawaited(_exitWindowPip());
       return;
     }
-    if (_isFullscreen) {
+    // While the stream is still loading there is nothing to drop fullscreen out
+    // to — back must exit the player directly instead of being swallowed.
+    final bool engineReady =
+        ref.read(playbackControllerProvider).engine?.value.isInitialized ??
+        false;
+    if (_isFullscreen && engineReady) {
       unawaited(_setFullscreen(false));
       return;
     }
@@ -1126,17 +1131,23 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                                   ),
                                 if (state.error == null)
                                   AnimatedOpacity(
+                                    // Keep the chrome (incl. the back button)
+                                    // visible & tappable while a stream is still
+                                    // loading, so a stuck "00:00" load can always
+                                    // be backed out of.
                                     opacity:
                                         (state.controlsVisible ||
                                                 state.seekPreviewPosition !=
-                                                    null) &&
+                                                    null ||
+                                                state.loading) &&
                                             !state.locked
                                         ? 1
                                         : 0,
                                     duration: const Duration(milliseconds: 180),
                                     child: IgnorePointer(
                                       ignoring:
-                                          !state.controlsVisible ||
+                                          (!state.controlsVisible &&
+                                              !state.loading) ||
                                           state.locked,
                                       child: _PlayerChrome(
                                         isFullscreen: _isFullscreen,

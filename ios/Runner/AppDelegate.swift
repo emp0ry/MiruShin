@@ -470,6 +470,22 @@ final class NativePlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
   func playerViewControllerDidStopPictureInPicture(_ playerViewController: AVPlayerViewController) {
     guard let vc = playerViewController as? MiruShinAVPlayerViewController else { return }
     vc.pipActive = false
+
+    // Re-arm PiP so it can be started AGAIN after returning to fullscreen.
+    // After the first auto-dismiss + re-present cycle AVPlayerViewController
+    // leaves its internal PiP controller stale, so the PiP button silently
+    // stops working on the second attempt unless we toggle the capability off
+    // and back on. Only do this when the player is still on screen (a restore),
+    // never when PiP was simply closed.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak vc] in
+      guard let vc = vc, vc.player != nil, vc.presentingViewController != nil else { return }
+      vc.allowsPictureInPicturePlayback = false
+      DispatchQueue.main.async {
+        guard vc.player != nil, vc.presentingViewController != nil else { return }
+        vc.allowsPictureInPicturePlayback = true
+      }
+    }
+
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self, vc] in
       guard let self = self else { return }
       if vc.didReachEnd || vc.didSendTerminalEvent || vc.pipRestoreInFlight || vc.didRestoreFromPip { return }
