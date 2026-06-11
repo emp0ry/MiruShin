@@ -128,6 +128,31 @@ final anilistAnimePreviewRussianListProvider =
       );
     });
 
+final anilistMangaRussianListProvider =
+    FutureProvider<List<AniListAnimeListFolder>>((Ref ref) async {
+      final List<AniListAnimeListFolder> folders = await ref.watch(
+        anilistMangaListProvider.future,
+      );
+      return _maybeEnrichAnimeFoldersWithRussian(
+        ref,
+        folders: folders,
+        mediaType: 'MANGA',
+      );
+    });
+
+final anilistMangaPreviewRussianListProvider =
+    FutureProvider<List<AniListAnimeListFolder>>((Ref ref) async {
+      final List<AniListAnimeListFolder> folders = await ref.watch(
+        anilistMangaPreviewListProvider.future,
+      );
+      return _maybeEnrichAnimeFoldersWithRussian(
+        ref,
+        folders: folders,
+        statuses: _previewStatuses,
+        mediaType: 'MANGA',
+      );
+    });
+
 final anilistRussianAliasProvider =
     AsyncNotifierProvider.family<
       AniListRussianAliasController,
@@ -413,10 +438,13 @@ void invalidateAniListAnimePreviewLibraryProvider(dynamic invalidate) {
 void invalidateAniListMangaLibraryProviders(dynamic invalidate) {
   invalidate(anilistMangaListProvider);
   invalidate(anilistMangaPreviewListProvider);
+  invalidate(anilistMangaRussianListProvider);
+  invalidate(anilistMangaPreviewRussianListProvider);
 }
 
 void invalidateAniListMangaPreviewLibraryProvider(dynamic invalidate) {
   invalidate(anilistMangaPreviewListProvider);
+  invalidate(anilistMangaPreviewRussianListProvider);
 }
 
 void invalidateAniListLibraryProviders(dynamic invalidate) {
@@ -449,7 +477,14 @@ Future<void> retryAniListFullListForMediaType(
 }) async {
   if (mediaType == 'MANGA') {
     ref.invalidate(anilistMangaListProvider);
+    final bool wantsRussian =
+        ref.read(aniListEffectiveTitleLanguageProvider) == 'RUSSIAN';
+    ref.invalidate(anilistMangaRussianListProvider);
+    ref.invalidate(anilistMangaPreviewRussianListProvider);
     await ref.read(anilistMangaListProvider.future);
+    if (wantsRussian) {
+      await ref.read(anilistMangaRussianListProvider.future);
+    }
     return;
   }
 
@@ -474,8 +509,22 @@ Future<void> _awaitAniListLibraryLoadsForMediaType(
   required String mediaType,
 }) async {
   if (mediaType == 'MANGA') {
+    final bool wantsRussianManga =
+        ref.read(aniListEffectiveTitleLanguageProvider) == 'RUSSIAN';
     await ref.read(anilistMangaPreviewListProvider.future);
-    await ref.read(anilistMangaListProvider.future);
+    if (wantsRussianManga) {
+      await Future.wait<List<AniListAnimeListFolder>>(
+        <Future<List<AniListAnimeListFolder>>>[
+          ref.read(anilistMangaPreviewRussianListProvider.future),
+          ref.read(anilistMangaListProvider.future),
+        ],
+      );
+      await ref.read(anilistMangaRussianListProvider.future);
+    } else {
+      ref.invalidate(anilistMangaPreviewRussianListProvider);
+      ref.invalidate(anilistMangaRussianListProvider);
+      await ref.read(anilistMangaListProvider.future);
+    }
     return;
   }
 
@@ -724,7 +773,10 @@ String _collectionScope(List<AniListListStatus>? statuses) {
 }
 
 String _resolvedAniListTitleLanguage(String mediaType, String titleLanguage) {
-  if (mediaType == 'ANIME' && titleLanguage == 'RUSSIAN') {
+  // AniList has no "Russian" option, so fetch the base list in English and let
+  // Shikimori supply the Russian titles afterwards — for manga as well as anime.
+  if ((mediaType == 'ANIME' || mediaType == 'MANGA') &&
+      titleLanguage == 'RUSSIAN') {
     return 'ENGLISH';
   }
   return titleLanguage;
@@ -751,6 +803,7 @@ Future<List<AniListAnimeListFolder>> _maybeEnrichAnimeFoldersWithRussian(
   Ref ref, {
   required List<AniListAnimeListFolder> folders,
   List<AniListListStatus>? statuses,
+  String mediaType = 'ANIME',
 }) async {
   if (folders.isEmpty) return folders;
 
@@ -764,7 +817,7 @@ Future<List<AniListAnimeListFolder>> _maybeEnrichAnimeFoldersWithRussian(
   final int? viewerId = settings.anilistViewerId;
   final MetadataCacheStore cache = ref.watch(metadataCacheStoreProvider);
   final String cacheKey =
-      'anilist.library.ANIME.${_collectionScope(statuses)}.RUSSIAN.${viewerId ?? 'viewer'}';
+      'anilist.library.$mediaType.${_collectionScope(statuses)}.RUSSIAN.${viewerId ?? 'viewer'}';
 
   Future<List<AniListAnimeListFolder>> cachedOrBase() async {
     final Map<String, dynamic>? cached = await cache.read(cacheKey);
@@ -787,7 +840,7 @@ Future<List<AniListAnimeListFolder>> _maybeEnrichAnimeFoldersWithRussian(
     final List<AniListAnimeListFolder> enriched =
         await _enrichFoldersWithRussian(folders, client);
     await cache.write(cacheKey, _encode(enriched));
-    if (statuses == null) {
+    if (statuses == null && mediaType == 'ANIME') {
       final bool airingEnabled = ref
           .read(aniListUserSettingsProvider)
           .maybeWhen(

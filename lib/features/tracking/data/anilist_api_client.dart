@@ -325,7 +325,8 @@ class AniListApiClient {
     final Object? media = data['Media'];
     if (media is! Map<String, dynamic>) return null;
     MediaItem item = _mediaFromJson(media);
-    if (_wantsRussian && type.toUpperCase() == 'ANIME') {
+    final String upperType = type.toUpperCase();
+    if (_wantsRussian && (upperType == 'ANIME' || upperType == 'MANGA')) {
       final ({String title, String description})? details =
           await _russianDetailsForItem(item);
       if (details != null) {
@@ -395,7 +396,10 @@ class AniListApiClient {
 
   Future<List<MediaItem>> _enrichWithRussian(List<MediaItem> items) async {
     if (items.isEmpty) return items;
+    // The batch endpoint is anime-only; manga entries skip it and resolve
+    // through the per-item (manga-aware) fallback below.
     final List<int> malIds = items
+        .where((MediaItem i) => !_itemIsManga(i))
         .map((MediaItem i) => int.tryParse(i.externalIds['mal'] ?? ''))
         .whereType<int>()
         .toList();
@@ -443,12 +447,18 @@ class AniListApiClient {
     return enriched;
   }
 
+  static bool _itemIsManga(MediaItem item) {
+    return item.externalIds['anilist_type'] == 'MANGA' ||
+        item.id.toLowerCase().startsWith('anilist:manga:');
+  }
+
   Future<({String title, String description})?> _russianDetailsForItem(
     MediaItem item,
   ) {
     return shikimori!.getRussianDetailsForMedia(
       malId: _malIdForItem(item),
       queries: _russianQueriesForItem(item),
+      isManga: _itemIsManga(item),
     );
   }
 

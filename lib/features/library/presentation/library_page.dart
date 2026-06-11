@@ -333,8 +333,8 @@ class _AniListDataTabState extends ConsumerState<_AniListDataTab>
     );
     final CatalogOfflineNotice? anilistOfflineNotice =
         offlineNotice?.mode == CatalogMode.anilist ? offlineNotice : null;
+    final bool isMangaTab = widget.mediaType == 'MANGA';
     final bool wantsRussianTitles =
-        widget.mediaType == 'ANIME' &&
         ref.watch(aniListEffectiveTitleLanguageProvider) == 'RUSSIAN';
 
     final AsyncValue<List<AniListAnimeListFolder>> previewLists =
@@ -376,11 +376,19 @@ class _AniListDataTabState extends ConsumerState<_AniListDataTab>
 
     final AsyncValue<List<AniListAnimeListFolder>>? previewRussianLists =
         wantsRussianTitles
-        ? ref.watch(anilistAnimePreviewRussianListProvider)
+        ? ref.watch(
+            isMangaTab
+                ? anilistMangaPreviewRussianListProvider
+                : anilistAnimePreviewRussianListProvider,
+          )
         : null;
     final AsyncValue<List<AniListAnimeListFolder>>? fullRussianLists =
         wantsRussianTitles && fullLists.hasValue
-        ? ref.watch(anilistAnimeRussianListProvider)
+        ? ref.watch(
+            isMangaTab
+                ? anilistMangaRussianListProvider
+                : anilistAnimeRussianListProvider,
+          )
         : null;
 
     final List<AniListAnimeListFolder> previewDisplayFolders =
