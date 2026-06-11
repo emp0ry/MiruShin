@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -15,12 +16,12 @@ import 'package:webview_flutter/webview_flutter.dart';
 ///
 /// Call [inject] from the WebView's `onPageFinished`, and wrap the
 /// [WebViewWidget] in a [TvWebCursor] (only when running on a TV).
-class TvWebCursor extends StatelessWidget {
+class TvWebCursor extends StatefulWidget {
   const TvWebCursor({
     required this.controller,
     required this.child,
     this.enabled = true,
-    this.step = 56,
+    this.step = 30,
     super.key,
   });
 
@@ -40,36 +41,115 @@ class TvWebCursor extends StatelessWidget {
     }
   }
 
+  @override
+  State<TvWebCursor> createState() => _TvWebCursorState();
+}
+
+class _TvWebCursorState extends State<TvWebCursor> {
+  bool _textInputMode = false;
+
   void _run(String body) {
     // Guard so a not-yet-injected page can't throw.
     unawaited(
-      controller
+      widget.controller
           .runJavaScript('window.__tvCursor && window.__tvCursor.$body')
           .catchError((_) {}),
     );
   }
 
   Future<void> _click() async {
-    bool wantsKeyboard = false;
+    final _TapInfo tap = await _tapInfo();
+    bool nativeTapped = false;
+    if (tap.valid) {
+      try {
+        nativeTapped =
+            await TvWebCursor._deviceChannel.invokeMethod<bool>(
+              'tapFocusedWebView',
+              <String, Object?>{'x': tap.x * tap.dpr, 'y': tap.y * tap.dpr},
+            ) ??
+            false;
+      } catch (_) {
+        nativeTapped = false;
+      }
+    }
+
+    bool wantsKeyboard = tap.editable;
+    if (!nativeTapped) {
+      wantsKeyboard = await _fallbackJsClick() || wantsKeyboard;
+    }
+    if (!wantsKeyboard) return;
+    if (mounted) {
+      setState(() => _textInputMode = true);
+    }
+    _run('setEditing(true)');
+    await Future<void>.delayed(const Duration(milliseconds: 80));
     try {
-      final Object result = await controller.runJavaScriptReturningResult(
-        'window.__tvCursor ? window.__tvCursor.click() : false',
+      await TvWebCursor._deviceChannel.invokeMethod<void>('showSoftKeyboard');
+    } catch (_) {
+      // Non-Android platforms or WebView implementations without the hook.
+    }
+  }
+
+  Future<_TapInfo> _tapInfo() async {
+    try {
+      final Object
+      result = await widget.controller.runJavaScriptReturningResult(
+        'window.__tvCursor ? JSON.stringify(window.__tvCursor.tapInfo()) : "{}"',
       );
-      wantsKeyboard = result == true || result.toString() == 'true';
+      Object? decoded = result;
+      if (decoded is String) {
+        decoded = jsonDecode(decoded);
+        if (decoded is String) decoded = jsonDecode(decoded);
+      }
+      if (decoded is! Map) return const _TapInfo.invalid();
+      final Object? x = decoded['x'];
+      final Object? y = decoded['y'];
+      final Object? dpr = decoded['dpr'];
+      return _TapInfo(
+        x: (x as num?)?.toDouble() ?? 0,
+        y: (y as num?)?.toDouble() ?? 0,
+        dpr: (dpr as num?)?.toDouble() ?? 1,
+        editable: decoded['editable'] == true,
+      );
+    } catch (_) {
+      return const _TapInfo.invalid();
+    }
+  }
+
+  Future<bool> _fallbackJsClick() async {
+    try {
+      final Object result = await widget.controller
+          .runJavaScriptReturningResult(
+            'window.__tvCursor ? window.__tvCursor.click() : false',
+          );
+      return result == true || result.toString() == 'true';
     } catch (_) {
       try {
-        await controller.runJavaScript(
+        await widget.controller.runJavaScript(
           'window.__tvCursor && window.__tvCursor.click()',
         );
       } catch (_) {}
     }
-    if (!wantsKeyboard) return;
-    await Future<void>.delayed(const Duration(milliseconds: 80));
-    try {
-      await _deviceChannel.invokeMethod<void>('showSoftKeyboard');
-    } catch (_) {
-      // Non-Android platforms or WebView implementations without the hook.
+    return false;
+  }
+
+  void _leaveTextInputMode() {
+    if (!_textInputMode) return;
+    setState(() => _textInputMode = false);
+    _run('blurActive();setEditing(false)');
+    unawaited(
+      TvWebCursor._deviceChannel
+          .invokeMethod<void>('hideSoftKeyboard')
+          .catchError((_) {}),
+    );
+  }
+
+  KeyEventResult _handleTextInputMode(LogicalKeyboardKey key, KeyEvent event) {
+    if (_exitTextInputKeys.contains(key) && event is KeyDownEvent) {
+      _leaveTextInputMode();
+      return KeyEventResult.handled;
     }
+    return KeyEventResult.ignored;
   }
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
@@ -77,14 +157,17 @@ class TvWebCursor extends StatelessWidget {
       return KeyEventResult.ignored;
     }
     final LogicalKeyboardKey key = event.logicalKey;
+    if (_textInputMode) {
+      return _handleTextInputMode(key, event);
+    }
     if (key == LogicalKeyboardKey.arrowLeft) {
-      _run('move(-$step,0)');
+      _run('move(-${widget.step},0)');
     } else if (key == LogicalKeyboardKey.arrowRight) {
-      _run('move($step,0)');
+      _run('move(${widget.step},0)');
     } else if (key == LogicalKeyboardKey.arrowUp) {
-      _run('move(0,-$step)');
+      _run('move(0,-${widget.step})');
     } else if (key == LogicalKeyboardKey.arrowDown) {
-      _run('move(0,$step)');
+      _run('move(0,${widget.step})');
     } else if (_activateKeys.contains(key)) {
       unawaited(_click());
     } else {
@@ -102,11 +185,44 @@ class TvWebCursor extends StatelessWidget {
     LogicalKeyboardKey.gameButtonA,
   };
 
+  static final Set<LogicalKeyboardKey> _exitTextInputKeys =
+      <LogicalKeyboardKey>{
+        LogicalKeyboardKey.escape,
+        LogicalKeyboardKey.goBack,
+        LogicalKeyboardKey.browserBack,
+      };
+
   @override
   Widget build(BuildContext context) {
-    if (!enabled) return child;
-    return Focus(autofocus: true, onKeyEvent: _onKey, child: child);
+    if (!widget.enabled) return widget.child;
+    return Focus(
+      autofocus: !_textInputMode,
+      onKeyEvent: _onKey,
+      child: widget.child,
+    );
   }
+}
+
+class _TapInfo {
+  const _TapInfo({
+    required this.x,
+    required this.y,
+    required this.dpr,
+    required this.editable,
+  }) : valid = true;
+
+  const _TapInfo.invalid()
+    : x = 0,
+      y = 0,
+      dpr = 1,
+      editable = false,
+      valid = false;
+
+  final double x;
+  final double y;
+  final double dpr;
+  final bool editable;
+  final bool valid;
 }
 
 const String _cursorScript = r'''
@@ -128,13 +244,17 @@ const String _cursorScript = r'''
     }
   }
   function place() { dot.style.left = x + 'px'; dot.style.top = y + 'px'; }
+  function setEditing(editing) {
+    ensure();
+    dot.style.display = editing ? 'none' : 'block';
+  }
   function move(dx, dy) {
     ensure();
     var margin = 70;
-    if (dx < 0 && x <= margin) window.scrollBy(-40, 0);
-    if (dx > 0 && x >= window.innerWidth - margin) window.scrollBy(40, 0);
-    if (dy < 0 && y <= margin) window.scrollBy(0, -40);
-    if (dy > 0 && y >= window.innerHeight - margin) window.scrollBy(0, 40);
+    if (dx < 0 && x <= margin) window.scrollBy(-28, 0);
+    if (dx > 0 && x >= window.innerWidth - margin) window.scrollBy(28, 0);
+    if (dy < 0 && y <= margin) window.scrollBy(0, -28);
+    if (dy > 0 && y >= window.innerHeight - margin) window.scrollBy(0, 28);
     x = Math.max(6, Math.min(window.innerWidth - 6, x + dx));
     y = Math.max(6, Math.min(window.innerHeight - 6, y + dy));
     place();
@@ -169,6 +289,22 @@ const String _cursorScript = r'''
     }
     return null;
   }
+  function tapInfo() {
+    ensure();
+    var el = document.elementFromPoint(x, y);
+    return {
+      x: x,
+      y: y,
+      dpr: window.devicePixelRatio || 1,
+      editable: !!editableTarget(el)
+    };
+  }
+  function blurActive() {
+    try {
+      var active = document.activeElement;
+      if (active && active.blur) active.blur();
+    } catch (e) {}
+  }
   function click() {
     ensure();
     var el = document.elementFromPoint(x, y);
@@ -193,7 +329,14 @@ const String _cursorScript = r'''
     }
     return false;
   }
-  window.__tvCursor = { move: move, click: click, ensure: ensure };
+  window.__tvCursor = {
+    move: move,
+    click: click,
+    ensure: ensure,
+    tapInfo: tapInfo,
+    blurActive: blurActive,
+    setEditing: setEditing
+  };
   ensure();
 })();
 ''';

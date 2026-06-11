@@ -18,8 +18,13 @@ import android.media.MediaMetadata
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.os.Build
+import android.os.SystemClock
 import android.util.Rational
+import android.view.MotionEvent
+import android.view.View
+import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
+import android.webkit.WebView
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -153,6 +158,13 @@ class MainActivity : FlutterActivity() {
             when (call.method) {
                 "isTelevision" -> result.success(isRunningOnTelevision())
                 "showSoftKeyboard" -> result.success(showSoftKeyboard())
+                "hideSoftKeyboard" -> result.success(hideSoftKeyboard())
+                "tapFocusedWebView" -> {
+                    val args = call.arguments as? Map<*, *>
+                    val x = (args?.get("x") as? Number)?.toFloat() ?: -1f
+                    val y = (args?.get("y") as? Number)?.toFloat() ?: -1f
+                    result.success(tapFocusedWebView(x, y))
+                }
                 else -> result.notImplemented()
             }
         }
@@ -181,6 +193,49 @@ class MainActivity : FlutterActivity() {
             inputMethodManager.showSoftInput(focused, InputMethodManager.SHOW_IMPLICIT)
         }
         return true
+    }
+
+    private fun hideSoftKeyboard(): Boolean {
+        val focused = currentFocus ?: window.decorView.findFocus() ?: return false
+        val inputMethodManager =
+            getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+                ?: return false
+        return inputMethodManager.hideSoftInputFromWindow(focused.windowToken, 0)
+    }
+
+    private fun tapFocusedWebView(x: Float, y: Float): Boolean {
+        if (x < 0f || y < 0f) return false
+        val webView = (currentFocus as? WebView) ?: findWebView(window.decorView) ?: return false
+        if (webView.width <= 0 || webView.height <= 0) return false
+        val localX = x.coerceIn(1f, (webView.width - 1).toFloat())
+        val localY = y.coerceIn(1f, (webView.height - 1).toFloat())
+        webView.requestFocus()
+        webView.requestFocusFromTouch()
+
+        val downTime = SystemClock.uptimeMillis()
+        val down = MotionEvent.obtain(
+            downTime, downTime, MotionEvent.ACTION_DOWN, localX, localY, 0
+        )
+        val up = MotionEvent.obtain(
+            downTime, SystemClock.uptimeMillis(), MotionEvent.ACTION_UP, localX, localY, 0
+        )
+        val handledDown = webView.dispatchTouchEvent(down)
+        val handledUp = webView.dispatchTouchEvent(up)
+        down.recycle()
+        up.recycle()
+        return handledDown || handledUp
+    }
+
+    private fun findWebView(view: View?): WebView? {
+        if (view == null) return null
+        if (view is WebView) return view
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) {
+                val found = findWebView(view.getChildAt(i))
+                if (found != null) return found
+            }
+        }
+        return null
     }
 
     // ── PiP enter ─────────────────────────────────────────────────────────

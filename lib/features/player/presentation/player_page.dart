@@ -785,21 +785,27 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         unawaited(notifier.togglePlay());
         return KeyEventResult.handled;
       }
+      final bool controlsVisible = state.controlsVisible && !state.locked;
+      final bool isPlaying = state.engine?.state.value.isPlaying ?? false;
+      final bool pausedChromeNavigation = controlsVisible && !isPlaying;
       // On Android TV, Up/Down are navigation, not volume. When the chrome is
-      // visible, Left/Right should also move through controls instead of seek.
+      // visible, use them to move through controls; Left/Right keep seeking
+      // during playback and only move focus while paused.
       if (key == LogicalKeyboardKey.arrowUp ||
           key == LogicalKeyboardKey.arrowDown) {
-        if (!state.controlsVisible && !state.locked) {
+        if (controlsVisible) {
+          return _moveTvPlayerFocus(key, event);
+        }
+        if (!state.locked) {
           if (event is KeyDownEvent) _showControls();
           return KeyEventResult.handled;
         }
-        return KeyEventResult.ignored;
+        return KeyEventResult.handled;
       }
-      if (state.controlsVisible &&
-          !state.locked &&
+      if (pausedChromeNavigation &&
           (key == LogicalKeyboardKey.arrowLeft ||
               key == LogicalKeyboardKey.arrowRight)) {
-        return KeyEventResult.ignored;
+        return _moveTvPlayerFocus(key, event);
       }
     }
 
@@ -866,6 +872,37 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     return KeyEventResult.ignored;
   }
 
+  KeyEventResult _moveTvPlayerFocus(LogicalKeyboardKey key, KeyEvent event) {
+    if (event is KeyUpEvent) return KeyEventResult.handled;
+    final TraversalDirection direction = switch (key) {
+      LogicalKeyboardKey.arrowLeft => TraversalDirection.left,
+      LogicalKeyboardKey.arrowRight => TraversalDirection.right,
+      LogicalKeyboardKey.arrowUp => TraversalDirection.up,
+      LogicalKeyboardKey.arrowDown => TraversalDirection.down,
+      _ => TraversalDirection.down,
+    };
+    _hideTimer?.cancel();
+    final FocusNode? primary = FocusManager.instance.primaryFocus;
+    bool moved = false;
+    if (primary != null && primary != _playerFocusNode) {
+      moved = primary.focusInDirection(direction);
+    }
+    if (!moved && (primary == null || primary == _playerFocusNode)) {
+      moved = _playerFocusNode.nextFocus();
+    }
+    if (!moved) {
+      moved =
+          direction == TraversalDirection.left ||
+              direction == TraversalDirection.up
+          ? _playerFocusNode.previousFocus()
+          : _playerFocusNode.nextFocus();
+    }
+    if (!moved) {
+      _playerFocusNode.nextFocus();
+    }
+    return KeyEventResult.handled;
+  }
+
   @override
   Widget build(BuildContext context) {
     final PlaybackState state = ref.watch(playbackControllerProvider);
@@ -918,11 +955,14 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       _lastPipIsPlaying = null;
     }
 
+    final bool tvPausedChromeNavigation =
+        _isTv &&
+        state.controlsVisible &&
+        !state.locked &&
+        !(state.engine?.state.value.isPlaying ?? false);
     final playerShortcuts = <ShortcutActivator, Intent>{
       const SingleActivator(LogicalKeyboardKey.space): _TogglePlayIntent(),
-      if (!_isTv ||
-          !state.controlsVisible ||
-          state.locked) ...const <ShortcutActivator, Intent>{
+      if (!tvPausedChromeNavigation) ...const <ShortcutActivator, Intent>{
         SingleActivator(LogicalKeyboardKey.arrowLeft): _SeekIntent(
           backward: true,
         ),
