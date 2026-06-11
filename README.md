@@ -16,7 +16,7 @@
   </a>
   <img alt="Flutter" src="https://img.shields.io/badge/Flutter-stable-02569B?logo=flutter&logoColor=white">
   <img alt="Dart" src="https://img.shields.io/badge/Dart-3.11%2B-0175C2?logo=dart&logoColor=white">
-  <img alt="Platforms" src="https://img.shields.io/badge/Platforms-Android%20%7C%20iOS%20%7C%20Windows%20%7C%20macOS%20%7C%20Linux-111827">
+  <img alt="Platforms" src="https://img.shields.io/badge/Platforms-Android%20%2F%20Android%20TV%20%7C%20iOS%20%7C%20Windows%20%7C%20macOS%20%7C%20Linux-111827">
   <img alt="Catalogs" src="https://img.shields.io/badge/Catalogs-TMDB%20%7C%20AniList-16A34A">
   <a href="LICENSE">
     <img alt="License: GPL-3.0" src="https://img.shields.io/badge/License-GPL--3.0-8B5CF6">
@@ -37,14 +37,15 @@ It can switch between TMDB-driven discovery and AniList-driven catalog views, th
 | Board and Discovery | Browse trending, popular, and filtered rails with cached metadata, search, and catalog mode switching between TMDB and AniList. |
 | Library | Keep a local library, sync AniList folders, continue watching, manage statuses, and keep progress in one place. |
 | Watch Flow | Use enabled Sora-compatible modules to search sources, choose seasons and episodes, and hand off cleanly into playback. |
-| Player | Play HLS, MP4, and DASH streams with quality selection, voiceovers, subtitles, AniSkip markers, autoplay next, and progress sync. |
+| Player | Play HLS, MP4, and DASH streams with quality selection, voiceovers, subtitles, AniSkip markers, autoplay next, Android TV remote navigation, and progress sync. |
 | Profile | Open AniList activities, favourites, feed, social pages, statistics, reviews, and export flows. |
-| Polish | English, Russian, and Japanese UI, theme and accent settings, secure token storage, cache controls, and responsive desktop/mobile layouts. |
+| Polish | English, Russian, and Japanese UI, theme and accent settings, secure token storage, cache controls, and responsive desktop/mobile/TV layouts. |
 
 ## Feature Notes
 
 - Sora modules, shown as addons in the UI, are installable by manifest URL, can be enabled or reordered, and support import/export for local backups.
 - Switch between TMDB and AniList by clicking the top-left logo. In compact mode, open `More` and use the catalog switch option there.
+- Android TV is supported with remote-friendly navigation for catalog browsing, WebView login flows, settings, and playback controls.
 - Discord Rich Presence is available on supported desktop platforms.
 - Picture in Picture and native player handoff are supported where the platform allows it.
 - AniList exports are available for MyAnimeList XML and Shikimori JSON.
@@ -61,7 +62,7 @@ It can switch between TMDB-driven discovery and AniList-driven catalog views, th
 
 Prebuilt binaries are on the [Releases](https://github.com/emp0ry/MiruShin/releases/latest) page:
 
-- **Android** - `.apk`
+- **Android and Android TV** - `.apk`
 - **iOS** - `.ipa`
 - **Windows** - installer (`.exe`) and portable `.zip`
 - **macOS** - `.dmg`

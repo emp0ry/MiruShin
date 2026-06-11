@@ -49,7 +49,7 @@ const downloadTargets = [
   },
   {
     key: "android",
-    label: "Android APK",
+    label: "Android and Android TV APK",
     pattern: /^MiruShin-android-v.+\.apk$/i,
   },
   {
