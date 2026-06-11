@@ -62,7 +62,7 @@ jobs:
       - name: Build APK (release)
         run: flutter build apk --release --build-name "${{ steps.ver.outputs.version }}" --build-number "${{ steps.ver.outputs.build_number }}"
 
-      - name: Rename APK to MiruShin-android-vX.Y.Z-buildN.apk
+      - name: Rename APK to MiruShin-android-vX.Y.Z.apk
         id: apk
         shell: bash
         run: |
@@ -73,8 +73,7 @@ jobs:
             exit 1
           fi
           VERSION="${{ steps.ver.outputs.version }}"
-          BUILD_NUMBER="${{ steps.ver.outputs.build_number }}"
-          DEST_APK="${APP_NAME}-android-v${VERSION}-build${BUILD_NUMBER}.apk"
+          DEST_APK="${APP_NAME}-android-v${VERSION}.apk"
           cp "$SRC_APK" "$DEST_APK"
           echo "apk_path=$DEST_APK" >> "$GITHUB_OUTPUT"
 

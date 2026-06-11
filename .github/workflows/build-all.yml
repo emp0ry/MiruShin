@@ -74,8 +74,7 @@ jobs:
             exit 1
           fi
           VERSION="${{ steps.ver.outputs.version }}"
-          BUILD_NUMBER="${{ steps.ver.outputs.build_number }}"
-          DEST_APK="${APP_NAME}-android-v${VERSION}-build${BUILD_NUMBER}.apk"
+          DEST_APK="${APP_NAME}-android-v${VERSION}.apk"
           cp "$SRC_APK" "$DEST_APK"
           echo "apk_path=$DEST_APK" >> "$GITHUB_OUTPUT"
 
