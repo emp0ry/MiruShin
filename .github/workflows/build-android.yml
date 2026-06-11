@@ -43,17 +43,26 @@ jobs:
         with:
           keystore-base64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
 
-      - name: Build APK (release)
-        run: flutter build apk --release
-
-      - name: Read version from pubspec.yaml
+      - name: Prepare Android version
         id: ver
         shell: bash
         run: |
-          VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d'+' -f1)
+          set -euo pipefail
+          VERSION_LINE=$(grep '^version:' pubspec.yaml | awk '{print $2}')
+          VERSION="${VERSION_LINE%%+*}"
+          PUBSPEC_BUILD="${VERSION_LINE#*+}"
+          BUILD_NUMBER=$(($(date -u +%s) / 60))
+          if [[ "$PUBSPEC_BUILD" =~ ^[0-9]+$ ]] && [ "$BUILD_NUMBER" -le "$PUBSPEC_BUILD" ]; then
+            BUILD_NUMBER=$((PUBSPEC_BUILD + 1))
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "build_number=$BUILD_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "Building Android $VERSION+$BUILD_NUMBER"
 
-      - name: Rename APK to MiruShin-android-vX.Y.Z.apk
+      - name: Build APK (release)
+        run: flutter build apk --release --build-name "${{ steps.ver.outputs.version }}" --build-number "${{ steps.ver.outputs.build_number }}"
+
+      - name: Rename APK to MiruShin-android-vX.Y.Z-buildN.apk
         id: apk
         shell: bash
         run: |
@@ -64,7 +73,8 @@ jobs:
             exit 1
           fi
           VERSION="${{ steps.ver.outputs.version }}"
-          DEST_APK="${APP_NAME}-android-v${VERSION}.apk"
+          BUILD_NUMBER="${{ steps.ver.outputs.build_number }}"
+          DEST_APK="${APP_NAME}-android-v${VERSION}-build${BUILD_NUMBER}.apk"
           cp "$SRC_APK" "$DEST_APK"
           echo "apk_path=$DEST_APK" >> "$GITHUB_OUTPUT"
 

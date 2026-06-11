@@ -17,6 +17,7 @@ import '../../../core/responsive/responsive_grid.dart';
 import '../../../core/widgets/adaptive_page.dart';
 import '../../../core/widgets/glass_card.dart';
 import '../../../core/widgets/neutral_placeholder.dart';
+import '../../../core/widgets/tv_text_field_focus.dart';
 import '../../../core/widgets/page_back_button.dart';
 import '../../../core/widgets/section_header.dart';
 import '../../../shared/models/anilist_models.dart';
@@ -1484,13 +1485,15 @@ class _ProfileAniListSettingsPageState
                             padding: const EdgeInsets.only(
                               bottom: AppSpacing.sm,
                             ),
-                            child: TextField(
-                              controller: _advancedScoreControllers[index],
-                              decoration: InputDecoration(
-                                labelText: 'Label ${index + 1}',
+                            child: TvTextFieldFocus(
+                              child: TextField(
+                                controller: _advancedScoreControllers[index],
+                                decoration: InputDecoration(
+                                  labelText: 'Label ${index + 1}',
+                                ),
+                                onChanged: (_) =>
+                                    _syncAdvancedScoresFromFields(save: true),
                               ),
-                              onChanged: (_) =>
-                                  _syncAdvancedScoresFromFields(save: true),
                             ),
                           ),
                         ),

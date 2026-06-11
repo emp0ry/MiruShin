@@ -586,6 +586,7 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
                   TvTextFieldFocus(
+                    releaseHorizontal: true,
                     child: TextField(
                       onChanged: _setQuery,
                       textInputAction: TextInputAction.search,

@@ -14,6 +14,8 @@ import '../../../app/theme/app_radius.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../app/theme/app_theme_extension.dart';
 import '../../../core/widgets/neutral_placeholder.dart';
+import '../../../core/widgets/tv_focusable.dart';
+import '../../../core/widgets/tv_text_field_focus.dart';
 import '../../../shared/models/anilist_models.dart';
 import '../../../shared/models/library_item.dart';
 import '../../../shared/models/media_item.dart';
@@ -1592,33 +1594,37 @@ class _FolderViewState extends ConsumerState<_FolderView>
       child: Row(
         children: <Widget>[
           Expanded(
-            child: TextField(
-              controller: _search,
-              onChanged: (_) => setState(() {}),
-              decoration: InputDecoration(
-                hintText:
-                    'Search ${widget.folder.status?.label ?? widget.folder.name}…',
-                prefixIcon: const Icon(Icons.search_rounded, size: 20),
-                suffixIcon: _search.text.isNotEmpty
-                    ? IconButton(
-                        icon: const Icon(Icons.clear_rounded, size: 18),
-                        onPressed: () {
-                          _search.clear();
-                          setState(() {});
-                        },
-                      )
-                    : null,
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: AppSpacing.md,
-                  vertical: AppSpacing.sm,
+            child: TvTextFieldFocus(
+              releaseHorizontal: true,
+              child: TextField(
+                controller: _search,
+                onChanged: (_) => setState(() {}),
+                textInputAction: TextInputAction.search,
+                decoration: InputDecoration(
+                  hintText:
+                      'Search ${widget.folder.status?.label ?? widget.folder.name}…',
+                  prefixIcon: const Icon(Icons.search_rounded, size: 20),
+                  suffixIcon: _search.text.isNotEmpty
+                      ? IconButton(
+                          icon: const Icon(Icons.clear_rounded, size: 18),
+                          onPressed: () {
+                            _search.clear();
+                            setState(() {});
+                          },
+                        )
+                      : null,
+                  isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.md,
+                    vertical: AppSpacing.sm,
+                  ),
+                  border: OutlineInputBorder(
+                    borderRadius: AppRadius.all(AppRadius.md),
+                    borderSide: BorderSide.none,
+                  ),
+                  filled: true,
+                  fillColor: palette.surfaceSoftColor,
                 ),
-                border: OutlineInputBorder(
-                  borderRadius: AppRadius.all(AppRadius.md),
-                  borderSide: BorderSide.none,
-                ),
-                filled: true,
-                fillColor: palette.surfaceSoftColor,
               ),
             ),
           ),
@@ -2563,11 +2569,14 @@ class _GridCell extends ConsumerWidget {
       );
     }
 
-    return GestureDetector(
+    // TvFocusable instead of a bare GestureDetector: same pointer handling,
+    // but D-pad focusable, and holding OK long-presses (AniList editor).
+    return TvFocusable(
       onTap: () =>
           context.push(AppRoutes.mediaDetailsPath(media.id), extra: media),
       onLongPress: openEditor,
       onSecondaryTap: openEditor,
+      borderRadius: AppRadius.all(AppRadius.md),
       child: ClipRRect(
         borderRadius: AppRadius.all(AppRadius.md),
         child: Stack(
@@ -3023,32 +3032,36 @@ class _LocalLibraryViewState extends State<_LocalLibraryView> {
           child: Row(
             children: <Widget>[
               Expanded(
-                child: TextField(
-                  controller: _search,
-                  onChanged: (_) => setState(() {}),
-                  decoration: InputDecoration(
-                    hintText: 'Search library…',
-                    prefixIcon: const Icon(Icons.search_rounded, size: 20),
-                    suffixIcon: _search.text.isNotEmpty
-                        ? IconButton(
-                            icon: const Icon(Icons.clear_rounded, size: 18),
-                            onPressed: () {
-                              _search.clear();
-                              setState(() {});
-                            },
-                          )
-                        : null,
-                    isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: AppSpacing.md,
-                      vertical: AppSpacing.sm,
+                child: TvTextFieldFocus(
+                  releaseHorizontal: true,
+                  child: TextField(
+                    controller: _search,
+                    onChanged: (_) => setState(() {}),
+                    textInputAction: TextInputAction.search,
+                    decoration: InputDecoration(
+                      hintText: 'Search library…',
+                      prefixIcon: const Icon(Icons.search_rounded, size: 20),
+                      suffixIcon: _search.text.isNotEmpty
+                          ? IconButton(
+                              icon: const Icon(Icons.clear_rounded, size: 18),
+                              onPressed: () {
+                                _search.clear();
+                                setState(() {});
+                              },
+                            )
+                          : null,
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: AppSpacing.md,
+                        vertical: AppSpacing.sm,
+                      ),
+                      border: OutlineInputBorder(
+                        borderRadius: AppRadius.all(AppRadius.md),
+                        borderSide: BorderSide.none,
+                      ),
+                      filled: true,
+                      fillColor: palette.surfaceSoftColor,
                     ),
-                    border: OutlineInputBorder(
-                      borderRadius: AppRadius.all(AppRadius.md),
-                      borderSide: BorderSide.none,
-                    ),
-                    filled: true,
-                    fillColor: palette.surfaceSoftColor,
                   ),
                 ),
               ),
@@ -3388,11 +3401,14 @@ class _LocalGridCell extends ConsumerWidget {
       }
     }
 
-    return GestureDetector(
+    // TvFocusable instead of a bare GestureDetector: same pointer handling,
+    // but D-pad focusable, and holding OK long-presses (AniList editor).
+    return TvFocusable(
       onTap: () =>
           context.push(AppRoutes.mediaDetailsPath(media.id), extra: media),
       onLongPress: openEditor,
       onSecondaryTap: openEditor,
+      borderRadius: AppRadius.all(AppRadius.md),
       child: ClipRRect(
         borderRadius: AppRadius.all(AppRadius.md),
         child: Stack(

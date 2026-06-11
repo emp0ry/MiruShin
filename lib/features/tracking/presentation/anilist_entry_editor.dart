@@ -7,6 +7,7 @@ import '../../../app/localization/app_localizations.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_radius.dart';
 import '../../../app/theme/app_spacing.dart';
+import '../../../core/widgets/tv_text_field_focus.dart';
 import '../../../app/theme/app_theme_extension.dart';
 import '../../../shared/models/anilist_models.dart';
 import '../../settings/presentation/settings_state.dart';
@@ -205,22 +206,24 @@ Future<AniListEntryEditDraft?> showAniListEntryEditor(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: <Widget>[
                             Expanded(
-                              child: TextField(
-                                controller: progressController,
-                                decoration: InputDecoration(
-                                  labelText: 'Progress',
-                                  helperText: 'of $progressLimit',
-                                  border: const OutlineInputBorder(),
+                              child: TvTextFieldFocus(
+                                child: TextField(
+                                  controller: progressController,
+                                  decoration: InputDecoration(
+                                    labelText: 'Progress',
+                                    helperText: 'of $progressLimit',
+                                    border: const OutlineInputBorder(),
+                                  ),
+                                  keyboardType: TextInputType.number,
+                                  inputFormatters: <TextInputFormatter>[
+                                    FilteringTextInputFormatter.digitsOnly,
+                                  ],
+                                  onChanged: (String value) {
+                                    draftProgress = clampProgress(
+                                      int.tryParse(value) ?? 0,
+                                    );
+                                  },
                                 ),
-                                keyboardType: TextInputType.number,
-                                inputFormatters: <TextInputFormatter>[
-                                  FilteringTextInputFormatter.digitsOnly,
-                                ],
-                                onChanged: (String value) {
-                                  draftProgress = clampProgress(
-                                    int.tryParse(value) ?? 0,
-                                  );
-                                },
                               ),
                             ),
                             const SizedBox(width: AppSpacing.sm),
@@ -249,21 +252,23 @@ Future<AniListEntryEditDraft?> showAniListEntryEditor(
                         Row(
                           children: <Widget>[
                             Expanded(
-                              child: TextField(
-                                controller: repeatController,
-                                decoration: const InputDecoration(
-                                  labelText: 'Repeat count',
-                                  border: OutlineInputBorder(),
+                              child: TvTextFieldFocus(
+                                child: TextField(
+                                  controller: repeatController,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Repeat count',
+                                    border: OutlineInputBorder(),
+                                  ),
+                                  keyboardType: TextInputType.number,
+                                  inputFormatters: <TextInputFormatter>[
+                                    FilteringTextInputFormatter.digitsOnly,
+                                  ],
+                                  onChanged: (String value) {
+                                    draftRepeat = (int.tryParse(value) ?? 0)
+                                        .clamp(0, 999)
+                                        .toInt();
+                                  },
                                 ),
-                                keyboardType: TextInputType.number,
-                                inputFormatters: <TextInputFormatter>[
-                                  FilteringTextInputFormatter.digitsOnly,
-                                ],
-                                onChanged: (String value) {
-                                  draftRepeat = (int.tryParse(value) ?? 0)
-                                      .clamp(0, 999)
-                                      .toInt();
-                                },
                               ),
                             ),
                             const SizedBox(width: AppSpacing.sm),

@@ -48,6 +48,9 @@ class _MediaPosterCardState extends ConsumerState<MediaPosterCard> {
     final MediaItem item = widget.item;
     return TvFocusable(
       onTap: widget.onTap,
+      // Holding the D-pad centre / Enter long-presses (e.g. opens the AniList
+      // entry editor); pointer long-presses stay with the InkWell below.
+      onLongPress: widget.onLongPress,
       autofocus: widget.autofocus,
       borderRadius: AppRadius.all(AppRadius.lg),
       interactPointer: false,

@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../app/theme/app_radius.dart';
 
@@ -54,6 +57,21 @@ class TvFocusable extends StatefulWidget {
 class _TvFocusableState extends State<TvFocusable> {
   bool _focused = false;
 
+  // Hold-to-long-press on the D-pad centre / Enter: a held activate key fires
+  // [TvFocusable.onLongPress] after the standard long-press timeout, a short
+  // press fires [TvFocusable.onTap] on release.
+  Timer? _holdTimer;
+  bool _holdFired = false;
+  bool _keyHeld = false;
+
+  static final Set<LogicalKeyboardKey> _activateKeys = <LogicalKeyboardKey>{
+    LogicalKeyboardKey.select,
+    LogicalKeyboardKey.enter,
+    LogicalKeyboardKey.numpadEnter,
+    LogicalKeyboardKey.space,
+    LogicalKeyboardKey.gameButtonA,
+  };
+
   bool get _hasAction =>
       widget.onTap != null ||
       widget.onLongPress != null ||
@@ -61,9 +79,54 @@ class _TvFocusableState extends State<TvFocusable> {
 
   bool get _isEnabled => widget.enabled && _hasAction;
 
+  @override
+  void dispose() {
+    _holdTimer?.cancel();
+    super.dispose();
+  }
+
   void _handleFocusHighlight(bool value) {
     if (_focused == value) return;
     setState(() => _focused = value);
+  }
+
+  void _cancelHold() {
+    _holdTimer?.cancel();
+    _holdTimer = null;
+    _keyHeld = false;
+    _holdFired = false;
+  }
+
+  KeyEventResult _onKeyEvent(FocusNode node, KeyEvent event) {
+    // Only take over the activate keys when a long-press action exists;
+    // otherwise the default ActivateIntent path handles the tap.
+    if (!_isEnabled || widget.onLongPress == null) {
+      return KeyEventResult.ignored;
+    }
+    if (!_activateKeys.contains(event.logicalKey)) {
+      return KeyEventResult.ignored;
+    }
+    if (event is KeyDownEvent) {
+      if (_keyHeld) return KeyEventResult.handled;
+      _keyHeld = true;
+      _holdFired = false;
+      _holdTimer = Timer(const Duration(milliseconds: 500), () {
+        if (!mounted) return;
+        _holdFired = true;
+        widget.onLongPress?.call();
+      });
+      return KeyEventResult.handled;
+    }
+    if (event is KeyRepeatEvent) {
+      return KeyEventResult.handled;
+    }
+    if (event is KeyUpEvent) {
+      final bool fired = _holdFired;
+      _cancelHold();
+      if (!fired) widget.onTap?.call();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
   }
 
   @override
@@ -111,23 +174,34 @@ class _TvFocusableState extends State<TvFocusable> {
       );
     }
 
-    return FocusableActionDetector(
-      enabled: _isEnabled,
-      autofocus: widget.autofocus,
-      focusNode: widget.focusNode,
-      mouseCursor: widget.onTap == null
-          ? MouseCursor.defer
-          : SystemMouseCursors.click,
-      onShowFocusHighlight: _handleFocusHighlight,
-      actions: <Type, Action<Intent>>{
-        ActivateIntent: CallbackAction<ActivateIntent>(
-          onInvoke: (_) {
-            widget.onTap?.call();
-            return null;
-          },
-        ),
-      },
-      child: content,
+    // The outer Focus sees activate keys before the app-level ActivateIntent
+    // shortcut, which is what makes hold-to-long-press possible; it never
+    // takes focus itself.
+    return Focus(
+      canRequestFocus: false,
+      skipTraversal: true,
+      onKeyEvent: _onKeyEvent,
+      child: FocusableActionDetector(
+        enabled: _isEnabled,
+        autofocus: widget.autofocus,
+        focusNode: widget.focusNode,
+        mouseCursor: widget.onTap == null
+            ? MouseCursor.defer
+            : SystemMouseCursors.click,
+        onShowFocusHighlight: _handleFocusHighlight,
+        onFocusChange: (bool focused) {
+          if (!focused) _cancelHold();
+        },
+        actions: <Type, Action<Intent>>{
+          ActivateIntent: CallbackAction<ActivateIntent>(
+            onInvoke: (_) {
+              widget.onTap?.call();
+              return null;
+            },
+          ),
+        },
+        child: content,
+      ),
     );
   }
 }

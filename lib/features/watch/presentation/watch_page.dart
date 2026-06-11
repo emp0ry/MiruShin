@@ -26,6 +26,7 @@ import '../../../core/widgets/adaptive_page.dart';
 import '../../../core/widgets/glass_card.dart';
 import '../../../core/widgets/metadata_chip.dart';
 import '../../../core/widgets/neutral_placeholder.dart';
+import '../../../core/widgets/tv_text_field_focus.dart';
 import '../../../core/widgets/page_back_button.dart';
 import '../../../core/widgets/section_header.dart';
 import '../../../core/widgets/skeleton_box.dart';
@@ -1989,17 +1990,20 @@ class _AddonEmptyRowState extends State<_AddonEmptyRow> {
           _AddonLogo(url: widget.iconUrl),
           const SizedBox(width: AppSpacing.sm),
           Expanded(
-            child: TextField(
-              controller: _controller,
-              autofocus: true,
-              style: Theme.of(context).textTheme.bodySmall,
-              decoration: InputDecoration(
-                hintText: context.t('Custom search…'),
-                isDense: true,
-                border: InputBorder.none,
-                contentPadding: EdgeInsets.zero,
+            child: TvTextFieldFocus(
+              releaseHorizontal: true,
+              child: TextField(
+                controller: _controller,
+                autofocus: true,
+                style: Theme.of(context).textTheme.bodySmall,
+                decoration: InputDecoration(
+                  hintText: context.t('Custom search…'),
+                  isDense: true,
+                  border: InputBorder.none,
+                  contentPadding: EdgeInsets.zero,
+                ),
+                onSubmitted: (_) => _submit(),
               ),
-              onSubmitted: (_) => _submit(),
             ),
           ),
           IconButton(
@@ -2128,17 +2132,20 @@ class _AddonGroupState extends State<_AddonGroup> {
             const SizedBox(width: AppSpacing.sm),
             if (_searching) ...<Widget>[
               Expanded(
-                child: TextField(
-                  controller: _controller,
-                  autofocus: true,
-                  style: Theme.of(context).textTheme.bodySmall,
-                  decoration: InputDecoration(
-                    hintText: context.t('Custom search…'),
-                    isDense: true,
-                    border: InputBorder.none,
-                    contentPadding: EdgeInsets.zero,
+                child: TvTextFieldFocus(
+                  releaseHorizontal: true,
+                  child: TextField(
+                    controller: _controller,
+                    autofocus: true,
+                    style: Theme.of(context).textTheme.bodySmall,
+                    decoration: InputDecoration(
+                      hintText: context.t('Custom search…'),
+                      isDense: true,
+                      border: InputBorder.none,
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                    onSubmitted: (_) => _submit(),
                   ),
-                  onSubmitted: (_) => _submit(),
                 ),
               ),
               IconButton(
