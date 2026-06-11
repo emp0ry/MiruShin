@@ -13,6 +13,8 @@ import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 import 'package:webview_win_floating/webview_win_floating.dart'
     as desktop_webview;
 
+import '../../../core/platform/tv_platform.dart';
+import '../../../core/widgets/tv_web_cursor.dart';
 import 'player_engine.dart';
 
 class YoutubeEmbedPlayerEngine extends PlayerEngine {
@@ -70,10 +72,13 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
   Widget buildVideoSurface(BuildContext context) {
     final WebViewController? controller = _controller;
     if (controller == null) return const SizedBox.shrink();
-    return ColoredBox(
+    final Widget surface = ColoredBox(
       color: const Color(0xFF000000),
       child: WebViewWidget(controller: controller),
     );
+    if (!TvPlatform.isAndroidTv) return surface;
+    // D-pad-driven dot cursor so the embedded YouTube UI is clickable on TV.
+    return TvWebCursor(controller: controller, child: surface);
   }
 
   @override
@@ -179,6 +184,16 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
       );
     }
 
+    if (TvPlatform.isAndroidTv) {
+      unawaited(
+        controller.setNavigationDelegate(
+          NavigationDelegate(
+            onPageFinished: (_) => TvWebCursor.inject(controller),
+          ),
+        ),
+      );
+    }
+
     if (controller.platform
         is desktop_webview.WindowsPlatformWebViewController) {
       unawaited(
@@ -209,7 +224,9 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
 
   bool get _usesHostedTrailerPage => Platform.isWindows || Platform.isLinux;
 
-  Future<Uri> _serveTrailerPage(String Function(String origin) buildHtml) async {
+  Future<Uri> _serveTrailerPage(
+    String Function(String origin) buildHtml,
+  ) async {
     await _stopHtmlServer();
     final HttpServer server = await HttpServer.bind(
       InternetAddress.loopbackIPv4,

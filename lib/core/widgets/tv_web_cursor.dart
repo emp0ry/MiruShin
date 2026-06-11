@@ -59,6 +59,9 @@ class _TvWebCursorState extends State<TvWebCursor> {
   bool _moveInFlight = false;
   int _repeatStreak = 0;
 
+  // Pending verification that an 'idle' message really means typing is over.
+  Timer? _idleRestoreTimer;
+
   @override
   void initState() {
     super.initState();
@@ -76,6 +79,7 @@ class _TvWebCursorState extends State<TvWebCursor> {
 
   @override
   void dispose() {
+    _idleRestoreTimer?.cancel();
     _focusNode.dispose();
     super.dispose();
   }
@@ -90,10 +94,11 @@ class _TvWebCursorState extends State<TvWebCursor> {
           if (!mounted) return;
           switch (message.message) {
             case 'editing':
+              _idleRestoreTimer?.cancel();
               _enterTextInputMode();
               break;
             case 'idle':
-              _restoreCursorMode();
+              _scheduleIdleRestore();
               break;
           }
         },
@@ -101,6 +106,21 @@ class _TvWebCursorState extends State<TvWebCursor> {
     } catch (_) {
       // The channel may already exist on reused controllers.
     }
+  }
+
+  /// 'idle' can be a transient blur (the page re-rendering its form while the
+  /// keyboard opens). Restoring immediately stole native focus back from the
+  /// WebView and closed the keyboard, so verify the input really lost focus
+  /// before bringing the cursor back.
+  void _scheduleIdleRestore() {
+    if (!_textInputMode) return;
+    _idleRestoreTimer?.cancel();
+    _idleRestoreTimer = Timer(const Duration(milliseconds: 200), () async {
+      if (!mounted || !_textInputMode) return;
+      if (await _hasEditableFocus()) return;
+      if (!mounted || !_textInputMode) return;
+      _restoreCursorMode();
+    });
   }
 
   void _run(String body) {
@@ -330,11 +350,20 @@ class _TvWebCursorState extends State<TvWebCursor> {
   @override
   Widget build(BuildContext context) {
     if (!widget.enabled) return widget.child;
-    return Focus(
-      focusNode: _focusNode,
-      autofocus: !_textInputMode,
-      onKeyEvent: _onKey,
-      child: widget.child,
+    // While typing, BACK must end typing mode (bring the cursor back) instead
+    // of popping the page. With the keyboard up the IME consumes BACK itself,
+    // so this fires on the press after the keyboard has closed.
+    return PopScope<Object?>(
+      canPop: !_textInputMode,
+      onPopInvokedWithResult: (bool didPop, Object? result) {
+        if (!didPop) _leaveTextInputMode();
+      },
+      child: Focus(
+        focusNode: _focusNode,
+        autofocus: !_textInputMode,
+        onKeyEvent: _onKey,
+        child: widget.child,
+      ),
     );
   }
 }
@@ -442,6 +471,26 @@ const String _cursorScript = r'''
   function activeEditable() {
     return editableTarget(document.activeElement);
   }
+  function installKeyboardWatcher() {
+    var vv = window.visualViewport;
+    if (!vv || window.__tvCursorKbWatchInstalled) return;
+    window.__tvCursorKbWatchInstalled = true;
+    var maxH = vv.height;
+    vv.addEventListener('resize', function () {
+      if (vv.height > maxH) maxH = vv.height;
+      // Viewport back to full height while an input is still focused: the
+      // soft keyboard was dismissed (IME Done/Back) without blurring the
+      // input. End editing so the host brings the cursor back.
+      if (vv.height >= maxH - 24) {
+        var editable = activeEditable();
+        if (editable) {
+          try { editable.blur(); } catch (e) {}
+          setEditing(false);
+          notify('idle');
+        }
+      }
+    });
+  }
   function installEditListeners() {
     if (window.__tvCursorEditListenersInstalled) return;
     window.__tvCursorEditListenersInstalled = true;
@@ -464,11 +513,13 @@ const String _cursorScript = r'''
         }, 250);
       }
     }, true);
+    // Escape ends editing explicitly. Enter is deliberately left to the page:
+    // on login forms the keyboard's Next/Done action arrives as Enter, and
+    // blurring on it kept closing the keyboard between fields.
     document.addEventListener('keydown', function (event) {
       var editable = activeEditable();
       if (!editable) return;
-      var name = (editable.tagName || '').toLowerCase();
-      if (event.key === 'Escape' || (event.key === 'Enter' && name !== 'textarea')) {
+      if (event.key === 'Escape') {
         setTimeout(function () {
           try { editable.blur(); } catch (e) {}
           setEditing(false);
@@ -527,6 +578,7 @@ const String _cursorScript = r'''
     hasEditableFocus: function () { return !!activeEditable(); }
   };
   installEditListeners();
+  installKeyboardWatcher();
   ensure();
 })();
 ''';

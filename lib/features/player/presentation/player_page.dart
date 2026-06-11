@@ -1102,10 +1102,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
             }
             // Standard TV pattern: BACK first dismisses the on-screen chrome,
             // a second BACK exits. While loading or on error the chrome is
-            // force-visible, so BACK must still exit directly.
+            // force-visible, so BACK must still exit directly — and trailers
+            // keep their single-BACK exit.
             final PlaybackState popState = ref.read(playbackControllerProvider);
             if (_isTv &&
                 !_exitingPlayer &&
+                !_isYoutubeTrailerPlayback(popState, widget.item) &&
                 popState.controlsVisible &&
                 !popState.loading &&
                 popState.error == null) {
