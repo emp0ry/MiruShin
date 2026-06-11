@@ -43,9 +43,6 @@ jobs:
         uses: ./.github/actions/android-signing
         with:
           keystore-base64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          keystore-password: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          key-alias: ${{ secrets.ANDROID_KEY_ALIAS }}
-          key-password: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
       - name: Build APK (release)
         run: flutter build apk --release
