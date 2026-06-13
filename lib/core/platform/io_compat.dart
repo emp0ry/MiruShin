@@ -13,6 +13,21 @@ class Platform {
   static bool get isWindows => false;
 }
 
+class ProcessResult {
+  ProcessResult(this.exitCode);
+
+  final int exitCode;
+}
+
+class Process {
+  // Web has no subprocesses; callers must guard on Platform.is* (all false here)
+  // so this stub is never reached at runtime on web.
+  static Future<ProcessResult> run(
+    String executable,
+    List<String> arguments,
+  ) async => ProcessResult(1);
+}
+
 class FileSystemEntity {
   FileSystemEntity(this.path);
 

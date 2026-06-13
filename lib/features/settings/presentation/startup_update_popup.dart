@@ -2,11 +2,13 @@ import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../../app/localization/app_localizations.dart';
+import '../../../core/platform/url_opener.dart';
 import '../../../app/theme/app_animations.dart';
 import '../../../app/theme/app_radius.dart';
 import '../../../app/theme/app_spacing.dart';
@@ -63,10 +65,22 @@ class _StartupUpdatePopupState extends ConsumerState<StartupUpdatePopup> {
   }
 
   Future<void> _download(UpdateInfo info) async {
-    _hideForSession(info.tagName);
-    await launchUrl(
-      Uri.parse(info.releaseUrl),
-      mode: LaunchMode.externalApplication,
+    if (await openExternalUrl(info.releaseUrl)) {
+      // Only dismiss once the browser actually opened.
+      _hideForSession(info.tagName);
+      return;
+    }
+
+    // Couldn't open a browser: copy the link so the update stays reachable and
+    // keep the popup visible instead of leaving the user with a dead button.
+    await Clipboard.setData(ClipboardData(text: info.releaseUrl));
+    if (!mounted) return;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(
+        content: Text(
+          context.t('Could not open the browser. Link copied to clipboard.'),
+        ),
+      ),
     );
   }
 

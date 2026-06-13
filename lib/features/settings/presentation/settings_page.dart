@@ -8,7 +8,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:go_router/go_router.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../../app/app_routes.dart';
 import '../../../app/localization/app_localizations.dart';
@@ -20,6 +19,7 @@ import '../../../core/constants/app_constants.dart';
 import '../../../core/cache/metadata_cache_store.dart';
 import '../../../core/platform/io_compat.dart' if (dart.library.io) 'dart:io';
 import '../../../core/platform/tv_platform.dart';
+import '../../../core/platform/url_opener.dart';
 import '../../../core/widgets/adaptive_page.dart';
 import '../../../core/widgets/glass_card.dart';
 import '../../../core/widgets/section_header.dart';
@@ -156,10 +156,7 @@ class _UpdateSection extends ConsumerWidget {
                   title: context.t('New version available'),
                   subtitle: info.tagName,
                   trailing: FilledButton.icon(
-                    onPressed: () => launchUrl(
-                      Uri.parse(info.releaseUrl),
-                      mode: LaunchMode.externalApplication,
-                    ),
+                    onPressed: () => openExternalUrl(info.releaseUrl),
                     icon: const Icon(Icons.download_rounded),
                     label: Text(context.t('Download')),
                   ),
