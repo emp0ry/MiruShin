@@ -353,6 +353,9 @@ class PlaybackController extends Notifier<PlaybackState> {
   }
 
   Future<void> load(MediaPlaybackItem item) async {
+    print(
+      '[DEBUG] load: S${item.seasonNumber}E${item.episodeNumber} ignoreProgress=${item.ignoreProgress}',
+    );
     _progressTimer?.cancel();
     _undoTimer?.cancel();
     _reachedNearEnd = false;
@@ -2224,12 +2227,14 @@ class PlaybackController extends Notifier<PlaybackState> {
     final PlayerEngine? engine = state.engine;
     if (engine == null) return;
     final Duration from = _currentPositionFor(engine);
-    final Duration clampedTarget = _clampSeekPosition(
-      target,
-      engine.state.value.duration,
-    );
+    final Duration duration = engine.state.value.duration;
+    final Duration clampedTarget = _clampSeekPosition(target, duration);
     _manualSeekEpoch++;
     _clearInteractiveSeek();
+    // Skip jumps (notably the auto ED-skip, which lands on the episode end) must
+    // feed completion detection like slider/gesture seeks do — otherwise jumping
+    // past the end leaves the episode unwatched and never triggers auto-next.
+    _noteManualSeekTarget(clampedTarget, duration);
     _setSeekPreview(engine, clampedTarget);
     try {
       await engine.seekTo(clampedTarget);
@@ -2336,6 +2341,9 @@ class PlaybackController extends Notifier<PlaybackState> {
         !_autoProgressMarked &&
         pos.inMilliseconds >= dur.inMilliseconds * _watchedFraction) {
       _autoProgressMarked = true;
+      print(
+        '[DEBUG] auto-progress: 85% reached at ${pos.inSeconds}s/${dur.inSeconds}s -> marking watched',
+      );
       unawaited(_saveProgress(item, engine));
     }
 
@@ -2347,6 +2355,9 @@ class PlaybackController extends Notifier<PlaybackState> {
         (reliableDuration && pos >= dur - const Duration(seconds: 2));
     if (ended && !_reachedNearEnd) {
       _reachedNearEnd = true;
+      print(
+        '[DEBUG] auto-next: end latched (isCompleted=${es.isCompleted} pos=${pos.inSeconds}s/${dur.inSeconds}s)',
+      );
       unawaited(_saveProgress(item, engine));
     }
 
@@ -2373,21 +2384,23 @@ class PlaybackController extends Notifier<PlaybackState> {
       // The backend reaching end-of-stream is the most reliable trigger:
       // some streams snap the reported position back to 0:00 on completion,
       // so a pure position-vs-duration check would never fire auto-next.
-      if (ended) {
-        state = state.copyWith(autoNextVisible: true);
-      } else if (dur >= const Duration(minutes: 2)) {
-        // Require at least 2 minutes of reported duration before showing
-        // auto-next. Some HLS/DASH streams report a very small initial
-        // duration before the full manifest is parsed, which would otherwise
-        // trigger the next-episode overlay within the first few seconds.
+      bool shouldShow = ended;
+      // Require at least 2 minutes of reported duration before showing
+      // auto-next. Some HLS/DASH streams report a very small initial duration
+      // before the full manifest is parsed, which would otherwise trigger the
+      // next-episode overlay within the first few seconds.
+      if (!shouldShow && dur >= const Duration(minutes: 2)) {
         if (showAfterEnd) {
-          const Duration endThreshold = Duration(seconds: 1);
-          if (pos + endThreshold >= dur) {
-            state = state.copyWith(autoNextVisible: true);
-          }
-        } else if (pos >= dur - const Duration(seconds: 10)) {
-          state = state.copyWith(autoNextVisible: true);
+          shouldShow = pos + const Duration(seconds: 1) >= dur;
+        } else {
+          shouldShow = pos >= dur - const Duration(seconds: 10);
         }
+      }
+      if (shouldShow) {
+        print(
+          '[DEBUG] auto-next: overlay shown (ended=$ended pos=${pos.inSeconds}s/${dur.inSeconds}s)',
+        );
+        state = state.copyWith(autoNextVisible: true);
       }
     } else if (!showNextOverlay && state.autoNextVisible) {
       state = state.copyWith(autoNextVisible: false);

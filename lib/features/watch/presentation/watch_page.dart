@@ -550,7 +550,10 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     _preferredVoiceOverId = bundle.selectedVoiceOver?.id;
     _preferredVoiceOverLabel = bundle.selectedVoiceOver?.label;
 
-    // For auto-next always start from the beginning regardless of saved progress.
+    // For auto-next always start from the beginning regardless of saved
+    // progress (startPosition stays zero below). This is enough on its own — we
+    // must NOT mark the episode ignoreProgress, or it would stop saving progress,
+    // never mark itself watched at 85%, and never chain the next auto-next.
     // For manual opens, look up the saved position so the controller's async
     // lookup doesn't race with the stop() call from the previous episode.
     Duration startPosition = Duration.zero;
@@ -596,7 +599,9 @@ class _WatchPageState extends ConsumerState<WatchPage> {
               seasonNumber: _session!.seasonNumber,
               startInFullscreen: startFs,
               startPosition: startPosition,
-              ignoreProgress: isAutoNext,
+              // Auto-loaded episodes are real playback the user is watching:
+              // they must track progress and be able to chain the next auto-next.
+              ignoreProgress: false,
             ),
           )
           .then((Object? result) {

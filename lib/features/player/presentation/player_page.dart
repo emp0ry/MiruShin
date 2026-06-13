@@ -433,6 +433,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         settings.autoplayNext &&
         state.autoNextVisible;
     if (shouldAutoNext && _autoNextTimer == null) {
+      // ignore: avoid_print
+      print('[DEBUG] auto-next: scheduling advance in 5s');
       _autoNextTimer = Timer(const Duration(seconds: 5), () {
         if (!mounted) return;
         final PlaybackState currentState = ref.read(playbackControllerProvider);
@@ -443,6 +445,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         }
         _autoNextTimer?.cancel();
         _autoNextTimer = null;
+        // ignore: avoid_print
+        print('[DEBUG] auto-next: timer fired -> advancing to next episode');
         final PlaybackController notifier = ref.read(
           playbackControllerProvider.notifier,
         );
