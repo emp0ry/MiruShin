@@ -159,6 +159,10 @@ class PlaybackController extends Notifier<PlaybackState> {
   static const Duration _seekSettleTolerance = Duration(milliseconds: 1200);
   static const Duration _engineOpenTimeout = Duration(seconds: 45);
   static const double _temporaryPlaybackSpeedBoost = 1.0;
+  // Fraction of an episode that counts as "watched". Matches the common anime
+  // convention where the last ~15% is the ED/credits + next-episode preview, so
+  // progress is committed before the stream actually reaches the end.
+  static const double _watchedFraction = 0.85;
 
   Timer? _progressTimer;
   Timer? _undoTimer;
@@ -167,6 +171,11 @@ class PlaybackController extends Notifier<PlaybackState> {
   // end-of-stream, which would otherwise hide completion from both the progress
   // saver (episode never marked watched) and the auto-next trigger.
   bool _reachedNearEnd = false;
+  // Latched once the current episode crosses the watched threshold (85%). The
+  // engine listener fires on every position tick, so this guarantees the
+  // watched mark + AniList sync run exactly once and can't be cleared by a
+  // later periodic save.
+  bool _autoProgressMarked = false;
   Timer? _interactiveSeekTimer;
   Timer? _seekPreviewTimer;
   Timer? _seekPreviewWarmupTimer;
@@ -347,6 +356,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     _progressTimer?.cancel();
     _undoTimer?.cancel();
     _reachedNearEnd = false;
+    _autoProgressMarked = false;
     _clearInteractiveSeek();
     if (state.autoNextVisible ||
         state.lastSkippedFrom != null ||
@@ -421,11 +431,14 @@ class PlaybackController extends Notifier<PlaybackState> {
     MediaPlaybackItem item,
     EpisodeProgress? progress,
   ) {
-    if (progress?.completed == true) {
+    final int savedSeconds = progress?.positionSeconds ?? 0;
+    // A finished episode is reset to 0:00 on save, so it restarts fresh. But an
+    // episode marked watched early (at 85%) keeps its real position — reopen in
+    // the final stretch instead of jumping back to the beginning.
+    if (progress?.completed == true && savedSeconds <= 0) {
       print('[DEBUG] _safeResumePosition: completed=true -> 0');
       return Duration.zero;
     }
-    final int savedSeconds = progress?.positionSeconds ?? 0;
     final Duration saved = savedSeconds > 0
         ? Duration(seconds: savedSeconds)
         : Duration.zero;
@@ -592,6 +605,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       _retryCount = 0;
       _updateMediaSession();
       _startProgressSaver();
+      _watchPlaybackProgress(engine, generation);
       _reinforceInitialSeek(engine, position, generation, _manualSeekEpoch);
       _guardFreshStart(engine, position, generation, _manualSeekEpoch);
       _watchEngineErrors(
@@ -1138,10 +1152,22 @@ class PlaybackController extends Notifier<PlaybackState> {
 
     final int positionSeconds = positionMs ~/ 1000;
     final int durationSeconds = durationMs ~/ 1000;
+    // Mirror the FVP/MPV path: watched at 85% (keep the real position), but only
+    // snap the resume point to 0:00 once essentially finished.
+    final bool reachedWatchedFraction =
+        durationSeconds > 0 &&
+        positionSeconds >= durationSeconds * _watchedFraction;
     final bool isNearEnd =
         durationSeconds > 0 && positionSeconds >= durationSeconds - 20;
-    final int savePosition = (completed || isNearEnd) ? 0 : positionSeconds;
-    final bool saveCompleted = completed || isNearEnd;
+    final bool resetToStart = completed || isNearEnd;
+    final int savePosition = resetToStart ? 0 : positionSeconds;
+    final bool saveCompleted = completed || isNearEnd || reachedWatchedFraction;
+
+    // Latch the watched mark so a later FVP save can't clear it. Only latch
+    // end-of-stream when genuinely finished — at 85% there is still ~15% left,
+    // and _reachedNearEnd would otherwise pop the auto-next overlay on restore.
+    if (saveCompleted) _autoProgressMarked = true;
+    if (resetToStart) _reachedNearEnd = true;
 
     for (final String mediaId in _progressMediaIds(item)) {
       await ref
@@ -1156,18 +1182,12 @@ class PlaybackController extends Notifier<PlaybackState> {
           );
     }
 
-    if (saveCompleted && durationSeconds > 0) {
-      final double fraction = (positionSeconds / durationSeconds).clamp(
-        0.0,
-        1.0,
-      );
-      if (fraction >= 0.85) {
-        final bool syncEnabled =
-            (ref.read(playerSettingsProvider).value ?? const PlayerSettings())
-                .autoAnilistSync;
-        if (syncEnabled) {
-          unawaited(_trySyncAniList(item, item.episodeNumber.round()));
-        }
+    if (saveCompleted) {
+      final bool syncEnabled =
+          (ref.read(playerSettingsProvider).value ?? const PlayerSettings())
+              .autoAnilistSync;
+      if (syncEnabled) {
+        unawaited(_trySyncAniList(item, item.episodeNumber.round()));
       }
     }
   }
@@ -2272,39 +2292,106 @@ class PlaybackController extends Notifier<PlaybackState> {
       if (item.ignoreProgress) {
         return;
       }
-      final PlayerSettings settings =
-          ref.read(playerSettingsProvider).value ?? const PlayerSettings();
-      final bool showNextOverlay =
-          settings.autoplayNext || settings.showNextEpisodeButton;
-      final bool showAfterEnd =
-          settings.showNextEpisodeButton && !settings.autoplayNext;
-      if (showNextOverlay && !state.autoNextVisible) {
-        final Duration dur = engine.state.value.duration;
-        final Duration pos = engine.state.value.position;
-        final bool ended = engine.state.value.isCompleted || _reachedNearEnd;
-        // The backend reaching end-of-stream is the most reliable trigger:
-        // some streams snap the reported position back to 0:00 on completion,
-        // so a pure position-vs-duration check would never fire auto-next.
-        if (ended) {
-          state = state.copyWith(autoNextVisible: true);
-        } else if (dur >= const Duration(minutes: 2)) {
-          // Require at least 2 minutes of reported duration before showing
-          // auto-next. Some HLS/DASH streams report a very small initial
-          // duration before the full manifest is parsed, which would otherwise
-          // trigger the next-episode overlay within the first few seconds.
-          if (showAfterEnd) {
-            const Duration endThreshold = Duration(seconds: 1);
-            if (pos + endThreshold >= dur) {
-              state = state.copyWith(autoNextVisible: true);
-            }
-          } else if (pos >= dur - const Duration(seconds: 10)) {
+      // Fallback path. The engine listener (_watchPlaybackProgress) is the
+      // primary, near-instant trigger; this keeps the overlay correct if a
+      // backend stops emitting state changes after reaching the end.
+      _evaluateAutoNextOverlay(engine);
+    });
+  }
+
+  // Drives 85% auto-progress and end-of-stream auto-next directly off engine
+  // state changes (~every 120ms) instead of the 5-second periodic saver, so a
+  // seek to the end, a paused-on-completion backend, or one that snaps the final
+  // position back to 0:00 can't make completion slip through the poll gap.
+  void _watchPlaybackProgress(PlayerEngine engine, int generation) {
+    late void Function() listener;
+    listener = () {
+      if (generation != _playbackGeneration ||
+          !identical(state.engine, engine)) {
+        engine.removeListener(listener);
+        return;
+      }
+      _evaluatePlaybackProgress(engine);
+    };
+    engine.addListener(listener);
+  }
+
+  void _evaluatePlaybackProgress(PlayerEngine engine) {
+    final MediaPlaybackItem? item = state.item;
+    if (item == null || item.ignoreProgress) return;
+    final PlayerEngineState es = engine.state.value;
+    if (!es.isInitialized) return;
+
+    final Duration dur = es.duration;
+    final Duration pos = es.position;
+    // Require a stable, realistic duration before trusting a fraction/near-end
+    // check: fragile HLS/DASH streams briefly expose a few-second duration while
+    // the full manifest is still being parsed.
+    final bool reliableDuration = dur >= const Duration(minutes: 2);
+
+    // (1) Auto-progress: mark the episode watched the instant playback crosses
+    // 85%, independent of ever reaching the very end. This is what makes the
+    // watched mark + AniList sync fire mid-playback instead of only on exit.
+    if (reliableDuration &&
+        !_autoProgressMarked &&
+        pos.inMilliseconds >= dur.inMilliseconds * _watchedFraction) {
+      _autoProgressMarked = true;
+      unawaited(_saveProgress(item, engine));
+    }
+
+    // (2) End-of-stream latch: the moment the backend reports completion (or the
+    // position crosses into the final seconds) persist the episode as watched so
+    // a seek-to-end or a 0:00 position-snap can never hide completion.
+    final bool ended =
+        es.isCompleted ||
+        (reliableDuration && pos >= dur - const Duration(seconds: 2));
+    if (ended && !_reachedNearEnd) {
+      _reachedNearEnd = true;
+      unawaited(_saveProgress(item, engine));
+    }
+
+    // (3) Surface the auto-next overlay using the configured thresholds.
+    _evaluateAutoNextOverlay(engine);
+  }
+
+  // Shows / hides the auto-next overlay based on the current settings and how
+  // close playback is to the end. Shared by the engine listener and the
+  // periodic saver so both paths stay in lockstep.
+  void _evaluateAutoNextOverlay(PlayerEngine engine) {
+    final MediaPlaybackItem? item = state.item;
+    if (item == null || item.ignoreProgress) return;
+    final PlayerSettings settings =
+        ref.read(playerSettingsProvider).value ?? const PlayerSettings();
+    final bool showNextOverlay =
+        settings.autoplayNext || settings.showNextEpisodeButton;
+    final bool showAfterEnd =
+        settings.showNextEpisodeButton && !settings.autoplayNext;
+    if (showNextOverlay && !state.autoNextVisible) {
+      final Duration dur = engine.state.value.duration;
+      final Duration pos = engine.state.value.position;
+      final bool ended = engine.state.value.isCompleted || _reachedNearEnd;
+      // The backend reaching end-of-stream is the most reliable trigger:
+      // some streams snap the reported position back to 0:00 on completion,
+      // so a pure position-vs-duration check would never fire auto-next.
+      if (ended) {
+        state = state.copyWith(autoNextVisible: true);
+      } else if (dur >= const Duration(minutes: 2)) {
+        // Require at least 2 minutes of reported duration before showing
+        // auto-next. Some HLS/DASH streams report a very small initial
+        // duration before the full manifest is parsed, which would otherwise
+        // trigger the next-episode overlay within the first few seconds.
+        if (showAfterEnd) {
+          const Duration endThreshold = Duration(seconds: 1);
+          if (pos + endThreshold >= dur) {
             state = state.copyWith(autoNextVisible: true);
           }
+        } else if (pos >= dur - const Duration(seconds: 10)) {
+          state = state.copyWith(autoNextVisible: true);
         }
-      } else if (!showNextOverlay && state.autoNextVisible) {
-        state = state.copyWith(autoNextVisible: false);
       }
-    });
+    } else if (!showNextOverlay && state.autoNextVisible) {
+      state = state.copyWith(autoNextVisible: false);
+    }
   }
 
   void dismissAutoNext() => state = state.copyWith(autoNextVisible: false);
@@ -2348,14 +2435,24 @@ class PlaybackController extends Notifier<PlaybackState> {
     final bool hasReliableCompletionDuration =
         durationSeconds != null && durationSeconds >= 120;
 
-    // Save position=0 with completed=true when near the end (or when the
-    // backend reports the stream finished). This resets the resume point to
-    // 0:00 (start fresh next time) while keeping isWatched=true via completed.
-    final bool isNearEnd =
+    // The episode counts as watched once playback crosses 85% (the common
+    // anime convention) or the backend reports end-of-stream. Latched in
+    // [_autoProgressMarked] so a later periodic save can never clear it back to
+    // unwatched while the final 15% (ED/credits) is still playing.
+    final bool reachedWatchedFraction =
+        hasReliableCompletionDuration &&
+        position.inSeconds >= durationSeconds * _watchedFraction;
+    final bool watched =
+        engineCompleted || reachedWatchedFraction || _autoProgressMarked;
+
+    // Only snap the resume point back to 0:00 once the stream is essentially
+    // finished. When we mark "watched" early (at 85%) the real position is kept
+    // so reopening resumes in the final stretch instead of restarting.
+    final bool resetToStart =
         engineCompleted ||
         (hasReliableCompletionDuration &&
             position.inSeconds >= durationSeconds - 20);
-    final int savePosition = isNearEnd ? 0 : position.inSeconds;
+    final int savePosition = resetToStart ? 0 : position.inSeconds;
     final int? savedDurationSeconds = hasReliableCompletionDuration
         ? durationSeconds
         : null;
@@ -2369,17 +2466,14 @@ class PlaybackController extends Notifier<PlaybackState> {
             episode: item.episodeNumber,
             positionSeconds: savePosition,
             durationSeconds: savedDurationSeconds,
-            completed: isNearEnd,
+            completed: watched,
           );
     }
 
     final bool syncEnabled =
         (ref.read(playerSettingsProvider).value ?? const PlayerSettings())
             .autoAnilistSync;
-    final bool fractionReached =
-        hasReliableCompletionDuration &&
-        (position.inSeconds / durationSeconds) >= 0.85;
-    if (syncEnabled && (engineCompleted || fractionReached)) {
+    if (syncEnabled && watched) {
       unawaited(_trySyncAniList(item, item.episodeNumber.round()));
     }
   }
