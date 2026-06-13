@@ -318,7 +318,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
       future
           .then((List<SoraEpisode> episodes) {
             if (!mounted || !_isCurrentSourceEpisodeRequest(request)) return;
-            final List<List<SoraEpisode>> groups = groupSoraEpisodesBySeason(
+            final List<SoraSeasonGroup> groups = groupSoraEpisodesIntoSeasons(
               episodes,
             );
             setState(() {
@@ -329,7 +329,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
                 _visibleTab = 1;
                 _session = _session?.copyWith(
                   step: WatchStep.pickEpisode,
-                  seasonNumber: 1,
+                  seasonNumber: groups.isEmpty ? 1 : groups.first.season,
                   clearEpisode: true,
                   clearCandidate: true,
                   clearError: true,
@@ -381,10 +381,17 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     if (requestKey != null) {
       _streamResolutionState.begin(requestKey, autoNext: isAutoNext);
     }
+    // In the TMDB source-season flow, follow the addon's own season for the
+    // picked episode so progress is saved under the right season — important
+    // when auto-next crosses a season boundary (the next episode belongs to a
+    // later season). Other flows (anime/AniList) keep their session season.
+    final bool useAddonSeason =
+        _usesSourceSeasonFlow(_lastItem) && episode.season > 0;
     setState(() {
       _session = _session!.copyWith(
         step: WatchStep.resolveStream,
         episode: episode,
+        seasonNumber: useAddonSeason ? episode.season : null,
         clearCandidate: true,
         clearError: true,
         isResolving: true,
@@ -1470,8 +1477,8 @@ class _SourceSeasonPickerSection extends ConsumerWidget {
                       );
                     }
 
-                    final List<List<SoraEpisode>> groups =
-                        groupSoraEpisodesBySeason(
+                    final List<SoraSeasonGroup> groups =
+                        groupSoraEpisodesIntoSeasons(
                           snapshot.data ?? const <SoraEpisode>[],
                         );
                     if (groups.length <= 1) {
@@ -1496,8 +1503,9 @@ class _SourceSeasonPickerSection extends ConsumerWidget {
                         separatorBuilder: (BuildContext context, int index) =>
                             const SizedBox(width: AppSpacing.md),
                         itemBuilder: (BuildContext context, int index) {
-                          final int seasonNumber = index + 1;
-                          final List<SoraEpisode> episodes = groups[index];
+                          final SoraSeasonGroup group = groups[index];
+                          final int seasonNumber = group.season;
+                          final List<SoraEpisode> episodes = group.episodes;
                           final bool selected = seasonNumber == selectedSeason;
                           final String label = _sourceSeasonLabel(
                             context,
@@ -3538,17 +3546,53 @@ List<List<SoraEpisode>> groupSoraEpisodesBySeason(List<SoraEpisode> episodes) {
   return groups;
 }
 
+/// A set of episodes that belong to one season, tagged with the season number.
+class SoraSeasonGroup {
+  const SoraSeasonGroup({required this.season, required this.episodes});
+
+  final int season;
+  final List<SoraEpisode> episodes;
+}
+
+/// Splits [episodes] into seasons. Prefers the addon's explicit per-episode
+/// season numbers when it provides them (so the picker shows exactly the
+/// addon's seasons and progress keys use the addon's season number); otherwise
+/// falls back to the number-reset heuristic and numbers seasons sequentially.
+List<SoraSeasonGroup> groupSoraEpisodesIntoSeasons(List<SoraEpisode> episodes) {
+  if (episodes.isEmpty) return const <SoraSeasonGroup>[];
+
+  if (episodes.any((SoraEpisode e) => e.season > 0)) {
+    final Map<int, List<SoraEpisode>> bySeason = <int, List<SoraEpisode>>{};
+    for (final SoraEpisode episode in episodes) {
+      final int season = episode.season > 0 ? episode.season : 1;
+      bySeason.putIfAbsent(season, () => <SoraEpisode>[]).add(episode);
+    }
+    final List<int> seasons = bySeason.keys.toList()..sort();
+    return <SoraSeasonGroup>[
+      for (final int season in seasons)
+        SoraSeasonGroup(season: season, episodes: bySeason[season]!),
+    ];
+  }
+
+  final List<List<SoraEpisode>> raw = groupSoraEpisodesBySeason(episodes);
+  return <SoraSeasonGroup>[
+    for (int i = 0; i < raw.length; i += 1)
+      SoraSeasonGroup(season: i + 1, episodes: raw[i]),
+  ];
+}
+
 List<SoraEpisode> _sourceSeasonEpisodes(
   List<SoraEpisode> episodes,
   int seasonNumber,
   bool useSourceSeasonGroups,
 ) {
   if (!useSourceSeasonGroups) return episodes;
-  final List<List<SoraEpisode>> groups = groupSoraEpisodesBySeason(episodes);
+  final List<SoraSeasonGroup> groups = groupSoraEpisodesIntoSeasons(episodes);
   if (groups.length <= 1) return episodes;
-  final int index = seasonNumber - 1;
-  if (index < 0 || index >= groups.length) return groups.first;
-  return groups[index];
+  for (final SoraSeasonGroup group in groups) {
+    if (group.season == seasonNumber) return group.episodes;
+  }
+  return groups.first.episodes;
 }
 
 bool _usesSourceSeasonFlow(MediaItem? item) {

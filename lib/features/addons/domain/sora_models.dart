@@ -409,6 +409,27 @@ class SoraEpisode {
     return number.toString();
   }
 
+  /// Season number supplied by the addon (0 when it doesn't provide one). Read
+  /// from the raw episode data so multi-season sources (e.g. TMDB shows) can be
+  /// grouped by the addon's own seasons instead of guessing from number resets.
+  int get season {
+    for (final String key in const <String>[
+      'season',
+      'seasonNumber',
+      'season_number',
+      'seasonNum',
+      's',
+    ]) {
+      final Object? value = raw[key];
+      if (value is num && value > 0) return value.toInt();
+      if (value is String) {
+        final int? parsed = int.tryParse(value.trim());
+        if (parsed != null && parsed > 0) return parsed;
+      }
+    }
+    return 0;
+  }
+
   SoraEpisode copyWith({
     double? number,
     String? href,
