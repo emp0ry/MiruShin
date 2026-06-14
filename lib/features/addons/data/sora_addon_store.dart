@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../../../core/env/env.dart';
 import '../../../core/platform/io_compat.dart' if (dart.library.io) 'dart:io';
 import '../domain/sora_models.dart';
 
@@ -63,8 +64,9 @@ class SoraAddonStore {
 
   /// Public catalog of Sora modules, keyed by short ids (e.g. "Ag9V"). Used to
   /// resolve an addon id typed in the Add Addon dialog to its manifest URL.
-  static const String moduleLibraryUrl =
-      'https://library.cufiy.net/api/modules.min.json';
+  /// The endpoint is XOR-obfuscated via envied so it is not a plain string in
+  /// the source or the compiled binary.
+  static String get moduleLibraryUrl => Env.moduleLibraryUrl;
 
   final Dio _dio;
   final Future<dynamic> Function()? _supportDirectoryProvider;

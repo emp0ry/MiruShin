@@ -7,6 +7,9 @@ inputs:
   tmdb-read-access-token:
     description: TMDB v4 Read Access Token bundled as the default API key.
     required: true
+  module-library-url:
+    description: Public Sora module catalog endpoint (obfuscated by envied).
+    required: true
 
 runs:
   using: composite
@@ -15,12 +18,18 @@ runs:
       shell: bash
       env:
         TMDB_READ_ACCESS_TOKEN: ${{ inputs.tmdb-read-access-token }}
+        MODULE_LIBRARY_URL: ${{ inputs.module-library-url }}
       run: |
         if [ -z "$TMDB_READ_ACCESS_TOKEN" ]; then
           echo "::error::TMDB_READ_ACCESS_TOKEN secret is empty. Add it under Settings → Secrets and variables → Actions."
           exit 1
         fi
+        if [ -z "$MODULE_LIBRARY_URL" ]; then
+          echo "::error::module-library-url input is empty."
+          exit 1
+        fi
         printf 'TMDB_READ_ACCESS_TOKEN=%s\n' "$TMDB_READ_ACCESS_TOKEN" > .env
+        printf 'MODULE_LIBRARY_URL=%s\n' "$MODULE_LIBRARY_URL" >> .env
         echo "Wrote .env ($(wc -c < .env) bytes)."
 
     - name: Generate envied sources

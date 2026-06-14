@@ -18,4 +18,10 @@ abstract final class Env {
   /// custom API key in Settings → API Connections.
   @EnviedField(varName: 'TMDB_READ_ACCESS_TOKEN', obfuscate: true)
   static final String tmdbReadAccessToken = _Env.tmdbReadAccessToken;
+
+  /// Public catalog of Sora modules used to resolve a short addon id (e.g.
+  /// "Ag9V") typed in the Add Addon dialog to its manifest URL. Obfuscated so
+  /// the endpoint is not a plain string in the source or compiled binary.
+  @EnviedField(varName: 'MODULE_LIBRARY_URL', obfuscate: true)
+  static final String moduleLibraryUrl = _Env.moduleLibraryUrl;
 }
