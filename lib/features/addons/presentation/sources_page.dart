@@ -17,6 +17,7 @@ import '../../../core/widgets/neutral_placeholder.dart';
 import '../../../core/widgets/page_back_button.dart';
 import '../../../core/widgets/section_header.dart';
 import '../../../core/widgets/skeleton_box.dart';
+import '../../../core/widgets/tv_focusable.dart';
 import '../../../core/widgets/tv_text_field_focus.dart';
 import '../application/addon_sources_provider.dart';
 import '../application/sora_addons_provider.dart';
@@ -165,15 +166,20 @@ class _SourceCard extends ConsumerWidget {
     final AsyncValue<List<AddonCatalogEntry>> catalog = ref.watch(
       addonCatalogProvider(source.url),
     );
-    return GlassCard(
-      padding: const EdgeInsets.all(AppSpacing.md),
+    return TvFocusable(
       onTap: () => context.openSourceModules(source),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Container(
-            width: 44,
-            height: 44,
+      interactPointer: false,
+      borderRadius: AppRadius.all(AppRadius.lg),
+      child: GlassCard(
+        padding: const EdgeInsets.all(AppSpacing.md),
+        onTap: () => context.openSourceModules(source),
+        canRequestFocus: false,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Container(
+              width: 44,
+              height: 44,
             decoration: BoxDecoration(
               color: Theme.of(
                 context,
@@ -229,7 +235,8 @@ class _SourceCard extends ConsumerWidget {
               onPressed: () => _showSourceMenu(menuContext, ref, source),
             ),
           ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -756,6 +763,7 @@ class _SourceModulesPageState extends ConsumerState<SourceModulesPage> {
               children: <Widget>[
                 Expanded(
                   child: TvTextFieldFocus(
+                    releaseHorizontal: true,
                     child: TextField(
                       controller: _searchController,
                       decoration: InputDecoration(

@@ -11,6 +11,7 @@ class GlassCard extends StatelessWidget {
     this.onTap,
     this.radius = AppRadius.lg,
     this.borderColor,
+    this.canRequestFocus = true,
     super.key,
   });
 
@@ -19,6 +20,10 @@ class GlassCard extends StatelessWidget {
   final VoidCallback? onTap;
   final double radius;
   final Color? borderColor;
+
+  /// Whether the tappable card takes D-pad/keyboard focus itself. Set to false
+  /// when an outer [TvFocusable] owns the focus, to avoid a duplicate stop.
+  final bool canRequestFocus;
 
   @override
   Widget build(BuildContext context) {
@@ -43,6 +48,7 @@ class GlassCard extends StatelessWidget {
     return InkWell(
       borderRadius: AppRadius.all(radius),
       onTap: onTap,
+      canRequestFocus: canRequestFocus,
       child: card,
     );
   }
