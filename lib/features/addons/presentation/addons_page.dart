@@ -198,7 +198,7 @@ class _InstalledAddons extends ConsumerWidget {
       return NeutralPlaceholder(
         title: context.t('No Sora addons installed'),
         message: context.t(
-          'Paste a Sora manifest JSON URL to preview the module before adding it.',
+          'Paste a Sora manifest URL or an addon ID (like Ag9V) to preview the module before adding it.',
         ),
         height: 340,
         icon: Icons.extension_off_rounded,
@@ -881,8 +881,8 @@ class _AddAddonDialogState extends ConsumerState<_AddAddonDialog> {
                   autofocus: true,
                   keyboardType: TextInputType.url,
                   decoration: InputDecoration(
-                    labelText: context.t('Manifest JSON URL'),
-                    hintText: 'https://example.com/addon.json',
+                    labelText: context.t('Manifest URL or addon ID'),
+                    hintText: 'https://example.com/addon.json  ·  Ag9V',
                     prefixIcon: const Icon(Icons.link_rounded),
                     suffixIcon: IconButton(
                       tooltip: context.t('Paste'),

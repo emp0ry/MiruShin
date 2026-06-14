@@ -61,6 +61,11 @@ class SoraAddonStore {
   static const String _defaultUserAgent =
       'MiruShin/1.0 SoraAddonRuntime (+https://github.com/emp0ry)';
 
+  /// Public catalog of Sora modules, keyed by short ids (e.g. "Ag9V"). Used to
+  /// resolve an addon id typed in the Add Addon dialog to its manifest URL.
+  static const String moduleLibraryUrl =
+      'https://library.cufiy.net/api/modules.min.json';
+
   final Dio _dio;
   final Future<dynamic> Function()? _supportDirectoryProvider;
   final String _webProxyUrl;
@@ -111,7 +116,7 @@ class SoraAddonStore {
   }
 
   Future<SoraAddonPreview> previewFromUrl(String url) async {
-    final Uri manifestUri = _parseUri(url, 'Addon manifest URL is not valid.');
+    final Uri manifestUri = await _resolveManifestUri(url);
     final Map<String, dynamic> manifestJson = await _fetchJson(manifestUri);
     final Map<String, dynamic> normalizedManifestJson =
         Map<String, dynamic>.from(manifestJson);
@@ -611,6 +616,57 @@ class SoraAddonStore {
       throw SoraAddonException(error);
     }
     return uri;
+  }
+
+  /// Resolves the Add Addon input into a manifest URI. Accepts a full manifest
+  /// URL or a short module library id (e.g. "Ag9V"), which is looked up in the
+  /// public Sora module catalog and mapped to its manifest URL.
+  Future<Uri> _resolveManifestUri(String input) async {
+    final String trimmed = input.trim();
+    final Uri? uri = Uri.tryParse(trimmed);
+    if (uri != null && uri.hasScheme && uri.host.isNotEmpty) {
+      return uri;
+    }
+    if (_looksLikeModuleId(trimmed)) {
+      return _resolveManifestUriFromId(trimmed);
+    }
+    throw const SoraAddonException(
+      'Enter a valid manifest URL or addon id (e.g. Ag9V).',
+    );
+  }
+
+  // Library ids are short alphanumeric tokens such as "Ag9V" or "BdWxr".
+  bool _looksLikeModuleId(String value) =>
+      RegExp(r'^[A-Za-z0-9]{2,16}$').hasMatch(value);
+
+  Future<Uri> _resolveManifestUriFromId(String id) async {
+    final String text = await _fetchText(Uri.parse(moduleLibraryUrl));
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(text);
+    } on FormatException {
+      throw const SoraAddonException('Could not read the addon library.');
+    }
+    if (decoded is! List) {
+      throw const SoraAddonException(
+        'The addon library returned an unexpected format.',
+      );
+    }
+    final String wanted = id.toLowerCase();
+    for (final Object? entry in decoded) {
+      if (entry is! Map) continue;
+      final String entryId = entry['id']?.toString().trim() ?? '';
+      if (entryId.toLowerCase() != wanted) continue;
+      final String manifestUrl = entry['manifestUrl']?.toString().trim() ?? '';
+      if (manifestUrl.isEmpty) {
+        throw SoraAddonException('Addon "$id" has no manifest URL.');
+      }
+      return _parseUri(
+        manifestUrl,
+        'Addon "$id" has an invalid manifest URL.',
+      );
+    }
+    throw SoraAddonException('No addon found in the library with id "$id".');
   }
 
   String _inferScriptUrl(Uri manifestUri) {
