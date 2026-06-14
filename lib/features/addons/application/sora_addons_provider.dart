@@ -153,6 +153,24 @@ class SoraAddonsController extends Notifier<SoraAddonsState> {
     }
   }
 
+  /// Previews and installs an addon directly from a manifest (or script) URL in
+  /// one step. Used by the Sources browser where the URL is already known.
+  Future<SoraInstalledAddon?> installFromUrl(String url) async {
+    state = state.copyWith(updating: true, clearError: true);
+    try {
+      final SoraAddonStore store = ref.read(soraAddonStoreProvider);
+      final SoraAddonPreview preview = await store.previewFromUrl(url);
+      final SoraInstalledAddon addon = await store.installFromPreview(preview);
+      ref.read(soraJsRuntimeProvider).invalidate(addon.id);
+      await load();
+      state = state.copyWith(updating: false, clearPreview: true);
+      return addon;
+    } on Object catch (error) {
+      state = state.copyWith(updating: false, error: _friendlyError(error));
+      return null;
+    }
+  }
+
   Future<void> setEnabled(String id, bool enabled) async {
     final SoraAddonStore store = ref.read(soraAddonStoreProvider);
     final SoraInstalledAddon addon = await store.setEnabled(id, enabled);

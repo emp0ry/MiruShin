@@ -84,13 +84,20 @@ class _ResponsiveScaffoldState extends ConsumerState<ResponsiveScaffold> {
       }
     }
 
-    return LayoutBuilder(
-      builder: (BuildContext context, BoxConstraints constraints) {
+    // Use a Builder (build phase) rather than a LayoutBuilder (layout phase)
+    // here. A LayoutBuilder builds the routed page during layout, and when that
+    // page activates an OverlayPortal mid-layout (during a route transition) it
+    // mutates a sibling LayoutBuilder, throwing the debug-only assert
+    // "_RenderLayoutBuilder was mutated in _RenderLayoutBuilder.performLayout".
+    // This is the outermost full-window widget, so MediaQuery width is the same
+    // value the LayoutBuilder constraints reported.
+    return Builder(
+      builder: (BuildContext context) {
         // On Android TV always use the labelled sidebar (the 10-foot nav) and
         // never the bottom bar, regardless of the reported window width.
         final WindowSizeClass sizeClass = isTv
             ? WindowSizeClass.expanded
-            : AppBreakpoints.classify(constraints.maxWidth);
+            : AppBreakpoints.classify(MediaQuery.sizeOf(context).width);
 
         Widget content = Stack(
           children: <Widget>[

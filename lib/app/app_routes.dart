@@ -10,6 +10,7 @@ abstract final class AppRoutes {
   static const String library = '/library';
   static const String calendar = '/calendar';
   static const String addons = '/addons';
+  static const String addonsSources = '/addons/sources';
   static const String profile = '/profile';
   static const String profileActivities = '/profile/activities';
   static const String profileFavourites = '/profile/favourites';

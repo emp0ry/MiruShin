@@ -7,10 +7,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_file_dialog/flutter_file_dialog.dart';
+import 'package:go_router/go_router.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../../../app/app_routes.dart';
 import '../../../app/localization/app_localizations.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_radius.dart';
@@ -105,6 +107,11 @@ class _AddonHero extends ConsumerWidget {
                     : () => _showAddAddonDialog(context),
                 icon: const Icon(Icons.add_rounded),
                 label: Text(context.t('Add Addon')),
+              ),
+              OutlinedButton.icon(
+                onPressed: () => context.push(AppRoutes.addonsSources),
+                icon: const Icon(Icons.travel_explore_rounded),
+                label: Text(context.t('Sources')),
               ),
               OutlinedButton.icon(
                 onPressed: state.installed.isEmpty || state.updating

@@ -5,6 +5,7 @@ import '../features/profile/presentation/profile_page.dart';
 import 'app_routes.dart';
 import '../core/responsive/responsive_scaffold.dart';
 import '../features/addons/presentation/addons_page.dart';
+import '../features/addons/presentation/sources_page.dart';
 import '../features/board/presentation/board_page.dart';
 import '../features/calendar/presentation/calendar_page.dart';
 import '../features/discovery/presentation/discovery_page.dart';
@@ -75,6 +76,11 @@ GoRouter buildAppRouter(String initialLocation) => GoRouter(
           path: AppRoutes.addons,
           pageBuilder: (BuildContext context, GoRouterState state) =>
               _fadePage(state, const AddonsPage()),
+        ),
+        GoRoute(
+          path: AppRoutes.addonsSources,
+          pageBuilder: (BuildContext context, GoRouterState state) =>
+              _fadePage(state, const SourcesPage()),
         ),
         GoRoute(
           path: AppRoutes.settings,

@@ -99,54 +99,56 @@ class _StartupUpdatePopupState extends ConsumerState<StartupUpdatePopup> {
       _ensureDismissedVersionLoaded(info.tagName);
     }
 
-    return LayoutBuilder(
-      builder: (BuildContext context, BoxConstraints constraints) {
-        final bool compact = constraints.maxWidth < 460;
-        return SafeArea(
-          bottom: false,
-          child: Padding(
-            padding: EdgeInsets.only(
-              left: compact ? AppSpacing.md : AppSpacing.xl,
-              top: compact ? AppSpacing.sm : AppSpacing.lg,
-              right: compact ? AppSpacing.md : AppSpacing.xl,
-            ),
-            child: Align(
-              alignment: Alignment.topCenter,
-              child: AnimatedSwitcher(
-                duration: AppAnimations.medium,
-                switchInCurve: AppAnimations.standard,
-                switchOutCurve: Curves.easeInCubic,
-                transitionBuilder: (Widget child, Animation<double> animation) {
-                  final Animation<double> slide = CurvedAnimation(
-                    parent: animation,
-                    curve: AppAnimations.standard,
-                  );
-                  return FadeTransition(
-                    opacity: animation,
-                    child: SlideTransition(
-                      position: Tween<Offset>(
-                        begin: const Offset(0, -0.08),
-                        end: Offset.zero,
-                      ).animate(slide),
-                      child: child,
-                    ),
-                  );
-                },
-                child: show
-                    ? _UpdateNotificationCard(
-                        key: ValueKey<String>('update-${info.tagName}'),
-                        info: info,
-                        onDownload: () => unawaited(_download(info)),
-                        onDismissVersion: () =>
-                            unawaited(_dismissVersion(info.tagName)),
-                        onLater: () => _hideForSession(info.tagName),
-                      )
-                    : const SizedBox.shrink(key: ValueKey<String>('no-update')),
-              ),
-            ),
+    // Width comes from MediaQuery rather than a LayoutBuilder: this popup sits
+    // in the shell Stack alongside the page, and a second LayoutBuilder here
+    // collides with the shell's LayoutBuilder when the page's OverlayPortals
+    // reactivate during a route transition (the debug "_RenderLayoutBuilder was
+    // mutated" assert). The popup spans the full window width, so MediaQuery is
+    // equivalent.
+    final bool compact = MediaQuery.sizeOf(context).width < 460;
+    return SafeArea(
+      bottom: false,
+      child: Padding(
+        padding: EdgeInsets.only(
+          left: compact ? AppSpacing.md : AppSpacing.xl,
+          top: compact ? AppSpacing.sm : AppSpacing.lg,
+          right: compact ? AppSpacing.md : AppSpacing.xl,
+        ),
+        child: Align(
+          alignment: Alignment.topCenter,
+          child: AnimatedSwitcher(
+            duration: AppAnimations.medium,
+            switchInCurve: AppAnimations.standard,
+            switchOutCurve: Curves.easeInCubic,
+            transitionBuilder: (Widget child, Animation<double> animation) {
+              final Animation<double> slide = CurvedAnimation(
+                parent: animation,
+                curve: AppAnimations.standard,
+              );
+              return FadeTransition(
+                opacity: animation,
+                child: SlideTransition(
+                  position: Tween<Offset>(
+                    begin: const Offset(0, -0.08),
+                    end: Offset.zero,
+                  ).animate(slide),
+                  child: child,
+                ),
+              );
+            },
+            child: show
+                ? _UpdateNotificationCard(
+                    key: ValueKey<String>('update-${info.tagName}'),
+                    info: info,
+                    onDownload: () => unawaited(_download(info)),
+                    onDismissVersion: () =>
+                        unawaited(_dismissVersion(info.tagName)),
+                    onLater: () => _hideForSession(info.tagName),
+                  )
+                : const SizedBox.shrink(key: ValueKey<String>('no-update')),
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 }

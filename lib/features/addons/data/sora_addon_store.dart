@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../../core/env/env.dart';
 import '../../../core/platform/io_compat.dart' if (dart.library.io) 'dart:io';
+import '../domain/addon_source_models.dart';
 import '../domain/sora_models.dart';
 
 class SoraAddonImportResult {
@@ -153,6 +154,58 @@ class SoraAddonStore {
       scriptCode: scriptCode,
       scriptUrl: scriptUri.toString(),
     );
+  }
+
+  /// Fetches and parses a module catalog (an array of module entries) from a
+  /// user-added source URL. Reuses the shared Dio/proxy/error handling.
+  Future<List<AddonCatalogEntry>> fetchCatalog(String url) async {
+    final Uri uri = _parseUri(
+      url,
+      'Enter a valid catalog URL (e.g. https://example.com/modules.json).',
+    );
+    final String text = await _fetchText(uri);
+    Object? decoded;
+    try {
+      decoded = jsonDecode(text);
+    } on FormatException catch (error) {
+      throw SoraAddonException('Catalog is not valid JSON: ${error.message}.');
+    }
+    // Accept a bare array, or an object wrapping the array under a common key.
+    final List<dynamic>? entries = decoded is List<dynamic>
+        ? decoded
+        : decoded is Map
+        ? _firstList(
+            decoded.map(
+              (Object? key, Object? value) =>
+                  MapEntry<String, dynamic>(key.toString(), value),
+            ),
+            const <String>['modules', 'sources', 'items', 'addons', 'data'],
+          )
+        : null;
+    if (entries == null) {
+      throw const SoraAddonException(
+        'Catalog must be a JSON array of modules.',
+      );
+    }
+    final List<AddonCatalogEntry> parsed = <AddonCatalogEntry>[
+      for (final Object? entry in entries)
+        if (AddonCatalogEntry.fromJson(entry) case final AddonCatalogEntry e) e,
+    ];
+    parsed.sort(
+      (AddonCatalogEntry a, AddonCatalogEntry b) =>
+          a.sourceName.toLowerCase().compareTo(b.sourceName.toLowerCase()),
+    );
+    return parsed;
+  }
+
+  List<dynamic>? _firstList(Map<String, dynamic> map, List<String> keys) {
+    for (final String key in keys) {
+      final Object? value = map[key];
+      if (value is List<dynamic>) {
+        return value;
+      }
+    }
+    return null;
   }
 
   Future<SoraInstalledAddon> installFromPreview(
