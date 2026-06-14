@@ -11,9 +11,6 @@
   <a href="https://github.com/emp0ry/MiruShin/releases/latest">
     <img alt="Total Downloads" src="https://img.shields.io/github/downloads/emp0ry/MiruShin/total?style=flat-square&logo=github&logoColor=white&label=Downloads&color=ff6d00&labelColor=1f2937">
   </a>
-  <a href="https://github.com/emp0ry/MiruShin/stargazers">
-    <img alt="Stars" src="https://img.shields.io/github/stars/emp0ry/MiruShin?style=flat-square&logo=github&logoColor=white&label=Stars&color=f59e0b&labelColor=1f2937">
-  </a>
   <a href="https://www.buymeacoffee.com/emp0ry">
     <img alt="Buy Me a Coffee" src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-emp0ry-FFDD00?style=flat-square&logo=buymeacoffee&logoColor=111827">
   </a>
