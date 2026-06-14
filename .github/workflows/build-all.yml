@@ -38,6 +38,7 @@ jobs:
         uses: ./.github/actions/generate-env
         with:
           tmdb-read-access-token: ${{ secrets.TMDB_READ_ACCESS_TOKEN }}
+          module-library-url: ${{ secrets.MODULE_LIBRARY_URL }}
 
       - name: Set up Android release signing
         uses: ./.github/actions/android-signing
@@ -124,6 +125,7 @@ jobs:
         uses: ./.github/actions/generate-env
         with:
           tmdb-read-access-token: ${{ secrets.TMDB_READ_ACCESS_TOKEN }}
+          module-library-url: ${{ secrets.MODULE_LIBRARY_URL }}
 
       - name: Force fresh pinned MDK SDK
         run: |
@@ -384,6 +386,7 @@ jobs:
         uses: ./.github/actions/generate-env
         with:
           tmdb-read-access-token: ${{ secrets.TMDB_READ_ACCESS_TOKEN }}
+          module-library-url: ${{ secrets.MODULE_LIBRARY_URL }}
 
       - name: Preload Windows MDK SDK
         shell: pwsh
@@ -479,6 +482,7 @@ jobs:
         uses: ./.github/actions/generate-env
         with:
           tmdb-read-access-token: ${{ secrets.TMDB_READ_ACCESS_TOKEN }}
+          module-library-url: ${{ secrets.MODULE_LIBRARY_URL }}
 
       - name: Pre-cache Apple MDK SDK
         run: bash .github/scripts/precache-apple-mdk.sh

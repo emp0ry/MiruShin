@@ -31,6 +31,7 @@ jobs:
         uses: ./.github/actions/generate-env
         with:
           tmdb-read-access-token: ${{ secrets.TMDB_READ_ACCESS_TOKEN }}
+          module-library-url: ${{ secrets.MODULE_LIBRARY_URL }}
 
       - name: Preload Windows MDK SDK
         shell: pwsh

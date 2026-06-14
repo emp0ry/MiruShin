@@ -30,6 +30,7 @@ jobs:
         uses: ./.github/actions/generate-env
         with:
           tmdb-read-access-token: ${{ secrets.TMDB_READ_ACCESS_TOKEN }}
+          module-library-url: ${{ secrets.MODULE_LIBRARY_URL }}
 
       - name: Pre-cache Apple MDK SDK
         run: bash .github/scripts/precache-apple-mdk.sh
