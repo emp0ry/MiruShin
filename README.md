@@ -6,20 +6,24 @@
 
 <p align="center">
   <a href="https://github.com/emp0ry/MiruShin/releases/latest">
-    <img src="https://img.shields.io/github/v/release/emp0ry/MiruShin?logo=github&color=5865F2" alt="Latest Release">
+    <img alt="Latest Release" src="https://img.shields.io/github/v/release/emp0ry/MiruShin?style=flat-square&logo=github&logoColor=white&label=Release&color=8b5cf6&labelColor=1f2937">
   </a>
   <a href="https://github.com/emp0ry/MiruShin/releases/latest">
-    <img alt="Total downloads" src="https://img.shields.io/github/downloads/emp0ry/MiruShin/total?color=ff6d00&label=Total%20Downloads">
+    <img alt="Total Downloads" src="https://img.shields.io/github/downloads/emp0ry/MiruShin/total?style=flat-square&logo=github&logoColor=white&label=Downloads&color=ff6d00&labelColor=1f2937">
+  </a>
+  <a href="https://github.com/emp0ry/MiruShin/stargazers">
+    <img alt="Stars" src="https://img.shields.io/github/stars/emp0ry/MiruShin?style=flat-square&logo=github&logoColor=white&label=Stars&color=f59e0b&labelColor=1f2937">
   </a>
   <a href="https://www.buymeacoffee.com/emp0ry">
-    <img alt="Buy Me a Coffee" src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-emp0ry-FFDD00?logo=buymeacoffee&logoColor=111827">
+    <img alt="Buy Me a Coffee" src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-emp0ry-FFDD00?style=flat-square&logo=buymeacoffee&logoColor=111827">
   </a>
-  <img alt="Flutter" src="https://img.shields.io/badge/Flutter-stable-02569B?logo=flutter&logoColor=white">
-  <img alt="Dart" src="https://img.shields.io/badge/Dart-3.11%2B-0175C2?logo=dart&logoColor=white">
-  <img alt="Platforms" src="https://img.shields.io/badge/Platforms-Android%20%2F%20Android%20TV%20%7C%20iOS%20%7C%20Windows%20%7C%20macOS%20%7C%20Linux-111827">
-  <img alt="Catalogs" src="https://img.shields.io/badge/Catalogs-TMDB%20%7C%20AniList-16A34A">
+  <br>
+  <img alt="Flutter" src="https://img.shields.io/badge/Flutter-stable-02569B?style=flat-square&logo=flutter&logoColor=white&labelColor=1f2937">
+  <img alt="Dart" src="https://img.shields.io/badge/Dart-3.11%2B-0175C2?style=flat-square&logo=dart&logoColor=white&labelColor=1f2937">
+  <img alt="Platforms" src="https://img.shields.io/badge/Platforms-Android%20%7C%20Android%20TV%20%7C%20iOS%20%7C%20Windows%20%7C%20macOS%20%7C%20Linux-111827?style=flat-square">
+  <img alt="Catalogs" src="https://img.shields.io/badge/Catalogs-TMDB%20%7C%20AniList-16A34A?style=flat-square&labelColor=1f2937">
   <a href="LICENSE">
-    <img alt="License: GPL-3.0" src="https://img.shields.io/badge/License-GPL--3.0-8B5CF6">
+    <img alt="License: GPL--3.0" src="https://img.shields.io/badge/License-GPL--3.0-8b5cf6?style=flat-square&labelColor=1f2937">
   </a>
 </p>
 
