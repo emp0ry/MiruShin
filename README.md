@@ -94,8 +94,6 @@ Or add the source manually by pasting this URL into your installer's **Sources -
 https://raw.githubusercontent.com/emp0ry/MiruShin/main/docs/source.json
 ```
 
-> The buttons open a redirect that hands the source URL to your installer, so they only work on a device where that app is installed (a custom `altstore://` / `sidestore://` / `feather://` / `livecontainer://` link can't be clicked directly from GitHub). On desktop, copy the URL above instead.
-
 ### Requirements
 
 - Flutter stable

@@ -6,7 +6,7 @@ name: AltStore Source
 # so this is idempotent across publish / edit / delete events.
 #
 # This is triggered by `release` events (and manual dispatch), never by `push`,
-# so committing apps.json back does not retrigger the workflow.
+# so committing source.json back does not retrigger the workflow.
 
 on:
   release:
