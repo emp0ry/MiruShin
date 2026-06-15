@@ -157,7 +157,7 @@ def fetch_releases(repo: str) -> list[dict]:
 def clean_notes(body: str | None, fallback: str) -> str:
     if not body:
         return fallback
-    return body.replace("\r\n", "\n").replace("\r", "\n").strip().split("## What's New\n\n")[-1].split("\n\n<details>")[0] or fallback
+    return body.replace("\r\n", "\n").replace("\r", "\n").strip().split("## What's New\n\n")[-1].split("\n\n<detail")[0] or fallback
 
 
 def build_versions(releases: list[dict]) -> list[dict]:
