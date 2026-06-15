@@ -1,0 +1,49 @@
+name: AltStore Source
+
+# Regenerate the AltStore / SideStore / Feather / LiveContainer source
+# (docs/source.json) whenever the set of GitHub Releases changes, and commit it
+# to the default branch. The whole file is rebuilt from the live Releases API,
+# so this is idempotent across publish / edit / delete events.
+#
+# This is triggered by `release` events (and manual dispatch), never by `push`,
+# so committing apps.json back does not retrigger the workflow.
+
+on:
+  release:
+    types: [published, edited, deleted, unpublished, released]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: altstore-source
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Generate docs/source.json from releases
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python3 .github/scripts/gen-altstore-source.py docs/source.json
+
+      - name: Commit if changed
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- docs/source.json; then
+            echo "docs/source.json unchanged; nothing to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/source.json
+          git commit -m "chore: update AltStore source (docs/source.json) [skip ci]"
+          git push

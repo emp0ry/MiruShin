@@ -64,10 +64,37 @@ It can switch between TMDB-driven discovery and AniList-driven catalog views, th
 Prebuilt binaries are on the [Releases](https://github.com/emp0ry/MiruShin/releases/latest) page:
 
 - **Android and Android TV** - `.apk`
-- **iOS** - `.ipa`
+- **iOS** - `.ipa` (direct download, or one-tap install via the source below)
 - **Windows** - installer (`.exe`) and portable `.zip`
 - **macOS** - `.dmg`
 - **Linux** - `AppImage`, `.tar.gz`, and `.deb` (Debian/Ubuntu)
+
+### iOS Install (AltStore Source)
+
+MiruShin publishes an AltStore-compatible source that works with **AltStore**, **SideStore**, **Feather**, and **LiveContainer**, so you can install the `.ipa` and pull future updates automatically. Tap a button **on your iPhone or iPad** (with the installer app already set up):
+
+<p align="center">
+  <a href="https://intradeus.github.io/http-protocol-redirector/?r=altstore%3A%2F%2Fsource%3Furl%3Dhttps%3A%2F%2Fraw.githubusercontent.com%2Femp0ry%2FMiruShin%2Fmain%2Fdocs%2Fsource.json">
+    <img alt="Add to AltStore" src="https://img.shields.io/badge/AltStore-Add%20Source-7E3FF2?style=for-the-badge&logoColor=white&labelColor=1f2937">
+  </a>
+  <a href="https://intradeus.github.io/http-protocol-redirector/?r=sidestore%3A%2F%2Fsource%3Furl%3Dhttps%3A%2F%2Fraw.githubusercontent.com%2Femp0ry%2FMiruShin%2Fmain%2Fdocs%2Fsource.json">
+    <img alt="Add to SideStore" src="https://img.shields.io/badge/SideStore-Add%20Source-2D7CF0?style=for-the-badge&logoColor=white&labelColor=1f2937">
+  </a>
+  <a href="https://intradeus.github.io/http-protocol-redirector/?r=feather%3A%2F%2Fsource%2Fhttps%3A%2F%2Fraw.githubusercontent.com%2Femp0ry%2FMiruShin%2Fmain%2Fdocs%2Fsource.json">
+    <img alt="Add to Feather" src="https://img.shields.io/badge/Feather-Add%20Source-15B8A6?style=for-the-badge&logoColor=white&labelColor=1f2937">
+  </a>
+  <a href="https://intradeus.github.io/http-protocol-redirector/?r=livecontainer%3A%2F%2Fsource%3Furl%3Dhttps%3A%2F%2Fraw.githubusercontent.com%2Femp0ry%2FMiruShin%2Fmain%2Fdocs%2Fsource.json">
+    <img alt="Add to LiveContainer" src="https://img.shields.io/badge/LiveContainer-Add%20Source-FF6A00?style=for-the-badge&logoColor=white&labelColor=1f2937">
+  </a>
+</p>
+
+Or add the source manually by pasting this URL into your installer's **Sources -> Add** screen:
+
+```text
+https://raw.githubusercontent.com/emp0ry/MiruShin/main/docs/source.json
+```
+
+> The buttons open a redirect that hands the source URL to your installer, so they only work on a device where that app is installed (a custom `altstore://` / `sidestore://` / `feather://` / `livecontainer://` link can't be clicked directly from GitHub). On desktop, copy the URL above instead.
 
 ### Requirements
 
