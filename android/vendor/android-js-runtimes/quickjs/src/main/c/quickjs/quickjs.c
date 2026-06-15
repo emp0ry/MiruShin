@@ -1620,7 +1620,7 @@ static inline uintptr_t js_get_stack_pointer(void)
 #ifdef _MSC_VER
     return _AddressOfReturnAddress();
 #else
-    return __builtin_frame_address(0);
+    return (uintptr_t)__builtin_frame_address(0);
 #endif
 }
 
@@ -9838,12 +9838,12 @@ void JS_SetOpaque(JSValue obj, void *opaque)
     }
 }
 
-/* return NULL if not an object of class class_id */
+/* return 0 if not an object of class class_id */
 JSClassID JS_GetClassID(JSValueConst obj)
 {
     JSObject *p;
     if (JS_VALUE_GET_TAG(obj) != JS_TAG_OBJECT)
-        return NULL;
+        return 0;
     p = JS_VALUE_GET_OBJ(obj);
     return p->class_id;
 }
