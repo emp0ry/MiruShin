@@ -72,7 +72,6 @@ APP = {
     # App icon and screenshots are served straight from the repo via raw URLs.
     "iconURL": f"https://raw.githubusercontent.com/{DEFAULT_REPO}/{RAW_BRANCH}/assets/icons/logo.png",
     "screenshots": [
-        f"https://raw.githubusercontent.com/{DEFAULT_REPO}/{RAW_BRANCH}/docs/assets/imgs/mobile_anilist.png",
         f"https://raw.githubusercontent.com/{DEFAULT_REPO}/{RAW_BRANCH}/docs/assets/imgs/mobile_tmdb.png",
         f"https://raw.githubusercontent.com/{DEFAULT_REPO}/{RAW_BRANCH}/docs/assets/imgs/mobile_detail.png",
         f"https://raw.githubusercontent.com/{DEFAULT_REPO}/{RAW_BRANCH}/docs/assets/imgs/mobile_player.png",
