@@ -77,7 +77,7 @@ class _SourcesHero extends ConsumerWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           Text(
-            context.t('Module sources'),
+            context.t('Addon sources'),
             style: Theme.of(context).textTheme.headlineSmall,
           ),
           const SizedBox(height: AppSpacing.md),
@@ -581,6 +581,10 @@ class _SourceModulesPageState extends ConsumerState<SourceModulesPage> {
     final List<String> types = _distinct(
       entries.map((AddonCatalogEntry e) => e.type),
     );
+    final Set<String> tmpLanguageFilters = Set<String>.from(_languageFilters);
+    final Set<String> tmpTypeFilters = Set<String>.from(_typeFilters);
+    bool tmpDownloadableOnly = _downloadableOnly;
+
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -588,8 +592,8 @@ class _SourceModulesPageState extends ConsumerState<SourceModulesPage> {
       builder: (BuildContext sheetContext) {
         return StatefulBuilder(
           builder: (BuildContext context, StateSetter setSheetState) {
-            void apply(VoidCallback change) {
-              setState(change);
+            void updateSheet(VoidCallback change) {
+              change();
               setSheetState(() {});
             }
 
@@ -613,15 +617,30 @@ class _SourceModulesPageState extends ConsumerState<SourceModulesPage> {
                             style: Theme.of(context).textTheme.titleLarge,
                           ),
                         ),
-                        if (_activeFilterCount > 0)
-                          TextButton(
-                            onPressed: () => apply(() {
-                              _languageFilters.clear();
-                              _typeFilters.clear();
-                              _downloadableOnly = false;
-                            }),
-                            child: Text(context.t('Clear filters')),
-                          ),
+                        TextButton(
+                          onPressed: () => updateSheet(() {
+                            tmpLanguageFilters.clear();
+                            tmpTypeFilters.clear();
+                            tmpDownloadableOnly = false;
+                          }),
+                          child: Text(context.t('Clear all')),
+                        ),
+                        const SizedBox(width: AppSpacing.sm),
+                        FilledButton(
+                          onPressed: () {
+                            setState(() {
+                              _languageFilters
+                                ..clear()
+                                ..addAll(tmpLanguageFilters);
+                              _typeFilters
+                                ..clear()
+                                ..addAll(tmpTypeFilters);
+                              _downloadableOnly = tmpDownloadableOnly;
+                            });
+                            Navigator.pop(sheetContext);
+                          },
+                          child: Text(context.t('Apply')),
+                        ),
                       ],
                     ),
                     if (languages.isNotEmpty) ...<Widget>[
@@ -637,19 +656,19 @@ class _SourceModulesPageState extends ConsumerState<SourceModulesPage> {
                         children: <Widget>[
                           FilterChip(
                             label: Text(context.t('All languages')),
-                            selected: _languageFilters.isEmpty,
+                            selected: tmpLanguageFilters.isEmpty,
                             onSelected: (_) =>
-                                apply(_languageFilters.clear),
+                                updateSheet(tmpLanguageFilters.clear),
                           ),
                           for (final String language in languages)
                             FilterChip(
                               label: Text(language),
-                              selected: _languageFilters.contains(language),
-                              onSelected: (bool selected) => apply(() {
+                              selected: tmpLanguageFilters.contains(language),
+                              onSelected: (bool selected) => updateSheet(() {
                                 if (selected) {
-                                  _languageFilters.add(language);
+                                  tmpLanguageFilters.add(language);
                                 } else {
-                                  _languageFilters.remove(language);
+                                  tmpLanguageFilters.remove(language);
                                 }
                               }),
                             ),
@@ -669,18 +688,19 @@ class _SourceModulesPageState extends ConsumerState<SourceModulesPage> {
                         children: <Widget>[
                           FilterChip(
                             label: Text(context.t('All types')),
-                            selected: _typeFilters.isEmpty,
-                            onSelected: (_) => apply(_typeFilters.clear),
+                            selected: tmpTypeFilters.isEmpty,
+                            onSelected: (_) =>
+                                updateSheet(tmpTypeFilters.clear),
                           ),
                           for (final String type in types)
                             FilterChip(
                               label: Text(type),
-                              selected: _typeFilters.contains(type),
-                              onSelected: (bool selected) => apply(() {
+                              selected: tmpTypeFilters.contains(type),
+                              onSelected: (bool selected) => updateSheet(() {
                                 if (selected) {
-                                  _typeFilters.add(type);
+                                  tmpTypeFilters.add(type);
                                 } else {
-                                  _typeFilters.remove(type);
+                                  tmpTypeFilters.remove(type);
                                 }
                               }),
                             ),
@@ -691,9 +711,9 @@ class _SourceModulesPageState extends ConsumerState<SourceModulesPage> {
                     SwitchListTile.adaptive(
                       contentPadding: EdgeInsets.zero,
                       title: Text(context.t('Downloadable only')),
-                      value: _downloadableOnly,
+                      value: tmpDownloadableOnly,
                       onChanged: (bool value) =>
-                          apply(() => _downloadableOnly = value),
+                          updateSheet(() => tmpDownloadableOnly = value),
                     ),
                   ],
                 ),

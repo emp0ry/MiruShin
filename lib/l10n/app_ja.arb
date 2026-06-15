@@ -28,7 +28,7 @@
   "Could not load catalog": "カタログを読み込めませんでした",
   "Installed": "インストール済み",
   "Loading...": "読み込み中...",
-  "Module sources": "モジュールソース",
+  "Addon sources": "アドオンソース",
   "No modules found": "モジュールが見つかりません",
   "No modules match your search.": "検索に一致するモジュールはありません。",
   "No sources added": "ソースが追加されていません",
