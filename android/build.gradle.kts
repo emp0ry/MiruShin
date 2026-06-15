@@ -16,6 +16,19 @@ subprojects {
     project.layout.buildDirectory.value(newSubprojectBuildDir)
 }
 subprojects {
+    configurations.configureEach {
+        resolutionStrategy.dependencySubstitution {
+            // JitPack serves this transitive flutter_js artifact behind a
+            // Cloudflare challenge in CI, so build the same QuickJS runtime
+            // from the vendored source instead.
+            substitute(
+                module("com.github.fast-development.android-js-runtimes:fastdev-jsruntimes-quickjs")
+            )
+                .using(project(":fastdev-jsruntimes-quickjs"))
+        }
+    }
+}
+subprojects {
     project.evaluationDependsOn(":app")
 }
 
