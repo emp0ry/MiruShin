@@ -10,7 +10,7 @@ name: AltStore Source
 
 on:
   release:
-    types: [published, edited, deleted, unpublished, released]
+    types: [published, edited, deleted, unpublished]
   workflow_dispatch:
 
 permissions:
