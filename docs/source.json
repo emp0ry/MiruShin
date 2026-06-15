@@ -65,7 +65,7 @@
         {
           "version": "1.6.2",
           "date": "2026-06-13",
-          "localizedDescription": "- Fixed auto-next episode and watch progress for auto-played episodes.\n    - Previously, when an episode started automatically, watch progress was not saved and the next episode did not play correctly.\n    - Now every episode saves progress, marks itself as watched at 85%, and reliably continues to the next episode.\n- Fixed the update download button sometimes not working.",
+          "localizedDescription": "- Fixed auto-next episode and watch progress for auto-played episodes.\n- Previously, when an episode started automatically, watch progress was not saved and the next episode did not play correctly.\n- Now every episode saves progress, marks itself as watched at 85%, and reliably continues to the next episode.\n- Fixed the update download button sometimes not working.",
           "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v1.6.2/MiruShin-ios-v1.6.2.ipa",
           "size": 21079490,
           "minOSVersion": "13.0"
