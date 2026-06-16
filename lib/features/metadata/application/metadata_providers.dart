@@ -29,6 +29,7 @@ final tmdbProviderProvider = Provider<TmdbMetadataProvider?>((Ref ref) {
     readAccessToken: settings.effectiveTmdbReadAccessToken,
     language: settings.effectiveTmdbLanguage,
     region: settings.tmdbRegion,
+    includeAdult: settings.tmdbShowAdultContent,
   );
 });
 
@@ -103,7 +104,7 @@ final activeCatalogRepositoryProvider = Provider<CatalogRepository?>((Ref ref) {
         tmdb: tmdb,
         cache: cache,
         cacheScope:
-            'tmdb.${settings.effectiveTmdbLanguage}.${settings.tmdbRegion}',
+            'tmdb.${settings.effectiveTmdbLanguage}.${settings.tmdbRegion}.${settings.tmdbShowAdultContent ? 'adult' : 'safe'}',
         onOffline: offlineCallback(CatalogMode.tmdb, 'TMDB'),
         onOnline: onlineCallback(CatalogMode.tmdb),
       ),

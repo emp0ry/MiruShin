@@ -293,6 +293,21 @@ class _ApiConnectionsSection extends ConsumerWidget {
             onChanged: controller.setTmdbRegion,
           ),
         ),
+        // Temporarily hidden: TMDB only flags movies as adult, so this toggle
+        // can't filter mature anime/series. The filter logic + setting remain
+        // (default off) so re-enabling is just restoring this row.
+        // SettingsRow(
+        //   title: context.t('Show adult content'),
+        //   subtitle: context.t(
+        //     'Include +18 titles in TMDB search and discovery.',
+        //   ),
+        //   trailing: Switch(
+        //     value: settings.tmdbShowAdultContent,
+        //     onChanged: settings.tmdbEnabled
+        //         ? controller.setTmdbShowAdultContent
+        //         : null,
+        //   ),
+        // ),
         SettingsRow(
           title: context.t('TMDB connection'),
           subtitle: settings.hasTmdbToken

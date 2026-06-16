@@ -21,6 +21,8 @@ class SettingsPreferences {
   static const String tvdbEnabledKey = 'settings.tvdbEnabled';
   static const String tmdbLanguageKey = 'settings.tmdbLanguage';
   static const String tmdbRegionKey = 'settings.tmdbRegion';
+  static const String tmdbShowAdultContentKey =
+      'settings.tmdbShowAdultContent';
   static const String cacheLimitMbKey = 'settings.cacheLimitMb';
   static const String metadataCacheEnabledKey = 'settings.metadataCacheEnabled';
   static const String anilistMobileClientIdKey =
@@ -72,6 +74,9 @@ class SettingsPreferences {
       _preferences.getString(tmdbLanguageKey) ?? 'en-US';
 
   String readTmdbRegion() => _preferences.getString(tmdbRegionKey) ?? 'US';
+
+  bool readTmdbShowAdultContent() =>
+      _preferences.getBool(tmdbShowAdultContentKey) ?? false;
 
   int readCacheLimitMb() => _preferences.getInt(cacheLimitMbKey) ?? 2048;
 
@@ -181,6 +186,10 @@ class SettingsPreferences {
 
   Future<void> saveTmdbRegion(String value) {
     return _preferences.setString(tmdbRegionKey, value);
+  }
+
+  Future<void> saveTmdbShowAdultContent(bool value) {
+    return _preferences.setBool(tmdbShowAdultContentKey, value);
   }
 
   Future<void> saveCacheLimitMb(int value) {

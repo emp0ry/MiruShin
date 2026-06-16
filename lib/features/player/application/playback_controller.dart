@@ -563,8 +563,14 @@ class PlaybackController extends Notifier<PlaybackState> {
         ? server.url
         : quality.url;
     final StreamType streamType = _streamTypeForUrl(url, server.streamType);
-    final PlayerSettings settings =
-        ref.read(playerSettingsProvider).value ?? const PlayerSettings();
+    // Await the persisted settings rather than reading `.value`, which is null
+    // on the first playback after launch while the async provider is still
+    // loading. Reading `.value` there fell back to the defaults, so a saved
+    // speed (e.g. 2x) was shown in the UI but the engine opened at 1x until the
+    // user re-selected it. Awaiting guarantees the saved speed/volume/backend.
+    final PlayerSettings settings = await ref.read(
+      playerSettingsProvider.future,
+    );
     final bool youtubeEmbed = _isYoutubeTrailerServer(server);
     final PlayerBackend backend = youtubeEmbed
         ? PlayerBackend.auto
@@ -2375,8 +2381,6 @@ class PlaybackController extends Notifier<PlaybackState> {
         ref.read(playerSettingsProvider).value ?? const PlayerSettings();
     final bool showNextOverlay =
         settings.autoplayNext || settings.showNextEpisodeButton;
-    final bool showAfterEnd =
-        settings.showNextEpisodeButton && !settings.autoplayNext;
     if (showNextOverlay && !state.autoNextVisible) {
       final Duration dur = engine.state.value.duration;
       final Duration pos = engine.state.value.position;
@@ -2385,16 +2389,14 @@ class PlaybackController extends Notifier<PlaybackState> {
       // some streams snap the reported position back to 0:00 on completion,
       // so a pure position-vs-duration check would never fire auto-next.
       bool shouldShow = ended;
-      // Require at least 2 minutes of reported duration before showing
-      // auto-next. Some HLS/DASH streams report a very small initial duration
-      // before the full manifest is parsed, which would otherwise trigger the
-      // next-episode overlay within the first few seconds.
+      // Otherwise wait until the episode is effectively finished before
+      // surfacing auto-next, so the stream plays through to its end. Auto-play
+      // mode previously surfaced ~10s early, so the 5s countdown advanced to
+      // the next episode a few seconds before the ending. The >=2min guard
+      // ignores the tiny initial duration some HLS/DASH streams report before
+      // the full manifest is parsed.
       if (!shouldShow && dur >= const Duration(minutes: 2)) {
-        if (showAfterEnd) {
-          shouldShow = pos + const Duration(seconds: 1) >= dur;
-        } else {
-          shouldShow = pos >= dur - const Duration(seconds: 10);
-        }
+        shouldShow = pos + const Duration(seconds: 1) >= dur;
       }
       if (shouldShow) {
         print(

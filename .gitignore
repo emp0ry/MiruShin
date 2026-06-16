@@ -24,8 +24,7 @@ migrate_working_dir/
 *.ipr
 *.iws
 .idea/
-.vscode/*
-!.vscode/launch.json
+.vscode/
 
 # =====================
 # Flutter repo-specific

@@ -20,6 +20,7 @@ class TmdbMetadataProvider implements PagedDiscoveryProvider {
     Dio? dio,
     this.language = 'en-US',
     this.region = 'US',
+    this.includeAdult = false,
   }) : _readAccessToken = readAccessToken.trim(),
        _dio =
            dio ??
@@ -35,6 +36,10 @@ class TmdbMetadataProvider implements PagedDiscoveryProvider {
   final String _readAccessToken;
   final String language;
   final String region;
+
+  /// When `true`, adult (18+) results are included in TMDB search and discovery.
+  /// Trailer lookups always force this off regardless of this flag.
+  final bool includeAdult;
 
   @override
   String get id => 'tmdb';
@@ -55,20 +60,12 @@ class TmdbMetadataProvider implements PagedDiscoveryProvider {
         _getDataWithEnglishFallback(
           '/search/movie',
           MediaType.movie,
-          <String, dynamic>{
-            'query': trimmed,
-            'include_adult': false,
-            'page': page,
-          },
+          <String, dynamic>{'query': trimmed, 'page': page},
         ),
         _getDataWithEnglishFallback(
           '/search/tv',
           MediaType.series,
-          <String, dynamic>{
-            'query': trimmed,
-            'include_adult': false,
-            'page': page,
-          },
+          <String, dynamic>{'query': trimmed, 'page': page},
         ),
       ],
     );
@@ -117,6 +114,7 @@ class TmdbMetadataProvider implements PagedDiscoveryProvider {
 
     return results
         .whereType<Map<String, dynamic>>()
+        .where((Map<String, dynamic> json) => !_blocksAdult(json))
         .map(_fromTrending)
         .whereType<MediaItem>()
         .toList();
@@ -817,6 +815,7 @@ class TmdbMetadataProvider implements PagedDiscoveryProvider {
       queryParameters: <String, dynamic>{
         'language': languageOverride ?? language,
         'region': region,
+        'include_adult': includeAdult,
         ...query,
       },
       options: Options(
@@ -1060,6 +1059,13 @@ class TmdbMetadataProvider implements PagedDiscoveryProvider {
   bool get _isJapaneseLanguage =>
       language.split('-').first.toLowerCase() == 'ja';
 
+  /// Curated TMDB endpoints (popular, top_rated, trending, upcoming) ignore the
+  /// `include_adult` query param, so we also drop adult items client-side using
+  /// the per-item `adult` flag. This makes the toggle effective everywhere.
+  bool _blocksAdult(Map<String, dynamic> json) {
+    return !includeAdult && json['adult'] == true;
+  }
+
   List<MediaItem> _parseList(Object? data, MediaType type) {
     if (data is! Map<String, dynamic>) {
       return <MediaItem>[];
@@ -1070,6 +1076,7 @@ class TmdbMetadataProvider implements PagedDiscoveryProvider {
     }
     return results
         .whereType<Map<String, dynamic>>()
+        .where((Map<String, dynamic> json) => !_blocksAdult(json))
         .map((Map<String, dynamic> json) => _fromListItem(json, type))
         .toList();
   }
@@ -1082,17 +1089,20 @@ class TmdbMetadataProvider implements PagedDiscoveryProvider {
     if (results is! List<dynamic>) {
       return <MediaItem>[];
     }
-    return results.whereType<Map<String, dynamic>>().map((
-      Map<String, dynamic> json,
-    ) {
-      final List<int> genreIds = _intList(json['genre_ids']);
-      final bool looksLikeAnime =
-          genreIds.contains(16) && _string(json['original_language']) == 'ja';
-      return _fromListItem(
-        json,
-        looksLikeAnime ? MediaType.anime : MediaType.series,
-      );
-    }).toList();
+    return results
+        .whereType<Map<String, dynamic>>()
+        .where((Map<String, dynamic> json) => !_blocksAdult(json))
+        .map((Map<String, dynamic> json) {
+          final List<int> genreIds = _intList(json['genre_ids']);
+          final bool looksLikeAnime =
+              genreIds.contains(16) &&
+              _string(json['original_language']) == 'ja';
+          return _fromListItem(
+            json,
+            looksLikeAnime ? MediaType.anime : MediaType.series,
+          );
+        })
+        .toList();
   }
 
   List<CalendarItem> _parseCalendarList(
@@ -1109,6 +1119,7 @@ class TmdbMetadataProvider implements PagedDiscoveryProvider {
     }
     return results
         .whereType<Map<String, dynamic>>()
+        .where((Map<String, dynamic> json) => !_blocksAdult(json))
         .map((Map<String, dynamic> json) {
           final MediaItem media = _fromListItem(json, type);
           final DateTime? date = _releaseDate(json, type);

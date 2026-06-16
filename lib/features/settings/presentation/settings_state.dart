@@ -102,6 +102,7 @@ class SettingsState {
     this.tmdbReadAccessToken = '',
     this.tmdbLanguage = 'en-US',
     this.tmdbRegion = 'US',
+    this.tmdbShowAdultContent = false,
     this.cacheLimitMb = 2048,
     this.metadataCacheEnabled = true,
     this.anilistMobileClientId = AppConstants.aniListMobileClientId,
@@ -139,6 +140,7 @@ class SettingsState {
   final String tmdbReadAccessToken;
   final String tmdbLanguage;
   final String tmdbRegion;
+  final bool tmdbShowAdultContent;
   final int cacheLimitMb;
   final bool metadataCacheEnabled;
   final String anilistMobileClientId;
@@ -217,6 +219,7 @@ class SettingsState {
     String? tmdbReadAccessToken,
     String? tmdbLanguage,
     String? tmdbRegion,
+    bool? tmdbShowAdultContent,
     int? cacheLimitMb,
     bool? metadataCacheEnabled,
     String? anilistMobileClientId,
@@ -256,6 +259,7 @@ class SettingsState {
       tmdbReadAccessToken: tmdbReadAccessToken ?? this.tmdbReadAccessToken,
       tmdbLanguage: tmdbLanguage ?? this.tmdbLanguage,
       tmdbRegion: tmdbRegion ?? this.tmdbRegion,
+      tmdbShowAdultContent: tmdbShowAdultContent ?? this.tmdbShowAdultContent,
       cacheLimitMb: cacheLimitMb ?? this.cacheLimitMb,
       metadataCacheEnabled: metadataCacheEnabled ?? this.metadataCacheEnabled,
       anilistMobileClientId:
@@ -416,6 +420,7 @@ class SettingsController extends Notifier<SettingsState> {
       tmdbLanguage: tmdbLanguage,
       metadataLocale: metadataLocale,
       tmdbRegion: preferences.readTmdbRegion(),
+      tmdbShowAdultContent: preferences.readTmdbShowAdultContent(),
       cacheLimitMb: preferences.readCacheLimitMb(),
       metadataCacheEnabled: preferences.readMetadataCacheEnabled(),
       anilistMobileClientId: preferences.readAniListMobileClientId(),
@@ -573,6 +578,15 @@ class SettingsController extends Notifier<SettingsState> {
     state = state.copyWith(tmdbRegion: value.trim().toUpperCase());
     unawaited(
       _save((SettingsPreferences prefs) => prefs.saveTmdbRegion(value)),
+    );
+  }
+
+  void setTmdbShowAdultContent(bool value) {
+    state = state.copyWith(tmdbShowAdultContent: value);
+    unawaited(
+      _save(
+        (SettingsPreferences prefs) => prefs.saveTmdbShowAdultContent(value),
+      ),
     );
   }
 
