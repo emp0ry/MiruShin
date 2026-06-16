@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "1.7.2",
+          "date": "2026-06-16",
+          "localizedDescription": "- Fixed playback speed not being restored after the player restarts.\n- Added a short delay before auto-playing the next episode after the current stream finishes.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v1.7.2/MiruShin-ios-v1.7.2.ipa",
+          "size": 21112570,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "1.7.1",
           "date": "2026-06-15",
           "localizedDescription": "- Added Clear All and Apply buttons to the source filter.\n- Updated several localization strings.",
@@ -263,11 +271,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "1.7.1",
-      "versionDate": "2026-06-15",
-      "versionDescription": "- Added Clear All and Apply buttons to the source filter.\n- Updated several localization strings.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v1.7.1/MiruShin-ios-v1.7.1.ipa",
-      "size": 21109882,
+      "version": "1.7.2",
+      "versionDate": "2026-06-16",
+      "versionDescription": "- Fixed playback speed not being restored after the player restarts.\n- Added a short delay before auto-playing the next episode after the current stream finishes.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v1.7.2/MiruShin-ios-v1.7.2.ipa",
+      "size": 21112570,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
