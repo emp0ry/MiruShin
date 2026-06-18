@@ -117,7 +117,7 @@ Love MiruShin? Fuel its development with a coffee! ☕
 
 - MiruShin ships **no** media content, media links, Sora modules, module manifests, or third-party API tokens of its own. All content, sources, and modules are supplied entirely by the user.
 - Any watch functionality depends solely on content, services, and modules that the **user** chooses to add. The developer (`emp0ry`) neither provides nor endorses any such source.
-- Sora-compatible modules are third-party code, created and maintained by their own authors. They may make network requests. **Only install modules from creators you trust** — their content and behavior are the responsibility of their creators, not of MiruShin or `emp0ry`.
+- Sora-compatible modules are third-party code, created and maintained by their own authors. They may make network requests. **Only install modules from creators you trust.** Their content and behavior are the responsibility of their creators, not of MiruShin or `emp0ry`.
 - By using MiruShin you accept sole responsibility for the content you access and for complying with all applicable local, national, and international laws, including copyright, licensing terms, and other intellectual property rights. You must ensure you hold the legal right to access or use any content.
 - The software is provided **"as is"** and **"as available"**, without warranties of any kind. To the maximum extent permitted by law, the developer accepts no liability for user actions, user-provided content, or third-party services or modules.
 - This product uses the TMDB API but is not endorsed or certified by TMDB.
