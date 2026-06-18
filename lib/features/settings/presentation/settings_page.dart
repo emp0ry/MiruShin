@@ -4,7 +4,6 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:go_router/go_router.dart';
 import 'package:path_provider/path_provider.dart';
@@ -23,6 +22,7 @@ import '../../../core/platform/url_opener.dart';
 import '../../../core/widgets/adaptive_page.dart';
 import '../../../core/widgets/glass_card.dart';
 import '../../../core/widgets/section_header.dart';
+import '../../../core/widgets/tv_directional_focus.dart';
 import '../../../core/widgets/tv_text_field_focus.dart';
 import '../../calendar/application/calendar_items_provider.dart';
 import '../../catalog/application/catalog_mode.dart';
@@ -84,54 +84,8 @@ class SettingsPage extends ConsumerWidget {
     );
     return AdaptivePage(
       child: TvPlatform.isAndroidTv
-          ? _TvSettingsFocus(child: content)
+          ? TvDirectionalFocus(child: content)
           : content,
-    );
-  }
-}
-
-class _TvSettingsFocus extends StatelessWidget {
-  const _TvSettingsFocus({required this.child});
-
-  final Widget child;
-
-  KeyEventResult _onKey(FocusNode node, KeyEvent event) {
-    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
-      return KeyEventResult.ignored;
-    }
-    final bool forward = event.logicalKey == LogicalKeyboardKey.arrowDown;
-    final bool backward = event.logicalKey == LogicalKeyboardKey.arrowUp;
-    if (!forward && !backward) return KeyEventResult.ignored;
-
-    final FocusNode? primary = FocusManager.instance.primaryFocus;
-    final bool moved = forward
-        ? (primary?.nextFocus() ?? node.nextFocus())
-        : (primary?.previousFocus() ?? node.previousFocus());
-    if (moved) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        final BuildContext? focusedContext =
-            FocusManager.instance.primaryFocus?.context;
-        if (focusedContext == null) return;
-        Scrollable.ensureVisible(
-          focusedContext,
-          duration: const Duration(milliseconds: 160),
-          curve: Curves.easeOutCubic,
-          alignmentPolicy: forward
-              ? ScrollPositionAlignmentPolicy.keepVisibleAtEnd
-              : ScrollPositionAlignmentPolicy.keepVisibleAtStart,
-        );
-      });
-    }
-    return KeyEventResult.handled;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Focus(
-      canRequestFocus: false,
-      skipTraversal: true,
-      onKeyEvent: _onKey,
-      child: child,
     );
   }
 }

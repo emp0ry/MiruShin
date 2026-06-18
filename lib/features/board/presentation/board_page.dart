@@ -11,6 +11,7 @@ import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_radius.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../app/theme/app_theme_extension.dart';
+import '../../../core/platform/tv_platform.dart';
 import '../../../core/responsive/app_breakpoints.dart';
 import '../../../core/responsive/responsive_grid.dart';
 import '../../../core/widgets/adaptive_page.dart';
@@ -19,6 +20,7 @@ import '../../../core/widgets/metadata_chip.dart';
 import '../../../core/widgets/neutral_placeholder.dart';
 import '../../../core/widgets/section_header.dart';
 import '../../../core/widgets/skeleton_box.dart';
+import '../../../core/widgets/tv_directional_focus.dart';
 import '../../catalog/application/catalog_mode.dart';
 import '../../catalog/presentation/catalog_offline_banner.dart';
 import '../../library/application/local_library_provider.dart';
@@ -100,7 +102,7 @@ class BoardPage extends ConsumerWidget {
               .map((AniListAnimeListEntry entry) => entry.mediaItem)
               .take(12)
               .toList(growable: false);
-    return AdaptivePage(
+    final Widget page = AdaptivePage(
       child: SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -191,6 +193,7 @@ class BoardPage extends ConsumerWidget {
         ),
       ),
     );
+    return TvPlatform.isAndroidTv ? TvDirectionalFocus(child: page) : page;
   }
 }
 

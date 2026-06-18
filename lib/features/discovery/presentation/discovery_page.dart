@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../../../app/localization/app_localizations.dart';
 import '../../../app/app_routes.dart';
 import '../../../app/theme/app_spacing.dart';
+import '../../../core/platform/tv_platform.dart';
 import '../../../core/responsive/responsive_grid.dart';
 import '../../../core/widgets/adaptive_page.dart';
 import '../../../core/widgets/glass_card.dart';
@@ -14,6 +15,7 @@ import '../../../core/widgets/media_poster_card.dart';
 import '../../../core/widgets/neutral_placeholder.dart';
 import '../../../core/widgets/section_header.dart';
 import '../../../core/widgets/skeleton_box.dart';
+import '../../../core/widgets/tv_directional_focus.dart';
 import '../../../core/widgets/tv_text_field_focus.dart';
 import '../../catalog/application/catalog_mode.dart';
 import '../../catalog/application/catalog_repository.dart';
@@ -568,7 +570,7 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
             ),
           )
         : const <String, AniListAnimeListEntry>{};
-    return AdaptivePage(
+    final Widget page = AdaptivePage(
       child: SingleChildScrollView(
         controller: _scrollController,
         child: Column(
@@ -746,6 +748,7 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
         ),
       ),
     );
+    return TvPlatform.isAndroidTv ? TvDirectionalFocus(child: page) : page;
   }
 }
 
