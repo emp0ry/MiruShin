@@ -745,6 +745,11 @@ main section[id],
   color: var(--muted);
 }
 
+.download-card p.is-compact {
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
 .download-button {
   width: 100%;
   margin-top: auto;

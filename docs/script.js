@@ -33,6 +33,11 @@ const downloadTargets = [
     pattern: /^MiruShin-windows-v.+-setup\.exe$/i,
   },
   {
+    key: "windows-msi",
+    label: "Windows MSI installer",
+    pattern: /^MiruShin-windows-v.+-setup\.msi$/i,
+  },
+  {
     key: "windows-portable",
     label: "Windows portable ZIP",
     pattern: /^MiruShin-windows-v.+-portable\.zip$/i,

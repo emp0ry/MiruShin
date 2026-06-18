@@ -65,9 +65,11 @@ Prebuilt binaries are on the [Releases](https://github.com/emp0ry/MiruShin/relea
 
 - **Android and Android TV** - `.apk`
 - **iOS** - `.ipa` (direct download, or one-tap install via the source below)
-- **Windows** - installer (`.exe`) and portable `.zip`
+- **Windows** - installer (`.exe`), MSI installer (`.msi`), and portable `.zip`
 - **macOS** - `.dmg`
 - **Linux** - `AppImage`, `.tar.gz`, and `.deb` (Debian/Ubuntu)
+
+> **Windows antivirus note:** the `.exe` installer is unsigned, so Microsoft Defender (or another antivirus) may show a false-positive warning. If that happens, use the `.msi` installer (it offers a per-user or all-users install) or the portable `.zip` instead.
 
 ### iOS Install (AltStore Source)
 
