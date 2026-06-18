@@ -52,8 +52,6 @@ MiruShin lets you browse trending titles, build your library, keep your progress
 
 </details>
 
-<br>
-
 ## What You Can Do
 
 | | |
