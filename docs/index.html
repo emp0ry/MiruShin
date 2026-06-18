@@ -2,23 +2,178 @@
 <html lang="en">
   <head>
     <meta charset="utf-8">
+    <meta name="language" content="en">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
     <meta name="theme-color" content="#120b24">
-    <meta
-      name="description"
-      content="MiruShin is a cinematic Flutter media player for discovery, watching, Android TV, and AniList tracking with Sora-compatible modules."
-    >
+    <meta name="description" content="MiruShin is a cinematic Flutter media player for discovery, watching, Android TV, and AniList tracking with Sora-compatible modules.">
+    <meta name="author" content="emp0ry">
+    <meta name="publisher" content="emp0ry">
+    <meta name="copyright" content="MiruShin">
+    <meta name="application-name" content="MiruShin">
+    <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
+    <meta name="googlebot" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
+    <meta name="keywords" content="MiruShin, anime app, movie app, TV series app, drama app, dorama app, Flutter app, cross-platform media app, open source media app, Android app, iOS app, Windows app, macOS app, Linux app, streaming addons, subtitles, HLS, TMDB, AniList, emp0ry">
+    <meta name="referrer" content="strict-origin-when-cross-origin">
+    <meta name="format-detection" content="telephone=no, address=no, email=no">
+    <meta http-equiv="Content-Security-Policy" content="
+        default-src 'self';
+        script-src 'self' 'unsafe-inline' https://www.googletagmanager.com https://www.google-analytics.com;
+        style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+        font-src 'self' https://fonts.gstatic.com;
+        img-src 'self' https://github.githubassets.com;
+        connect-src 'self' https://api.github.com https://www.google-analytics.com https://region1.google-analytics.com;
+        upgrade-insecure-requests;
+    ">
+    <meta name="msapplication-TileColor" content="#120b24">
+    <meta name="msapplication-TileImage" content="https://mirushin.emp0ry.com/assets/mstile-150x150.png">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="MiruShin">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>MiruShin | Discover, Watch, Track</title>
-    <link rel="icon" href="assets/logo.ico" type="image/x-icon">
+    <link rel="canonical" href="https://mirushin.emp0ry.com/">
+    <link rel="alternate" href="https://mirushin.emp0ry.com/" hreflang="en">
+    <link rel="alternate" href="https://mirushin.emp0ry.com/" hreflang="x-default">
+    <link rel="sitemap" type="application/xml" href="https://mirushin.emp0ry.com/sitemap.xml">
+    <link rel="icon" href="assets/favicon-32x32.png" type="image/png" sizes="32x32">
+    <link rel="icon" href="assets/favicon-16x16.png" type="image/png" sizes="16x16">
+    <link rel="icon" href="assets/logo.ico" sizes="any">
     <link rel="shortcut icon" href="assets/logo.ico" type="image/x-icon">
+    <link rel="apple-touch-icon" sizes="180x180" href="assets/apple-touch-icon.png">
+    <link rel="apple-touch-icon-precomposed" sizes="180x180" href="assets/apple-touch-icon.png">
     <link rel="manifest" href="site.webmanifest">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="dns-prefetch" href="https://api.github.com">
+    <link rel="preload" as="image" href="assets/imgs/board.png">
     <link
-      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&amp;family=Sora:wght@400;500;600;700;800&amp;display=swap"
+      href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&amp;family=Sora:wght@400;500;600;700;800&amp;display=swap"
       rel="stylesheet"
     >
+    <meta property="og:locale" content="en_US">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="MiruShin">
+    <meta property="og:title" content="MiruShin | Discover, Watch, Track">
+    <meta property="og:description" content="A cinematic Flutter media player for discovery, watching, Android TV, AniList tracking, and Sora-compatible module workflows.">
+    <meta property="og:url" content="https://mirushin.emp0ry.com/">
+    <meta property="og:image" content="https://mirushin.emp0ry.com/assets/social-preview.png">
+    <meta property="og:image:secure_url" content="https://mirushin.emp0ry.com/assets/social-preview.png">
+    <meta property="og:image:type" content="image/png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="MiruShin social preview showing the discovery board and popular anime rail.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="MiruShin | Discover, Watch, Track">
+    <meta name="twitter:description" content="A cinematic Flutter media player for discovery, watching, Android TV, AniList tracking, and Sora-compatible module workflows.">
+    <meta name="twitter:image" content="https://mirushin.emp0ry.com/assets/social-preview.png">
+    <meta name="twitter:image:alt" content="MiruShin social preview showing the discovery board and popular anime rail.">
     <link rel="stylesheet" href="styles.css">
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "Person",
+          "@id": "https://mirushin.emp0ry.com/#creator",
+          "name": "emp0ry",
+          "url": "https://github.com/emp0ry"
+        },
+        {
+          "@type": "WebSite",
+          "@id": "https://mirushin.emp0ry.com/#website",
+          "url": "https://mirushin.emp0ry.com/",
+          "name": "MiruShin",
+          "description": "Official MiruShin website with downloads, app features, privacy policy, and legal notice.",
+          "inLanguage": "en-US",
+          "publisher": {
+            "@id": "https://mirushin.emp0ry.com/#creator"
+          }
+        },
+        {
+          "@type": "SoftwareApplication",
+          "@id": "https://mirushin.emp0ry.com/#software",
+          "name": "MiruShin",
+          "applicationCategory": "MultimediaApplication",
+          "operatingSystem": [
+            "Android",
+            "Android TV",
+            "iOS",
+            "Windows",
+            "macOS",
+            "Linux"
+          ],
+          "url": "https://mirushin.emp0ry.com/",
+          "downloadUrl": "https://github.com/emp0ry/MiruShin/releases/latest",
+          "codeRepository": "https://github.com/emp0ry/MiruShin",
+          "image": "https://mirushin.emp0ry.com/assets/social-preview.png",
+          "screenshot": [
+            "https://mirushin.emp0ry.com/assets/imgs/board.png",
+            "https://mirushin.emp0ry.com/assets/imgs/player.png"
+          ],
+          "description": "A cinematic Flutter media player for discovery, watching, Android TV, AniList tracking, and Sora-compatible module workflows.",
+          "featureList": [
+            "TMDB and AniList catalog modes",
+            "Sora-compatible module workflows",
+            "HLS, MP4, and DASH playback",
+            "Subtitle controls",
+            "AniSkip support",
+            "Android TV navigation",
+            "Local library and progress tracking"
+          ],
+          "offers": {
+            "@type": "Offer",
+            "price": "0",
+            "priceCurrency": "USD",
+            "availability": "https://schema.org/InStock",
+            "url": "https://github.com/emp0ry/MiruShin/releases/latest"
+          },
+          "author": {
+            "@id": "https://mirushin.emp0ry.com/#creator"
+          }
+        },
+        {
+          "@type": "WebPage",
+          "@id": "https://mirushin.emp0ry.com/#webpage",
+          "url": "https://mirushin.emp0ry.com/",
+          "name": "MiruShin | Discover, Watch, Track",
+          "description": "MiruShin is a cinematic Flutter media player for discovery, watching, Android TV, and AniList tracking with Sora-compatible modules.",
+          "isPartOf": {
+            "@id": "https://mirushin.emp0ry.com/#website"
+          },
+          "about": {
+            "@id": "https://mirushin.emp0ry.com/#software"
+          },
+          "primaryImageOfPage": {
+            "@type": "ImageObject",
+            "url": "https://mirushin.emp0ry.com/assets/social-preview.png",
+            "width": 1200,
+            "height": 630
+          },
+          "inLanguage": "en-US"
+        },
+        {
+          "@type": "BreadcrumbList",
+          "@id": "https://mirushin.emp0ry.com/#breadcrumbs",
+          "itemListElement": [
+            {
+              "@type": "ListItem",
+              "position": 1,
+              "name": "Home",
+              "item": "https://mirushin.emp0ry.com/"
+            }
+          ]
+        }
+      ]
+    }
+    </script>
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-QY5L70VTTG"></script>
+    <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-QY5L70VTTG');
+    </script>
     <script defer src="script.js"></script>
   </head>
   <body data-page="home">
@@ -117,12 +272,15 @@
                 src="assets/imgs/board.png"
                 alt="MiruShin board screen"
                 loading="eager"
+                fetchpriority="high"
+                decoding="async"
               >
               <img
                 class="hero-shot hero-shot-secondary"
                 src="assets/imgs/player.png"
                 alt="MiruShin player screen"
                 loading="eager"
+                decoding="async"
               >
             </div>
             <div class="floating-card floating-card-left">
@@ -336,6 +494,7 @@
                 src="assets/imgs/board.png"
                 alt="MiruShin board view screenshot"
                 loading="lazy"
+                decoding="async"
               >
               <figcaption class="screenshot-caption">
                 <strong>Board</strong>
@@ -349,6 +508,7 @@
                 src="assets/imgs/player.png"
                 alt="MiruShin player view screenshot"
                 loading="lazy"
+                decoding="async"
               >
               <figcaption class="screenshot-caption">
                 <strong>Player</strong>

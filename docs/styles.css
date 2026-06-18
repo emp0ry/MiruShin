@@ -43,7 +43,7 @@ body {
     radial-gradient(circle at 50% 120%, rgba(122, 231, 255, 0.08), transparent 28%),
     linear-gradient(180deg, #070711 0%, #100b1f 44%, #080711 100%);
   color: var(--text);
-  font-family: "Manrope", "Segoe UI", sans-serif;
+  font-family: "Poppins", "Segoe UI", sans-serif;
   line-height: 1.6;
   overflow-x: hidden;
 }
