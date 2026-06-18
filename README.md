@@ -5,6 +5,10 @@
 <h1 align="center">MiruShin</h1>
 
 <p align="center">
+  <b>Your anime, movies, and shows: discover, track, and watch in one beautiful app.</b>
+</p>
+
+<p align="center">
   <a href="https://github.com/emp0ry/MiruShin/releases/latest">
     <img alt="Latest Release" src="https://img.shields.io/github/v/release/emp0ry/MiruShin?style=flat-square&logo=github&logoColor=white&label=Release&color=8b5cf6&labelColor=1f2937">
   </a>
@@ -15,8 +19,6 @@
     <img alt="Buy Me a Coffee" src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-emp0ry-FFDD00?style=flat-square&logo=buymeacoffee&logoColor=111827">
   </a>
   <br>
-  <img alt="Flutter" src="https://img.shields.io/badge/Flutter-stable-02569B?style=flat-square&logo=flutter&logoColor=white&labelColor=1f2937">
-  <img alt="Dart" src="https://img.shields.io/badge/Dart-3.11%2B-0175C2?style=flat-square&logo=dart&logoColor=white&labelColor=1f2937">
   <img alt="Platforms" src="https://img.shields.io/badge/Platforms-Android%20%7C%20Android%20TV%20%7C%20iOS%20%7C%20Windows%20%7C%20macOS%20%7C%20Linux-111827?style=flat-square">
   <img alt="Catalogs" src="https://img.shields.io/badge/Catalogs-TMDB%20%7C%20AniList-16A34A?style=flat-square&labelColor=1f2937">
   <a href="LICENSE">
@@ -25,31 +27,8 @@
 </p>
 
 <p align="center">
-MiruShin takes the familiar feel of AnimeShin and pushes it further with a cleaner Flutter architecture, a modular feature layout, real Sora module support, cross-platform playback, and deeper AniList profile flows.
+MiruShin lets you browse trending titles, build your library, keep your progress in sync, and watch everything in a polished player, on your phone, TV, or computer.
 </p>
-<p align="center">
-It can switch between TMDB-driven discovery and AniList-driven catalog views, then carry that context into your library, watch flow, and player experience from a single codebase.
-</p>
-
-## Highlights
-
-| Area | What MiruShin does |
-| --- | --- |
-| Board and Discovery | Browse trending, popular, and filtered rails with cached metadata, search, and catalog mode switching between TMDB and AniList. |
-| Library | Keep a local library, sync AniList folders, continue watching, manage statuses, and keep progress in one place. |
-| Watch Flow | Use enabled Sora-compatible modules to search sources, choose seasons and episodes, and hand off cleanly into playback. |
-| Player | Play HLS, MP4, and DASH streams with quality selection, voiceovers, subtitles, AniSkip markers, autoplay next, Android TV remote navigation, and progress sync. |
-| Profile | Open AniList activities, favourites, feed, social pages, statistics, reviews, and export flows. |
-| Polish | English, Russian, and Japanese UI, theme and accent settings, secure token storage, cache controls, and responsive desktop/mobile/TV layouts. |
-
-## Feature Notes
-
-- Sora modules, shown as addons in the UI, are installable by manifest URL, can be enabled or reordered, and support import/export for local backups.
-- Switch between TMDB and AniList by clicking the top-left logo. In compact mode, open `More` and use the catalog switch option there.
-- Android TV is supported with remote-friendly navigation for catalog browsing, WebView login flows, settings, and playback controls.
-- Discord Rich Presence is available on supported desktop platforms.
-- Picture in Picture and native player handoff are supported where the platform allows it.
-- AniList exports are available for MyAnimeList XML and Shikimori JSON.
 
 ## Screenshots
 
@@ -57,23 +36,42 @@ It can switch between TMDB-driven discovery and AniList-driven catalog views, th
 
 ![MiruShin player](docs/assets/imgs/player.png)
 
-## Getting Started
+## What You Can Do
 
-### Download
+| | |
+| --- | --- |
+| 🔥 **Discover** | Browse trending, popular, and filtered rails. Switch between TMDB and AniList catalogs anytime. |
+| 📚 **Library** | Keep your own library, sync AniList, continue watching, and track your progress in one place. |
+| ▶️ **Watch** | Play HLS, MP4, and DASH with quality selection, voiceovers, subtitles, and autoplay next. |
+| ⏭️ **Skip Smartly** | AniSkip markers let you jump openings and endings automatically. |
+| 👤 **Profile** | View AniList activity, favourites, feed, statistics, reviews, and export your list. |
+| 🎨 **Make It Yours** | English, Russian, and Japanese UI with themes, accent colors, and layouts for mobile, desktop, and TV. |
 
-Prebuilt binaries are on the [Releases](https://github.com/emp0ry/MiruShin/releases/latest) page:
+**More goodies**
 
-- **Android and Android TV** - `.apk`
-- **iOS** - `.ipa` (direct download, or one-tap install via the source below)
-- **Windows** - installer (`.exe`), MSI installer (`.msi`), and portable `.zip`
-- **macOS** - `.dmg`
-- **Linux** - `AppImage`, `.tar.gz`, and `.deb` (Debian/Ubuntu)
+- 📺 **Android TV** with remote-friendly navigation throughout.
+- 🖼️ **Picture-in-Picture** and native player handoff where the platform supports it.
+- 🎮 **Discord Rich Presence** on supported desktops.
+- 📤 **Exports** to MyAnimeList XML and Shikimori JSON.
+- 🧩 **Add-ons** (Sora-compatible modules) for source search, installable by URL.
 
-> **Windows antivirus note:** the `.exe` installer is unsigned, so Microsoft Defender (or another antivirus) may show a false-positive warning. If that happens, use the `.msi` installer (it offers a per-user or all-users install) or the portable `.zip` instead.
+## Download
 
-### iOS Install (AltStore Source)
+Grab the latest build for your device from the **[Releases page](https://github.com/emp0ry/MiruShin/releases/latest)**:
 
-MiruShin publishes an AltStore-compatible source that works with **AltStore**, **SideStore**, **Feather**, and **LiveContainer**, so you can install the `.ipa` and pull future updates automatically. Tap a button **on your iPhone or iPad** (with the installer app already set up):
+| Platform | What to download |
+| --- | --- |
+| **Android / Android TV** | `.apk` |
+| **iOS** | `.ipa`, or one-tap install via the source below |
+| **Windows** | `.exe` installer, `.msi` installer, or portable `.zip` |
+| **macOS** | `.dmg` |
+| **Linux** | `AppImage`, `.tar.gz`, or `.deb` |
+
+> **Windows note:** the `.exe` installer is unsigned, so Microsoft Defender may show a false-positive warning. If that happens, use the `.msi` installer or the portable `.zip` instead.
+
+### iOS one-tap install
+
+MiruShin works with **AltStore**, **SideStore**, **Feather**, and **LiveContainer**, so you can install the `.ipa` and get future updates automatically. Tap a button **on your iPhone or iPad** (with the installer app already set up):
 
 <p align="center">
   <a href="https://intradeus.github.io/http-protocol-redirector/?r=altstore%3A%2F%2Fsource%3Furl%3Dhttps%3A%2F%2Fraw.githubusercontent.com%2Femp0ry%2FMiruShin%2Fmain%2Fdocs%2Fsource.json">
@@ -90,86 +88,36 @@ MiruShin publishes an AltStore-compatible source that works with **AltStore**, *
   </a>
 </p>
 
-Or add the source manually by pasting this URL into your installer's **Sources -> Add** screen:
+Prefer to add it manually? Paste this URL into your installer's **Sources → Add** screen:
 
 ```text
 https://raw.githubusercontent.com/emp0ry/MiruShin/main/docs/source.json
 ```
 
-### Requirements
+## Getting Started
 
-- Flutter stable
-- Dart SDK compatible with `sdk: ^3.11.4`
+Just install and open the app. Discovery and metadata work right away. No setup needed.
 
-### Run Locally
+Want more? Two optional steps unlock the rest:
 
-```bash
-git clone https://github.com/emp0ry/MiruShin.git
-cd MiruShin
-flutter pub get
-flutter run
-```
+- **Sign in to AniList** to get profile pages, library sync, tracking, exports, and the AniList catalog. Just sign in from Settings and MiruShin handles the rest.
+- **Add modules to watch** by opening the **Addons** page and pasting a trusted module manifest URL, then install and enable it. Need modules? Join the [Sora Discord](https://discord.gg/XR3SrmUbpd) to find them.
 
-You can also run a specific target with commands like `flutter run -d macos`, `flutter run -d windows`, `flutter run -d linux`, or `flutter run -d android`.
-
-## First-Time Setup
-
-MiruShin is configured at runtime from the in-app Settings page. There is no `.env` file to edit for the normal setup flow.
-
-### TMDB
-
-TMDB powers the default metadata and discovery experience.
-
-1. Create or open a TMDB developer application.
-2. Copy your TMDB Read Access Token.
-3. Open `Settings -> API Connections` in MiruShin.
-4. Enable TMDB metadata and paste the token into `TMDB Read Access Token`.
-
-The token is stored in platform secure storage and is not hardcoded in the repo.
-
-### AniList
-
-AniList powers profile pages, library sync, tracking, exports, and the AniList catalog mode.
-
-Default client values in the app:
-
-- Mobile client ID: `40342`
-- Mobile redirect URI: `app://mirushin/auth`
-- Desktop client ID: `40343`
-- Desktop redirect URI: `http://localhost:28372/`
-
-On mobile, the OAuth flow uses an embedded WebView callback. On desktop, MiruShin listens for a localhost callback.
-
-### Sora Modules
-
-Sora-compatible modules, shown as addons inside the app, unlock source search for watch pages.
-
-1. Open the `Addons` page.
-2. Paste a trusted module manifest JSON URL.
-3. Preview the module.
-4. Install and enable it.
-
-MiruShin keeps a local working copy of installed modules and can update them later.
-
-For information on how to get Sora addons, please join the [Sora Discord](https://discord.gg/XR3SrmUbpd) server.
-
+> **Tips:** Switch between TMDB and AniList anytime by tapping the top-left logo (or via **More** in compact mode).
 
 ## Support the Project
 
-Love MiruShin? Fuel its development with a coffee!
+Love MiruShin? Fuel its development with a coffee! ☕
 
 [![Buy Me a Coffee](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/emp0ry)
 
-## Safety and Scope
+## Safety & Scope
 
-- MiruShin is a media player and interface layer. It does not host or provide any content.
-- MiruShin does not ship TMDB tokens, AniList tokens, Sora modules, module manifests, or media catalogs.
-- Users are responsible for providing their own content and for ensuring they have the legal rights to access or use it.
-- Users are responsible for complying with all applicable laws and for respecting copyright and intellectual property rights.
-- Sora modules are third-party code and can make network requests. Only install modules from creators you trust.
-- MiruShin includes no built-in Sora modules. Third-party modules are the responsibility of their creators, not MiruShin or `emp0ry`.
-- Source access comes from user-installed modules, not from hardcoded providers bundled in this repository.
-- The software is provided "as is" without warranties, and users bear full responsibility for how they use the app and any installed modules.
+- MiruShin is a media player and interface. It does **not** host or provide any content.
+- It ships no TMDB tokens, AniList tokens, Sora modules, or media catalogs. You bring your own.
+- You're responsible for the content you access and for following the laws and copyright rules that apply to you.
+- Sora modules are third-party code that can make network requests. **Only install modules from creators you trust.**
+- The software is provided "as is", without warranties.
 - This product uses the TMDB API but is not endorsed or certified by TMDB.
 
 ## Legal
@@ -178,7 +126,35 @@ Love MiruShin? Fuel its development with a coffee!
 - [Privacy Policy](PRIVACY_POLICY.md)
 - [Legal Notice](LEGAL.md)
 
-## Project Layout
+## For Developers
+
+<details>
+<summary>Build from source & project details</summary>
+
+### Requirements
+
+- Flutter (stable channel)
+- Dart SDK compatible with `sdk: ^3.11.4`
+
+### Run locally
+
+```bash
+git clone https://github.com/emp0ry/MiruShin.git
+cd MiruShin
+flutter pub get
+flutter run
+```
+
+Run a specific target with `flutter run -d macos`, `-d windows`, `-d linux`, or `-d android`.
+
+### AniList client defaults
+
+- Mobile client ID: `40342`, redirect `app://mirushin/auth`
+- Desktop client ID: `40343`, redirect `http://localhost:28372/`
+
+On mobile the OAuth flow uses an embedded WebView callback; on desktop MiruShin listens for a localhost callback.
+
+### Project layout
 
 ```text
 lib/
@@ -188,24 +164,11 @@ lib/
   shared/     # app-wide models and shared data structures
 ```
 
-Key feature areas:
+### Built with
 
-- `features/board`, `features/discovery`, `features/calendar`
-- `features/library`, `features/media_details`, `features/watch`
-- `features/player`
-- `features/profile`, `features/tracking`
-- `features/addons`
-- `features/settings`
+Flutter · Riverpod · GoRouter · Dio · media_kit (mpv) & FVP · WebView Flutter · Flutter Secure Storage
 
-## Built With
-
-- Flutter
-- Riverpod
-- GoRouter
-- Dio
-- media_kit (mpv) and FVP for playback
-- WebView Flutter
-- Flutter Secure Storage
+</details>
 
 ## Credits
 
@@ -214,3 +177,9 @@ Key feature areas:
 - [Shikimori](https://shikimori.one/) for Russian-title enrichment flows
 - [AniSkip](https://aniskip.com/) for OP/ED marker support
 - [cranci1](https://github.com/cranci1), author of Sora and the Sora module ecosystem
+
+## Visitors
+
+<p align="center">
+  <img alt="Visitors" src="https://count.getloli.com/get/@mirushin?theme=moebooru">
+</p>
