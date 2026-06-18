@@ -43,27 +43,33 @@ if (-not $downloaded) {
   throw "Unable to download a valid $archiveName archive."
 }
 
-if (Get-Command cmake -ErrorAction SilentlyContinue) {
-  $tempBase = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
-  $checkDir = Join-Path $tempBase "mirushin-mdk-windows-check"
-  if (Test-Path $checkDir) { Remove-Item $checkDir -Recurse -Force }
-  New-Item -ItemType Directory -Path $checkDir | Out-Null
-
-  Push-Location $checkDir
-  try {
-    & cmake -E tar xvf $archivePath | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-      throw "cmake archive validation failed with code $LASTEXITCODE"
-    }
-  } finally {
-    Pop-Location
-  }
-
-  $findMdk = Join-Path $checkDir "mdk-sdk/lib/cmake/FindMDK.cmake"
-  if (-not (Test-Path $findMdk)) {
-    throw "Archive validation failed: $findMdk was not found."
-  }
-  Remove-Item $checkDir -Recurse -Force
+# Extract the SDK ourselves so fvp's deps.cmake finds mdk-sdk/ already in place
+# and skips its own extraction (it guards on mdk-sdk/lib/cmake/FindMDK.cmake
+# existing). fvp extracts with `cmake -E tar`, whose libarchive enforces
+# ARCHIVE_EXTRACT_SECURE_SYMLINKS and refuses to write into
+# windows/flutter/ephemeral/.plugin_symlinks/fvp (a Flutter junction), failing
+# on the windows-2025-vs2026 runner. 7-Zip has no such policy and writes through
+# the junction fine, so we use it here.
+$sevenZip = (Get-Command 7z -ErrorAction SilentlyContinue).Source
+if (-not $sevenZip) {
+  $candidate = Join-Path $env:ProgramFiles "7-Zip/7z.exe"
+  if (Test-Path $candidate) { $sevenZip = $candidate }
+}
+if (-not $sevenZip) {
+  throw "7-Zip (7z) is required to extract $archiveName but was not found."
 }
 
-Write-Host "Prepared $archiveName at $archivePath"
+& $sevenZip x $archivePath "-o$fvpWindowsDir" -y | Out-Null
+if ($LASTEXITCODE -ne 0) {
+  throw "7-Zip extraction failed with code $LASTEXITCODE"
+}
+
+$findMdk = Join-Path $sdkDir "lib/cmake/FindMDK.cmake"
+if (-not (Test-Path $findMdk)) {
+  throw "Extraction failed: $findMdk was not found."
+}
+
+# Drop the archive so fvp's md5/download paths stay inert; mdk-sdk/ is enough.
+if (Test-Path $archivePath) { Remove-Item $archivePath -Force }
+
+Write-Host "Extracted mdk-sdk to $sdkDir"

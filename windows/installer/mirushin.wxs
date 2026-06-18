@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MiruShin Windows MSI installer (WiX v5).
+
+  Build from the project root (see .github/workflows/build-windows.yml):
+    wix extension add -g WixToolset.UI.wixext
+    wix build -arch x64 -ext WixToolset.UI.wixext `
+      -d Version=X.Y.Z `
+      -d SourceDir=<abs-path-to-Release-folder> `
+      -d IconFile=windows\runner\resources\app_icon.ico `
+      -d LicenseRtf=windows\installer\license.rtf `
+      -o MiruShin-windows-vX.Y.Z-setup.msi `
+      windows\installer\mirushin.wxs
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <Package Name="MiruShin"
+           Manufacturer="emp0ry"
+           Version="$(var.Version)"
+           Scope="perUser"
+           UpgradeCode="A1B2C3D4-E5F6-7890-ABCD-EF1234567890">
+
+    <!-- Block downgrades and replace older versions in place. -->
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- Per-user install (no UAC) under %LocalAppData%\Programs, plus a
+         per-user Start Menu folder. -->
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="MiruShin" />
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="AppShortcutFolder" Name="MiruShin" />
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="MiruShin" Level="1">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentRef Id="AppShortcuts" />
+    </Feature>
+
+    <!-- Add/Remove Programs metadata. -->
+    <Icon Id="AppIcon.ico" SourceFile="$(var.IconFile)" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/emp0ry/MiruShin" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/emp0ry/MiruShin" />
+
+    <!-- Wizard UI with a directory chooser, matching the .exe setup feel. -->
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+    <ui:WixUI Id="WixUI_InstallDir" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
+  </Package>
+
+  <!-- Harvest the entire Flutter Release folder (exe, DLLs, data\, plugins). -->
+  <Fragment>
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <Files Include="$(var.SourceDir)\**" />
+    </ComponentGroup>
+  </Fragment>
+
+  <!-- Start Menu + Desktop shortcuts. -->
+  <Fragment>
+    <StandardDirectory Id="DesktopFolder" />
+    <Component Id="AppShortcuts" Directory="AppShortcutFolder" Guid="*">
+      <Shortcut Id="StartMenuShortcut"
+                Name="MiruShin"
+                Target="[INSTALLFOLDER]mirushin.exe"
+                WorkingDirectory="INSTALLFOLDER"
+                Icon="AppIcon.ico" />
+      <Shortcut Id="DesktopShortcut"
+                Directory="DesktopFolder"
+                Name="MiruShin"
+                Target="[INSTALLFOLDER]mirushin.exe"
+                WorkingDirectory="INSTALLFOLDER"
+                Icon="AppIcon.ico" />
+      <RemoveFolder Id="RemoveAppShortcutFolder" On="uninstall" />
+      <RegistryValue Root="HKCU"
+                     Key="Software\emp0ry\MiruShin"
+                     Name="installed"
+                     Type="integer"
+                     Value="1"
+                     KeyPath="yes" />
+    </Component>
+  </Fragment>
+</Wix>

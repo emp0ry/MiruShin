@@ -100,6 +100,34 @@ jobs:
           $exeFile = "${{ env.APP_NAME }}-windows-v$version-setup.exe"
           "installer_path=$exeFile" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
+      - name: Build MSI installer (WiX)
+        id: msi
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 5.* 2>$null
+          if (-not (Get-Command wix -ErrorAction SilentlyContinue)) {
+            $env:PATH = "$env:USERPROFILE\.dotnet\tools;$env:PATH"
+          }
+          wix extension add -g WixToolset.UI.wixext
+          if ($LASTEXITCODE -ne 0) { throw "Failed to add WixToolset.UI.wixext (exit $LASTEXITCODE)" }
+
+          $version   = "${{ steps.ver.outputs.version }}"
+          $sourceDir = (Resolve-Path "build/windows/x64/runner/Release").Path
+          $msiFile   = "${{ env.APP_NAME }}-windows-v$version-setup.msi"
+
+          wix build -arch x64 -ext WixToolset.UI.wixext `
+            "-d" "Version=$version" `
+            "-d" "SourceDir=$sourceDir" `
+            "-d" "IconFile=windows\runner\resources\app_icon.ico" `
+            "-d" "LicenseRtf=windows\installer\license.rtf" `
+            "-o" "$msiFile" `
+            "windows\installer\mirushin.wxs"
+
+          if ($LASTEXITCODE -ne 0) { throw "WiX build failed (exit $LASTEXITCODE)" }
+          if (-not (Test-Path $msiFile)) { throw "MSI was not produced: $msiFile" }
+
+          "installer_path=$msiFile" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v6
         with:
@@ -107,3 +135,4 @@ jobs:
           path: |
             ${{ steps.zip.outputs.zip_path }}
             ${{ steps.installer.outputs.installer_path }}
+            ${{ steps.msi.outputs.installer_path }}
