@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "1.7.3",
+          "date": "2026-06-18",
+          "localizedDescription": "- Added an MSI installer for Windows (`.msi`), alongside the existing setup `.exe` and portable `.zip`. The MSI lets you choose a per-user or all-users install.\n- Fixed Android TV D-pad navigation on the Home and Discovery screens: focus no longer skips the movie posters and jumps straight to the \"see more\" / \"Load more\" button, so you can now reach and select every poster.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v1.7.3/MiruShin-ios-v1.7.3.ipa",
+          "size": 21117744,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "1.7.2",
           "date": "2026-06-16",
           "localizedDescription": "- Fixed playback speed not being restored after the player restarts.\n- Added a short delay before auto-playing the next episode after the current stream finishes.",
@@ -271,11 +279,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "1.7.2",
-      "versionDate": "2026-06-16",
-      "versionDescription": "- Fixed playback speed not being restored after the player restarts.\n- Added a short delay before auto-playing the next episode after the current stream finishes.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v1.7.2/MiruShin-ios-v1.7.2.ipa",
-      "size": 21112570,
+      "version": "1.7.3",
+      "versionDate": "2026-06-18",
+      "versionDescription": "- Added an MSI installer for Windows (`.msi`), alongside the existing setup `.exe` and portable `.zip`. The MSI lets you choose a per-user or all-users install.\n- Fixed Android TV D-pad navigation on the Home and Discovery screens: focus no longer skips the movie posters and jumps straight to the \"see more\" / \"Load more\" button, so you can now reach and select every poster.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v1.7.3/MiruShin-ios-v1.7.3.ipa",
+      "size": 21117744,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
