@@ -6,7 +6,7 @@ abstract final class AppConstants {
   static const String githubProjectUrl = 'https://github.com/emp0ry/MiruShin';
   static const String githubLatestReleaseUrl =
       'https://github.com/emp0ry/MiruShin/releases/latest';
-  static const String appWebsiteUrl = 'https://emp0ry.github.io/MiruShin/';
+  static const String appWebsiteUrl = 'https://mirushin.emp0ry.com/';
   static const String discordRpcApplicationId = '1507695411635159110';
   static const String discordRpcLogoImageUrl =
       'https://github.com/emp0ry/MiruShin/blob/main/assets/icons/logo.png?raw=true';

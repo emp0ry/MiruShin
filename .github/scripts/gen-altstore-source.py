@@ -48,7 +48,7 @@ SOURCE = {
         "Official AltStore / SideStore / Feather / LiveContainer source for "
         "MiruShin - a cross-platform anime streaming and player app."
     ),
-    "website": "https://github.com/emp0ry/MiruShin",
+    "website": "https://mirushin.emp0ry.com/",
     "tintColor": "8b5cf6",
 }
 

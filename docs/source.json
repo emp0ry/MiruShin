@@ -4,7 +4,7 @@
   "subtitle": "New way to watch and discover media.",
   "description": "Official AltStore / SideStore / Feather / LiveContainer source for MiruShin - a cross-platform anime streaming and player app.",
   "iconURL": "https://raw.githubusercontent.com/emp0ry/MiruShin/main/assets/icons/logo.png",
-  "website": "https://github.com/emp0ry/MiruShin",
+  "website": "https://mirushin.emp0ry.com/",
   "tintColor": "8b5cf6",
   "featuredApps": [
     "com.emp0ry.mirushin"

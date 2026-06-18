@@ -91,16 +91,16 @@ Grab the latest build for your device from the **[Releases page](https://github.
 MiruShin works with **AltStore**, **SideStore**, **Feather**, and **LiveContainer**, so you can install the `.ipa` and get future updates automatically. Tap a button **on your iPhone or iPad** (with the installer app already set up):
 
 <p align="center">
-  <a href="https://intradeus.github.io/http-protocol-redirector/?r=altstore%3A%2F%2Fsource%3Furl%3Dhttps%3A%2F%2Fraw.githubusercontent.com%2Femp0ry%2FMiruShin%2Fmain%2Fdocs%2Fsource.json">
+  <a href="https://intradeus.github.io/http-protocol-redirector/?r=altstore%3A%2F%2Fsource%3Furl%3Dhttps%3A%2F%2Fmirushin.emp0ry.com%2Fsource.json">
     <img alt="Add to AltStore" src="https://img.shields.io/badge/AltStore-Add%20Source-7E3FF2?style=for-the-badge&logoColor=white&labelColor=1f2937">
   </a>
-  <a href="https://intradeus.github.io/http-protocol-redirector/?r=sidestore%3A%2F%2Fsource%3Furl%3Dhttps%3A%2F%2Fraw.githubusercontent.com%2Femp0ry%2FMiruShin%2Fmain%2Fdocs%2Fsource.json">
+  <a href="https://intradeus.github.io/http-protocol-redirector/?r=sidestore%3A%2F%2Fsource%3Furl%3Dhttps%3A%2F%2Fmirushin.emp0ry.com%2Fsource.json">
     <img alt="Add to SideStore" src="https://img.shields.io/badge/SideStore-Add%20Source-2D7CF0?style=for-the-badge&logoColor=white&labelColor=1f2937">
   </a>
-  <a href="https://intradeus.github.io/http-protocol-redirector/?r=feather%3A%2F%2Fsource%2Fhttps%3A%2F%2Fraw.githubusercontent.com%2Femp0ry%2FMiruShin%2Fmain%2Fdocs%2Fsource.json">
+  <a href="https://intradeus.github.io/http-protocol-redirector/?r=feather%3A%2F%2Fsource%2Fhttps%3A%2F%2Fmirushin.emp0ry.com%2Fsource.json">
     <img alt="Add to Feather" src="https://img.shields.io/badge/Feather-Add%20Source-15B8A6?style=for-the-badge&logoColor=white&labelColor=1f2937">
   </a>
-  <a href="https://intradeus.github.io/http-protocol-redirector/?r=livecontainer%3A%2F%2Fsource%3Furl%3Dhttps%3A%2F%2Fraw.githubusercontent.com%2Femp0ry%2FMiruShin%2Fmain%2Fdocs%2Fsource.json">
+  <a href="https://intradeus.github.io/http-protocol-redirector/?r=livecontainer%3A%2F%2Fsource%3Furl%3Dhttps%3A%2F%2Fmirushin.emp0ry.com%2Fsource.json">
     <img alt="Add to LiveContainer" src="https://img.shields.io/badge/LiveContainer-Add%20Source-FF6A00?style=for-the-badge&logoColor=white&labelColor=1f2937">
   </a>
 </p>
@@ -108,7 +108,7 @@ MiruShin works with **AltStore**, **SideStore**, **Feather**, and **LiveContaine
 Prefer to add it manually? Paste this URL into your installer's **Sources → Add** screen:
 
 ```text
-https://raw.githubusercontent.com/emp0ry/MiruShin/main/docs/source.json
+https://mirushin.emp0ry.com/source.json
 ```
 
 ## Getting Started
