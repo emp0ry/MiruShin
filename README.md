@@ -32,9 +32,27 @@ MiruShin lets you browse trending titles, build your library, keep your progress
 
 ## Screenshots
 
-![MiruShin board](docs/assets/imgs/board.png)
+<div align="center">
 
-![MiruShin player](docs/assets/imgs/player.png)
+<img src="docs/assets/imgs/board.png" alt="MiruShin discovery board" width="49%">
+<img src="docs/assets/imgs/player.png" alt="MiruShin player" width="49%">
+
+</div>
+
+<details>
+<summary><h3>Mobile version</h3></summary>
+
+<div align="center">
+
+<img src="docs/assets/imgs/mobile_tmdb.png" alt="Mobile discovery" width="30%">
+<img src="docs/assets/imgs/mobile_detail.png" alt="Mobile title detail" width="30%">
+<img src="docs/assets/imgs/mobile_player.png" alt="Mobile player" width="30%">
+
+</div>
+
+</details>
+
+<br>
 
 ## What You Can Do
 
@@ -67,7 +85,8 @@ Grab the latest build for your device from the **[Releases page](https://github.
 | **macOS** | `.dmg` |
 | **Linux** | `AppImage`, `.tar.gz`, or `.deb` |
 
-> **Windows note:** the `.exe` installer is unsigned, so Microsoft Defender may show a false-positive warning. If that happens, use the `.msi` installer or the portable `.zip` instead.
+> [!NOTE]
+> **Windows:** the `.exe` installer is unsigned, so Microsoft Defender may show a false-positive warning. If that happens, use the `.msi` installer or the portable `.zip` instead.
 
 ### iOS one-tap install
 
@@ -103,7 +122,8 @@ Want more? Two optional steps unlock the rest:
 - **Sign in to AniList** to get profile pages, library sync, tracking, exports, and the AniList catalog. Just sign in from Settings and MiruShin handles the rest.
 - **Add modules to watch** by opening the **Addons** page and pasting a trusted module manifest URL, then install and enable it. Need modules? Join the [Sora Discord](https://discord.gg/XR3SrmUbpd) to find them.
 
-> **Tips:** Switch between TMDB and AniList anytime by tapping the top-left logo (or via **More** in compact mode).
+> [!TIP]
+> Switch between TMDB and AniList anytime by tapping the top-left logo (or via **More** in compact mode).
 
 ## Support the Project
 
@@ -113,6 +133,7 @@ Love MiruShin? Fuel its development with a coffee! ☕
 
 ## Disclaimer
 
+> [!IMPORTANT]
 > **MiruShin is a media player and interface layer. It does not host, store, upload, stream, or otherwise provide any media content, and it contains no built-in sources, catalogs, or modules.**
 
 - MiruShin ships **no** media content, media links, Sora modules, module manifests, or third-party API tokens of its own. All content, sources, and modules are supplied entirely by the user.
