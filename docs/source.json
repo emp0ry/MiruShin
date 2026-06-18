@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "1.7.4",
+          "date": "2026-06-18",
+          "localizedDescription": "- Updated the MiruShin website URL to use the new official domain.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v1.7.4/MiruShin-ios-v1.7.4.ipa",
+          "size": 21117738,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "1.7.3",
           "date": "2026-06-18",
           "localizedDescription": "- Added an MSI installer for Windows (`.msi`), alongside the existing setup `.exe` and portable `.zip`. The MSI lets you choose a per-user or all-users install.\n- Fixed Android TV D-pad navigation on the Home and Discovery screens: focus no longer skips the movie posters and jumps straight to the \"see more\" / \"Load more\" button, so you can now reach and select every poster.",
@@ -279,11 +287,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "1.7.3",
+      "version": "1.7.4",
       "versionDate": "2026-06-18",
-      "versionDescription": "- Added an MSI installer for Windows (`.msi`), alongside the existing setup `.exe` and portable `.zip`. The MSI lets you choose a per-user or all-users install.\n- Fixed Android TV D-pad navigation on the Home and Discovery screens: focus no longer skips the movie posters and jumps straight to the \"see more\" / \"Load more\" button, so you can now reach and select every poster.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v1.7.3/MiruShin-ios-v1.7.3.ipa",
-      "size": 21117744,
+      "versionDescription": "- Updated the MiruShin website URL to use the new official domain.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v1.7.4/MiruShin-ios-v1.7.4.ipa",
+      "size": 21117738,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
