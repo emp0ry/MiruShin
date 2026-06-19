@@ -127,7 +127,9 @@ Want more? Two optional steps unlock the rest:
 
 Love MiruShin? Fuel its development with a coffee! ☕
 
-[![Buy Me a Coffee](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/emp0ry)
+<a href="https://www.buymeacoffee.com/emp0ry" target="_blank">
+  <img src="https://img.shields.io/badge/Buy%20Me%20A%20Coffee-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black" alt="Buy Me A Coffee" />
+</a>
 
 ## Disclaimer
 
