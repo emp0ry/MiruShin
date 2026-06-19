@@ -1495,7 +1495,7 @@ main section[id],
   }
 }
 
-@media (max-width: 1000px) {
+@media (max-width: 960px) {
   body[data-page="home"] .nav-toggle {
     display: inline-flex;
   }
