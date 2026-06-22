@@ -12,8 +12,8 @@ import 'app_breakpoints.dart';
 import 'app_navigation_item.dart';
 
 const int _visibleDestinationCount = 3;
-const double _railMoreHeightBreakpoint = 546;
-const double _sidebarMoreHeightBreakpoint = 480;
+const double _railMoreHeightBreakpoint = 550;
+const double _sidebarMoreHeightBreakpoint = 490;
 
 bool _matchesLocation(AppNavigationItem item, String location) {
   return location.startsWith(item.path);
