@@ -54,8 +54,10 @@ class SettingsPage extends ConsumerWidget {
           SectionHeader(title: context.t('Settings')),
           const SizedBox(height: AppSpacing.lg),
           const _UpdateSection(),
-          _AccountSection(placeholderOnly: !showAniListProfileUi),
-          const SizedBox(height: AppSpacing.lg),
+          if (showAniListProfileUi) ...<Widget>[
+            const _AccountSection(),
+            const SizedBox(height: AppSpacing.lg),
+          ],
           if (showAniListProfileUi && settings.hasAniListSession) ...<Widget>[
             const _AniListSettingsShortcutSection(),
             const SizedBox(height: AppSpacing.lg),
@@ -70,12 +72,12 @@ class SettingsPage extends ConsumerWidget {
             showMetadataLanguage: catalogMode == CatalogMode.tmdb,
           ),
           const SizedBox(height: AppSpacing.lg),
-          _ApiConnectionsSection(settings: settings, controller: controller),
-          const SizedBox(height: AppSpacing.lg),
           if (DiscordRpcService.isSupported) ...<Widget>[
             _DiscordRpcSection(settings: settings, controller: controller),
             const SizedBox(height: AppSpacing.lg),
           ],
+          _ApiConnectionsSection(settings: settings, controller: controller),
+          const SizedBox(height: AppSpacing.lg),
           _CacheSection(settings: settings, controller: controller),
           const SizedBox(height: AppSpacing.lg),
           const _AboutSection(),
@@ -531,28 +533,10 @@ class _TextSettingField extends StatelessWidget {
 }
 
 class _AccountSection extends ConsumerWidget {
-  const _AccountSection({this.placeholderOnly = false});
-
-  final bool placeholderOnly;
+  const _AccountSection();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    if (placeholderOnly) {
-      return SettingsSection(
-        title: context.t('Accounts'),
-        icon: Icons.manage_accounts_rounded,
-        children: <Widget>[
-          _AccountCard(
-            name: 'AniList',
-            avatarUrl: null,
-            isActive: true,
-            isConnected: false,
-            onSignIn: () => loginAniList(context, ref),
-          ),
-        ],
-      );
-    }
-
     final SettingsState settings = ref.watch(settingsProvider);
     final SettingsController controller = ref.read(settingsProvider.notifier);
 
@@ -1612,10 +1596,6 @@ class _LanguageSection extends StatelessWidget {
             ),
           ),
         ],
-        SettingsRow(
-          title: context.t('Subtitle preferred language'),
-          subtitle: context.t('No playback or subtitle logic is implemented.'),
-        ),
         if (showMetadataLanguage)
           SettingsRow(
             title: context.t('Region / country preference'),
