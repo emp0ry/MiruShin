@@ -191,94 +191,99 @@ class _ApiConnectionsSection extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final CatalogMode catalogMode = ref.watch(catalogModeProvider);
+    final bool showTmdb = catalogMode == CatalogMode.tmdb;
+    final bool showAniList = catalogMode == CatalogMode.anilist;
     return SettingsSection(
       title: context.t('API Connections'),
       icon: Icons.cloud_sync_rounded,
       children: <Widget>[
-        SettingsRow(
-          title: context.t('Enable TMDB metadata'),
-          subtitle: context.t(
-            'Primary source for Board, Discovery, movies, series, and anime visuals.',
-          ),
-          trailing: Switch(
-            value: settings.tmdbEnabled,
-            onChanged: controller.setTmdbEnabled,
-          ),
-        ),
-        SettingsRow(
-          title: context.t('Use custom API key'),
-          subtitle: context.t(
-            'Off: use the built-in TMDB key. On: enter your own TMDB Read Access Token.',
-          ),
-          trailing: Switch(
-            value: settings.tmdbUseCustomKey,
-            onChanged: settings.tmdbEnabled
-                ? controller.setTmdbUseCustomKey
-                : null,
-          ),
-        ),
-        if (settings.tmdbUseCustomKey)
+        if (showTmdb) ...<Widget>[
           SettingsRow(
-            title: context.t('TMDB Read Access Token'),
+            title: context.t('Enable TMDB metadata'),
             subtitle: context.t(
-              'Stored in secure platform storage. Do not commit secrets.',
+              'Primary source for Board, Discovery, movies, series, and anime visuals.',
+            ),
+            trailing: Switch(
+              value: settings.tmdbEnabled,
+              onChanged: controller.setTmdbEnabled,
+            ),
+          ),
+          SettingsRow(
+            title: context.t('Use custom API key'),
+            subtitle: context.t(
+              'Off: use the built-in TMDB key. On: enter your own TMDB Read Access Token.',
+            ),
+            trailing: Switch(
+              value: settings.tmdbUseCustomKey,
+              onChanged: settings.tmdbEnabled
+                  ? controller.setTmdbUseCustomKey
+                  : null,
+            ),
+          ),
+          if (settings.tmdbUseCustomKey)
+            SettingsRow(
+              title: context.t('TMDB Read Access Token'),
+              subtitle: context.t(
+                'Stored in secure platform storage. Do not commit secrets.',
+              ),
+              trailing: _TextSettingField(
+                initialValue: settings.tmdbReadAccessToken,
+                hintText: 'duHahLci2pJIZbQ2MoJ0...',
+                obscureText: true,
+                onChanged: controller.setTmdbReadAccessToken,
+              ),
+            ),
+          SettingsRow(
+            title: context.t('TMDB language'),
+            subtitle: context.t(
+              'Controlled by Metadata language. App language only changes interface text.',
             ),
             trailing: _TextSettingField(
-              initialValue: settings.tmdbReadAccessToken,
-              hintText: 'duHahLci2pJIZbQ2MoJ0...',
-              obscureText: true,
-              onChanged: controller.setTmdbReadAccessToken,
+              initialValue: settings.effectiveTmdbLanguage,
+              hintText: 'en-US',
+              onChanged: controller.setTmdbLanguage,
             ),
           ),
-        SettingsRow(
-          title: context.t('TMDB language'),
-          subtitle: context.t(
-            'Controlled by Metadata language. App language only changes interface text.',
+          SettingsRow(
+            title: context.t('TMDB region'),
+            trailing: _TextSettingField(
+              initialValue: settings.tmdbRegion,
+              hintText: 'US',
+              onChanged: controller.setTmdbRegion,
+            ),
           ),
-          trailing: _TextSettingField(
-            initialValue: settings.effectiveTmdbLanguage,
-            hintText: 'en-US',
-            onChanged: controller.setTmdbLanguage,
+          // Temporarily hidden: TMDB only flags movies as adult, so this toggle
+          // can't filter mature anime/series. The filter logic + setting remain
+          // (default off) so re-enabling is just restoring this row.
+          // SettingsRow(
+          //   title: context.t('Show adult content'),
+          //   subtitle: context.t(
+          //     'Include +18 titles in TMDB search and discovery.',
+          //   ),
+          //   trailing: Switch(
+          //     value: settings.tmdbShowAdultContent,
+          //     onChanged: settings.tmdbEnabled
+          //         ? controller.setTmdbShowAdultContent
+          //         : null,
+          //   ),
+          // ),
+          SettingsRow(
+            title: context.t('TMDB connection'),
+            subtitle: settings.hasTmdbToken
+                ? context.t('Configured')
+                : context.t('Not configured'),
+            trailing: OutlinedButton.icon(
+              onPressed: settings.hasTmdbToken
+                  ? () => _testTmdbConnection(context)
+                  : null,
+              icon: const Icon(Icons.verified_rounded),
+              label: Text(context.t('Test connection')),
+            ),
           ),
-        ),
-        SettingsRow(
-          title: context.t('TMDB region'),
-          trailing: _TextSettingField(
-            initialValue: settings.tmdbRegion,
-            hintText: 'US',
-            onChanged: controller.setTmdbRegion,
-          ),
-        ),
-        // Temporarily hidden: TMDB only flags movies as adult, so this toggle
-        // can't filter mature anime/series. The filter logic + setting remain
-        // (default off) so re-enabling is just restoring this row.
-        // SettingsRow(
-        //   title: context.t('Show adult content'),
-        //   subtitle: context.t(
-        //     'Include +18 titles in TMDB search and discovery.',
-        //   ),
-        //   trailing: Switch(
-        //     value: settings.tmdbShowAdultContent,
-        //     onChanged: settings.tmdbEnabled
-        //         ? controller.setTmdbShowAdultContent
-        //         : null,
-        //   ),
-        // ),
-        SettingsRow(
-          title: context.t('TMDB connection'),
-          subtitle: settings.hasTmdbToken
-              ? context.t('Configured')
-              : context.t('Not configured'),
-          trailing: OutlinedButton.icon(
-            onPressed: settings.hasTmdbToken
-                ? () => _testTmdbConnection(context)
-                : null,
-            icon: const Icon(Icons.verified_rounded),
-            label: Text(context.t('Test connection')),
-          ),
-        ),
-        const Divider(height: AppSpacing.xxl),
-        if (kIsWeb)
+        ],
+        if (kIsWeb) ...<Widget>[
+          if (showTmdb) const Divider(height: AppSpacing.xxl),
           SettingsRow(
             title: context.t('Sora web proxy URL'),
             subtitle: context.t(
@@ -290,42 +295,45 @@ class _ApiConnectionsSection extends ConsumerWidget {
               onChanged: controller.setSoraWebProxyUrl,
             ),
           ),
-        if (kIsWeb) const Divider(height: AppSpacing.xxl),
-        SettingsRow(
-          title: context.t('AniList mobile client ID'),
-          subtitle:
-              '${context.t('AniList mobile redirect')}: ${AppConstants.aniListMobileRedirectUri}',
-          trailing: _TextSettingField(
-            initialValue: settings.anilistMobileClientId,
-            hintText: AppConstants.aniListMobileClientId,
-            onChanged: controller.setAniListMobileClientId,
+        ],
+        if (showAniList) ...<Widget>[
+          if (kIsWeb) const Divider(height: AppSpacing.xxl),
+          SettingsRow(
+            title: context.t('AniList mobile client ID'),
+            subtitle:
+                '${context.t('AniList mobile redirect')}: ${AppConstants.aniListMobileRedirectUri}',
+            trailing: _TextSettingField(
+              initialValue: settings.anilistMobileClientId,
+              hintText: AppConstants.aniListMobileClientId,
+              onChanged: controller.setAniListMobileClientId,
+            ),
           ),
-        ),
-        SettingsRow(
-          title: context.t('AniList desktop client ID'),
-          subtitle:
-              '${context.t('AniList desktop redirect')}: ${AppConstants.aniListDesktopRedirectUri}',
-          trailing: _TextSettingField(
-            initialValue: settings.anilistDesktopClientId,
-            hintText: AppConstants.aniListDesktopClientId,
-            onChanged: controller.setAniListDesktopClientId,
+          SettingsRow(
+            title: context.t('AniList desktop client ID'),
+            subtitle:
+                '${context.t('AniList desktop redirect')}: ${AppConstants.aniListDesktopRedirectUri}',
+            trailing: _TextSettingField(
+              initialValue: settings.anilistDesktopClientId,
+              hintText: AppConstants.aniListDesktopClientId,
+              onChanged: controller.setAniListDesktopClientId,
+            ),
           ),
-        ),
-        SettingsRow(
-          title: context.t('AniList desktop callback port'),
-          subtitle: 'http://localhost:${settings.anilistDesktopPort}/',
-          trailing: _TextSettingField(
-            initialValue: settings.anilistDesktopPort.toString(),
-            hintText: AppConstants.aniListDesktopCallbackPort.toString(),
-            keyboardType: TextInputType.number,
-            onChanged: (String value) {
-              final int? port = int.tryParse(value);
-              if (port != null && port > 0) {
-                controller.setAniListDesktopPort(port);
-              }
-            },
+          SettingsRow(
+            title: context.t('AniList desktop callback port'),
+            subtitle: 'http://localhost:${settings.anilistDesktopPort}/',
+            trailing: _TextSettingField(
+              initialValue: settings.anilistDesktopPort.toString(),
+              hintText: AppConstants.aniListDesktopCallbackPort.toString(),
+              keyboardType: TextInputType.number,
+              onChanged: (String value) {
+                final int? port = int.tryParse(value);
+                if (port != null && port > 0) {
+                  controller.setAniListDesktopPort(port);
+                }
+              },
+            ),
           ),
-        ),
+        ],
       ],
     );
   }
@@ -1596,18 +1604,6 @@ class _LanguageSection extends StatelessWidget {
             ),
           ),
         ],
-        if (showMetadataLanguage)
-          SettingsRow(
-            title: context.t('Region / country preference'),
-            subtitle: context.t(
-              'Used by TMDB release calendars and localization.',
-            ),
-            trailing: _TextSettingField(
-              initialValue: settings.tmdbRegion,
-              hintText: 'US',
-              onChanged: controller.setTmdbRegion,
-            ),
-          ),
       ],
     );
   }
