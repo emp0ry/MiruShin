@@ -200,25 +200,13 @@ class _ApiConnectionsSection extends ConsumerWidget {
       children: <Widget>[
         if (showTmdb) ...<Widget>[
           SettingsRow(
-            title: context.t('Enable TMDB metadata'),
-            subtitle: context.t(
-              'Primary source for Board, Discovery, movies, series, and anime visuals.',
-            ),
-            trailing: Switch(
-              value: settings.tmdbEnabled,
-              onChanged: controller.setTmdbEnabled,
-            ),
-          ),
-          SettingsRow(
             title: context.t('Use custom API key'),
             subtitle: context.t(
               'Off: use the built-in TMDB key. On: enter your own TMDB Read Access Token.',
             ),
             trailing: Switch(
               value: settings.tmdbUseCustomKey,
-              onChanged: settings.tmdbEnabled
-                  ? controller.setTmdbUseCustomKey
-                  : null,
+              onChanged: controller.setTmdbUseCustomKey,
             ),
           ),
           if (settings.tmdbUseCustomKey)

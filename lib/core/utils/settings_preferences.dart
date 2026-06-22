@@ -16,7 +16,6 @@ class SettingsPreferences {
   static const String compactModeKey = 'settings.compactMode';
   static const String compactCardsKey = 'settings.compactCards';
   static const String discordRpcEnabledKey = 'settings.discordRpcEnabled';
-  static const String tmdbEnabledKey = 'settings.tmdbEnabled';
   static const String tmdbUseCustomKeyKey = 'settings.tmdbUseCustomKey';
   static const String tvdbEnabledKey = 'settings.tvdbEnabled';
   static const String tmdbLanguageKey = 'settings.tmdbLanguage';
@@ -60,7 +59,6 @@ class SettingsPreferences {
   bool readDiscordRpcEnabled() =>
       _preferences.getBool(discordRpcEnabledKey) ?? true;
 
-  bool readTmdbEnabled() => _preferences.getBool(tmdbEnabledKey) ?? true;
 
   bool readTmdbUseCustomKey() =>
       _preferences.getBool(tmdbUseCustomKeyKey) ?? false;
@@ -170,10 +168,6 @@ class SettingsPreferences {
 
   Future<void> saveDiscordRpcEnabled(bool value) {
     return _preferences.setBool(discordRpcEnabledKey, value);
-  }
-
-  Future<void> saveTmdbEnabled(bool value) {
-    return _preferences.setBool(tmdbEnabledKey, value);
   }
 
   Future<void> saveTmdbUseCustomKey(bool value) {

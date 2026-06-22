@@ -97,7 +97,6 @@ class SettingsState {
     this.compactMode = false,
     this.compactCards = false,
     this.discordRpcEnabled = true,
-    this.tmdbEnabled = true,
     this.tmdbUseCustomKey = false,
     this.tmdbReadAccessToken = '',
     this.tmdbLanguage = 'en-US',
@@ -132,7 +131,6 @@ class SettingsState {
   final bool compactMode;
   final bool compactCards;
   final bool discordRpcEnabled;
-  final bool tmdbEnabled;
 
   /// When `true`, [tmdbReadAccessToken] (the user's own key) is used. When
   /// `false`, the bundled default key from [Env.tmdbReadAccessToken] is used.
@@ -214,7 +212,6 @@ class SettingsState {
     bool? compactMode,
     bool? compactCards,
     bool? discordRpcEnabled,
-    bool? tmdbEnabled,
     bool? tmdbUseCustomKey,
     String? tmdbReadAccessToken,
     String? tmdbLanguage,
@@ -254,7 +251,6 @@ class SettingsState {
       compactMode: compactMode ?? this.compactMode,
       compactCards: compactCards ?? this.compactCards,
       discordRpcEnabled: discordRpcEnabled ?? this.discordRpcEnabled,
-      tmdbEnabled: tmdbEnabled ?? this.tmdbEnabled,
       tmdbUseCustomKey: tmdbUseCustomKey ?? this.tmdbUseCustomKey,
       tmdbReadAccessToken: tmdbReadAccessToken ?? this.tmdbReadAccessToken,
       tmdbLanguage: tmdbLanguage ?? this.tmdbLanguage,
@@ -414,7 +410,6 @@ class SettingsController extends Notifier<SettingsState> {
       compactMode: preferences.readCompactMode(),
       compactCards: preferences.readCompactCards(),
       discordRpcEnabled: preferences.readDiscordRpcEnabled(),
-      tmdbEnabled: preferences.readTmdbEnabled(),
       tmdbUseCustomKey: preferences.readTmdbUseCustomKey(),
       tmdbReadAccessToken: tmdbToken ?? '',
       tmdbLanguage: tmdbLanguage,
@@ -519,13 +514,6 @@ class SettingsController extends Notifier<SettingsState> {
     state = state.copyWith(discordRpcEnabled: value);
     unawaited(
       _save((SettingsPreferences prefs) => prefs.saveDiscordRpcEnabled(value)),
-    );
-  }
-
-  void setTmdbEnabled(bool value) {
-    state = state.copyWith(tmdbEnabled: value);
-    unawaited(
-      _save((SettingsPreferences prefs) => prefs.saveTmdbEnabled(value)),
     );
   }
 

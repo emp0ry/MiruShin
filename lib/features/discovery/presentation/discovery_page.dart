@@ -272,7 +272,6 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
   String _settingsKey(SettingsState settings, CatalogMode mode) {
     return Object.hash(
       mode,
-      settings.tmdbEnabled,
       settings.effectiveTmdbReadAccessToken,
       settings.effectiveTmdbLanguage,
       settings.anilistAccessToken,

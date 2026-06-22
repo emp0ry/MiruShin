@@ -745,7 +745,6 @@ Future<List<SoraTitleVariant>> _buildTitleVariants({
 
   final bool canReadTmdbTranslations =
       catalogMode == CatalogMode.tmdb &&
-      settings.tmdbEnabled &&
       settings.effectiveTmdbReadAccessToken.isNotEmpty &&
       media.externalIds['tmdb'] != null;
   Map<String, String> translated = const <String, String>{};
