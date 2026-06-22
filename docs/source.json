@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "1.8.0",
+          "date": "2026-06-22",
+          "localizedDescription": "- Added an Episodes button in the player so you can jump to any episode directly.\n- Improved player controls so labels switch to icons earlier and never feel cramped.\n- Fixed Now Playing metadata on iOS, macOS, Android, Windows, and Discord.\n- Now Playing now shows the real AniList/TMDB title in your selected language, with smart fallback support.\n- Fixed TMDB library progress showing 0% instead of the correct watch percentage.\n- Settings now adapt to your selected catalog mode.\n- TMDB mode now hides AniList options and accounts.\n- AniList mode now hides TMDB-specific options.\n- Removed the redundant TMDB enable toggle.\n- Added a new Compact cards toggle for Board cards.\n- Discord settings were moved under Language.\n- Removed unused settings: Poster card style, Subtitle preferred language, and Region/country.\n- Removed the redundant Discovery status bar for a cleaner browsing experience.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v1.8.0/MiruShin-ios-v1.8.0.ipa",
+          "size": 21158039,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "1.7.4",
           "date": "2026-06-18",
           "localizedDescription": "- Updated the MiruShin website URL to use the new official domain.",
@@ -287,11 +295,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "1.7.4",
-      "versionDate": "2026-06-18",
-      "versionDescription": "- Updated the MiruShin website URL to use the new official domain.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v1.7.4/MiruShin-ios-v1.7.4.ipa",
-      "size": 21117738,
+      "version": "1.8.0",
+      "versionDate": "2026-06-22",
+      "versionDescription": "- Added an Episodes button in the player so you can jump to any episode directly.\n- Improved player controls so labels switch to icons earlier and never feel cramped.\n- Fixed Now Playing metadata on iOS, macOS, Android, Windows, and Discord.\n- Now Playing now shows the real AniList/TMDB title in your selected language, with smart fallback support.\n- Fixed TMDB library progress showing 0% instead of the correct watch percentage.\n- Settings now adapt to your selected catalog mode.\n- TMDB mode now hides AniList options and accounts.\n- AniList mode now hides TMDB-specific options.\n- Removed the redundant TMDB enable toggle.\n- Added a new Compact cards toggle for Board cards.\n- Discord settings were moved under Language.\n- Removed unused settings: Poster card style, Subtitle preferred language, and Region/country.\n- Removed the redundant Discovery status bar for a cleaner browsing experience.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v1.8.0/MiruShin-ios-v1.8.0.ipa",
+      "size": 21158039,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
