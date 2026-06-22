@@ -609,6 +609,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
               // Auto-loaded episodes are real playback the user is watching:
               // they must track progress and be able to chain the next auto-next.
               ignoreProgress: false,
+              episodeSeasons: _playerEpisodeSeasons(),
             ),
           )
           .then((Object? result) {
@@ -616,6 +617,11 @@ class _WatchPageState extends ConsumerState<WatchPage> {
             _playerRouteInFlight = false;
             _activePlayerEpisodeKey = null;
             setState(() {});
+            if (result is PlayerEpisodeSelectionResult) {
+              _nextEpisodeInFullscreen = result.startInFullscreen;
+              unawaited(_playEpisodeFromPlayer(result.episodeHref));
+              return;
+            }
             final PlayerNextEpisodeResult? nextResult = _nextEpisodeResultFrom(
               result,
             );
@@ -734,6 +740,107 @@ class _WatchPageState extends ConsumerState<WatchPage> {
       ),
     );
     _pickEpisode(next, isAutoNext: true);
+  }
+
+  /// Builds the season-grouped episode list handed to the player so its
+  /// in-player Episodes sheet mirrors the addon's episode picker. Episode ids
+  /// carry the addon href so a tapped episode can be resolved and played.
+  List<Season> _playerEpisodeSeasons() {
+    final List<SoraEpisode> episodes = _sourceEpisodes ?? const <SoraEpisode>[];
+    if (episodes.isEmpty) return const <Season>[];
+    final List<SoraSeasonGroup> groups = groupSoraEpisodesIntoSeasons(episodes);
+    final bool multiSeason = groups.length > 1;
+    return <Season>[
+      for (final SoraSeasonGroup group in groups)
+        Season(
+          number: group.season,
+          title: multiSeason
+              ? context.tf('Season {number}', <String, Object?>{
+                  'number': group.season,
+                })
+              : context.t('Episodes'),
+          episodes: <Episode>[
+            for (final SoraEpisode episode in group.episodes)
+              Episode(
+                id: episode.href,
+                number: episode.number.round(),
+                title: episode.title.trim().isNotEmpty
+                    ? episode.title
+                    : context.tf('Episode {number}', <String, Object?>{
+                        'number': episode.displayNumber,
+                      }),
+                thumbnailUrl: episode.image,
+              ),
+          ],
+        ),
+    ];
+  }
+
+  /// Resolves and plays the episode the user picked from the in-player Episodes
+  /// sheet, reusing the same path as choosing an episode from the addon picker.
+  Future<void> _playEpisodeFromPlayer(String href) async {
+    final WatchSession? session = _session;
+    final MediaItem? item = _lastItem;
+    if (session == null || item == null) return;
+    final SoraSearchResult? source = session.source;
+    if (source == null) return;
+    if (href.trim().isEmpty) return;
+
+    // Manual selection must never be blocked by the auto-next de-dupe guard.
+    _lastAutoNextFromEpisodeHref = null;
+
+    List<SoraEpisode> episodes = _sourceEpisodes ?? const <SoraEpisode>[];
+    if (episodes.isEmpty) {
+      try {
+        final SoraInstalledAddon? addon = ref
+            .read(soraAddonsProvider)
+            .byId(source.addonId);
+        if (addon == null) {
+          throw const SoraAddonException('Addon is no longer installed.');
+        }
+        episodes = await ref
+            .read(soraJsRuntimeProvider)
+            .extractEpisodes(addon: addon, result: source);
+      } on Object catch (error) {
+        if (!mounted) return;
+        _clearAutoNextFullscreen();
+        setState(() {
+          _session = _session?.copyWith(
+            step: WatchStep.streamReady,
+            isResolving: false,
+            error: error.toString(),
+          );
+        });
+        return;
+      }
+      if (!mounted) return;
+    }
+
+    final int index = episodes.indexWhere((SoraEpisode e) => e.href == href);
+    if (index < 0) {
+      _clearAutoNextFullscreen();
+      return;
+    }
+
+    final SoraEpisode rawSelected = episodes[index];
+    final AnimeEpisodeMetadata? metadata = await _metadataForAutoNext(
+      item,
+      rawSelected,
+    );
+    if (!mounted) return;
+
+    final SoraEpisode selected = _episodeForPlayback(
+      rawSelected,
+      metadata,
+      null,
+    );
+    // Drop any stale cached stream so the picked episode resolves a fresh URL.
+    ref.invalidate(
+      soraStreamBundleProvider(
+        SoraStreamRequest(addonId: source.addonId, episode: selected),
+      ),
+    );
+    _pickEpisode(selected);
   }
 
   Future<AnimeEpisodeMetadata?> _metadataForAutoNext(

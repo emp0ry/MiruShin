@@ -572,11 +572,15 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     }
   }
 
-  Future<void> _exitPlayer({bool playNext = false}) async {
+  Future<void> _exitPlayer({
+    bool playNext = false,
+    String? selectEpisodeHref,
+  }) async {
     if (_exitingPlayer) return;
+    final bool advancing = playNext || selectEpisodeHref != null;
     final bool wasFullscreen = _isFullscreen;
     final bool shouldStartNextFullscreen =
-        playNext && (wasFullscreen || _shouldStartFullscreen);
+        advancing && (wasFullscreen || _shouldStartFullscreen);
     final bool preserveFullscreenForNext =
         _isMobile && shouldStartNextFullscreen;
     _preserveFullscreenForNextRoute = preserveFullscreenForNext;
@@ -594,7 +598,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         ref.read(pipControllerProvider).bringToForeground(),
         Future<void>.delayed(const Duration(milliseconds: 700)),
       ]);
-      if (playNext) {
+      if (advancing) {
         await Future<void>.delayed(const Duration(milliseconds: 300));
       }
     }
@@ -612,7 +616,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       );
     }
     final PlaybackState playbackState = ref.read(playbackControllerProvider);
-    final Object? result = playNext
+    final Object? result = selectEpisodeHref != null
+        ? PlayerEpisodeSelectionResult(
+            episodeHref: selectEpisodeHref,
+            startInFullscreen: shouldStartNextFullscreen,
+          )
+        : playNext
         ? PlayerNextEpisodeResult(
             startInFullscreen: shouldStartNextFullscreen,
             serverId: playbackState.server?.id,
@@ -880,7 +889,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.keyE) {
-      _showEpisodes(context, state.item);
+      _showEpisodes(
+        context,
+        state.item,
+        onSelect: (String href) =>
+            unawaited(_exitPlayer(selectEpisodeHref: href)),
+      );
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.keyQ) {
@@ -1065,7 +1079,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
           ),
           _EpisodesIntent: CallbackAction<_EpisodesIntent>(
             onInvoke: (_) {
-              _showEpisodes(context, state.item);
+              _showEpisodes(
+                context,
+                state.item,
+                onSelect: (String href) =>
+                    unawaited(_exitPlayer(selectEpisodeHref: href)),
+              );
               return null;
             },
           ),
@@ -1250,6 +1269,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                                             : null,
                                         onExit: () => unawaited(_exitPlayer()),
                                         onToggleFullscreen: _toggleFullscreen,
+                                        onSelectEpisode: (String href) =>
+                                            unawaited(
+                                              _exitPlayer(
+                                                selectEpisodeHref: href,
+                                              ),
+                                            ),
                                         onEnterNativePip: _nativePipSupported
                                             ? () => unawaited(
                                                 _handOffToNativePip(),
@@ -1820,6 +1845,7 @@ class _PlayerChrome extends ConsumerWidget {
     required this.isMobile,
     required this.onExit,
     required this.onToggleFullscreen,
+    this.onSelectEpisode,
     this.onEnterNativePip,
     this.tvSeedFocusNode,
   });
@@ -1828,6 +1854,9 @@ class _PlayerChrome extends ConsumerWidget {
   final bool isMobile;
   final VoidCallback onExit;
   final VoidCallback onToggleFullscreen;
+
+  /// Plays the episode the user picks from the in-player Episodes sheet.
+  final void Function(String href)? onSelectEpisode;
   final VoidCallback? onEnterNativePip;
 
   /// On Android TV: attached to the centre play/pause button so the page can
@@ -2074,6 +2103,19 @@ class _PlayerChrome extends ConsumerWidget {
                                                 ref,
                                               ),
                                             ),
+                                            if (item != null &&
+                                                item.seasons.isNotEmpty)
+                                              _ChromeButton(
+                                                icon:
+                                                    Icons.video_library_rounded,
+                                                label: 'Episodes',
+                                                showLabel: !compactStreams,
+                                                onTap: () => _showEpisodes(
+                                                  context,
+                                                  item,
+                                                  onSelect: onSelectEpisode,
+                                                ),
+                                              ),
                                             _ChromeButton(
                                               icon: Icons.subtitles_rounded,
                                               label: 'Subs',
@@ -3642,18 +3684,24 @@ Future<void> _showSpeedMenu(BuildContext context, WidgetRef ref) async {
 
 Future<void> _showEpisodes(
   BuildContext context,
-  MediaPlaybackItem? item,
-) async {
+  MediaPlaybackItem? item, {
+  void Function(String href)? onSelect,
+}) async {
+  final NavigatorState navigator = Navigator.of(context);
+  final String? currentHref = item?.externalIds['sora_episode_href'];
   await _showMenuSheet(context, 'Episodes', <Widget>[
     if (item == null || item.seasons.isEmpty)
       ListTile(title: Text(context.t('No episode data was provided.'))),
     for (final Season season in item?.seasons ?? const <Season>[])
       ExpansionTile(
-        initiallyExpanded: true,
+        initiallyExpanded:
+            item!.seasons.length == 1 ||
+            season.episodes.any((Episode e) => e.id == currentHref),
         title: Text(season.title),
         children: <Widget>[
           for (final Episode episode in season.episodes)
             ListTile(
+              selected: episode.id == currentHref,
               leading: CircleAvatar(child: Text(episode.number.toString())),
               title: Text(episode.title),
               subtitle: episode.progress > Duration.zero
@@ -3663,6 +3711,15 @@ Future<void> _showEpisodes(
                       }),
                     )
                   : null,
+              trailing: episode.id == currentHref
+                  ? const Icon(Icons.play_arrow_rounded)
+                  : null,
+              onTap: onSelect == null || episode.id == currentHref
+                  ? null
+                  : () {
+                      navigator.pop();
+                      onSelect(episode.id);
+                    },
             ),
         ],
       ),

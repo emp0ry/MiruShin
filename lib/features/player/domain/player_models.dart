@@ -256,6 +256,19 @@ class PlayerNextEpisodeResult {
   final String? voiceoverLabel;
 }
 
+/// Returned by the player when the user picks a specific episode from the
+/// in-player Episodes sheet. The watch page resolves [episodeHref] and opens it
+/// just like choosing an episode from the addon picker.
+class PlayerEpisodeSelectionResult {
+  const PlayerEpisodeSelectionResult({
+    required this.episodeHref,
+    this.startInFullscreen = false,
+  });
+
+  final String episodeHref;
+  final bool startInFullscreen;
+}
+
 class PlayerSettings {
   const PlayerSettings({
     this.seekInterval = const Duration(seconds: 10),
@@ -516,6 +529,7 @@ class MediaPlaybackItem {
     int seasonNumber, {
     Duration startPosition = Duration.zero,
     bool ignoreProgress = false,
+    List<Season> seasons = const <Season>[],
   }) {
     final StreamType streamType = streamTypeFrom(bundle.streamType);
 
@@ -599,6 +613,7 @@ class MediaPlaybackItem {
         'sora_episode_href': bundle.episode.href,
       },
       servers: servers,
+      seasons: seasons,
       currentEpisodeId: '${seasonNumber}_$episodeNumber',
       skipMarkers: _skipMarkersFromBundle(bundle),
       startPosition: startPosition,

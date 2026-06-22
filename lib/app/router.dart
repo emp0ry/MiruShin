@@ -191,6 +191,7 @@ CustomTransitionPage<void> _playerPage(GoRouterState state) {
     args.seasonNumber,
     startPosition: args.startPosition,
     ignoreProgress: args.ignoreProgress,
+    seasons: args.episodeSeasons,
   );
   return _fadePage(
     state,
@@ -246,6 +247,7 @@ class PlayerRouteArgs {
     this.startInFullscreen = false,
     this.startPosition = Duration.zero,
     this.ignoreProgress = false,
+    this.episodeSeasons = const <Season>[],
   });
 
   final NormalizedStreamBundle bundle;
@@ -254,4 +256,8 @@ class PlayerRouteArgs {
   final bool startInFullscreen;
   final Duration startPosition;
   final bool ignoreProgress;
+
+  /// Full episode list (grouped into seasons) for the in-player Episodes sheet,
+  /// so the user can jump to any episode without leaving the player.
+  final List<Season> episodeSeasons;
 }
