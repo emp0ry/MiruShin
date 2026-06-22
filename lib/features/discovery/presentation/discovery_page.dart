@@ -682,13 +682,6 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
               ),
             ),
             const SizedBox(height: AppSpacing.xl),
-            _DiscoveryStatusBar(
-              itemCount: items.length,
-              page: _page,
-              loadingMore: _loadingMore,
-              hasMore: _hasMore,
-            ),
-            const SizedBox(height: AppSpacing.lg),
             if (_loadingInitial)
               const _DiscoverySkeletonGrid()
             else if (_error != null && items.isEmpty)
@@ -826,56 +819,6 @@ Future<void> _openAniListEntryEditor(
     entry: editableEntry,
     draft: draft,
   );
-}
-
-class _DiscoveryStatusBar extends StatelessWidget {
-  const _DiscoveryStatusBar({
-    required this.itemCount,
-    required this.page,
-    required this.loadingMore,
-    required this.hasMore,
-  });
-
-  final int itemCount;
-  final int page;
-  final bool loadingMore;
-  final bool hasMore;
-
-  @override
-  Widget build(BuildContext context) {
-    return Wrap(
-      spacing: AppSpacing.sm,
-      runSpacing: AppSpacing.sm,
-      crossAxisAlignment: WrapCrossAlignment.center,
-      children: <Widget>[
-        Chip(
-          avatar: const Icon(Icons.movie_filter_rounded, size: 18),
-          label: Text('${context.t('Loaded')}: $itemCount'),
-        ),
-        Chip(
-          avatar: const Icon(Icons.layers_rounded, size: 18),
-          label: Text('${context.t('Page')}: ${page == 0 ? 1 : page}'),
-        ),
-        Chip(
-          avatar: Icon(
-            loadingMore
-                ? Icons.downloading_rounded
-                : hasMore
-                ? Icons.auto_awesome_motion_rounded
-                : Icons.done_all_rounded,
-            size: 18,
-          ),
-          label: Text(
-            loadingMore
-                ? context.t('Loading more')
-                : hasMore
-                ? context.t('Infinite discovery')
-                : context.t('All caught up'),
-          ),
-        ),
-      ],
-    );
-  }
 }
 
 class _DiscoveryFooter extends StatelessWidget {

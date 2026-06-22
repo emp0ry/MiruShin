@@ -2078,11 +2078,12 @@ class _PlayerChrome extends ConsumerWidget {
                                     BoxConstraints constraints,
                                   ) {
                                     final double width = constraints.maxWidth;
-                                    final bool compactStreams = width < 520;
-                                    final bool compactSubs = width < 470;
-                                    final bool compactZoom = width < 420;
-                                    final bool compactSpeed = width < 365;
-                                    final bool compactQuality = width < 315;
+                                    final bool compactStreams = width < 650;
+                                    final bool compactEpisodes = width < 585;
+                                    final bool compactSubs = width < 505;
+                                    final bool compactZoom = width < 460;
+                                    final bool compactSpeed = width < 390;
+                                    final bool compactQuality = width < 340;
                                     final String speedLabel =
                                         '${settings.playbackSpeed.toStringAsFixed(settings.playbackSpeed == settings.playbackSpeed.roundToDouble() ? 0 : 2)}x';
 
@@ -2109,7 +2110,7 @@ class _PlayerChrome extends ConsumerWidget {
                                                 icon:
                                                     Icons.video_library_rounded,
                                                 label: 'Episodes',
-                                                showLabel: !compactStreams,
+                                                showLabel: !compactEpisodes,
                                                 onTap: () => _showEpisodes(
                                                   context,
                                                   item,

@@ -10,8 +10,10 @@ import '../data/subtitle_parser.dart';
 
 import '../../../shared/models/anilist_models.dart';
 import '../../../shared/models/media_item.dart';
+import '../../addons/data/anime_titles_service.dart';
 import '../../catalog/application/catalog_mode.dart';
 import '../../library/application/local_library_provider.dart';
+import '../../profile/application/anilist_user_settings_provider.dart';
 import '../../settings/presentation/settings_state.dart';
 import '../../tracking/application/anilist_library_provider.dart';
 import '../../tracking/data/anilist_api_client.dart';
@@ -205,6 +207,12 @@ class PlaybackController extends Notifier<PlaybackState> {
   int _temporarySpeedHolds = 0;
   final Set<String> _syncedToAnilist = <String>{};
 
+  // Cache of Russian (Shikimori) titles resolved on demand for the now-playing
+  // surfaces, keyed by AniList id. Lets the media session / Discord show the
+  // localized title without blocking playback while Shikimori is fetched.
+  final Map<String, String> _russianTitleCache = <String, String>{};
+  String? _russianTitleResolving;
+
   void Function()? _nextEpisodeHandler;
 
   @override
@@ -277,7 +285,7 @@ class PlaybackController extends Notifier<PlaybackState> {
               : '');
     unawaited(
       MediaSessionService.updateNowPlaying(
-        title: item.title,
+        title: _nowPlayingTitle(item),
         subtitle: sub,
         artworkUrl: item.posterUrl,
         position: es.position,
@@ -301,7 +309,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       appEnabled: settings.discordRpcEnabled,
       playerEnabled: playerSettings.discordRpcEnabled,
     );
-    final String rpcTitle = _discordTitle(item);
+    final String rpcTitle = _nowPlayingTitle(item);
     await DiscordRpcService.updatePresence(
       DiscordRpcPresence(
         title: rpcTitle,
@@ -319,18 +327,110 @@ class PlaybackController extends Notifier<PlaybackState> {
     );
   }
 
-  String _discordTitle(MediaPlaybackItem item) {
-    for (final String value in <String>[
-      item.externalIds['mirushin_metadata_title'] ?? '',
-      item.title,
-      item.originalTitle,
+  /// The series/movie title shown on the now-playing surfaces (Control Center,
+  /// Android/Windows media session, Discord). Always the AniList/TMDB metadata
+  /// title — never the addon's source title.
+  ///
+  /// AniList anime follow the AniList title-language setting
+  /// (ROMAJI/ENGLISH/NATIVE/RUSSIAN) using the per-language titles carried in
+  /// externalIds (`anilist_title_{romaji,english,native}`); RUSSIAN comes from
+  /// Shikimori, fetched lazily and cached (see [_maybeResolveRussianTitle]).
+  /// TMDB items already store [mirushin_metadata_title] localized to the chosen
+  /// metadata language, so it is used directly.
+  String _nowPlayingTitle(MediaPlaybackItem item) {
+    final Map<String, String> ids = item.externalIds;
+    final String english = (ids['anilist_title_english'] ?? '').trim();
+    final String romaji = (ids['anilist_title_romaji'] ?? '').trim();
+    final String native = (ids['anilist_title_native'] ?? '').trim();
+    final String meta = (ids['mirushin_metadata_title'] ?? '').trim();
+    final String original =
+        (ids['mirushin_metadata_original_title'] ?? '').trim().isNotEmpty
+        ? (ids['mirushin_metadata_original_title'] ?? '').trim()
+        : item.originalTitle.trim();
+
+    final bool isAnime =
+        english.isNotEmpty || romaji.isNotEmpty || native.isNotEmpty;
+
+    String chosen;
+    if (isAnime) {
+      // AniList content uses its own title-language preference, not the TMDB
+      // metadata locale. AniList has no Russian, so it comes from Shikimori.
+      final String titleLanguage = ref.read(
+        aniListEffectiveTitleLanguageProvider,
+      );
+      chosen = switch (titleLanguage) {
+        'ROMAJI' => romaji,
+        'NATIVE' => native,
+        'RUSSIAN' => _russianTitleFor(item),
+        _ => english,
+      };
+    } else {
+      // TMDB's metadata title is already localized to the chosen language
+      // (with TMDB's own fallback baked in).
+      chosen = meta;
+    }
+
+    // `meta` is the app's own already-localized display title (for AniList it
+    // honours the title-language setting, including the Russian injection), so
+    // it must rank above the raw per-language candidates.
+    for (final String candidate in <String>[
+      chosen,
+      meta,
+      english,
+      romaji,
+      native,
+      original,
     ]) {
-      final String trimmed = value.trim();
-      if (trimmed.isNotEmpty) {
-        return trimmed;
+      if (candidate.trim().isNotEmpty) {
+        return candidate.trim();
       }
     }
+    // Last resort only — this is the addon source title.
     return item.title;
+  }
+
+  /// Returns the cached Russian title for [item] and, if not yet available,
+  /// kicks off a best-effort Shikimori lookup that refreshes the now-playing
+  /// surfaces once it resolves. Returns '' until then so the fallback chain runs.
+  String _russianTitleFor(MediaPlaybackItem item) {
+    final String anilistId = (item.externalIds['anilist'] ?? '').trim();
+    if (anilistId.isEmpty) return '';
+    final String? cached = _russianTitleCache[anilistId];
+    if (cached != null) return cached;
+    unawaited(_maybeResolveRussianTitle(item, anilistId));
+    return '';
+  }
+
+  Future<void> _maybeResolveRussianTitle(
+    MediaPlaybackItem item,
+    String anilistId,
+  ) async {
+    if (_russianTitleCache.containsKey(anilistId)) return;
+    if (_russianTitleResolving == anilistId) return;
+    _russianTitleResolving = anilistId;
+    try {
+      final AnimeTitles titles = await AnimeTitlesService.resolve(
+        anilistId: anilistId,
+        malId: (item.externalIds['mal'] ?? '').trim().isEmpty
+            ? null
+            : item.externalIds['mal'],
+        titleCandidates: <String>[
+          item.externalIds['anilist_title_romaji'] ?? '',
+          item.externalIds['anilist_title_english'] ?? '',
+          item.title,
+        ].where((String s) => s.trim().isNotEmpty),
+      );
+      _russianTitleCache[anilistId] = titles.russian.trim();
+    } on Object {
+      // Best-effort: cache empty so we don't retry the same id every tick.
+      _russianTitleCache[anilistId] = '';
+    } finally {
+      _russianTitleResolving = null;
+    }
+    // Refresh the surfaces now that the localized title (or its absence) is known.
+    if (state.item?.externalIds['anilist'] == anilistId) {
+      _updateMediaSession();
+    }
   }
 
   String _discordViewUrl(MediaPlaybackItem item) {
@@ -345,7 +445,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       return 'https://www.themoviedb.org/$path/$tmdbId';
     }
 
-    final String query = Uri.encodeComponent(_discordTitle(item));
+    final String query = Uri.encodeComponent(_nowPlayingTitle(item));
     final String searchPath = item.mediaType == MediaType.movie
         ? 'movie'
         : 'tv';
@@ -1190,6 +1290,19 @@ class PlaybackController extends Notifier<PlaybackState> {
             completed: saveCompleted,
           );
     }
+
+    unawaited(
+      ref
+          .read(localLibraryProvider.notifier)
+          .updateWatchProgress(
+            mediaId: item.id,
+            seasonNumber: item.seasonNumber,
+            episodeNumber: item.episodeNumber,
+            positionFraction: saveCompleted
+                ? 1.0
+                : (durationSeconds > 0 ? positionSeconds / durationSeconds : null),
+          ),
+    );
 
     if (saveCompleted) {
       final bool syncEnabled =
@@ -2484,6 +2597,21 @@ class PlaybackController extends Notifier<PlaybackState> {
             completed: watched,
           );
     }
+
+    unawaited(
+      ref
+          .read(localLibraryProvider.notifier)
+          .updateWatchProgress(
+            mediaId: item.id,
+            seasonNumber: item.seasonNumber,
+            episodeNumber: item.episodeNumber,
+            positionFraction: watched
+                ? 1.0
+                : (durationSeconds != null && durationSeconds > 0
+                      ? position.inSeconds / durationSeconds
+                      : null),
+          ),
+    );
 
     final bool syncEnabled =
         (ref.read(playerSettingsProvider).value ?? const PlayerSettings())

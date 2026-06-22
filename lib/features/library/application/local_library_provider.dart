@@ -155,6 +155,77 @@ class LocalLibraryController extends Notifier<List<LibraryItem>> {
     return addToLibrary(media, status: LibraryStatus.completed, progress: 1);
   }
 
+  /// Updates a local item's progress to reflect the furthest episode reached
+  /// (cumulative episode index across seasons / total episodes). Progress is
+  /// monotonic — jumping back to an earlier episode never lowers it. For movies
+  /// the playback [positionFraction] is used instead. No-op when the media is
+  /// not in the local library (we never auto-add items here).
+  Future<void> updateWatchProgress({
+    required String mediaId,
+    required int seasonNumber,
+    required double episodeNumber,
+    double? positionFraction,
+  }) async {
+    final LibraryItem? existing = find(mediaId);
+    if (existing == null) return;
+
+    final double fraction = _furthestProgressFraction(
+      media: existing.mediaItem,
+      seasonNumber: seasonNumber,
+      episodeNumber: episodeNumber,
+      positionFraction: positionFraction,
+    );
+    if (fraction <= existing.progress) return;
+
+    final LibraryItem updated = LibraryItem(
+      id: existing.id,
+      mediaItem: existing.mediaItem,
+      status: existing.status,
+      progress: fraction,
+      addedAt: existing.addedAt,
+      updatedAt: DateTime.now(),
+      trackingSyncState: existing.trackingSyncState,
+    );
+    // Replace in place so playback doesn't reorder the library list.
+    state = <LibraryItem>[
+      for (final LibraryItem item in state)
+        if (item.mediaItem.id == mediaId) updated else item,
+    ];
+    await _persist();
+  }
+
+  double _furthestProgressFraction({
+    required MediaItem media,
+    required int seasonNumber,
+    required double episodeNumber,
+    double? positionFraction,
+  }) {
+    final List<MediaSeason> seasons = media.seasons
+        .where((MediaSeason s) => !s.isSpecials && s.episodeCount > 0)
+        .toList(growable: false);
+
+    int total = seasons.fold<int>(
+      0,
+      (int sum, MediaSeason s) => sum + s.episodeCount,
+    );
+    if (total <= 0) total = media.episodeCount ?? 0;
+
+    // Movies / items without a real episode structure: use playback position.
+    if (media.type == MediaType.movie || total <= 1) {
+      return (positionFraction ?? 0).clamp(0.0, 1.0);
+    }
+
+    int episodesBefore = 0;
+    for (final MediaSeason s in seasons) {
+      if (s.seasonNumber < seasonNumber) {
+        episodesBefore += s.episodeCount;
+      }
+    }
+
+    final int reached = episodesBefore + episodeNumber.round();
+    return (reached / total).clamp(0.0, 1.0);
+  }
+
   Future<void> remove(String mediaId) async {
     state = state
         .where((LibraryItem item) => item.mediaItem.id != mediaId)
