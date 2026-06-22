@@ -94,8 +94,8 @@ class SettingsState {
     this.appLocale,
     this.metadataLocale,
     this.accentColor = AppColors.accentPurple,
-    this.posterCardStyle = 'Cinematic',
     this.compactMode = false,
+    this.compactCards = false,
     this.discordRpcEnabled = true,
     this.tmdbEnabled = true,
     this.tmdbUseCustomKey = false,
@@ -129,8 +129,8 @@ class SettingsState {
   final Locale? appLocale;
   final Locale? metadataLocale;
   final Color accentColor;
-  final String posterCardStyle;
   final bool compactMode;
+  final bool compactCards;
   final bool discordRpcEnabled;
   final bool tmdbEnabled;
 
@@ -211,8 +211,8 @@ class SettingsState {
     Locale? appLocale,
     Locale? metadataLocale,
     Color? accentColor,
-    String? posterCardStyle,
     bool? compactMode,
+    bool? compactCards,
     bool? discordRpcEnabled,
     bool? tmdbEnabled,
     bool? tmdbUseCustomKey,
@@ -251,8 +251,8 @@ class SettingsState {
           ? null
           : metadataLocale ?? this.metadataLocale,
       accentColor: accentColor ?? this.accentColor,
-      posterCardStyle: posterCardStyle ?? this.posterCardStyle,
       compactMode: compactMode ?? this.compactMode,
+      compactCards: compactCards ?? this.compactCards,
       discordRpcEnabled: discordRpcEnabled ?? this.discordRpcEnabled,
       tmdbEnabled: tmdbEnabled ?? this.tmdbEnabled,
       tmdbUseCustomKey: tmdbUseCustomKey ?? this.tmdbUseCustomKey,
@@ -411,8 +411,8 @@ class SettingsController extends Notifier<SettingsState> {
       themeMode: _themeModeFromName(themeModeName),
       appLocale: appLocale,
       accentColor: accentColor == null ? null : Color(accentColor),
-      posterCardStyle: preferences.readPosterCardStyle(),
       compactMode: preferences.readCompactMode(),
+      compactCards: preferences.readCompactCards(),
       discordRpcEnabled: preferences.readDiscordRpcEnabled(),
       tmdbEnabled: preferences.readTmdbEnabled(),
       tmdbUseCustomKey: preferences.readTmdbUseCustomKey(),
@@ -501,17 +501,17 @@ class SettingsController extends Notifier<SettingsState> {
     );
   }
 
-  void setPosterCardStyle(String style) {
-    state = state.copyWith(posterCardStyle: style);
-    unawaited(
-      _save((SettingsPreferences prefs) => prefs.savePosterCardStyle(style)),
-    );
-  }
-
   void setCompactMode(bool value) {
     state = state.copyWith(compactMode: value);
     unawaited(
       _save((SettingsPreferences prefs) => prefs.saveCompactMode(value)),
+    );
+  }
+
+  void setCompactCards(bool value) {
+    state = state.copyWith(compactCards: value);
+    unawaited(
+      _save((SettingsPreferences prefs) => prefs.saveCompactCards(value)),
     );
   }
 

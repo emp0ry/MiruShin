@@ -13,8 +13,8 @@ class SettingsPreferences {
   static const String appLanguageKey = 'settings.appLanguage';
   static const String metadataLanguageKey = 'settings.metadataLanguage';
   static const String accentColorKey = 'settings.accentColor';
-  static const String posterCardStyleKey = 'settings.posterCardStyle';
   static const String compactModeKey = 'settings.compactMode';
+  static const String compactCardsKey = 'settings.compactCards';
   static const String discordRpcEnabledKey = 'settings.discordRpcEnabled';
   static const String tmdbEnabledKey = 'settings.tmdbEnabled';
   static const String tmdbUseCustomKeyKey = 'settings.tmdbUseCustomKey';
@@ -53,9 +53,9 @@ class SettingsPreferences {
 
   int? readAccentColor() => _preferences.getInt(accentColorKey);
 
-  String? readPosterCardStyle() => _preferences.getString(posterCardStyleKey);
-
   bool readCompactMode() => _preferences.getBool(compactModeKey) ?? false;
+
+  bool readCompactCards() => _preferences.getBool(compactCardsKey) ?? false;
 
   bool readDiscordRpcEnabled() =>
       _preferences.getBool(discordRpcEnabledKey) ?? true;
@@ -160,12 +160,12 @@ class SettingsPreferences {
     return _preferences.setInt(accentColorKey, value);
   }
 
-  Future<void> savePosterCardStyle(String value) {
-    return _preferences.setString(posterCardStyleKey, value);
-  }
-
   Future<void> saveCompactMode(bool value) {
     return _preferences.setBool(compactModeKey, value);
+  }
+
+  Future<void> saveCompactCards(bool value) {
+    return _preferences.setBool(compactCardsKey, value);
   }
 
   Future<void> saveDiscordRpcEnabled(bool value) {

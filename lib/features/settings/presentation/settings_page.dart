@@ -757,29 +757,17 @@ class _AppearanceSection extends StatelessWidget {
           ),
         ),
         SettingsRow(
-          title: context.t('Poster card style'),
-          trailing: DropdownButton<String>(
-            value: settings.posterCardStyle,
-            items: const <String>['Cinematic', 'Compact', 'Editorial']
-                .map(
-                  (String style) => DropdownMenuItem<String>(
-                    value: style,
-                    child: Text(style),
-                  ),
-                )
-                .toList(),
-            onChanged: (String? value) {
-              if (value != null) {
-                controller.setPosterCardStyle(value);
-              }
-            },
-          ),
-        ),
-        SettingsRow(
           title: context.t('Compact mode'),
           trailing: Switch(
             value: settings.compactMode,
             onChanged: controller.setCompactMode,
+          ),
+        ),
+        SettingsRow(
+          title: context.t('Compact cards'),
+          trailing: Switch(
+            value: settings.compactCards,
+            onChanged: controller.setCompactCards,
           ),
         ),
         SettingsRow(

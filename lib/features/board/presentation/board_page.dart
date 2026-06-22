@@ -515,7 +515,7 @@ class _MediaSection extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final bool forceCompact = ref.watch(
-      settingsProvider.select((SettingsState settings) => settings.compactMode),
+      settingsProvider.select((SettingsState settings) => settings.compactCards),
     );
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
