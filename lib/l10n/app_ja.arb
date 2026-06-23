@@ -149,6 +149,7 @@
   "Clear filters": "フィルターを解除",
   "Clear metadata": "メタデータを消去",
   "Clears image and metadata cache from disk.": "ディスク上の画像とメタデータのキャッシュを消去します。",
+  "Closing in {seconds}s": "{seconds}秒後に閉じる",
   "Coming Soon": "近日公開",
   "Comments": "コメント",
   "Compact cards": "コンパクトカード",

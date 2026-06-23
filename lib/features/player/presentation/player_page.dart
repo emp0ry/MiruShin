@@ -1328,6 +1328,14 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                                           playbackControllerProvider.notifier,
                                         )
                                         .dismissAutoNext(),
+                                    onExpire: () {
+                                      ref
+                                          .read(
+                                            playbackControllerProvider.notifier,
+                                          )
+                                          .dismissAutoNext();
+                                      unawaited(_exitPlayer());
+                                    },
                                   ),
                                 if (state.error != null)
                                   _PlayerErrorOverlay(

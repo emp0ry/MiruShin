@@ -165,6 +165,12 @@ class PlaybackController extends Notifier<PlaybackState> {
   // convention where the last ~15% is the ED/credits + next-episode preview, so
   // progress is committed before the stream actually reaches the end.
   static const double _watchedFraction = 0.85;
+  // How close playback must have actually advanced to the reported end before a
+  // backend "completed" signal is believed. A bad or reloaded stream can emit a
+  // transient end-of-stream (EOF) minutes early while the manifest duration
+  // stays correct; without this guard that false completion latches auto-next
+  // and marks the episode watched well before the real ending.
+  static const Duration _endProximityTolerance = Duration(seconds: 60);
 
   Timer? _progressTimer;
   Timer? _undoTimer;
@@ -173,11 +179,22 @@ class PlaybackController extends Notifier<PlaybackState> {
   // end-of-stream, which would otherwise hide completion from both the progress
   // saver (episode never marked watched) and the auto-next trigger.
   bool _reachedNearEnd = false;
+  // Highest playback position actually observed for the current episode. Used to
+  // validate a backend completion signal: real playback reaches ~the duration
+  // before completing, so a "completed" report while this high-water mark is
+  // still far from the end is a spurious EOF (bad/reloaded stream) and must be
+  // ignored. Survives an end-of-stream snap-back to 0:00.
+  Duration _maxObservedPosition = Duration.zero;
   // Latched once the current episode crosses the watched threshold (85%). The
   // engine listener fires on every position tick, so this guarantees the
   // watched mark + AniList sync run exactly once and can't be cleared by a
   // later periodic save.
   bool _autoProgressMarked = false;
+  // Latched once the auto-next overlay has been dismissed for the current
+  // episode (countdown expired, cancelled, or advanced). Without it the
+  // end-of-stream evaluators would re-show the overlay on the very next tick,
+  // looping the countdown endlessly. Reset when a new episode loads.
+  bool _autoNextDismissed = false;
   Timer? _interactiveSeekTimer;
   Timer? _seekPreviewTimer;
   Timer? _seekPreviewWarmupTimer;
@@ -459,7 +476,9 @@ class PlaybackController extends Notifier<PlaybackState> {
     _progressTimer?.cancel();
     _undoTimer?.cancel();
     _reachedNearEnd = false;
+    _maxObservedPosition = Duration.zero;
     _autoProgressMarked = false;
+    _autoNextDismissed = false;
     _clearInteractiveSeek();
     if (state.autoNextVisible ||
         state.lastSkippedFrom != null ||
@@ -1363,6 +1382,9 @@ class PlaybackController extends Notifier<PlaybackState> {
       _markCurrentCompleted(showNext: true);
     } else if (target < duration - const Duration(seconds: 30)) {
       _reachedNearEnd = false;
+      // Lower the high-water mark to the rewatch point so a spurious EOF during
+      // the re-watch isn't validated against progress from before the seek.
+      if (_maxObservedPosition > target) _maxObservedPosition = target;
     }
   }
 
@@ -2406,6 +2428,9 @@ class PlaybackController extends Notifier<PlaybackState> {
       if (item == null || engine == null || !engine.state.value.isInitialized) {
         return;
       }
+      // Keep the high-water mark fresh even if the engine listener stopped
+      // emitting, so completion is validated correctly on this fallback path.
+      _trackMaxObservedPosition(engine);
       if (!item.ignoreProgress) {
         await _saveProgress(item, engine);
       }
@@ -2440,11 +2465,43 @@ class PlaybackController extends Notifier<PlaybackState> {
     engine.addListener(listener);
   }
 
+  // Records the furthest point playback has genuinely reached. A lower reading
+  // never lowers the mark, so an end-of-stream snap-back to 0:00 is ignored; a
+  // glitchy overshoot past the reported duration is dropped too. The mark is the
+  // evidence used by [_engineReportsCompletion] to tell a real end from a
+  // premature EOF.
+  void _trackMaxObservedPosition(PlayerEngine engine) {
+    final PlayerEngineState es = engine.state.value;
+    if (!es.isInitialized) return;
+    final Duration pos = es.position;
+    if (pos <= _maxObservedPosition) return;
+    final Duration dur = es.duration;
+    if (dur > Duration.zero && pos > dur + const Duration(seconds: 5)) return;
+    _maxObservedPosition = pos;
+  }
+
+  // Whether the backend's end-of-stream signal should be believed. For a
+  // reliable-duration stream, completion is trusted only once playback has
+  // actually advanced to near the end: a bad or reloaded stream can report a
+  // transient EOF minutes early while the manifest duration stays correct, and
+  // believing it would latch auto-next + mark the episode watched prematurely.
+  // Short/unknown durations can't be validated this way, so they're trusted as
+  // before.
+  bool _engineReportsCompletion(PlayerEngine engine) {
+    final PlayerEngineState es = engine.state.value;
+    if (!es.isCompleted) return false;
+    final Duration dur = es.duration;
+    if (dur < const Duration(minutes: 2)) return true;
+    return _maxObservedPosition >= dur - _endProximityTolerance;
+  }
+
   void _evaluatePlaybackProgress(PlayerEngine engine) {
     final MediaPlaybackItem? item = state.item;
     if (item == null || item.ignoreProgress) return;
     final PlayerEngineState es = engine.state.value;
     if (!es.isInitialized) return;
+
+    _trackMaxObservedPosition(engine);
 
     final Duration dur = es.duration;
     final Duration pos = es.position;
@@ -2468,14 +2525,18 @@ class PlaybackController extends Notifier<PlaybackState> {
 
     // (2) End-of-stream latch: the moment the backend reports completion (or the
     // position crosses into the final seconds) persist the episode as watched so
-    // a seek-to-end or a 0:00 position-snap can never hide completion.
+    // a seek-to-end or a 0:00 position-snap can never hide completion. The
+    // completion signal is validated against real progress so a premature EOF on
+    // a bad/reloaded stream can't latch the end minutes early.
     final bool ended =
-        es.isCompleted ||
+        _engineReportsCompletion(engine) ||
         (reliableDuration && pos >= dur - const Duration(seconds: 2));
     if (ended && !_reachedNearEnd) {
       _reachedNearEnd = true;
       print(
-        '[DEBUG] auto-next: end latched (isCompleted=${es.isCompleted} pos=${pos.inSeconds}s/${dur.inSeconds}s)',
+        '[DEBUG] auto-next: end latched (isCompleted=${es.isCompleted} '
+        'pos=${pos.inSeconds}s max=${_maxObservedPosition.inSeconds}s '
+        'dur=${dur.inSeconds}s)',
       );
       unawaited(_saveProgress(item, engine));
     }
@@ -2490,14 +2551,15 @@ class PlaybackController extends Notifier<PlaybackState> {
   void _evaluateAutoNextOverlay(PlayerEngine engine) {
     final MediaPlaybackItem? item = state.item;
     if (item == null || item.ignoreProgress) return;
+    _trackMaxObservedPosition(engine);
     final PlayerSettings settings =
         ref.read(playerSettingsProvider).value ?? const PlayerSettings();
     final bool showNextOverlay =
         settings.autoplayNext || settings.showNextEpisodeButton;
-    if (showNextOverlay && !state.autoNextVisible) {
+    if (showNextOverlay && !state.autoNextVisible && !_autoNextDismissed) {
       final Duration dur = engine.state.value.duration;
       final Duration pos = engine.state.value.position;
-      final bool ended = engine.state.value.isCompleted || _reachedNearEnd;
+      final bool ended = _engineReportsCompletion(engine) || _reachedNearEnd;
       // The backend reaching end-of-stream is the most reliable trigger:
       // some streams snap the reported position back to 0:00 on completion,
       // so a pure position-vs-duration check would never fire auto-next.
@@ -2522,7 +2584,10 @@ class PlaybackController extends Notifier<PlaybackState> {
     }
   }
 
-  void dismissAutoNext() => state = state.copyWith(autoNextVisible: false);
+  void dismissAutoNext() {
+    _autoNextDismissed = true;
+    state = state.copyWith(autoNextVisible: false);
+  }
 
   Future<void> _saveProgress(
     MediaPlaybackItem item,
@@ -2534,8 +2599,10 @@ class PlaybackController extends Notifier<PlaybackState> {
     final Duration position = engine.state.value.position;
     // Treat a latched seek-to-end the same as a backend-reported completion so
     // the episode is still marked watched even when the position snapped to 0.
+    // The raw completion flag is validated against real progress so a premature
+    // EOF on a bad/reloaded stream doesn't mark the episode watched early.
     final bool engineCompleted =
-        engine.state.value.isCompleted || _reachedNearEnd;
+        _engineReportsCompletion(engine) || _reachedNearEnd;
     final DateTime? guardUntil = _resumeGuardUntil;
     if (!engineCompleted &&
         guardUntil != null &&

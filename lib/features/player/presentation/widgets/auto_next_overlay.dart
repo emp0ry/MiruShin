@@ -8,14 +8,23 @@ class AutoNextOverlay extends StatefulWidget {
   const AutoNextOverlay({
     required this.onProceed,
     required this.onCancel,
+    required this.onExpire,
     required this.autoProceed,
     required this.showButton,
     required this.showCountdown,
     super.key,
   });
 
+  /// The user chose to continue to the next episode.
   final VoidCallback onProceed;
+
+  /// The user aborted an in-progress auto-advance (autoProceed mode only).
   final VoidCallback onCancel;
+
+  /// The countdown ran out without the user acting. In button (non-autoProceed)
+  /// mode this closes the player instead of looping the countdown.
+  final VoidCallback onExpire;
+
   final bool autoProceed;
   final bool showButton;
   final bool showCountdown;
@@ -25,31 +34,16 @@ class AutoNextOverlay extends StatefulWidget {
 }
 
 class _AutoNextOverlayState extends State<AutoNextOverlay> {
+  static const int _countdownStart = 5;
+
   late int _seconds;
   Timer? _timer;
-  bool _dismissed = false;
+  bool _expired = false;
 
   @override
   void initState() {
     super.initState();
-    _seconds = 5;
-    if (widget.autoProceed || widget.showCountdown) {
-      _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-        if (!mounted) return;
-        setState(() {
-          _seconds -= 1;
-          if (_seconds <= 0) {
-            _timer?.cancel();
-            if (widget.autoProceed) {
-              widget.onProceed();
-            } else if (!_dismissed && widget.showCountdown) {
-              _dismissed = true;
-              widget.onCancel();
-            }
-          }
-        });
-      });
-    }
+    _startCountdown();
   }
 
   @override
@@ -57,26 +51,7 @@ class _AutoNextOverlayState extends State<AutoNextOverlay> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.autoProceed != widget.autoProceed ||
         oldWidget.showCountdown != widget.showCountdown) {
-      _timer?.cancel();
-      _seconds = 5;
-      _dismissed = false;
-      if (widget.autoProceed || widget.showCountdown) {
-        _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-          if (!mounted) return;
-          setState(() {
-            _seconds -= 1;
-            if (_seconds <= 0) {
-              _timer?.cancel();
-              if (widget.autoProceed) {
-                widget.onProceed();
-              } else if (!_dismissed && widget.showCountdown) {
-                _dismissed = true;
-                widget.onCancel();
-              }
-            }
-          });
-        });
-      }
+      _startCountdown();
     }
   }
 
@@ -86,8 +61,33 @@ class _AutoNextOverlayState extends State<AutoNextOverlay> {
     super.dispose();
   }
 
+  void _startCountdown() {
+    _timer?.cancel();
+    _seconds = _countdownStart;
+    _expired = false;
+    if (!widget.autoProceed && !widget.showCountdown) return;
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      setState(() {
+        _seconds -= 1;
+        if (_seconds > 0) return;
+        _timer?.cancel();
+        if (_expired) return;
+        _expired = true;
+        // Auto-advance fires the proceed action; the manual button+countdown
+        // mode closes the player so the overlay can't loop the countdown.
+        if (widget.autoProceed) {
+          widget.onProceed();
+        } else {
+          widget.onExpire();
+        }
+      });
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
+    final bool countdownDone = widget.showCountdown && _seconds <= 0;
     return Positioned(
       right: 24,
       bottom: 100,
@@ -101,7 +101,7 @@ class _AutoNextOverlayState extends State<AutoNextOverlay> {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
-            if (!widget.showCountdown || _seconds > 0) ...<Widget>[
+            if (!countdownDone) ...<Widget>[
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
@@ -110,31 +110,19 @@ class _AutoNextOverlayState extends State<AutoNextOverlay> {
                     context.t('Next Episode'),
                     style: const TextStyle(color: Colors.white70, fontSize: 12),
                   ),
-                  if (!widget.showCountdown)
-                    Text(
-                      context.t('Ready to play next'),
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    )
-                  else
-                    Text(
-                      context.tf('Playing in {seconds}s', <String, Object?>{
-                        'seconds': _seconds,
-                      }),
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                      ),
+                  Text(
+                    _statusLabel(context),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
                     ),
+                  ),
                 ],
               ),
               const SizedBox(width: 12),
             ],
-            if (widget.showButton && (!widget.showCountdown || _seconds > 0))
+            if (widget.showButton && !countdownDone)
               FilledButton(
                 onPressed: () {
                   _timer?.cancel();
@@ -154,5 +142,17 @@ class _AutoNextOverlayState extends State<AutoNextOverlay> {
         ),
       ),
     );
+  }
+
+  String _statusLabel(BuildContext context) {
+    if (!widget.showCountdown) {
+      return context.t('Ready to play next');
+    }
+    // Auto-advance plays the next episode when the countdown ends; the manual
+    // button mode closes the player, so the label must say so.
+    final String key = widget.autoProceed
+        ? 'Playing in {seconds}s'
+        : 'Closing in {seconds}s';
+    return context.tf(key, <String, Object?>{'seconds': _seconds});
   }
 }
