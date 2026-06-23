@@ -171,9 +171,16 @@ class PlaybackController extends Notifier<PlaybackState> {
   // stays correct; without this guard that false completion latches auto-next
   // and marks the episode watched well before the real ending.
   static const Duration _endProximityTolerance = Duration(seconds: 60);
+  // Grace period between an episode finishing and the manual next-episode button
+  // overlay appearing, so it eases in instead of popping up the instant the
+  // stream ends. Auto-play mode advances immediately (no overlay), so this only
+  // affects the button overlay.
+  static const Duration _autoNextOverlayDelay = Duration(seconds: 2);
 
   Timer? _progressTimer;
   Timer? _undoTimer;
+  // Pending appearance of the delayed next-episode button overlay (button mode).
+  Timer? _autoNextOverlayTimer;
   // Latched when the user seeks to (or plays past) the very end of a reliable
   // stream. Some backends snap the reported position back to 0:00 at
   // end-of-stream, which would otherwise hide completion from both the progress
@@ -268,6 +275,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       _playbackGeneration++;
       _progressTimer?.cancel();
       _undoTimer?.cancel();
+      _autoNextOverlayTimer?.cancel();
       _interactiveSeekTimer?.cancel();
       _seekPreviewTimer?.cancel();
       _seekPreviewWarmupTimer?.cancel();
@@ -475,6 +483,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     );
     _progressTimer?.cancel();
     _undoTimer?.cancel();
+    _autoNextOverlayTimer?.cancel();
     _reachedNearEnd = false;
     _maxObservedPosition = Duration.zero;
     _autoProgressMarked = false;
@@ -651,6 +660,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     }
     _progressTimer?.cancel();
     _undoTimer?.cancel();
+    _autoNextOverlayTimer?.cancel();
     final int generation = ++_playbackGeneration;
     _clearInteractiveSeek();
     unawaited(_disposeSeekPreviewEngine());
@@ -1209,6 +1219,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     _temporarySpeedHolds = 0;
     _progressTimer?.cancel();
     _undoTimer?.cancel();
+    _autoNextOverlayTimer?.cancel();
     _clearInteractiveSeek();
     await _disposeSeekPreviewEngine(clearState: false);
 
@@ -2575,17 +2586,61 @@ class PlaybackController extends Notifier<PlaybackState> {
       }
       if (shouldShow) {
         print(
-          '[DEBUG] auto-next: overlay shown (ended=$ended pos=${pos.inSeconds}s/${dur.inSeconds}s)',
+          '[DEBUG] auto-next: trigger reached (ended=$ended '
+          'pos=${pos.inSeconds}s/${dur.inSeconds}s '
+          'autoplay=${settings.autoplayNext})',
         );
-        state = state.copyWith(autoNextVisible: true);
+        if (settings.autoplayNext) {
+          // Auto-play advances on its own 5s timer (no visible overlay), so
+          // there is nothing to ease in — surface the state immediately.
+          _showAutoNextOverlay();
+        } else {
+          // Button mode: let the ending breathe, then ease the overlay in.
+          _scheduleAutoNextOverlay();
+        }
+      } else {
+        // The end condition no longer holds (e.g. the user sought back before
+        // the delayed overlay appeared) — drop the pending appearance.
+        _autoNextOverlayTimer?.cancel();
+        _autoNextOverlayTimer = null;
       }
-    } else if (!showNextOverlay && state.autoNextVisible) {
-      state = state.copyWith(autoNextVisible: false);
+    } else if (!showNextOverlay) {
+      _autoNextOverlayTimer?.cancel();
+      _autoNextOverlayTimer = null;
+      if (state.autoNextVisible) {
+        state = state.copyWith(autoNextVisible: false);
+      }
     }
+  }
+
+  // Surfaces the auto-next overlay now, unless it was already dismissed for this
+  // episode. Clears any pending delayed appearance.
+  void _showAutoNextOverlay() {
+    _autoNextOverlayTimer?.cancel();
+    _autoNextOverlayTimer = null;
+    if (_autoNextDismissed || state.autoNextVisible) return;
+    print('[DEBUG] auto-next: overlay shown');
+    state = state.copyWith(autoNextVisible: true);
+  }
+
+  // Surfaces the auto-next overlay after [_autoNextOverlayDelay]. Idempotent:
+  // repeated calls while the timer is pending (every engine tick) are no-ops.
+  void _scheduleAutoNextOverlay() {
+    if (_autoNextOverlayTimer != null ||
+        _autoNextDismissed ||
+        state.autoNextVisible) {
+      return;
+    }
+    _autoNextOverlayTimer = Timer(_autoNextOverlayDelay, () {
+      _autoNextOverlayTimer = null;
+      _showAutoNextOverlay();
+    });
   }
 
   void dismissAutoNext() {
     _autoNextDismissed = true;
+    _autoNextOverlayTimer?.cancel();
+    _autoNextOverlayTimer = null;
     state = state.copyWith(autoNextVisible: false);
   }
 
