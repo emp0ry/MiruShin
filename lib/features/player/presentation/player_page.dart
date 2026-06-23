@@ -24,6 +24,7 @@ import '../engine/player_engine.dart';
 import '../domain/skip_markers_provider.dart';
 import 'widgets/auto_next_overlay.dart';
 import 'widgets/gesture_overlay.dart';
+import 'widgets/player_shortcuts_view.dart';
 
 ButtonStyle _overlayActionButtonStyle() {
   return FilledButton.styleFrom(
@@ -3796,6 +3797,27 @@ class _PlayerSettingsTiles extends ConsumerWidget {
                   .reloadWithBackend(picked);
             }
           },
+        ),
+        ListTile(
+          leading: const Icon(Icons.keyboard_rounded),
+          title: Text(context.t('Keyboard shortcuts')),
+          subtitle: Text(context.t('Keys & touch gestures')),
+          trailing: const Icon(Icons.chevron_right_rounded),
+          onTap: () => _showMenuSheet(
+            context,
+            'Player controls',
+            <Widget>[
+              PlayerShortcutsView(seekSeconds: settings.seekInterval.inSeconds),
+              const SizedBox(height: 14),
+              Align(
+                alignment: Alignment.centerRight,
+                child: FilledButton(
+                  onPressed: () => Navigator.of(context).maybePop(),
+                  child: Text(context.t('Close')),
+                ),
+              ),
+            ],
+          ),
         ),
         SwitchListTile(
           value: settings.useAniSkip,
