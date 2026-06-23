@@ -881,13 +881,25 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       unawaited(notifier.setVolume(current > 0 ? 0 : 1.0));
       return KeyEventResult.handled;
     }
-    if (key == LogicalKeyboardKey.keyS) {
+    if (key == LogicalKeyboardKey.keyC) {
       unawaited(
         ref
             .read(playerSettingsProvider.notifier)
             .setSubtitlesEnabled(!settings.subtitlesEnabled),
       );
       return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.keyP) {
+      if (event is! KeyDownEvent) return KeyEventResult.handled;
+      return _enterPipIfSupported()
+          ? KeyEventResult.handled
+          : KeyEventResult.ignored;
+    }
+    if (key == LogicalKeyboardKey.keyV) {
+      if (event is! KeyDownEvent) return KeyEventResult.handled;
+      return _handleUniversalSkip()
+          ? KeyEventResult.handled
+          : KeyEventResult.ignored;
     }
     if (key == LogicalKeyboardKey.keyE) {
       _showEpisodes(
@@ -912,6 +924,66 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     }
 
     return KeyEventResult.ignored;
+  }
+
+  // Enters Picture-in-Picture using whichever backend the platform supports:
+  // native AVPlayer PiP (iOS/macOS) or the Windows mini-player window. Returns
+  // false (key not consumed) when PiP isn't available so the press can fall
+  // through. Already-in-PiP is treated as handled.
+  bool _enterPipIfSupported() {
+    if (_nativePipActive || _inPipMode) return true;
+    if (_nativePipSupported) {
+      unawaited(_handOffToNativePip());
+      return true;
+    }
+    if (_windowPipSupported) {
+      unawaited(_enterWindowPip());
+      return true;
+    }
+    return false;
+  }
+
+  // Universal "do the on-screen action" key: triggers whichever contextual
+  // prompt is currently offered — the next-episode overlay, or the Skip
+  // OP/ED action when the playhead is inside that marker. Returns false when
+  // there is nothing to act on.
+  bool _handleUniversalSkip() {
+    final PlaybackState state = ref.read(playbackControllerProvider);
+    final PlaybackController notifier = ref.read(
+      playbackControllerProvider.notifier,
+    );
+    // 1) Next episode — the overlay only surfaces at the very end, so it wins.
+    if (state.autoNextVisible) {
+      notifier.dismissAutoNext();
+      unawaited(_exitPlayer(playNext: true));
+      return true;
+    }
+    final PlayerSettings settings =
+        ref.read(playerSettingsProvider).value ?? const PlayerSettings();
+    final SkipMarkers markers = _effectiveSkipMarkers(
+      ref.read(skipMarkersProvider).value,
+      (state.item ?? widget.item).skipMarkers,
+    );
+    final Duration pos = state.engine?.state.value.position ?? Duration.zero;
+    // 2) Skip ED when inside the ending marker.
+    if (settings.showSkipEndingButton &&
+        !settings.autoSkipEnding &&
+        markers.hasEnding &&
+        pos >= markers.endingStart! &&
+        pos < markers.endingEnd!) {
+      notifier.skipTo(markers.endingEnd!);
+      return true;
+    }
+    // 3) Skip OP when inside the opening marker.
+    if (settings.showSkipOpeningButton &&
+        !settings.autoSkipOpening &&
+        markers.hasOpening &&
+        pos >= markers.openingStart! &&
+        pos < markers.openingEnd!) {
+      notifier.skipTo(markers.openingEnd!);
+      return true;
+    }
+    return false;
   }
 
   KeyEventResult _moveTvPlayerFocus(LogicalKeyboardKey key, KeyEvent event) {
@@ -1016,10 +1088,14 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         SingleActivator(LogicalKeyboardKey.arrowDown): _VolumeIntent(up: false),
       },
       const SingleActivator(LogicalKeyboardKey.keyM): _MuteIntent(),
-      const SingleActivator(LogicalKeyboardKey.keyS): _SubtitlesIntent(),
+      const SingleActivator(LogicalKeyboardKey.keyC): _SubtitlesIntent(),
       const SingleActivator(LogicalKeyboardKey.keyE): _EpisodesIntent(),
       const SingleActivator(LogicalKeyboardKey.keyQ): _QualityIntent(),
       const SingleActivator(LogicalKeyboardKey.keyF): _FullscreenIntent(),
+      const SingleActivator(LogicalKeyboardKey.keyP, includeRepeats: false):
+          _PipIntent(),
+      const SingleActivator(LogicalKeyboardKey.keyV, includeRepeats: false):
+          _SkipOrNextIntent(),
       const SingleActivator(LogicalKeyboardKey.escape): _BackIntent(),
     };
 
@@ -1112,6 +1188,18 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
               } else {
                 _toggleFullscreen();
               }
+              return null;
+            },
+          ),
+          _PipIntent: CallbackAction<_PipIntent>(
+            onInvoke: (_) {
+              _enterPipIfSupported();
+              return null;
+            },
+          ),
+          _SkipOrNextIntent: CallbackAction<_SkipOrNextIntent>(
+            onInvoke: (_) {
+              _handleUniversalSkip();
               return null;
             },
           ),
@@ -3807,7 +3895,12 @@ class _PlayerSettingsTiles extends ConsumerWidget {
             context,
             'Player controls',
             <Widget>[
-              PlayerShortcutsView(seekSeconds: settings.seekInterval.inSeconds),
+              PlayerShortcutsView(
+                seekSeconds: settings.seekInterval.inSeconds,
+                pipSupported:
+                    NativePlayerService.isSupported ||
+                    ref.read(pipControllerProvider).isSupported,
+              ),
               const SizedBox(height: 14),
               Align(
                 alignment: Alignment.centerRight,
@@ -4633,6 +4726,14 @@ class _BackIntent extends Intent {
 
 class _FullscreenIntent extends Intent {
   const _FullscreenIntent();
+}
+
+class _PipIntent extends Intent {
+  const _PipIntent();
+}
+
+class _SkipOrNextIntent extends Intent {
+  const _SkipOrNextIntent();
 }
 
 class _NoopIntent extends Intent {

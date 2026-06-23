@@ -7,10 +7,17 @@ import '../../../../app/localization/app_localizations.dart';
 /// action). Built to read well on phones (touch), TV (10-foot, focusable close
 /// button supplied by the host sheet) and desktop. Shown from player settings.
 class PlayerShortcutsView extends StatelessWidget {
-  const PlayerShortcutsView({required this.seekSeconds, super.key});
+  const PlayerShortcutsView({
+    required this.seekSeconds,
+    this.pipSupported = false,
+    super.key,
+  });
 
   /// The configured seek step, surfaced on the ←/→ keys (defaults to 10s).
   final int seekSeconds;
+
+  /// Whether this device can enter Picture-in-Picture (hides the P key if not).
+  final bool pipSupported;
 
   @override
   Widget build(BuildContext context) {
@@ -56,9 +63,12 @@ class PlayerShortcutsView extends StatelessWidget {
           children: <Widget>[
             _LabeledKey(glyph: 'F', label: context.t('Fullscreen')),
             _LabeledKey(glyph: 'M', label: context.t('Mute')),
-            _LabeledKey(glyph: 'S', label: context.t('Subtitles')),
+            _LabeledKey(glyph: 'C', label: context.t('Subtitles')),
             _LabeledKey(glyph: 'E', label: context.t('Episodes')),
             _LabeledKey(glyph: 'Q', label: context.t('Quality')),
+            _LabeledKey(glyph: 'V', label: context.t('Skip / Next')),
+            if (pipSupported)
+              _LabeledKey(glyph: 'P', label: context.t('Picture in Picture')),
             _LabeledKey(glyph: 'Esc', label: context.t('Back')),
           ],
         ),
