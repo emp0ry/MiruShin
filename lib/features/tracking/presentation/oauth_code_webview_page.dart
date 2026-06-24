@@ -1,7 +1,7 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
-import '../../../app/localization/app_localizations.dart';
 import '../../../core/platform/tv_platform.dart';
 import '../../../core/widgets/tv_web_cursor.dart';
 import '../data/oauth_token_bundle.dart';
@@ -12,6 +12,12 @@ import '../data/oauth_token_bundle.dart';
 /// the captured `code` via [OAuthCodeResult]. The redirect is recognised by the
 /// presence of a `code` query parameter on [redirectUri]'s host/path (or any
 /// navigation carrying `?code=`), so no OS-level deep-link wiring is required.
+///
+/// Navigation to the redirect target itself is always *prevented*: for the
+/// mobile custom-scheme redirect (`app://mirushin/auth`) letting the WebView
+/// load it would fail with `ERR_UNKNOWN_URL_SCHEME` and leave a blank page; for
+/// the https callback it would briefly flash the bare callback page. This
+/// mirrors the working AniList login page.
 class OAuthCodeWebViewPage extends StatefulWidget {
   const OAuthCodeWebViewPage({
     required this.authUrl,
@@ -35,18 +41,10 @@ class OAuthCodeWebViewPage extends StatefulWidget {
 }
 
 class _OAuthCodeWebViewPageState extends State<OAuthCodeWebViewPage> {
-  // A real mobile browser User-Agent. The default WebView UA contains "; wv)",
-  // which MyAnimeList/Shikimori and the Cloudflare-fronted auth proxy treat as
-  // an embedded/bot browser and answer with a blank page — the white screen.
-  static const String _userAgent =
-      'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 '
-      '(KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36';
-
   late final WebViewController _controller;
   late final Uri _redirect;
   bool _loading = true;
   bool _completed = false;
-  String? _error;
 
   @override
   void initState() {
@@ -54,7 +52,6 @@ class _OAuthCodeWebViewPageState extends State<OAuthCodeWebViewPage> {
     _redirect = Uri.parse(widget.redirectUri);
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setUserAgent(_userAgent)
       ..setNavigationDelegate(
         NavigationDelegate(
           onPageStarted: (_) {
@@ -72,20 +69,31 @@ class _OAuthCodeWebViewPageState extends State<OAuthCodeWebViewPage> {
             if (url != null) _maybeComplete(url);
           },
           onNavigationRequest: (NavigationRequest request) {
-            if (_maybeComplete(request.url)) {
+            _maybeComplete(request.url);
+            // Never actually navigate to the redirect target. The WebView
+            // can't load app:// (ERR_UNKNOWN_URL_SCHEME → blank), and the
+            // code/state is already captured from the URL above.
+            if (_completed || _isRedirectTarget(request.url)) {
               return NavigationDecision.prevent;
             }
             return NavigationDecision.navigate;
           },
-          onWebResourceError: _onWebResourceError,
+          onWebResourceError: (WebResourceError error) {
+            if (kDebugMode) {
+              debugPrint(
+                '[Tracker OAuth] WebView error '
+                '${error.errorCode} (${error.errorType}) on '
+                '${error.url}: ${error.description}',
+              );
+            }
+          },
         ),
       )
       ..loadRequest(Uri.parse(widget.authUrl));
   }
 
-  /// Best-effort capture of the code from the page that actually loaded, for
-  /// the case where the final redirect (often a server-side 302 to a custom
-  /// scheme like `app://`) is not surfaced through the navigation callbacks.
+  /// Best-effort capture from the page that actually loaded, for flows where
+  /// the final redirect arrives via JavaScript rather than a navigation event.
   Future<void> _tryCaptureFromPage() async {
     if (_completed) return;
     try {
@@ -98,22 +106,16 @@ class _OAuthCodeWebViewPageState extends State<OAuthCodeWebViewPage> {
     }
   }
 
-  void _onWebResourceError(WebResourceError error) {
-    // A failure loading the custom-scheme redirect (e.g. app://mirushin/auth)
-    // is expected — the WebView can't open it — so capture the code from the
-    // URL instead of treating it as an error.
-    final String? url = error.url;
-    if (url != null && _maybeComplete(url)) return;
-    // Only surface main-frame failures; subresource errors (analytics, fonts,
-    // …) on the login page are harmless and must not hide the form.
-    if (error.isForMainFrame == false) return;
-    if (_completed || !mounted) return;
-    setState(() {
-      _loading = false;
-      _error = error.description.isNotEmpty
-          ? error.description
-          : 'Error ${error.errorCode}';
-    });
+  /// Whether [url] is the OAuth redirect target (so the WebView must not try to
+  /// load it). Matches the redirect scheme/host/path or the OOB code page.
+  bool _isRedirectTarget(String url) {
+    final Uri? uri = Uri.tryParse(url);
+    if (uri == null) return false;
+    final String? prefix = widget.oobCodePathPrefix;
+    if (prefix != null && uri.path.startsWith(prefix)) return true;
+    return uri.scheme == _redirect.scheme &&
+        uri.host == _redirect.host &&
+        (_redirect.path.isEmpty || uri.path == _redirect.path);
   }
 
   bool _maybeComplete(String url) {
@@ -143,20 +145,14 @@ class _OAuthCodeWebViewPageState extends State<OAuthCodeWebViewPage> {
         code != null &&
         code.trim().isNotEmpty) {
       _completed = true;
-      Navigator.of(context).pop(
-        OAuthCodeResult(code: code.trim(), state: state),
-      );
+      if (mounted) {
+        Navigator.of(context).pop(
+          OAuthCodeResult(code: code.trim(), state: state),
+        );
+      }
       return true;
     }
     return false;
-  }
-
-  void _retry() {
-    setState(() {
-      _error = null;
-      _loading = true;
-    });
-    _controller.loadRequest(Uri.parse(widget.authUrl));
   }
 
   @override
@@ -171,53 +167,7 @@ class _OAuthCodeWebViewPageState extends State<OAuthCodeWebViewPage> {
             child: WebViewWidget(controller: _controller),
           ),
           if (_loading) const LinearProgressIndicator(minHeight: 2),
-          if (_error != null) _ErrorOverlay(message: _error!, onRetry: _retry),
         ],
-      ),
-    );
-  }
-}
-
-class _ErrorOverlay extends StatelessWidget {
-  const _ErrorOverlay({required this.message, required this.onRetry});
-
-  final String message;
-  final VoidCallback onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    return Positioned.fill(
-      child: ColoredBox(
-        color: Theme.of(context).colorScheme.surface,
-        child: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                const Icon(Icons.error_outline_rounded, size: 40),
-                const SizedBox(height: 12),
-                Text(
-                  context.t('Could not load the login page.'),
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  message,
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                const SizedBox(height: 16),
-                FilledButton.icon(
-                  onPressed: onRetry,
-                  icon: const Icon(Icons.refresh_rounded),
-                  label: Text(context.t('Retry')),
-                ),
-              ],
-            ),
-          ),
-        ),
       ),
     );
   }
