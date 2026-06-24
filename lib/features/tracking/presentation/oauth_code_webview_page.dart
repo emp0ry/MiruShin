@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
+import '../../../app/localization/app_localizations.dart';
 import '../../../core/platform/tv_platform.dart';
 import '../../../core/widgets/tv_web_cursor.dart';
 import '../data/oauth_token_bundle.dart';
@@ -34,10 +35,18 @@ class OAuthCodeWebViewPage extends StatefulWidget {
 }
 
 class _OAuthCodeWebViewPageState extends State<OAuthCodeWebViewPage> {
+  // A real mobile browser User-Agent. The default WebView UA contains "; wv)",
+  // which MyAnimeList/Shikimori and the Cloudflare-fronted auth proxy treat as
+  // an embedded/bot browser and answer with a blank page — the white screen.
+  static const String _userAgent =
+      'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 '
+      '(KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36';
+
   late final WebViewController _controller;
   late final Uri _redirect;
   bool _loading = true;
   bool _completed = false;
+  String? _error;
 
   @override
   void initState() {
@@ -45,6 +54,7 @@ class _OAuthCodeWebViewPageState extends State<OAuthCodeWebViewPage> {
     _redirect = Uri.parse(widget.redirectUri);
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setUserAgent(_userAgent)
       ..setNavigationDelegate(
         NavigationDelegate(
           onPageStarted: (_) {
@@ -55,6 +65,7 @@ class _OAuthCodeWebViewPageState extends State<OAuthCodeWebViewPage> {
             if (TvPlatform.isAndroidTv) {
               await TvWebCursor.inject(_controller);
             }
+            await _tryCaptureFromPage();
           },
           onUrlChange: (UrlChange change) {
             final String? url = change.url;
@@ -66,9 +77,43 @@ class _OAuthCodeWebViewPageState extends State<OAuthCodeWebViewPage> {
             }
             return NavigationDecision.navigate;
           },
+          onWebResourceError: _onWebResourceError,
         ),
       )
       ..loadRequest(Uri.parse(widget.authUrl));
+  }
+
+  /// Best-effort capture of the code from the page that actually loaded, for
+  /// the case where the final redirect (often a server-side 302 to a custom
+  /// scheme like `app://`) is not surfaced through the navigation callbacks.
+  Future<void> _tryCaptureFromPage() async {
+    if (_completed) return;
+    try {
+      final Object href = await _controller.runJavaScriptReturningResult(
+        'window.location.href',
+      );
+      _maybeComplete(href.toString().replaceAll('"', ''));
+    } catch (_) {
+      // Some WebView platforms restrict script execution while navigating.
+    }
+  }
+
+  void _onWebResourceError(WebResourceError error) {
+    // A failure loading the custom-scheme redirect (e.g. app://mirushin/auth)
+    // is expected — the WebView can't open it — so capture the code from the
+    // URL instead of treating it as an error.
+    final String? url = error.url;
+    if (url != null && _maybeComplete(url)) return;
+    // Only surface main-frame failures; subresource errors (analytics, fonts,
+    // …) on the login page are harmless and must not hide the form.
+    if (error.isForMainFrame == false) return;
+    if (_completed || !mounted) return;
+    setState(() {
+      _loading = false;
+      _error = error.description.isNotEmpty
+          ? error.description
+          : 'Error ${error.errorCode}';
+    });
   }
 
   bool _maybeComplete(String url) {
@@ -106,6 +151,14 @@ class _OAuthCodeWebViewPageState extends State<OAuthCodeWebViewPage> {
     return false;
   }
 
+  void _retry() {
+    setState(() {
+      _error = null;
+      _loading = true;
+    });
+    _controller.loadRequest(Uri.parse(widget.authUrl));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -118,7 +171,53 @@ class _OAuthCodeWebViewPageState extends State<OAuthCodeWebViewPage> {
             child: WebViewWidget(controller: _controller),
           ),
           if (_loading) const LinearProgressIndicator(minHeight: 2),
+          if (_error != null) _ErrorOverlay(message: _error!, onRetry: _retry),
         ],
+      ),
+    );
+  }
+}
+
+class _ErrorOverlay extends StatelessWidget {
+  const _ErrorOverlay({required this.message, required this.onRetry});
+
+  final String message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned.fill(
+      child: ColoredBox(
+        color: Theme.of(context).colorScheme.surface,
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                const Icon(Icons.error_outline_rounded, size: 40),
+                const SizedBox(height: 12),
+                Text(
+                  context.t('Could not load the login page.'),
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  message,
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 16),
+                FilledButton.icon(
+                  onPressed: onRetry,
+                  icon: const Icon(Icons.refresh_rounded),
+                  label: Text(context.t('Retry')),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
