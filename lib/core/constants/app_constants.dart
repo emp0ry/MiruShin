@@ -49,7 +49,10 @@ abstract final class AppConstants {
       'https://auth.emp0ry.com/shikimori/authorize';
   static const String shikimoriTokenProxyUrl = 'https://auth.emp0ry.com/token';
   static const String shikimoriCallbackUrl = 'https://auth.emp0ry.com/callback';
-  static const String shikimoriApiBaseUrl = 'https://shikimori.one';
+  // Canonical API host. shikimori.one 301-redirects here, and that cross-host
+  // redirect strips the Authorization header — so authenticated calls (whoami,
+  // user_rates) must target shikimori.io directly or they arrive unauthenticated.
+  static const String shikimoriApiBaseUrl = 'https://shikimori.io';
   static const String shikimoriUserAgent = 'MiruShin';
   // Legacy OOB code page parsing fallback.
   static const String shikimoriOobRedirectUri = 'urn:ietf:wg:oauth:2.0:oob';
