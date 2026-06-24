@@ -1,0 +1,23 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mirushin-auth",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-24",
+  "observability": {
+    "enabled": true
+  },
+  "upload_source_maps": true,
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "vars": {
+    "SHIKIMORI_REDIRECT_URI": "https://auth.emp0ry.com/callback",
+    "SHIKIMORI_USER_AGENT": "MiruShin"
+  },
+  "routes": [
+    {
+      "pattern": "auth.emp0ry.com",
+      "custom_domain": true
+    }
+  ]
+}

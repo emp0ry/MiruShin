@@ -78,7 +78,6 @@ unlinked_spec.ds
 # =====================
 # Node / Cloudflare Workers
 # =====================
-mirushin-auth/
 node_modules/
 **/node_modules/
 .wrangler/
