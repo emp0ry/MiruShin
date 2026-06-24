@@ -29,6 +29,8 @@ import 'local_library_editor.dart';
 import '../../settings/presentation/settings_state.dart';
 import '../../tracking/application/anilist_library_provider.dart';
 import '../../tracking/application/anilist_login_flow.dart';
+import '../../tracking/application/tracker_library_provider.dart';
+import '../../tracking/domain/tracker_models.dart';
 import '../../tracking/presentation/anilist_entry_editor.dart';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -339,9 +341,22 @@ class _AniListDataTabState extends ConsumerState<_AniListDataTab>
     final bool wantsRussianTitles =
         ref.watch(aniListEffectiveTitleLanguageProvider) == 'RUSSIAN';
 
+    // When the primary library source is a secondary tracker (MAL / Shikimori),
+    // read its anime list instead of AniList. Manga stays AniList-only.
+    final bool useTrackerSource =
+        widget.mediaType != 'MANGA' &&
+        ref.watch(
+              settingsProvider.select(
+                (SettingsState s) => s.effectivePrimaryTrackerSource,
+              ),
+            ) !=
+            TrackerSource.anilist;
+
     final AsyncValue<List<AniListAnimeListFolder>> previewLists =
         widget.mediaType == 'MANGA'
         ? ref.watch(anilistMangaPreviewListProvider)
+        : useTrackerSource
+        ? ref.watch(trackerAnimeListProvider)
         : ref.watch(anilistAnimePreviewListProvider);
     final List<AniListAnimeListFolder> previewSourceFolders =
         previewLists.maybeWhen(
@@ -360,6 +375,8 @@ class _AniListDataTabState extends ConsumerState<_AniListDataTab>
     final AsyncValue<List<AniListAnimeListFolder>> fullLists =
         widget.mediaType == 'MANGA'
         ? ref.watch(anilistMangaListProvider)
+        : useTrackerSource
+        ? ref.watch(trackerAnimeListProvider)
         : ref.watch(anilistAnimeListProvider);
     final List<AniListAnimeListFolder> fullSourceFolders =
         fullLists.maybeWhen(

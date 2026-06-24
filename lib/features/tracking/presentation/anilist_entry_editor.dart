@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -12,6 +14,7 @@ import '../../../app/theme/app_theme_extension.dart';
 import '../../../shared/models/anilist_models.dart';
 import '../../settings/presentation/settings_state.dart';
 import '../application/anilist_library_provider.dart';
+import '../application/tracker_sync_coordinator.dart';
 import '../data/anilist_api_client.dart';
 import 'anilist_favorite_button.dart';
 
@@ -374,6 +377,22 @@ Future<AniListEntrySaveResult> saveAniListEntryEdit({
   final int? mediaId = entryAniListId(entry);
   if (mediaId == null) return AniListEntrySaveResult.failed;
   final bool isManga = _isMangaEntry(entry);
+
+  // Propagate the same status/progress/score to any connected secondary
+  // trackers (MAL / Shikimori). No-ops when those are signed out or the entry
+  // has no MAL id; failures are queued by the coordinator for a later flush.
+  if (!isManga) {
+    unawaited(
+      ref
+          .read(trackerSyncCoordinatorProvider)
+          .pushEntryEdit(
+            externalIds: entry.mediaItem.externalIds,
+            status: draft.status,
+            progress: draft.progress,
+            score: draft.score,
+          ),
+    );
+  }
 
   void applyLocalEdit() {
     if (isManga) {

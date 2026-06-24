@@ -20,8 +20,7 @@ class SettingsPreferences {
   static const String tvdbEnabledKey = 'settings.tvdbEnabled';
   static const String tmdbLanguageKey = 'settings.tmdbLanguage';
   static const String tmdbRegionKey = 'settings.tmdbRegion';
-  static const String tmdbShowAdultContentKey =
-      'settings.tmdbShowAdultContent';
+  static const String tmdbShowAdultContentKey = 'settings.tmdbShowAdultContent';
   static const String cacheLimitMbKey = 'settings.cacheLimitMb';
   static const String metadataCacheEnabledKey = 'settings.metadataCacheEnabled';
   static const String anilistMobileClientIdKey =
@@ -43,6 +42,27 @@ class SettingsPreferences {
       'settings.anilistUserSettingsCache';
   static const String soraWebProxyUrlKey = 'settings.soraWebProxyUrl';
   static const String startupPageKey = 'settings.startupPage';
+  static const String primaryTrackerSourceKey = 'settings.primaryTrackerSource';
+  // MyAnimeList
+  static const String malViewerIdKey = 'settings.malViewerId';
+  static const String malViewerNameKey = 'settings.malViewerName';
+  static const String malAvatarUrlKey = 'settings.malAvatarUrl';
+  static const String malUseCustomCredentialsKey =
+      'settings.malUseCustomCredentials';
+  static const String malCustomClientIdDesktopKey =
+      'settings.malCustomClientIdDesktop';
+  static const String malCustomClientIdMobileKey =
+      'settings.malCustomClientIdMobile';
+  // Shikimori
+  static const String shikimoriViewerIdKey = 'settings.shikimoriViewerId';
+  static const String shikimoriViewerNameKey = 'settings.shikimoriViewerName';
+  static const String shikimoriAvatarUrlKey = 'settings.shikimoriAvatarUrl';
+  static const String shikimoriUseCustomCredentialsKey =
+      'settings.shikimoriUseCustomCredentials';
+  static const String shikimoriCustomClientIdKey =
+      'settings.shikimoriCustomClientId';
+  static const String shikimoriCustomClientSecretKey =
+      'settings.shikimoriCustomClientSecret';
 
   String? readThemeMode() => _preferences.getString(themeModeKey);
 
@@ -58,7 +78,6 @@ class SettingsPreferences {
 
   bool readDiscordRpcEnabled() =>
       _preferences.getBool(discordRpcEnabledKey) ?? true;
-
 
   bool readTmdbUseCustomKey() =>
       _preferences.getBool(tmdbUseCustomKeyKey) ?? false;
@@ -243,6 +262,115 @@ class SettingsPreferences {
       return _preferences.remove(anilistUserSettingsCacheKey);
     }
     return _preferences.setString(anilistUserSettingsCacheKey, value);
+  }
+
+  // --- Tracker primary source + MAL/Shikimori connections ---
+
+  String? readPrimaryTrackerSource() =>
+      _preferences.getString(primaryTrackerSourceKey);
+
+  Future<void> savePrimaryTrackerSource(String value) =>
+      _preferences.setString(primaryTrackerSourceKey, value);
+
+  int? readMalViewerId() => _preferences.getInt(malViewerIdKey);
+
+  String? readMalViewerName() => _preferences.getString(malViewerNameKey);
+
+  String? readMalAvatarUrl() => _preferences.getString(malAvatarUrlKey);
+
+  bool readMalUseCustomCredentials() =>
+      _preferences.getBool(malUseCustomCredentialsKey) ?? false;
+
+  String readMalCustomClientIdDesktop() =>
+      _preferences.getString(malCustomClientIdDesktopKey) ?? '';
+
+  String readMalCustomClientIdMobile() =>
+      _preferences.getString(malCustomClientIdMobileKey) ?? '';
+
+  int? readShikimoriViewerId() => _preferences.getInt(shikimoriViewerIdKey);
+
+  String? readShikimoriViewerName() =>
+      _preferences.getString(shikimoriViewerNameKey);
+
+  String? readShikimoriAvatarUrl() =>
+      _preferences.getString(shikimoriAvatarUrlKey);
+
+  bool readShikimoriUseCustomCredentials() =>
+      _preferences.getBool(shikimoriUseCustomCredentialsKey) ?? false;
+
+  String readShikimoriCustomClientId() =>
+      _preferences.getString(shikimoriCustomClientIdKey) ?? '';
+
+  String readShikimoriCustomClientSecret() =>
+      _preferences.getString(shikimoriCustomClientSecretKey) ?? '';
+
+  Future<void> saveMalUseCustomCredentials(bool value) =>
+      _preferences.setBool(malUseCustomCredentialsKey, value);
+
+  Future<void> saveMalCustomClientIdDesktop(String value) =>
+      _preferences.setString(malCustomClientIdDesktopKey, value.trim());
+
+  Future<void> saveMalCustomClientIdMobile(String value) =>
+      _preferences.setString(malCustomClientIdMobileKey, value.trim());
+
+  Future<void> saveShikimoriUseCustomCredentials(bool value) =>
+      _preferences.setBool(shikimoriUseCustomCredentialsKey, value);
+
+  Future<void> saveShikimoriCustomClientId(String value) =>
+      _preferences.setString(shikimoriCustomClientIdKey, value.trim());
+
+  Future<void> clearShikimoriCustomClientSecret() =>
+      _preferences.remove(shikimoriCustomClientSecretKey);
+
+  Future<void> saveMalViewer({
+    required int? id,
+    required String? name,
+    required String? avatarUrl,
+  }) => _saveViewer(
+    idKey: malViewerIdKey,
+    nameKey: malViewerNameKey,
+    avatarKey: malAvatarUrlKey,
+    id: id,
+    name: name,
+    avatarUrl: avatarUrl,
+  );
+
+  Future<void> saveShikimoriViewer({
+    required int? id,
+    required String? name,
+    required String? avatarUrl,
+  }) => _saveViewer(
+    idKey: shikimoriViewerIdKey,
+    nameKey: shikimoriViewerNameKey,
+    avatarKey: shikimoriAvatarUrlKey,
+    id: id,
+    name: name,
+    avatarUrl: avatarUrl,
+  );
+
+  Future<void> _saveViewer({
+    required String idKey,
+    required String nameKey,
+    required String avatarKey,
+    required int? id,
+    required String? name,
+    required String? avatarUrl,
+  }) async {
+    if (id == null) {
+      await _preferences.remove(idKey);
+    } else {
+      await _preferences.setInt(idKey, id);
+    }
+    if (name == null || name.isEmpty) {
+      await _preferences.remove(nameKey);
+    } else {
+      await _preferences.setString(nameKey, name);
+    }
+    if (avatarUrl == null || avatarUrl.isEmpty) {
+      await _preferences.remove(avatarKey);
+    } else {
+      await _preferences.setString(avatarKey, avatarUrl);
+    }
   }
 
   Future<void> saveAniListViewer({

@@ -21,6 +21,41 @@ abstract final class AppConstants {
   static const String aniListRedirectHost = 'mirushin';
   static const String aniListRedirectPath = '/auth';
 
+  // Redirect target shared by the authorization-code trackers (MAL, Shikimori).
+  // On mobile the in-app WebView intercepts this URL before navigation; on
+  // desktop the local callback server listens on the matching localhost port.
+  static const String trackerRedirectScheme = 'app';
+  static const String trackerRedirectHost = 'mirushin';
+  static const String trackerRedirectPath = '/auth';
+  static const String trackerMobileRedirectUri = 'app://mirushin/auth';
+
+  // MyAnimeList OAuth2 (authorization code + PKCE, no client secret).
+  static const String malAuthorizeUrl =
+      'https://myanimelist.net/v1/oauth2/authorize';
+  static const String malTokenUrl = 'https://myanimelist.net/v1/oauth2/token';
+  static const String malAuthorizeProxyUrl =
+      'https://auth.emp0ry.com/mal/authorize';
+  static const String malTokenProxyUrl = 'https://auth.emp0ry.com/mal/token';
+  static const String malApiBaseUrl = 'https://api.myanimelist.net/v2';
+  static const int malDesktopCallbackPort = 28373;
+  static const String malDesktopRedirectUri = 'http://localhost:28373/token';
+
+  // Shikimori OAuth2. The default callback/token exchange goes through a
+  // Cloudflare Worker so the app does not bundle the Shikimori client secret.
+  static const String shikimoriAuthorizeUrl =
+      'https://shikimori.io/oauth/authorize';
+  static const String shikimoriTokenUrl = 'https://shikimori.io/oauth/token';
+  static const String shikimoriAuthorizeProxyUrl =
+      'https://auth.emp0ry.com/shikimori/authorize';
+  static const String shikimoriTokenProxyUrl = 'https://auth.emp0ry.com/token';
+  static const String shikimoriCallbackUrl = 'https://auth.emp0ry.com/callback';
+  static const String shikimoriApiBaseUrl = 'https://shikimori.one';
+  static const String shikimoriUserAgent = 'MiruShin';
+  // Legacy OOB code page parsing fallback.
+  static const String shikimoriOobRedirectUri = 'urn:ietf:wg:oauth:2.0:oob';
+  static const String shikimoriOobHost = 'shikimori.one';
+  static const String shikimoriOobCodePathPrefix = '/oauth/authorize/';
+
   static Future<void> init() async {
     try {
       final PackageInfo info = await PackageInfo.fromPlatform();

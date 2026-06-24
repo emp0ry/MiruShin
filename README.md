@@ -20,7 +20,7 @@
   </a>
   <br>
   <img alt="Platforms" src="https://img.shields.io/badge/Platforms-Android%20%7C%20Android%20TV%20%7C%20iOS%20%7C%20Windows%20%7C%20macOS%20%7C%20Linux-111827?style=flat-square">
-  <img alt="Catalogs" src="https://img.shields.io/badge/Catalogs-TMDB%20%7C%20AniList-16A34A?style=flat-square&labelColor=1f2937">
+  <img alt="Trackers" src="https://img.shields.io/badge/Trackers-AniList%20%7C%20MAL%20%7C%20Shikimori-16A34A?style=flat-square&labelColor=1f2937">
   <a href="LICENSE">
     <img alt="License: GPL--3.0" src="https://img.shields.io/badge/License-GPL--3.0-8b5cf6?style=flat-square&labelColor=1f2937">
   </a>
@@ -57,7 +57,7 @@ MiruShin lets you browse trending titles, build your library, keep your progress
 | | |
 | --- | --- |
 | 🔥 **Discover** | Browse trending, popular, and filtered rails. Switch between TMDB and AniList catalogs anytime. |
-| 📚 **Library** | Keep your own library, sync AniList, continue watching, and track your progress in one place. |
+| 📚 **Library** | Keep your own library, sync AniList, MyAnimeList, and Shikimori, continue watching, and track your progress in one place. |
 | ▶️ **Watch** | Play HLS, MP4, and DASH with quality selection, voiceovers, subtitles, and autoplay next. |
 | ⏭️ **Skip Smartly** | AniSkip markers let you jump openings and endings automatically. |
 | 👤 **Profile** | View AniList activity, favourites, feed, statistics, reviews, and export your list. |
@@ -68,6 +68,7 @@ MiruShin lets you browse trending titles, build your library, keep your progress
 - 📺 **Android TV** with remote-friendly navigation throughout.
 - 🖼️ **Picture-in-Picture** and native player handoff where the platform supports it.
 - 🎮 **Discord Rich Presence** on supported desktops.
+- 🔄 **Tracker sync** for AniList, MyAnimeList, and Shikimori account workflows.
 - 📤 **Exports** to MyAnimeList XML and Shikimori JSON.
 - 🧩 **Add-ons** (Sora-compatible modules) for source search, installable by URL.
 
@@ -117,7 +118,7 @@ Just install and open the app. Discovery and metadata work right away. No setup 
 
 Want more? Two optional steps unlock the rest:
 
-- **Sign in to AniList** to get profile pages, library sync, tracking, exports, and the AniList catalog. Just sign in from Settings and MiruShin handles the rest.
+- **Sign in to AniList, MyAnimeList, or Shikimori** to sync library status and progress. AniList also unlocks profile pages, social surfaces, exports, and the AniList catalog.
 - **Add modules to watch** by opening the **Addons** page and pasting a trusted module manifest URL, then install and enable it. Need modules? Join the [Sora Discord](https://discord.gg/XR3SrmUbpd) to find them.
 
 > [!TIP]
@@ -185,6 +186,30 @@ Run a specific target with `flutter run -d macos`, `-d windows`, `-d linux`, or 
 
 On mobile the OAuth flow uses an embedded WebView callback; on desktop MiruShin listens for a localhost callback.
 
+### MyAnimeList and Shikimori OAuth
+
+Default MyAnimeList and Shikimori login goes through the Cloudflare Worker in
+[`mirushin-auth`](mirushin-auth/). Shared OAuth app credentials are Cloudflare
+secrets and are not committed to this repository or bundled into Flutter builds.
+
+To deploy your own Worker:
+
+```bash
+cd mirushin-auth
+npm install
+npx wrangler secret put SHIKIMORI_CLIENT_ID
+npx wrangler secret put SHIKIMORI_CLIENT_SECRET
+npx wrangler secret put MAL_CLIENT_ID_DESKTOP
+npx wrangler secret put MAL_CLIENT_ID_MOBILE
+npm run deploy
+```
+
+Configure provider redirect URLs as:
+
+- Shikimori: `https://auth.emp0ry.com/callback`
+- MyAnimeList desktop: `http://localhost:28373/token`
+- MyAnimeList mobile: `app://mirushin/auth`
+
 ### Project layout
 
 ```text
@@ -205,6 +230,7 @@ Flutter · Riverpod · GoRouter · Dio · media_kit (mpv) & FVP · WebView Flutt
 
 - [TMDB](https://www.themoviedb.org/) for metadata and imagery
 - [AniList](https://anilist.co/) for profile, tracking, and social data
-- [Shikimori](https://shikimori.one/) for Russian-title enrichment flows
+- [MyAnimeList](https://myanimelist.net/) for tracker sync and export workflows
+- [Shikimori](https://shikimori.io/) for tracker sync and Russian-title enrichment flows
 - [AniSkip](https://aniskip.com/) for OP/ED marker support
 - [cranci1](https://github.com/cranci1), author of Sora and the Sora module ecosystem

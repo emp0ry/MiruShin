@@ -2,7 +2,7 @@
   "name": "MiruShin",
   "short_name": "MiruShin",
   "id": "/",
-  "description": "A cinematic Flutter media player for discovery, watching, Android TV, AniList tracking, and Sora-compatible module workflows.",
+  "description": "A cinematic Flutter media player for discovery, watching, Android TV, AniList, MyAnimeList, and Shikimori tracking, and Sora-compatible module workflows.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

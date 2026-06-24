@@ -10,7 +10,6 @@ inputs:
   module-library-url:
     description: Public Sora module catalog endpoint (obfuscated by envied).
     required: true
-
 runs:
   using: composite
   steps:

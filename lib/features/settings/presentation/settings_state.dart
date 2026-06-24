@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -10,10 +11,21 @@ import '../../../core/env/env.dart';
 import '../../../core/security/app_secure_storage.dart';
 import '../../../core/utils/settings_preferences.dart';
 import '../../../shared/models/anilist_models.dart';
+import '../../tracking/data/mal_oauth_service.dart';
+import '../../tracking/data/oauth_token_bundle.dart';
+import '../../tracking/data/shikimori_oauth_service.dart';
+import '../../tracking/domain/tracker_models.dart';
 
 final settingsProvider = NotifierProvider<SettingsController, SettingsState>(
   SettingsController.new,
 );
+
+/// Whether the running build targets a mobile platform. Matches the definition
+/// used by the tracker login flow so MAL client-id selection (desktop vs mobile
+/// app) is consistent between login and token refresh.
+bool get _isMobilePlatform =>
+    defaultTargetPlatform == TargetPlatform.android ||
+    defaultTargetPlatform == TargetPlatform.iOS;
 
 enum AppThemeMode { system, dark, light, oled }
 
@@ -122,6 +134,25 @@ class SettingsState {
     this.anilistScoreFormat = 'POINT_10_DECIMAL',
     this.soraWebProxyUrl = const String.fromEnvironment('MIRUSHIN_WEB_PROXY'),
     this.startupPage = AppStartupPage.board,
+    this.primaryTrackerSource = TrackerSource.anilist,
+    this.malAccessToken = '',
+    this.malRefreshToken = '',
+    this.malExpiresAt,
+    this.malViewerId,
+    this.malViewerName,
+    this.malAvatarUrl,
+    this.malUseCustomCredentials = false,
+    this.malCustomClientIdDesktop = '',
+    this.malCustomClientIdMobile = '',
+    this.shikimoriAccessToken = '',
+    this.shikimoriRefreshToken = '',
+    this.shikimoriExpiresAt,
+    this.shikimoriViewerId,
+    this.shikimoriViewerName,
+    this.shikimoriAvatarUrl,
+    this.shikimoriUseCustomCredentials = false,
+    this.shikimoriCustomClientId = '',
+    this.shikimoriCustomClientSecret = '',
   });
 
   final AppThemeMode themeMode;
@@ -159,6 +190,89 @@ class SettingsState {
   final String anilistScoreFormat;
   final String soraWebProxyUrl;
   final AppStartupPage startupPage;
+
+  /// The tracker whose library feeds the in-app Library view.
+  final TrackerSource primaryTrackerSource;
+
+  // MyAnimeList session + credentials.
+  final String malAccessToken;
+  final String malRefreshToken;
+  final DateTime? malExpiresAt;
+  final int? malViewerId;
+  final String? malViewerName;
+  final String? malAvatarUrl;
+  final bool malUseCustomCredentials;
+  final String malCustomClientIdDesktop;
+  final String malCustomClientIdMobile;
+
+  // Shikimori session + credentials.
+  final String shikimoriAccessToken;
+  final String shikimoriRefreshToken;
+  final DateTime? shikimoriExpiresAt;
+  final int? shikimoriViewerId;
+  final String? shikimoriViewerName;
+  final String? shikimoriAvatarUrl;
+  final bool shikimoriUseCustomCredentials;
+  final String shikimoriCustomClientId;
+  final String shikimoriCustomClientSecret;
+
+  /// The MAL client id used for OAuth. MAL client ids are not bundled in public
+  /// builds, so users must enable custom credentials and provide their own.
+  String effectiveMalClientId({required bool isMobile}) {
+    if (malUseCustomCredentials) {
+      return (isMobile ? malCustomClientIdMobile : malCustomClientIdDesktop)
+          .trim();
+    }
+    return '';
+  }
+
+  String get effectiveShikimoriClientId {
+    if (shikimoriUseCustomCredentials) return shikimoriCustomClientId.trim();
+    return '';
+  }
+
+  String get effectiveShikimoriClientSecret {
+    if (shikimoriUseCustomCredentials) {
+      return shikimoriCustomClientSecret.trim();
+    }
+    return '';
+  }
+
+  bool get hasMalSession {
+    return malAccessToken.trim().isNotEmpty && malViewerId != null;
+  }
+
+  bool get hasShikimoriSession {
+    return shikimoriAccessToken.trim().isNotEmpty && shikimoriViewerId != null;
+  }
+
+  bool get malConfigured =>
+      !malUseCustomCredentials ||
+      effectiveMalClientId(isMobile: false).isNotEmpty ||
+      effectiveMalClientId(isMobile: true).isNotEmpty;
+
+  bool get shikimoriConfigured =>
+      !shikimoriUseCustomCredentials ||
+      (effectiveShikimoriClientId.isNotEmpty &&
+          effectiveShikimoriClientSecret.isNotEmpty);
+
+  /// The primary tracker actually used for reading the library, falling back to
+  /// whichever single service is connected when the chosen one is signed out.
+  TrackerSource get effectivePrimaryTrackerSource {
+    bool connected(TrackerSource source) {
+      return switch (source) {
+        TrackerSource.anilist => hasAniListSession,
+        TrackerSource.mal => hasMalSession,
+        TrackerSource.shikimori => hasShikimoriSession,
+      };
+    }
+
+    if (connected(primaryTrackerSource)) return primaryTrackerSource;
+    for (final TrackerSource source in TrackerSource.values) {
+      if (connected(source)) return source;
+    }
+    return primaryTrackerSource;
+  }
 
   /// The token actually used for TMDB requests: the user's custom token when
   /// [tmdbUseCustomKey] is enabled, otherwise the bundled default key.
@@ -237,9 +351,30 @@ class SettingsState {
     String? anilistScoreFormat,
     String? soraWebProxyUrl,
     AppStartupPage? startupPage,
+    TrackerSource? primaryTrackerSource,
+    String? malAccessToken,
+    String? malRefreshToken,
+    DateTime? malExpiresAt,
+    int? malViewerId,
+    String? malViewerName,
+    String? malAvatarUrl,
+    bool? malUseCustomCredentials,
+    String? malCustomClientIdDesktop,
+    String? malCustomClientIdMobile,
+    String? shikimoriAccessToken,
+    String? shikimoriRefreshToken,
+    DateTime? shikimoriExpiresAt,
+    int? shikimoriViewerId,
+    String? shikimoriViewerName,
+    String? shikimoriAvatarUrl,
+    bool? shikimoriUseCustomCredentials,
+    String? shikimoriCustomClientId,
+    String? shikimoriCustomClientSecret,
     bool clearAppLocale = false,
     bool clearMetadataLocale = false,
     bool clearAniListSession = false,
+    bool clearMalSession = false,
+    bool clearShikimoriSession = false,
   }) {
     return SettingsState(
       themeMode: themeMode ?? this.themeMode,
@@ -290,6 +425,49 @@ class SettingsState {
       anilistScoreFormat: anilistScoreFormat ?? this.anilistScoreFormat,
       soraWebProxyUrl: soraWebProxyUrl ?? this.soraWebProxyUrl,
       startupPage: startupPage ?? this.startupPage,
+      primaryTrackerSource: primaryTrackerSource ?? this.primaryTrackerSource,
+      malAccessToken: clearMalSession
+          ? ''
+          : malAccessToken ?? this.malAccessToken,
+      malRefreshToken: clearMalSession
+          ? ''
+          : malRefreshToken ?? this.malRefreshToken,
+      malExpiresAt: clearMalSession ? null : malExpiresAt ?? this.malExpiresAt,
+      malViewerId: clearMalSession ? null : malViewerId ?? this.malViewerId,
+      malViewerName: clearMalSession
+          ? null
+          : malViewerName ?? this.malViewerName,
+      malAvatarUrl: clearMalSession ? null : malAvatarUrl ?? this.malAvatarUrl,
+      malUseCustomCredentials:
+          malUseCustomCredentials ?? this.malUseCustomCredentials,
+      malCustomClientIdDesktop:
+          malCustomClientIdDesktop ?? this.malCustomClientIdDesktop,
+      malCustomClientIdMobile:
+          malCustomClientIdMobile ?? this.malCustomClientIdMobile,
+      shikimoriAccessToken: clearShikimoriSession
+          ? ''
+          : shikimoriAccessToken ?? this.shikimoriAccessToken,
+      shikimoriRefreshToken: clearShikimoriSession
+          ? ''
+          : shikimoriRefreshToken ?? this.shikimoriRefreshToken,
+      shikimoriExpiresAt: clearShikimoriSession
+          ? null
+          : shikimoriExpiresAt ?? this.shikimoriExpiresAt,
+      shikimoriViewerId: clearShikimoriSession
+          ? null
+          : shikimoriViewerId ?? this.shikimoriViewerId,
+      shikimoriViewerName: clearShikimoriSession
+          ? null
+          : shikimoriViewerName ?? this.shikimoriViewerName,
+      shikimoriAvatarUrl: clearShikimoriSession
+          ? null
+          : shikimoriAvatarUrl ?? this.shikimoriAvatarUrl,
+      shikimoriUseCustomCredentials:
+          shikimoriUseCustomCredentials ?? this.shikimoriUseCustomCredentials,
+      shikimoriCustomClientId:
+          shikimoriCustomClientId ?? this.shikimoriCustomClientId,
+      shikimoriCustomClientSecret:
+          shikimoriCustomClientSecret ?? this.shikimoriCustomClientSecret,
     );
   }
 
@@ -385,6 +563,28 @@ class SettingsController extends Notifier<SettingsState> {
     final String? aniListToken = await _secureStorage.readAniListAccessToken();
     final DateTime? aniListExpiresAt = await _secureStorage
         .readAniListExpiresAt();
+    final String? malToken = await _secureStorage.readMalAccessToken();
+    final String? malRefresh = await _secureStorage.readMalRefreshToken();
+    final DateTime? malExpiresAt = await _secureStorage.readMalExpiresAt();
+    final String? shikimoriToken = await _secureStorage
+        .readShikimoriAccessToken();
+    final String? shikimoriRefresh = await _secureStorage
+        .readShikimoriRefreshToken();
+    final DateTime? shikimoriExpiresAt = await _secureStorage
+        .readShikimoriExpiresAt();
+    String shikimoriCustomClientSecret =
+        (await _secureStorage.readShikimoriCustomClientSecret()) ?? '';
+    final String legacyShikimoriCustomClientSecret = preferences
+        .readShikimoriCustomClientSecret()
+        .trim();
+    if (shikimoriCustomClientSecret.isEmpty &&
+        legacyShikimoriCustomClientSecret.isNotEmpty) {
+      shikimoriCustomClientSecret = legacyShikimoriCustomClientSecret;
+      await _secureStorage.writeShikimoriCustomClientSecret(
+        legacyShikimoriCustomClientSecret,
+      );
+      await preferences.clearShikimoriCustomClientSecret();
+    }
     final Locale? appLocale = SettingsState._supportedLocaleFromLanguage(
       appLanguage,
     );
@@ -441,6 +641,28 @@ class SettingsController extends Notifier<SettingsState> {
       anilistScoreFormat: preferences.readAniListScoreFormat(),
       soraWebProxyUrl: preferences.readSoraWebProxyUrl(),
       startupPage: AppStartupPage.fromName(preferences.readStartupPage()),
+      primaryTrackerSource: TrackerSource.fromName(
+        preferences.readPrimaryTrackerSource(),
+      ),
+      malAccessToken: malToken ?? '',
+      malRefreshToken: malRefresh ?? '',
+      malExpiresAt: malExpiresAt,
+      malViewerId: preferences.readMalViewerId(),
+      malViewerName: preferences.readMalViewerName(),
+      malAvatarUrl: preferences.readMalAvatarUrl(),
+      malUseCustomCredentials: preferences.readMalUseCustomCredentials(),
+      malCustomClientIdDesktop: preferences.readMalCustomClientIdDesktop(),
+      malCustomClientIdMobile: preferences.readMalCustomClientIdMobile(),
+      shikimoriAccessToken: shikimoriToken ?? '',
+      shikimoriRefreshToken: shikimoriRefresh ?? '',
+      shikimoriExpiresAt: shikimoriExpiresAt,
+      shikimoriViewerId: preferences.readShikimoriViewerId(),
+      shikimoriViewerName: preferences.readShikimoriViewerName(),
+      shikimoriAvatarUrl: preferences.readShikimoriAvatarUrl(),
+      shikimoriUseCustomCredentials: preferences
+          .readShikimoriUseCustomCredentials(),
+      shikimoriCustomClientId: preferences.readShikimoriCustomClientId(),
+      shikimoriCustomClientSecret: shikimoriCustomClientSecret,
     );
   }
 
@@ -766,6 +988,229 @@ class SettingsController extends Notifier<SettingsState> {
     final SettingsPreferences preferences = await _prefs();
     await _secureStorage.clearAniListSession();
     await preferences.saveAniListViewer(id: null, name: null, avatarUrl: null);
+  }
+
+  // --- Tracker primary source + custom credentials ---
+
+  void setPrimaryTrackerSource(TrackerSource value) {
+    state = state.copyWith(primaryTrackerSource: value);
+    unawaited(
+      _save(
+        (SettingsPreferences prefs) =>
+            prefs.savePrimaryTrackerSource(value.name),
+      ),
+    );
+  }
+
+  void setMalUseCustomCredentials(bool value) {
+    state = state.copyWith(malUseCustomCredentials: value);
+    unawaited(
+      _save(
+        (SettingsPreferences prefs) => prefs.saveMalUseCustomCredentials(value),
+      ),
+    );
+  }
+
+  void setMalCustomClientIdDesktop(String value) {
+    state = state.copyWith(malCustomClientIdDesktop: value.trim());
+    unawaited(
+      _save(
+        (SettingsPreferences prefs) =>
+            prefs.saveMalCustomClientIdDesktop(value),
+      ),
+    );
+  }
+
+  void setMalCustomClientIdMobile(String value) {
+    state = state.copyWith(malCustomClientIdMobile: value.trim());
+    unawaited(
+      _save(
+        (SettingsPreferences prefs) => prefs.saveMalCustomClientIdMobile(value),
+      ),
+    );
+  }
+
+  void setShikimoriUseCustomCredentials(bool value) {
+    state = state.copyWith(shikimoriUseCustomCredentials: value);
+    unawaited(
+      _save(
+        (SettingsPreferences prefs) =>
+            prefs.saveShikimoriUseCustomCredentials(value),
+      ),
+    );
+  }
+
+  void setShikimoriCustomClientId(String value) {
+    state = state.copyWith(shikimoriCustomClientId: value.trim());
+    unawaited(
+      _save(
+        (SettingsPreferences prefs) => prefs.saveShikimoriCustomClientId(value),
+      ),
+    );
+  }
+
+  void setShikimoriCustomClientSecret(String value) {
+    state = state.copyWith(shikimoriCustomClientSecret: value.trim());
+    unawaited(
+      _secureStorage.writeShikimoriCustomClientSecret(value).then((_) async {
+        final SettingsPreferences preferences = await _prefs();
+        await preferences.clearShikimoriCustomClientSecret();
+      }),
+    );
+  }
+
+  // --- MyAnimeList session ---
+
+  Future<void> connectMal({
+    required OAuthTokenBundle tokens,
+    required TrackerViewer viewer,
+  }) async {
+    state = state.copyWith(
+      malAccessToken: tokens.accessToken,
+      malRefreshToken: tokens.refreshToken,
+      malExpiresAt: tokens.expiresAt,
+      malViewerId: viewer.id,
+      malViewerName: viewer.name,
+      malAvatarUrl: viewer.avatarUrl,
+    );
+    final SettingsPreferences preferences = await _prefs();
+    await _secureStorage.writeMalAccessToken(tokens.accessToken);
+    await _secureStorage.writeMalRefreshToken(tokens.refreshToken);
+    await _secureStorage.writeMalExpiresAt(tokens.expiresAt);
+    await preferences.saveMalViewer(
+      id: viewer.id,
+      name: viewer.name,
+      avatarUrl: viewer.avatarUrl,
+    );
+  }
+
+  Future<void> disconnectMal() async {
+    state = state.copyWith(clearMalSession: true);
+    final SettingsPreferences preferences = await _prefs();
+    await _secureStorage.clearMalSession();
+    await preferences.saveMalViewer(id: null, name: null, avatarUrl: null);
+  }
+
+  /// Refreshes the MAL access token using the stored refresh token, persisting
+  /// the new tokens. Returns the fresh access token, or null on failure.
+  Future<String?> refreshMalToken() async {
+    final String refresh = state.malRefreshToken.trim();
+    // A MAL refresh token can only be refreshed with the client id of the app
+    // that issued it. A given build only ever logs in via one platform's app,
+    // so the current platform selects the matching client id.
+    final String clientId = state.effectiveMalClientId(
+      isMobile: _isMobilePlatform,
+    );
+    if (state.malUseCustomCredentials && clientId.isEmpty) return null;
+    if (refresh.isEmpty) return null;
+    try {
+      final OAuthTokenBundle tokens = await MalOAuthService().refresh(
+        clientId: clientId,
+        refreshToken: refresh,
+        isMobile: _isMobilePlatform,
+      );
+      state = state.copyWith(
+        malAccessToken: tokens.accessToken,
+        malRefreshToken: tokens.refreshToken.isEmpty
+            ? state.malRefreshToken
+            : tokens.refreshToken,
+        malExpiresAt: tokens.expiresAt,
+      );
+      await _secureStorage.writeMalAccessToken(tokens.accessToken);
+      if (tokens.refreshToken.isNotEmpty) {
+        await _secureStorage.writeMalRefreshToken(tokens.refreshToken);
+      }
+      await _secureStorage.writeMalExpiresAt(tokens.expiresAt);
+      return tokens.accessToken;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Returns a non-expired MAL access token, refreshing proactively if needed.
+  Future<String?> validMalAccessToken() async {
+    if (!state.hasMalSession) return null;
+    final DateTime? expiresAt = state.malExpiresAt;
+    if (expiresAt != null && expiresAt.isAfter(DateTime.now())) {
+      return state.malAccessToken.trim();
+    }
+    return refreshMalToken();
+  }
+
+  // --- Shikimori session ---
+
+  Future<void> connectShikimori({
+    required OAuthTokenBundle tokens,
+    required TrackerViewer viewer,
+  }) async {
+    state = state.copyWith(
+      shikimoriAccessToken: tokens.accessToken,
+      shikimoriRefreshToken: tokens.refreshToken,
+      shikimoriExpiresAt: tokens.expiresAt,
+      shikimoriViewerId: viewer.id,
+      shikimoriViewerName: viewer.name,
+      shikimoriAvatarUrl: viewer.avatarUrl,
+    );
+    final SettingsPreferences preferences = await _prefs();
+    await _secureStorage.writeShikimoriAccessToken(tokens.accessToken);
+    await _secureStorage.writeShikimoriRefreshToken(tokens.refreshToken);
+    await _secureStorage.writeShikimoriExpiresAt(tokens.expiresAt);
+    await preferences.saveShikimoriViewer(
+      id: viewer.id,
+      name: viewer.name,
+      avatarUrl: viewer.avatarUrl,
+    );
+  }
+
+  Future<void> disconnectShikimori() async {
+    state = state.copyWith(clearShikimoriSession: true);
+    final SettingsPreferences preferences = await _prefs();
+    await _secureStorage.clearShikimoriSession();
+    await preferences.saveShikimoriViewer(
+      id: null,
+      name: null,
+      avatarUrl: null,
+    );
+  }
+
+  Future<String?> refreshShikimoriToken() async {
+    final String refresh = state.shikimoriRefreshToken.trim();
+    final String clientId = state.effectiveShikimoriClientId;
+    final String clientSecret = state.effectiveShikimoriClientSecret;
+    if (refresh.isEmpty || !state.shikimoriConfigured) {
+      return null;
+    }
+    try {
+      final OAuthTokenBundle tokens = await ShikimoriOAuthService().refresh(
+        clientId: clientId,
+        clientSecret: clientSecret,
+        refreshToken: refresh,
+      );
+      state = state.copyWith(
+        shikimoriAccessToken: tokens.accessToken,
+        shikimoriRefreshToken: tokens.refreshToken.isEmpty
+            ? state.shikimoriRefreshToken
+            : tokens.refreshToken,
+        shikimoriExpiresAt: tokens.expiresAt,
+      );
+      await _secureStorage.writeShikimoriAccessToken(tokens.accessToken);
+      if (tokens.refreshToken.isNotEmpty) {
+        await _secureStorage.writeShikimoriRefreshToken(tokens.refreshToken);
+      }
+      await _secureStorage.writeShikimoriExpiresAt(tokens.expiresAt);
+      return tokens.accessToken;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<String?> validShikimoriAccessToken() async {
+    if (!state.hasShikimoriSession) return null;
+    final DateTime? expiresAt = state.shikimoriExpiresAt;
+    if (expiresAt != null && expiresAt.isAfter(DateTime.now())) {
+      return state.shikimoriAccessToken.trim();
+    }
+    return refreshShikimoriToken();
   }
 
   Future<void> _save(

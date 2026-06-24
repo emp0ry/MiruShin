@@ -6,14 +6,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="dark">
     <meta name="theme-color" content="#120b24">
-    <meta name="description" content="MiruShin is a cinematic Flutter media player for discovery, watching, Android TV, and AniList tracking with Sora-compatible modules.">
+    <meta name="description" content="MiruShin is a cinematic Flutter media player for discovery, watching, Android TV, and AniList, MyAnimeList, and Shikimori tracking with Sora-compatible modules.">
     <meta name="author" content="emp0ry">
     <meta name="publisher" content="emp0ry">
     <meta name="copyright" content="MiruShin">
     <meta name="application-name" content="MiruShin">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
     <meta name="googlebot" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
-    <meta name="keywords" content="MiruShin, anime app, movie app, TV series app, drama app, dorama app, Flutter app, cross-platform media app, open source media app, Android app, iOS app, Windows app, macOS app, Linux app, streaming addons, subtitles, HLS, TMDB, AniList, emp0ry">
+    <meta name="keywords" content="MiruShin, anime app, movie app, TV series app, drama app, dorama app, Flutter app, cross-platform media app, open source media app, Android app, iOS app, Windows app, macOS app, Linux app, streaming addons, subtitles, HLS, TMDB, AniList, MyAnimeList, Shikimori, emp0ry">
     <meta name="referrer" content="strict-origin-when-cross-origin">
     <meta name="format-detection" content="telephone=no, address=no, email=no">
     <meta http-equiv="Content-Security-Policy" content="
@@ -55,7 +55,7 @@
     <meta property="og:type" content="website">
     <meta property="og:site_name" content="MiruShin">
     <meta property="og:title" content="MiruShin | Discover, Watch, Track">
-    <meta property="og:description" content="A cinematic Flutter media player for discovery, watching, Android TV, AniList tracking, and Sora-compatible module workflows.">
+    <meta property="og:description" content="A cinematic Flutter media player for discovery, watching, Android TV, tracker sync, and Sora-compatible module workflows.">
     <meta property="og:url" content="https://mirushin.emp0ry.com/">
     <meta property="og:image" content="https://mirushin.emp0ry.com/assets/social-preview.png">
     <meta property="og:image:secure_url" content="https://mirushin.emp0ry.com/assets/social-preview.png">
@@ -65,7 +65,7 @@
     <meta property="og:image:alt" content="MiruShin social preview showing the discovery board and popular anime rail.">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="MiruShin | Discover, Watch, Track">
-    <meta name="twitter:description" content="A cinematic Flutter media player for discovery, watching, Android TV, AniList tracking, and Sora-compatible module workflows.">
+    <meta name="twitter:description" content="A cinematic Flutter media player for discovery, watching, Android TV, tracker sync, and Sora-compatible module workflows.">
     <meta name="twitter:image" content="https://mirushin.emp0ry.com/assets/social-preview.png">
     <meta name="twitter:image:alt" content="MiruShin social preview showing the discovery board and popular anime rail.">
     <link rel="stylesheet" href="styles.css">
@@ -111,9 +111,10 @@
             "https://mirushin.emp0ry.com/assets/imgs/board.png",
             "https://mirushin.emp0ry.com/assets/imgs/player.png"
           ],
-          "description": "A cinematic Flutter media player for discovery, watching, Android TV, AniList tracking, and Sora-compatible module workflows.",
+          "description": "A cinematic Flutter media player for discovery, watching, Android TV, tracker sync, and Sora-compatible module workflows.",
           "featureList": [
             "TMDB and AniList catalog modes",
+            "AniList, MyAnimeList, and Shikimori tracker sync",
             "Sora-compatible module workflows",
             "HLS, MP4, and DASH playback",
             "Subtitle controls",
@@ -137,7 +138,7 @@
           "@id": "https://mirushin.emp0ry.com/#webpage",
           "url": "https://mirushin.emp0ry.com/",
           "name": "MiruShin | Discover, Watch, Track",
-          "description": "MiruShin is a cinematic Flutter media player for discovery, watching, Android TV, and AniList tracking with Sora-compatible modules.",
+          "description": "MiruShin is a cinematic Flutter media player for discovery, watching, Android TV, and AniList, MyAnimeList, and Shikimori tracking with Sora-compatible modules.",
           "isPartOf": {
             "@id": "https://mirushin.emp0ry.com/#website"
           },
@@ -219,7 +220,7 @@
           <div class="hero-copy reveal">
             <div class="eyebrow">
               <span class="eyebrow-dot"></span>
-              Flutter media player · Android TV · TMDB · AniList · Sora-compatible modules
+              Flutter media player · Android TV · TMDB · AniList · MAL · Shikimori · Sora-compatible modules
             </div>
             <h1>Discover. Watch. Track. Repeat.</h1>
             <p class="hero-text">
@@ -564,7 +565,7 @@
               <div class="feature-icon icon-grid"></div>
               <h3>Library that stays useful</h3>
               <p>
-                Keep local progress, sync AniList folders, return to what matters, and keep the whole
+                Keep local progress, sync AniList, MyAnimeList, and Shikimori, return to what matters, and keep the whole
                 experience centered on actual watching.
               </p>
             </article>
@@ -572,16 +573,16 @@
               <div class="feature-icon icon-orbit"></div>
               <h3>Profile and social depth</h3>
               <p>
-                Activities, favourites, reviews, statistics, exports, and AniList profile surfaces are
-                all built into the same app shell.
+                Activities, favourites, reviews, statistics, tracker exports, and AniList profile
+                surfaces are all built into the same app shell.
               </p>
             </article>
             <article class="feature-card reveal reveal-delay-md">
               <div class="feature-icon icon-lock"></div>
               <h3>Local-first posture</h3>
               <p>
-                Tokens are entered by the user, stored on device, and used only for the services and
-                modules they explicitly enable.
+                Tokens are stored on device where supported, and default MAL/Shikimori auth goes through
+                a small Cloudflare Worker so shared app credentials are not shipped in releases.
               </p>
             </article>
           </div>
@@ -618,7 +619,7 @@
               <span class="step-index">03</span>
               <div>
                 <h3>Land in a player that respects momentum</h3>
-                <p>Resume progress, tune subtitles, skip openings, autoplay next, sync AniList progress, and stay in the zone.</p>
+                <p>Resume progress, tune subtitles, skip openings, autoplay next, sync tracker progress, and stay in the zone.</p>
               </div>
             </article>
           </div>
@@ -703,7 +704,7 @@
 
         <div class="footer-credits">
           <p>Built and published by emp0ry.</p>
-          <p>Credits: cranci1 for Sora and the Sora module ecosystem, plus TMDB, AniList, Shikimori, and AniSkip.</p>
+          <p>Credits: cranci1 for Sora and the Sora module ecosystem, plus TMDB, AniList, MyAnimeList, Shikimori, and AniSkip.</p>
           <p>&copy; <span data-year></span> MiruShin</p>
         </div>
       </div>

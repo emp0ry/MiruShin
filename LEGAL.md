@@ -1,6 +1,6 @@
 # Legal Notice
 
-Effective date: May 24, 2026
+Effective date: June 24, 2026
 
 This Legal Notice applies to **MiruShin**, published by **emp0ry**, and to the repository at **https://github.com/emp0ry/MiruShin**.
 
@@ -37,7 +37,7 @@ Installing a module means you accept the risks of running third-party code that 
 
 ## Third-Party Services
 
-MiruShin can interact with third-party services such as TMDB, AniList, Shikimori, AniSkip, Discord, and services contacted by user-installed modules.
+MiruShin can interact with third-party services such as TMDB, AniList, MyAnimeList, Shikimori, AniSkip, Discord, Cloudflare Workers used for OAuth proxying, and services contacted by user-installed modules.
 
 Use of those services is subject to their own terms, policies, and availability. MiruShin and `emp0ry` are not responsible for outages, content, behavior, or policy decisions of third-party services.
 

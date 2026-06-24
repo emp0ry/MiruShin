@@ -16,6 +16,7 @@ import '../../library/application/local_library_provider.dart';
 import '../../profile/application/anilist_user_settings_provider.dart';
 import '../../settings/presentation/settings_state.dart';
 import '../../tracking/application/anilist_library_provider.dart';
+import '../../tracking/application/tracker_sync_coordinator.dart';
 import '../../tracking/data/anilist_api_client.dart';
 import '../../watch/domain/normalized_models.dart';
 import '../data/discord_rpc_service.dart';
@@ -2740,6 +2741,22 @@ class PlaybackController extends Notifier<PlaybackState> {
             .autoAnilistSync;
     if (syncEnabled && watched) {
       unawaited(_trySyncAniList(item, item.episodeNumber.round()));
+      // Fan out the same progress to any connected secondary trackers (MAL /
+      // Shikimori). The coordinator no-ops when those services are signed out
+      // or the item lacks a MAL id, so this is safe regardless of catalog mode.
+      // Also drain any edits queued while offline (cheap when the queue is
+      // empty) so syncing recovers even when AniList stays the primary source.
+      final TrackerSyncCoordinator coordinator = ref.read(
+        trackerSyncCoordinatorProvider,
+      );
+      unawaited(coordinator.flushPending());
+      unawaited(
+        coordinator.pushEpisodeProgress(
+          externalIds: item.externalIds,
+          episode: item.episodeNumber.round(),
+          total: item.episodeCount,
+        ),
+      );
     }
   }
 

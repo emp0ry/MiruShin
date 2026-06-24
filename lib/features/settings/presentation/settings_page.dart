@@ -34,6 +34,9 @@ import '../../player/domain/player_models.dart';
 import '../../../shared/models/anilist_models.dart';
 import '../../tracking/application/anilist_library_provider.dart';
 import '../../tracking/application/anilist_login_flow.dart';
+import '../../tracking/application/tracker_library_provider.dart';
+import '../../tracking/application/tracker_login_flow.dart';
+import '../../tracking/domain/tracker_models.dart';
 import '../application/update_checker_provider.dart';
 import 'settings_state.dart';
 import 'widgets/settings_widgets.dart';
@@ -62,6 +65,8 @@ class SettingsPage extends ConsumerWidget {
             const _AniListSettingsShortcutSection(),
             const SizedBox(height: AppSpacing.lg),
           ],
+          const _TrackerConnectionsSection(),
+          const SizedBox(height: AppSpacing.lg),
           _AppearanceSection(settings: settings, controller: controller),
           const SizedBox(height: AppSpacing.lg),
           const _PlayerEngineSection(),
@@ -524,6 +529,160 @@ class _TextSettingField extends StatelessWidget {
           onChanged: onChanged,
         ),
       ),
+    );
+  }
+}
+
+class _TrackerConnectionsSection extends ConsumerWidget {
+  const _TrackerConnectionsSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final SettingsState settings = ref.watch(settingsProvider);
+    final SettingsController controller = ref.read(settingsProvider.notifier);
+
+    return SettingsSection(
+      title: context.t('Connections'),
+      icon: Icons.link_rounded,
+      children: <Widget>[
+        // MyAnimeList
+        SettingsRow(
+          title: 'MyAnimeList',
+          subtitle: settings.hasMalSession
+              ? (settings.malViewerName ?? context.t('Connected'))
+              : context.t('Not connected'),
+          trailing: _TrackerConnectButton(
+            connected: settings.hasMalSession,
+            onConnect: () => loginMal(context, ref),
+            onDisconnect: () async {
+              await controller.disconnectMal();
+              ref.invalidate(trackerAnimeListProvider);
+            },
+          ),
+        ),
+        SettingsRow(
+          title: context.t('Use custom MyAnimeList credentials'),
+          trailing: Switch(
+            value: settings.malUseCustomCredentials,
+            onChanged: controller.setMalUseCustomCredentials,
+          ),
+        ),
+        if (settings.malUseCustomCredentials) ...<Widget>[
+          SettingsRow(
+            title: context.t('MyAnimeList Client ID (Desktop)'),
+            subtitle: context.t(
+              'From the MAL app whose redirect is the localhost callback.',
+            ),
+            trailing: _TextSettingField(
+              initialValue: settings.malCustomClientIdDesktop,
+              hintText: '0a1b2c3d...',
+              onChanged: controller.setMalCustomClientIdDesktop,
+            ),
+          ),
+          SettingsRow(
+            title: context.t('MyAnimeList Client ID (Mobile)'),
+            subtitle: context.t(
+              'From the MAL app whose redirect is app://mirushin/auth.',
+            ),
+            trailing: _TextSettingField(
+              initialValue: settings.malCustomClientIdMobile,
+              hintText: '0a1b2c3d...',
+              onChanged: controller.setMalCustomClientIdMobile,
+            ),
+          ),
+        ],
+        const Divider(height: AppSpacing.xl),
+        // Shikimori
+        SettingsRow(
+          title: 'Shikimori',
+          subtitle: settings.hasShikimoriSession
+              ? (settings.shikimoriViewerName ?? context.t('Connected'))
+              : context.t('Not connected'),
+          trailing: _TrackerConnectButton(
+            connected: settings.hasShikimoriSession,
+            onConnect: () => loginShikimori(context, ref),
+            onDisconnect: () async {
+              await controller.disconnectShikimori();
+              ref.invalidate(trackerAnimeListProvider);
+            },
+          ),
+        ),
+        SettingsRow(
+          title: context.t('Use custom Shikimori credentials'),
+          trailing: Switch(
+            value: settings.shikimoriUseCustomCredentials,
+            onChanged: controller.setShikimoriUseCustomCredentials,
+          ),
+        ),
+        if (settings.shikimoriUseCustomCredentials) ...<Widget>[
+          SettingsRow(
+            title: context.t('Shikimori Client ID'),
+            trailing: _TextSettingField(
+              initialValue: settings.shikimoriCustomClientId,
+              hintText: '0a1b2c3d...',
+              onChanged: controller.setShikimoriCustomClientId,
+            ),
+          ),
+          SettingsRow(
+            title: context.t('Shikimori Client Secret'),
+            subtitle: context.t(
+              'Stored in secure platform storage. Do not commit secrets.',
+            ),
+            trailing: _TextSettingField(
+              initialValue: settings.shikimoriCustomClientSecret,
+              hintText: '••••••••',
+              obscureText: true,
+              onChanged: controller.setShikimoriCustomClientSecret,
+            ),
+          ),
+        ],
+        const Divider(height: AppSpacing.xl),
+        SettingsRow(
+          title: context.t('Primary library source'),
+          subtitle: context.t('Which tracker fills the Library tab'),
+          trailing: DropdownButton<TrackerSource>(
+            value: settings.primaryTrackerSource,
+            onChanged: (TrackerSource? value) {
+              if (value != null) controller.setPrimaryTrackerSource(value);
+            },
+            items: <DropdownMenuItem<TrackerSource>>[
+              for (final TrackerSource source in TrackerSource.values)
+                DropdownMenuItem<TrackerSource>(
+                  value: source,
+                  child: Text(source.label),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _TrackerConnectButton extends StatelessWidget {
+  const _TrackerConnectButton({
+    required this.connected,
+    required this.onConnect,
+    required this.onDisconnect,
+  });
+
+  final bool connected;
+  final VoidCallback onConnect;
+  final VoidCallback onDisconnect;
+
+  @override
+  Widget build(BuildContext context) {
+    if (connected) {
+      return OutlinedButton.icon(
+        onPressed: onDisconnect,
+        icon: const Icon(Icons.logout_rounded, size: 18),
+        label: Text(context.t('Disconnect')),
+      );
+    }
+    return FilledButton.icon(
+      onPressed: onConnect,
+      icon: const Icon(Icons.login_rounded, size: 18),
+      label: Text(context.t('Connect')),
     );
   }
 }

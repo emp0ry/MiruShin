@@ -1,12 +1,14 @@
 # Privacy Policy
 
-Effective date: May 24, 2026
+Effective date: June 24, 2026
 
 This Privacy Policy applies to **MiruShin**, published by **emp0ry**, and to the repository at **https://github.com/emp0ry/MiruShin**.
 
 ## Summary
 
-MiruShin does not operate its own user account system or hosted streaming service. The app primarily stores settings and tokens on your device, then connects to third-party services you choose to use, such as TMDB, AniList, and user-installed Sora modules.
+MiruShin does not operate its own user account system or hosted streaming service. The app primarily stores settings and tokens on your device, then connects to third-party services you choose to use, such as TMDB, AniList, MyAnimeList, Shikimori, and user-installed Sora modules.
+
+Default MyAnimeList and Shikimori login uses a small Cloudflare Worker at `auth.emp0ry.com` to keep shared OAuth app credentials out of the public app binary.
 
 ## Data Stored on Your Device
 
@@ -17,7 +19,7 @@ Depending on how you use the app, MiruShin may store the following locally on yo
 - Local library data and playback progress
 - Installed Sora module records and module ordering
 - Exported files you explicitly choose to create
-- API credentials and session tokens you enter, including TMDB and AniList tokens
+- API credentials and session tokens you enter or receive through login, including TMDB, AniList, MyAnimeList, and Shikimori tokens
 
 Sensitive tokens are intended to be stored using platform-secure storage where supported.
 
@@ -27,12 +29,20 @@ MiruShin can send requests to third-party services when you enable or use relate
 
 - TMDB for metadata and imagery
 - AniList for login, profile data, tracking, library sync, reviews, and social features
-- Shikimori for title and metadata enrichment flows
+- MyAnimeList for login, profile data, tracker sync, and export/import workflows
+- Shikimori for login, profile data, tracker sync, title data, and metadata enrichment flows
+- Cloudflare Workers for default MyAnimeList and Shikimori OAuth authorization/token proxying
 - AniSkip for skip-marker data
 - Discord for Rich Presence features on supported desktop platforms
 - User-installed Sora modules and any services those modules contact
 
 These services operate under their own privacy policies and terms. MiruShin cannot control how third-party services or third-party modules collect, process, or retain data.
+
+## OAuth Proxy
+
+For default MyAnimeList and Shikimori login, MiruShin sends OAuth authorization codes and refresh-token requests through `auth.emp0ry.com`, a Cloudflare Worker operated for MiruShin. The Worker forwards those requests to the relevant provider and returns the provider response to the app.
+
+The Worker is used to avoid shipping shared OAuth app credentials in public releases. It is not an analytics service. Cloudflare may process request metadata as part of providing and securing the Worker service.
 
 ## No First-Party Analytics Service
 
@@ -46,7 +56,7 @@ You are responsible for reviewing and trusting any module you install.
 
 ## Account and Content Responsibility
 
-If you connect AniList or provide other credentials, you do so voluntarily. If you use your own content sources or third-party modules, you are responsible for the legality of that use and for any data those sources process.
+If you connect AniList, MyAnimeList, Shikimori, or provide other credentials, you do so voluntarily. If you use your own content sources or third-party modules, you are responsible for the legality of that use and for any data those sources process.
 
 ## Data Sharing
 
