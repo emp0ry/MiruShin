@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "1.9.0",
+          "date": "2026-06-24",
+          "localizedDescription": "- Added MyAnimeList and Shikimori account connections alongside AniList.\n- Sync your status, episode progress, and score across AniList, MyAnimeList, and Shikimori.\n- Sign in securely from Settings -> Connections using OAuth.\n- Choose your Library source from AniList, MyAnimeList, or Shikimori.\n* Offline updates are now queued and synced automatically when you are back online.\n- Added optional custom API credentials for MyAnimeList and Shikimori.\n- Your tokens are stored securely on your device.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v1.9.0/MiruShin-ios-v1.9.0.ipa",
+          "size": 21218181,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "1.8.1",
           "date": "2026-06-23",
           "localizedDescription": "- Fixed auto next episode and watched progress triggering too early on unstable or reloaded streams.\n- Next episode button now counts down 5 to 1, then closes the player if you don't continue.\n- Next episode button shows shortly after the episode ends instead of instantly.\n- Added a keyboard shortcuts and touch gestures panel in player settings.\n- New keys: C toggles subtitles, P enters Picture in Picture, V skips intro/outro or goes to next episode.",
@@ -303,11 +311,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "1.8.1",
-      "versionDate": "2026-06-23",
-      "versionDescription": "- Fixed auto next episode and watched progress triggering too early on unstable or reloaded streams.\n- Next episode button now counts down 5 to 1, then closes the player if you don't continue.\n- Next episode button shows shortly after the episode ends instead of instantly.\n- Added a keyboard shortcuts and touch gestures panel in player settings.\n- New keys: C toggles subtitles, P enters Picture in Picture, V skips intro/outro or goes to next episode.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v1.8.1/MiruShin-ios-v1.8.1.ipa",
-      "size": 21179100,
+      "version": "1.9.0",
+      "versionDate": "2026-06-24",
+      "versionDescription": "- Added MyAnimeList and Shikimori account connections alongside AniList.\n- Sync your status, episode progress, and score across AniList, MyAnimeList, and Shikimori.\n- Sign in securely from Settings -> Connections using OAuth.\n- Choose your Library source from AniList, MyAnimeList, or Shikimori.\n* Offline updates are now queued and synced automatically when you are back online.\n- Added optional custom API credentials for MyAnimeList and Shikimori.\n- Your tokens are stored securely on your device.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v1.9.0/MiruShin-ios-v1.9.0.ipa",
+      "size": 21218181,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
