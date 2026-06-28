@@ -59,6 +59,7 @@ MiruShin lets you browse trending titles, build your library, keep your progress
 | 🔥 **Discover** | Browse trending, popular, and filtered rails. Switch between TMDB and AniList catalogs anytime. |
 | 📚 **Library** | Keep your own library, sync AniList, MyAnimeList, and Shikimori, continue watching, and track your progress in one place. |
 | ▶️ **Watch** | Play HLS, MP4, and DASH with quality selection, voiceovers, subtitles, and autoplay next. |
+| 📥 **Offline** | Download episodes from the watch page and play them later from the Downloaded library tab. |
 | ⏭️ **Skip Smartly** | AniSkip markers let you jump openings and endings automatically. |
 | 👤 **Profile** | View AniList activity, favourites, feed, statistics, reviews, and export your list. |
 | 🎨 **Make It Yours** | English, Russian, and Japanese UI with themes, accent colors, and layouts for mobile, desktop, and TV. |
@@ -135,7 +136,7 @@ Love MiruShin? Fuel its development with a coffee! ☕
 ## Disclaimer
 
 > [!IMPORTANT]
-> **MiruShin is a media player and interface layer. It does not host, store, upload, stream, or otherwise provide any media content, and it contains no built-in sources, catalogs, or modules.**
+> **MiruShin is a media player and interface layer. It does not host, upload, stream, or otherwise provide any media content, and it contains no built-in sources, catalogs, or modules. Offline files are saved locally only when the user chooses to download from their own configured sources.**
 
 - MiruShin ships **no** media content, media links, Sora modules, module manifests, or third-party API tokens of its own. All content, sources, and modules are supplied entirely by the user.
 - Any watch functionality depends solely on content, services, and modules that the **user** chooses to add. The developer (`emp0ry`) neither provides nor endorses any such source.
