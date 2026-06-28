@@ -45,6 +45,7 @@ class OfflineTitlePage extends ConsumerStatefulWidget {
 
 class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
   String? _selectedAddonId;
+  final Map<String, int> _selectedSeasonByAddon = <String, int>{};
 
   @override
   void didUpdateWidget(covariant OfflineTitlePage oldWidget) {
@@ -52,6 +53,7 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
     if (oldWidget.mediaId != widget.mediaId ||
         oldWidget.initialAddonId != widget.initialAddonId) {
       _selectedAddonId = null;
+      _selectedSeasonByAddon.clear();
     }
   }
 
@@ -101,9 +103,22 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
     final List<DownloadedEpisode> moduleEpisodes = episodes
         .where((DownloadedEpisode e) => e.addonId == selected)
         .toList(growable: false);
-    final int effectiveContinued = _effectiveContinued(moduleEpisodes);
-    final DownloadedEpisode? continueEpisode = _continueEpisodeFor(
+    final List<_OfflineSeasonOption> seasonOptions = _seasonOptions(
+      media,
       moduleEpisodes,
+    );
+    final bool useSeasonFlow = _usesOfflineSeasonFlow(media, seasonOptions);
+    final int? selectedSeason = useSeasonFlow
+        ? _selectedSeason(selected, seasonOptions)
+        : null;
+    final List<DownloadedEpisode> visibleEpisodes = selectedSeason == null
+        ? moduleEpisodes
+        : moduleEpisodes
+              .where((DownloadedEpisode e) => e.seasonNumber == selectedSeason)
+              .toList(growable: false);
+    final int effectiveContinued = _effectiveContinued(visibleEpisodes);
+    final DownloadedEpisode? continueEpisode = _continueEpisodeFor(
+      visibleEpisodes,
       effectiveContinued,
     );
 
@@ -151,6 +166,16 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
                 ),
                 const SizedBox(height: AppSpacing.lg),
 
+                if (useSeasonFlow && selectedSeason != null) ...<Widget>[
+                  _seasonPickerCard(
+                    context,
+                    selected,
+                    seasonOptions,
+                    selectedSeason,
+                  ),
+                  const SizedBox(height: AppSpacing.lg),
+                ],
+
                 GlassCard(
                   padding: const EdgeInsets.all(AppSpacing.xl),
                   child: Column(
@@ -167,6 +192,7 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
                         controller,
                         media,
                         moduleEpisodes,
+                        selectedSeason,
                         effectiveContinued,
                       ),
                     ],
@@ -252,8 +278,24 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
     DownloadController controller,
     MediaItem media,
     List<DownloadedEpisode> moduleEpisodes,
+    int? selectedSeason,
     int effectiveContinued,
   ) {
+    if (selectedSeason != null) {
+      final List<DownloadedEpisode> seasonEpisodes = moduleEpisodes
+          .where((DownloadedEpisode e) => e.seasonNumber == selectedSeason)
+          .toList(growable: false);
+      return _buildSeasonEpisodeRows(
+        context,
+        controller,
+        media,
+        moduleEpisodes,
+        selectedSeason,
+        seasonEpisodes,
+        effectiveContinued,
+      );
+    }
+
     // Group by season.
     final Map<int, List<DownloadedEpisode>> bySeason =
         <int, List<DownloadedEpisode>>{};
@@ -283,55 +325,182 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
         );
       }
 
-      // Downloaded episodes keyed by rounded number for placeholder matching.
-      final Map<int, DownloadedEpisode> downloadedByNum =
-          <int, DownloadedEpisode>{};
-      for (final DownloadedEpisode e in seasonEpisodes) {
-        downloadedByNum[e.episodeNumber.round()] = e;
-      }
+      rows.addAll(
+        _buildSeasonEpisodeRows(
+          context,
+          controller,
+          media,
+          moduleEpisodes,
+          season,
+          seasonEpisodes,
+          effectiveContinued,
+        ),
+      );
+    }
+    return rows;
+  }
 
-      final int total = _seasonEpisodeTotal(media, season, seasonEpisodes);
-      final Set<int> rendered = <int>{};
+  List<Widget> _buildSeasonEpisodeRows(
+    BuildContext context,
+    DownloadController controller,
+    MediaItem media,
+    List<DownloadedEpisode> moduleEpisodes,
+    int season,
+    List<DownloadedEpisode> seasonEpisodes,
+    int effectiveContinued,
+  ) {
+    final List<Widget> rows = <Widget>[];
 
-      for (int n = 1; n <= total; n++) {
-        final DownloadedEpisode? ep = downloadedByNum[n];
-        rendered.add(n);
-        if (ep != null) {
-          rows.add(
-            _episodeTile(
-              context,
-              controller,
-              media,
-              ep,
-              moduleEpisodes,
-              effectiveContinued,
-            ),
-          );
-        } else {
-          rows.add(_disabledEpisodeRow(context, n));
-        }
-      }
-      // Specials / non-integer / out-of-range downloads not covered above.
-      for (final DownloadedEpisode e in seasonEpisodes) {
-        if (rendered.contains(e.episodeNumber.round()) &&
-            e.episodeNumber == e.episodeNumber.roundToDouble() &&
-            e.episodeNumber.round() <= total &&
-            e.episodeNumber.round() >= 1) {
-          continue;
-        }
+    // Downloaded episodes keyed by rounded number for placeholder matching.
+    final Map<int, DownloadedEpisode> downloadedByNum =
+        <int, DownloadedEpisode>{};
+    for (final DownloadedEpisode e in seasonEpisodes) {
+      downloadedByNum[e.episodeNumber.round()] = e;
+    }
+
+    final int total = _seasonEpisodeTotal(media, season, seasonEpisodes);
+    final Set<int> rendered = <int>{};
+
+    for (int n = 1; n <= total; n++) {
+      final DownloadedEpisode? ep = downloadedByNum[n];
+      rendered.add(n);
+      if (ep != null) {
         rows.add(
           _episodeTile(
             context,
             controller,
             media,
-            e,
+            ep,
             moduleEpisodes,
             effectiveContinued,
           ),
         );
+      } else {
+        rows.add(_disabledEpisodeRow(context, n));
       }
     }
+    // Specials / non-integer / out-of-range downloads not covered above.
+    for (final DownloadedEpisode e in seasonEpisodes) {
+      if (rendered.contains(e.episodeNumber.round()) &&
+          e.episodeNumber == e.episodeNumber.roundToDouble() &&
+          e.episodeNumber.round() <= total &&
+          e.episodeNumber.round() >= 1) {
+        continue;
+      }
+      rows.add(
+        _episodeTile(
+          context,
+          controller,
+          media,
+          e,
+          moduleEpisodes,
+          effectiveContinued,
+        ),
+      );
+    }
     return rows;
+  }
+
+  List<_OfflineSeasonOption> _seasonOptions(
+    MediaItem media,
+    List<DownloadedEpisode> moduleEpisodes,
+  ) {
+    final Map<int, int> localCounts = <int, int>{};
+    for (final DownloadedEpisode e in moduleEpisodes) {
+      localCounts[e.seasonNumber] = (localCounts[e.seasonNumber] ?? 0) + 1;
+    }
+
+    final Set<int> numbers = <int>{};
+    for (final MediaSeason season in media.seasons) {
+      if (season.episodeCount > 0 ||
+          localCounts.containsKey(season.seasonNumber)) {
+        numbers.add(season.seasonNumber);
+      }
+    }
+    numbers.addAll(localCounts.keys);
+
+    final List<int> sorted = numbers.toList()..sort();
+    return <_OfflineSeasonOption>[
+      for (final int number in sorted)
+        _OfflineSeasonOption(
+          number: number,
+          totalEpisodes: _seasonEpisodeTotal(
+            media,
+            number,
+            moduleEpisodes
+                .where((DownloadedEpisode e) => e.seasonNumber == number)
+                .toList(growable: false),
+          ),
+          localCount: localCounts[number] ?? 0,
+        ),
+    ];
+  }
+
+  bool _usesOfflineSeasonFlow(
+    MediaItem media,
+    List<_OfflineSeasonOption> seasonOptions,
+  ) {
+    if (media.type == MediaType.movie || seasonOptions.length <= 1) {
+      return false;
+    }
+    if (media.id.startsWith('tmdb:')) return true;
+    return media.sourceProvider.trim().toLowerCase() == 'tmdb';
+  }
+
+  int? _selectedSeason(
+    String addonId,
+    List<_OfflineSeasonOption> seasonOptions,
+  ) {
+    if (seasonOptions.isEmpty) return null;
+    final int? saved = _selectedSeasonByAddon[addonId];
+    if (saved != null &&
+        seasonOptions.any(
+          (_OfflineSeasonOption option) => option.number == saved,
+        )) {
+      return saved;
+    }
+    for (final _OfflineSeasonOption option in seasonOptions) {
+      if (option.localCount > 0) return option.number;
+    }
+    return seasonOptions.first.number;
+  }
+
+  Widget _seasonPickerCard(
+    BuildContext context,
+    String addonId,
+    List<_OfflineSeasonOption> seasonOptions,
+    int selectedSeason,
+  ) {
+    return GlassCard(
+      padding: const EdgeInsets.all(AppSpacing.xl),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          SectionHeader(
+            title: context.t('Choose Season'),
+            subtitle: context.t('Downloaded episodes play offline.'),
+          ),
+          Wrap(
+            spacing: AppSpacing.sm,
+            runSpacing: AppSpacing.sm,
+            children: <Widget>[
+              for (final _OfflineSeasonOption option in seasonOptions)
+                ChoiceChip(
+                  label: Text(
+                    '${context.tf('Season {number}', <String, Object?>{'number': option.number})} · ${option.localCount}/${option.totalEpisodes}',
+                  ),
+                  selected: selectedSeason == option.number,
+                  onSelected: (_) {
+                    setState(() {
+                      _selectedSeasonByAddon[addonId] = option.number;
+                    });
+                  },
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 
   int _seasonEpisodeTotal(
@@ -626,6 +795,18 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
     final int decimals = (size >= 100 || unit == 0) ? 0 : 1;
     return '${size.toStringAsFixed(decimals)} ${units[unit]}';
   }
+}
+
+class _OfflineSeasonOption {
+  const _OfflineSeasonOption({
+    required this.number,
+    required this.totalEpisodes,
+    required this.localCount,
+  });
+
+  final int number;
+  final int totalEpisodes;
+  final int localCount;
 }
 
 class _OfflineEpisodeTile extends StatelessWidget {
