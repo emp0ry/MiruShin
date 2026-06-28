@@ -33,7 +33,7 @@
         {
           "version": "2.0.1",
           "date": "2026-06-28",
-          "localizedDescription": "- * Fixed an iOS PiP issue where the app crash after a stream ended.",
+          "localizedDescription": "- Fixed an iOS PiP issue where the app crash after a stream ended.",
           "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.0.1/MiruShin-ios-v2.0.1.ipa",
           "size": 21969067,
           "minOSVersion": "13.0"
@@ -329,7 +329,7 @@
       ],
       "version": "2.0.1",
       "versionDate": "2026-06-28",
-      "versionDescription": "- * Fixed an iOS PiP issue where the app crash after a stream ended.",
+      "versionDescription": "- Fixed an iOS PiP issue where the app crash after a stream ended.",
       "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.0.1/MiruShin-ios-v2.0.1.ipa",
       "size": 21969067,
       "minOSVersion": "13.0",
