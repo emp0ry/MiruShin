@@ -565,7 +565,7 @@ List<SoraStreamCandidate> _parseStreamValue(Object? value) {
   // Server name with any embedded quality stripped. Used only when we synthesise
   // per-quality candidates from url1080/url720/... fields, where the quality is
   // appended explicitly. For a plain stream entry we must keep [rawTitle] so a
-  // quality baked into the title (e.g. "ALGOL (1080p)") survives for
+  // quality baked into the title survives for
   // _extractQualityLabel — _serverName strips it again later for display.
   final String title = _cleanServerName(rawTitle, _string(json['quality']));
 

@@ -135,6 +135,15 @@ class MediaKitPlayerEngine extends PlayerEngine {
   Duration _lastReliableDuration = Duration.zero;
   List<PlayerBufferedRange> _lastBufferedRanges = const <PlayerBufferedRange>[];
 
+  // Post-startup proxy error throttling. mpv can emit the same decode error
+  // (e.g. "Error decoding audio") many times per second; we collapse the log to
+  // one line per distinct error (then at most every 5s) with a repeat count,
+  // instead of flooding the console.
+  String? _lastProxyErrorText;
+  DateTime? _lastProxyErrorLogAt;
+  DateTime? _firstRepeatedProxyErrorAt;
+  int _repeatedProxyErrorCount = 0;
+
   @override
   ValueListenable<PlayerEngineState> get state => _state;
 
@@ -221,6 +230,10 @@ class MediaKitPlayerEngine extends PlayerEngine {
       _usingProxy = false;
       _lastProxyProgressPosition = Duration.zero;
       _proxyStallStartedAt = null;
+      _lastProxyErrorText = null;
+      _lastProxyErrorLogAt = null;
+      _firstRepeatedProxyErrorAt = null;
+      _repeatedProxyErrorCount = 0;
 
       await player.setVolume((_volume * 100).clamp(0.0, 100.0).toDouble());
       // Always start the native backend at 1.0x. Some HLS/TS streams
@@ -732,10 +745,29 @@ class MediaKitPlayerEngine extends PlayerEngine {
           return;
         }
         if (_canRetryDirectAfterProxy(player)) {
-          debugPrint(
-            'MediaKit: transient proxy stream error after startup; '
-            'keeping proxy active: $error',
-          );
+          final DateTime now = DateTime.now();
+          // Count consecutive repeats of the same error within a short window.
+          if (error == _lastProxyErrorText &&
+              _firstRepeatedProxyErrorAt != null &&
+              now.difference(_firstRepeatedProxyErrorAt!) <
+                  const Duration(seconds: 10)) {
+            _repeatedProxyErrorCount++;
+          } else {
+            _lastProxyErrorText = error;
+            _firstRepeatedProxyErrorAt = now;
+            _repeatedProxyErrorCount = 1;
+          }
+
+          // Collapse the log: once per distinct error, then at most every 5s.
+          if (_lastProxyErrorLogAt == null ||
+              now.difference(_lastProxyErrorLogAt!) >
+                  const Duration(seconds: 5)) {
+            _lastProxyErrorLogAt = now;
+            debugPrint(
+              'MediaKit: proxy stream error after startup '
+              '(x$_repeatedProxyErrorCount); keeping proxy active: $error',
+            );
+          }
           return;
         }
         _lastError = error;
