@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -10,6 +11,7 @@ import '../../app/theme/app_spacing.dart';
 import '../../app/theme/app_theme_extension.dart';
 import '../../features/catalog/application/catalog_mode.dart';
 import '../../features/settings/presentation/startup_update_popup.dart';
+import '../navigation/edge_swipe_back.dart';
 import '../platform/tv_platform.dart';
 import 'adaptive_navigation.dart';
 import 'app_breakpoints.dart';
@@ -109,6 +111,28 @@ class _ResponsiveScaffoldState extends ConsumerState<ResponsiveScaffold> {
               child: StartupUpdatePopup(),
             ),
           ],
+        );
+        // On touch phones/tablets, let a swipe from the left edge navigate back
+        // (the routes use a custom transition, so Flutter's interactive
+        // back-swipe isn't available). Mirrors the BACK behaviour in the
+        // PopScope below: pop a pushed route, otherwise return to the home tab.
+        final bool swipeBackEnabled =
+            !isTv &&
+            (defaultTargetPlatform == TargetPlatform.android ||
+                defaultTargetPlatform == TargetPlatform.iOS);
+        content = EdgeSwipeBack(
+          enabled: swipeBackEnabled,
+          onBack: () {
+            final GoRouter router = GoRouter.of(context);
+            final bool atHome =
+                currentLocation == AppRoutes.board || currentLocation == '/';
+            if (router.canPop()) {
+              router.pop();
+            } else if (!atHome) {
+              onDestinationSelected(AppRoutes.board);
+            }
+          },
+          child: content,
         );
         if (isTv) {
           content = Focus(

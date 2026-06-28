@@ -1953,7 +1953,7 @@ class _AboutSection extends StatelessWidget {
       children: <Widget>[
         SettingsRow(
           title: context.t('App version'),
-          subtitle: AppConstants.appVersion,
+          subtitle: AppConstants.appVersion.split('+').first,
         ),
         SettingsRow(
           title: context.t('Credits'),
