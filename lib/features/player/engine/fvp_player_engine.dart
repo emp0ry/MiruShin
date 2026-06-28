@@ -20,11 +20,18 @@ const Duration _seekAcceptanceTolerance = Duration(milliseconds: 1500);
 const Duration _previewPrepareTimeout = Duration(milliseconds: 1800);
 const Duration _previewTextureTimeout = Duration(milliseconds: 1200);
 const Duration _startupRetryDelay = Duration(seconds: 45);
+const Duration _videoSurfaceStartupTimeout = Duration(seconds: 20);
 const int _startupRetryLimit = 0;
 const Duration _fragileHlsSmallResumeThreshold = Duration(seconds: 30);
 const Duration _firstFramePollInterval = Duration(milliseconds: 250);
 const int _firstFramePollAttempts = 120;
 const Duration _invalidStatusGrace = Duration(seconds: 3);
+const List<Duration> _speedStartupReapplyDelays = <Duration>[
+  Duration(milliseconds: 300),
+  Duration(milliseconds: 900),
+  Duration(milliseconds: 1600),
+  Duration(milliseconds: 3000),
+];
 
 /// Pure FVP/MDK implementation of MiruShin's PlayerEngine.
 ///
@@ -52,6 +59,7 @@ class FvpPlayerEngine extends PlayerEngine {
   Timer? _positionTimer;
   Timer? _openTimeoutTimer;
   Timer? _startupRetryTimer;
+  Timer? _videoSurfaceTimeoutTimer;
   bool _opening = false;
   bool _hasMedia = false;
   // Stores errors set by the open-timeout so _syncState() doesn't silently
@@ -63,8 +71,10 @@ class FvpPlayerEngine extends PlayerEngine {
   Duration _currentStartAt = Duration.zero;
   bool _currentAutoplay = true;
   int _openGeneration = 0;
+  int _speedApplyGeneration = 0;
   int _startupRetryCount = 0;
   bool _preserveStartupRetryCount = false;
+  bool _requireVideoSurfaceDuringStartup = false;
   List<PlayerBufferedRange> _lastBufferedRanges = const <PlayerBufferedRange>[];
   DateTime? _invalidSince;
   bool _reportedInvalid = false;
@@ -120,6 +130,7 @@ class FvpPlayerEngine extends PlayerEngine {
     _lastError = null;
     _invalidSince = null;
     _reportedInvalid = false;
+    _requireVideoSurfaceDuringStartup = false;
 
     _configureNetworkAndBuffering(
       player,
@@ -160,6 +171,7 @@ class FvpPlayerEngine extends PlayerEngine {
       final bool isHls = _isHlsLikeSource(source);
       final bool useProxy =
           !source.disableProxy && !_previewMode && (isNetwork || isInlineDash);
+      _requireVideoSurfaceDuringStartup = !_previewMode && isNetwork;
       String playbackUrl = remoteUri.toString();
       if (useProxy && isInlineDash) {
         await _proxy.stop();
@@ -217,6 +229,7 @@ class FvpPlayerEngine extends PlayerEngine {
       _startPositionTimer();
       _startOpenTimeout();
       _scheduleStartupRetry(openGeneration);
+      _startVideoSurfaceTimeout(openGeneration);
 
       final bool fragileHls = _isFragileHls(playbackUrl);
       final Duration requestedInitialPosition = startAt ?? Duration.zero;
@@ -287,6 +300,30 @@ class FvpPlayerEngine extends PlayerEngine {
         'stream did not produce frames within ${_startupRetryDelay.inSeconds}s.',
       );
       unawaited(_retryOpenCurrentSource());
+    });
+  }
+
+  void _startVideoSurfaceTimeout(int generation) {
+    _videoSurfaceTimeoutTimer?.cancel();
+    if (!_requireVideoSurfaceDuringStartup) return;
+
+    _videoSurfaceTimeoutTimer = Timer(_videoSurfaceStartupTimeout, () {
+      if (generation != _openGeneration ||
+          !_hasMedia ||
+          !_requireVideoSurfaceDuringStartup ||
+          _lastError != null) {
+        return;
+      }
+
+      final mdk.Player? player = _player;
+      if (player == null) return;
+
+      final Size videoSize = _videoSize(player.mediaInfo);
+      if (videoSize.width > 0 && videoSize.height > 0) return;
+
+      _lastError = 'Playback did not produce a video surface.';
+      debugPrint('FVP: playback did not produce a video surface.');
+      _syncState();
     });
   }
 
@@ -471,12 +508,7 @@ class FvpPlayerEngine extends PlayerEngine {
     final mdk.Player? active = _player;
     if (active == null || active != player || !_hasMedia) return;
 
-    final PlayerSource? source = _currentSource;
-    if (source != null) {
-      _configureNetworkAndBuffering(active, source, playbackSpeed: speed);
-    }
-
-    active.playbackRate = speed;
+    _applyPlaybackSpeed(active, speed);
     _syncState();
   }
 
@@ -535,11 +567,7 @@ class FvpPlayerEngine extends PlayerEngine {
     final mdk.Player? active = _player;
     if (active == null || active != player || !_hasMedia) return;
 
-    final PlayerSource? source = _currentSource;
-    if (source != null) {
-      _configureNetworkAndBuffering(active, source, playbackSpeed: speed);
-    }
-    active.playbackRate = speed;
+    _applyPlaybackSpeed(active, speed);
     _syncState();
   }
 
@@ -609,16 +637,61 @@ class FvpPlayerEngine extends PlayerEngine {
   @override
   Future<void> setPlaybackSpeed(double speed) async {
     final double safeSpeed = speed.clamp(0.25, 3.0).toDouble();
+    final int speedGeneration = ++_speedApplyGeneration;
     _playbackSpeed = safeSpeed;
     final mdk.Player? player = _player;
-    final PlayerSource? source = _currentSource;
     if (player != null) {
-      if (source != null) {
-        _configureNetworkAndBuffering(player, source, playbackSpeed: safeSpeed);
+      _applyPlaybackSpeed(player, safeSpeed);
+      if (safeSpeed != 1.0 && (_opening || !_state.value.isInitialized)) {
+        unawaited(
+          _reapplyPlaybackSpeedDuringStartup(
+            player,
+            _openGeneration,
+            speedGeneration,
+          ),
+        );
       }
-      player.playbackRate = safeSpeed;
     }
     _syncState();
+  }
+
+  void _applyPlaybackSpeed(mdk.Player player, double speed) {
+    final PlayerSource? source = _currentSource;
+    if (source != null) {
+      _configureNetworkAndBuffering(player, source, playbackSpeed: speed);
+    }
+    player.playbackRate = speed;
+  }
+
+  Future<void> _reapplyPlaybackSpeedDuringStartup(
+    mdk.Player player,
+    int openGeneration,
+    int speedGeneration,
+  ) async {
+    for (int i = 0; i < _speedStartupReapplyDelays.length; i += 1) {
+      await Future<void>.delayed(_speedStartupReapplyDelays[i]);
+
+      final mdk.Player? active = _player;
+      if (active == null ||
+          active != player ||
+          openGeneration != _openGeneration ||
+          speedGeneration != _speedApplyGeneration ||
+          !_hasMedia) {
+        return;
+      }
+
+      final bool ready = _hasStartupContent(active);
+      final bool lastAttempt = i == _speedStartupReapplyDelays.length - 1;
+      if (!ready && !lastAttempt) {
+        continue;
+      }
+
+      // MDK can accept a rate before HLS startup, then continue native playback
+      // at 1x once frames arrive. Reassert the latest requested speed during
+      // that settling window so auto-next/new-player opens do not drift from UI.
+      _applyPlaybackSpeed(active, _playbackSpeed);
+      _syncState();
+    }
   }
 
   @override
@@ -910,6 +983,9 @@ class FvpPlayerEngine extends PlayerEngine {
     );
     final bool hasTexture = player.textureId.value != null;
     final bool hasVideoSize = videoSize.width > 0 && videoSize.height > 0;
+    if (_requireVideoSurfaceDuringStartup && hasVideoSize) {
+      _requireVideoSurfaceDuringStartup = false;
+    }
     final bool hasDuration = duration > Duration.zero;
     final bool hasContent =
         hasDuration ||
@@ -946,17 +1022,22 @@ class FvpPlayerEngine extends PlayerEngine {
         status.test(mdk.MediaStatus.loading) ||
         status.test(mdk.MediaStatus.stalled);
     final bool nativeEnded = status.test(mdk.MediaStatus.end);
-    final bool initialized = !nativeInvalid && _hasMedia && hasContent;
+    final bool startupRequirementSatisfied =
+        _requireVideoSurfaceDuringStartup ? hasVideoSize : hasContent;
+    final bool initialized =
+        !nativeInvalid && _hasMedia && startupRequirementSatisfied;
 
     // Only consider the stream truly opened once it has real content or a
     // debounced error. Player state alone is set immediately and must not clear
     // _opening prematurely, otherwise the open-timeout never fires.
-    if (hasContent || invalid) {
+    if (startupRequirementSatisfied || invalid || _lastError != null) {
       _opening = false;
       _openTimeoutTimer?.cancel();
       _openTimeoutTimer = null;
       _startupRetryTimer?.cancel();
       _startupRetryTimer = null;
+      _videoSurfaceTimeoutTimer?.cancel();
+      _videoSurfaceTimeoutTimer = null;
     }
 
     final List<PlayerBufferedRange> nativeBufferedRanges = _bufferedRanges(
@@ -1099,6 +1180,8 @@ class FvpPlayerEngine extends PlayerEngine {
     _openTimeoutTimer = null;
     _startupRetryTimer?.cancel();
     _startupRetryTimer = null;
+    _videoSurfaceTimeoutTimer?.cancel();
+    _videoSurfaceTimeoutTimer = null;
     _opening = false;
     _hasMedia = false;
     _lastError = null;
@@ -1106,6 +1189,7 @@ class FvpPlayerEngine extends PlayerEngine {
     _lastBufferedRanges = const <PlayerBufferedRange>[];
     _invalidSince = null;
     _reportedInvalid = false;
+    _requireVideoSurfaceDuringStartup = false;
     await _eventSubscription?.cancel();
     await _stateSubscription?.cancel();
     await _mediaStatusSubscription?.cancel();

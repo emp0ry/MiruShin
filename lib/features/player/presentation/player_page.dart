@@ -261,6 +261,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     final bool wasPlaying = engine.state.value.isPlaying;
     final int posMs = engine.state.value.position.inMilliseconds;
     final double rate = engine.state.value.playbackSpeed;
+    final double volume = engine.state.value.volume;
 
     final MediaServer? server = s.server;
     if (server == null) return;
@@ -298,6 +299,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         headers: headers,
         positionMs: posMs,
         playbackRate: rate,
+        volume: volume,
         wasPlaying: wasPlaying,
         title: s.item?.title ?? '',
         openingStartMs: markers.openingStart?.inMilliseconds,
@@ -3891,26 +3893,22 @@ class _PlayerSettingsTiles extends ConsumerWidget {
           title: Text(context.t('Keyboard shortcuts')),
           subtitle: Text(context.t('Keys & touch gestures')),
           trailing: const Icon(Icons.chevron_right_rounded),
-          onTap: () => _showMenuSheet(
-            context,
-            'Player controls',
-            <Widget>[
-              PlayerShortcutsView(
-                seekSeconds: settings.seekInterval.inSeconds,
-                pipSupported:
-                    NativePlayerService.isSupported ||
-                    ref.read(pipControllerProvider).isSupported,
+          onTap: () => _showMenuSheet(context, 'Player controls', <Widget>[
+            PlayerShortcutsView(
+              seekSeconds: settings.seekInterval.inSeconds,
+              pipSupported:
+                  NativePlayerService.isSupported ||
+                  ref.read(pipControllerProvider).isSupported,
+            ),
+            const SizedBox(height: 14),
+            Align(
+              alignment: Alignment.centerRight,
+              child: FilledButton(
+                onPressed: () => Navigator.of(context).maybePop(),
+                child: Text(context.t('Close')),
               ),
-              const SizedBox(height: 14),
-              Align(
-                alignment: Alignment.centerRight,
-                child: FilledButton(
-                  onPressed: () => Navigator.of(context).maybePop(),
-                  child: Text(context.t('Close')),
-                ),
-              ),
-            ],
-          ),
+            ),
+          ]),
         ),
         SwitchListTile(
           value: settings.useAniSkip,

@@ -277,6 +277,7 @@ final class NativeMacPlayerCoordinator: NSObject, NSWindowDelegate, AVPictureInP
     // AVPlayer caps HTTP streaming playback to 2x; clamp explicitly so the
     // source window and PiP controls never request an unsupported rate.
     let playbackRate    = min(Float((args["playbackRate"] as? Double) ?? 1.0), 2.0)
+    let volume          = min(max(Float((args["volume"] as? Double) ?? 1.0), 0.0), 1.0)
     let wasPlaying      = (args["wasPlaying"]    as? Bool)   ?? true
     let title           = (args["title"]         as? String) ?? "MiruShin"
     let headers         = args["headers"]        as? [String: String]
@@ -297,6 +298,8 @@ final class NativeMacPlayerCoordinator: NSObject, NSWindowDelegate, AVPictureInP
     let item   = AVPlayerItem(asset: asset)
     let player = AVPlayer(playerItem: item)
     player.automaticallyWaitsToMinimizeStalling = true
+    player.volume = volume
+    player.isMuted = volume <= 0
     // defaultRate ensures that the PiP native play/pause controls use the
     // user's chosen speed when resuming, instead of hardcoded 1.0x.
     if #available(macOS 13.0, *) {

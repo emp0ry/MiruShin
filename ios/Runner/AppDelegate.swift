@@ -312,6 +312,7 @@ final class NativePlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
 
     let posMs           = (args["positionMs"]    as? Double) ?? 0.0
     let playbackRate    = Float((args["playbackRate"] as? Double) ?? 1.0)
+    let volume          = min(max(Float((args["volume"] as? Double) ?? 1.0), 0.0), 1.0)
     let wasPlaying      = (args["wasPlaying"]    as? Bool)   ?? true
     let title           = (args["title"]         as? String) ?? ""
     let headers         = args["headers"]        as? [String: String]
@@ -332,6 +333,8 @@ final class NativePlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
     let item   = AVPlayerItem(asset: asset)
     let player = AVPlayer(playerItem: item)
     player.automaticallyWaitsToMinimizeStalling = true
+    player.volume = volume
+    player.isMuted = volume <= 0
 
     let vc        = MiruShinAVPlayerViewController()
     vc.player     = player

@@ -65,31 +65,29 @@ class NativePlayerService {
   static Future<dynamic> _handleCall(MethodCall call) async {
     final Map<String, dynamic> args =
         (call.arguments as Map?)?.cast<String, dynamic>() ?? {};
-    final int posMs =
-        ((args['positionMs'] as num?)?.toDouble() ?? 0.0).round();
-    final int durMs =
-        ((args['durationMs'] as num?)?.toDouble() ?? 0.0).round();
+    final int posMs = ((args['positionMs'] as num?)?.toDouble() ?? 0.0).round();
+    final int durMs = ((args['durationMs'] as num?)?.toDouble() ?? 0.0).round();
 
     switch (call.method) {
       case 'dismissed':
         _active = false;
-        _eventCtrl.add(NativePlayerDismissed(
-          positionMs: posMs,
-          durationMs: durMs,
-          wasPlaying: args['wasPlaying'] as bool? ?? false,
-        ));
+        _eventCtrl.add(
+          NativePlayerDismissed(
+            positionMs: posMs,
+            durationMs: durMs,
+            wasPlaying: args['wasPlaying'] as bool? ?? false,
+          ),
+        );
       case 'completed':
         _active = false;
-        _eventCtrl.add(NativePlayerCompleted(
-          positionMs: posMs,
-          durationMs: durMs,
-        ));
+        _eventCtrl.add(
+          NativePlayerCompleted(positionMs: posMs, durationMs: durMs),
+        );
       case 'pipRestored':
         // _active stays true — native player is still running
-        _eventCtrl.add(NativePlayerPipRestored(
-          positionMs: posMs,
-          durationMs: durMs,
-        ));
+        _eventCtrl.add(
+          NativePlayerPipRestored(positionMs: posMs, durationMs: durMs),
+        );
     }
   }
 
@@ -98,6 +96,7 @@ class NativePlayerService {
     required Map<String, String> headers,
     required int positionMs,
     required double playbackRate,
+    required double volume,
     required bool wasPlaying,
     required String title,
     int? openingStartMs,
@@ -115,6 +114,7 @@ class NativePlayerService {
         'headers': headers,
         'positionMs': positionMs.toDouble(),
         'playbackRate': playbackRate,
+        'volume': volume,
         'wasPlaying': wasPlaying,
         'title': title,
         'openingStartMs': openingStartMs?.toDouble(),

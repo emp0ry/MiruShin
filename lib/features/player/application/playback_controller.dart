@@ -161,6 +161,12 @@ class PlaybackController extends Notifier<PlaybackState> {
   static const Duration _seekSettleTimeout = Duration(milliseconds: 5000);
   static const Duration _seekSettleTolerance = Duration(milliseconds: 1200);
   static const Duration _engineOpenTimeout = Duration(seconds: 45);
+  static const List<Duration> _startupSpeedReapplyDelays = <Duration>[
+    Duration(milliseconds: 500),
+    Duration(milliseconds: 1500),
+    Duration(seconds: 3),
+    Duration(seconds: 6),
+  ];
   static const double _temporaryPlaybackSpeedBoost = 1.0;
   // Fraction of an episode that counts as "watched". Matches the common anime
   // convention where the last ~15% is the ED/credits + next-episode preview, so
@@ -731,7 +737,8 @@ class PlaybackController extends Notifier<PlaybackState> {
         await engine.dispose();
         return;
       }
-      await engine.setPlaybackSpeed(_effectivePlaybackSpeed(settings));
+      final double targetPlaybackSpeed = _effectivePlaybackSpeed(settings);
+      await engine.setPlaybackSpeed(targetPlaybackSpeed);
       await engine.setVolume(settings.volume);
       if (autoplay) await engine.play();
       if (generation != _playbackGeneration) {
@@ -745,6 +752,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       _updateMediaSession();
       _startProgressSaver();
       _watchPlaybackProgress(engine, generation);
+      _reinforcePlaybackSpeed(engine, generation);
       _reinforceInitialSeek(engine, position, generation, _manualSeekEpoch);
       _guardFreshStart(engine, position, generation, _manualSeekEpoch);
       _watchEngineErrors(
@@ -787,6 +795,7 @@ class PlaybackController extends Notifier<PlaybackState> {
         position: fallbackPosition,
         autoplay: fallbackAutoplay,
         preserveAspectRatio: fallbackAspectRatio ?? preserveAspectRatio,
+        allowSourceFallback: allowSourceFallback,
       )) {
         return;
       }
@@ -795,6 +804,7 @@ class PlaybackController extends Notifier<PlaybackState> {
         position: fallbackPosition,
         autoplay: fallbackAutoplay,
         preserveAspectRatio: fallbackAspectRatio ?? preserveAspectRatio,
+        allowSourceFallback: allowSourceFallback,
       )) {
         return;
       }
@@ -803,6 +813,7 @@ class PlaybackController extends Notifier<PlaybackState> {
         autoplay: fallbackAutoplay,
         preserveAspectRatio: fallbackAspectRatio ?? preserveAspectRatio,
         backendOverride: engineBackend,
+        allowSourceFallback: allowSourceFallback,
       )) {
         return;
       }
@@ -898,6 +909,35 @@ class PlaybackController extends Notifier<PlaybackState> {
     return value.position + const Duration(seconds: 3) >= position;
   }
 
+  void _reinforcePlaybackSpeed(PlayerEngine engine, int generation) {
+    unawaited(_reinforcePlaybackSpeedAfterStartup(engine, generation));
+  }
+
+  Future<void> _reinforcePlaybackSpeedAfterStartup(
+    PlayerEngine engine,
+    int generation,
+  ) async {
+    for (final Duration delay in _startupSpeedReapplyDelays) {
+      await Future<void>.delayed(delay);
+      if (generation != _playbackGeneration || state.engine != engine) {
+        return;
+      }
+
+      final double speed = engine.state.value.playbackSpeed
+          .clamp(0.25, 3.0)
+          .toDouble();
+      if (speed == 1.0) continue;
+
+      try {
+        await engine.setPlaybackSpeed(speed);
+      } on Object {
+        return;
+      }
+      state = state.copyWith();
+      _updateMediaSession();
+    }
+  }
+
   void _guardFreshStart(
     PlayerEngine engine,
     Duration requestedPosition,
@@ -974,6 +1014,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     required bool proxyDisabled,
     required Duration position,
     required bool autoplay,
+    required bool allowSourceFallback,
     double? preserveAspectRatio,
   }) {
     if (proxyDisabled) return false;
@@ -1005,7 +1046,7 @@ class PlaybackController extends Notifier<PlaybackState> {
         preserveAspectRatio: preserveAspectRatio,
         isAutoFallback: true,
         backendOverride: failedBackend,
-        allowSourceFallback: false,
+        allowSourceFallback: allowSourceFallback,
         disableProxy: true,
       ),
     );
@@ -1016,6 +1057,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     required PlayerBackend failedBackend,
     required Duration position,
     required bool autoplay,
+    required bool allowSourceFallback,
     double? preserveAspectRatio,
   }) {
     final PlayerSettings settings =
@@ -1046,7 +1088,7 @@ class PlaybackController extends Notifier<PlaybackState> {
         preserveAspectRatio: preserveAspectRatio,
         isAutoFallback: true,
         backendOverride: PlayerBackend.fvp,
-        allowSourceFallback: false,
+        allowSourceFallback: allowSourceFallback,
       ),
     );
     return true;
@@ -1057,6 +1099,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     required bool autoplay,
     double? preserveAspectRatio,
     PlayerBackend? backendOverride,
+    bool allowSourceFallback = false,
   }) {
     final MediaPlaybackItem? item = state.item;
     final MediaServer? server = state.server;
@@ -1107,7 +1150,7 @@ class PlaybackController extends Notifier<PlaybackState> {
         preserveAspectRatio: preserveAspectRatio,
         isAutoFallback: true,
         backendOverride: backendOverride,
-        allowSourceFallback: false,
+        allowSourceFallback: allowSourceFallback,
       ),
     );
     return true;
@@ -1118,6 +1161,10 @@ class PlaybackController extends Notifier<PlaybackState> {
       return server.url.trim();
     }
     return quality.url.trim();
+  }
+
+  bool _isMissingVideoSurfaceError(String? description) {
+    return description?.toLowerCase().contains('video surface') ?? false;
   }
 
   String _qualityFallbackKey(MediaServer server, StreamQuality quality) {
@@ -1168,13 +1215,19 @@ class PlaybackController extends Notifier<PlaybackState> {
       }
       if (engine.state.value.hasError && state.error == null) {
         engine.removeListener(listener);
-        if (_tryDirectAfterProxyFallback(
-          failedBackend: engineBackend,
-          proxyDisabled: proxyDisabled,
-          position: _fallbackPositionFor(engine),
-          autoplay: engine.state.value.isPlaying,
-          preserveAspectRatio: engine.state.value.aspectRatio,
-        )) {
+        final String? errorDescription = engine.state.value.errorDescription;
+        final bool missingVideoSurface = _isMissingVideoSurfaceError(
+          errorDescription,
+        );
+        if (!missingVideoSurface &&
+            _tryDirectAfterProxyFallback(
+              failedBackend: engineBackend,
+              proxyDisabled: proxyDisabled,
+              position: _fallbackPositionFor(engine),
+              autoplay: engine.state.value.isPlaying,
+              preserveAspectRatio: engine.state.value.aspectRatio,
+              allowSourceFallback: allowSourceFallback,
+            )) {
           return;
         }
         if (_tryAutoBackendFallback(
@@ -1182,6 +1235,7 @@ class PlaybackController extends Notifier<PlaybackState> {
           position: _fallbackPositionFor(engine),
           autoplay: engine.state.value.isPlaying,
           preserveAspectRatio: engine.state.value.aspectRatio,
+          allowSourceFallback: allowSourceFallback,
         )) {
           return;
         }
@@ -1190,6 +1244,7 @@ class PlaybackController extends Notifier<PlaybackState> {
           autoplay: engine.state.value.isPlaying,
           preserveAspectRatio: engine.state.value.aspectRatio,
           backendOverride: engineBackend,
+          allowSourceFallback: allowSourceFallback,
         )) {
           return;
         }
@@ -1331,7 +1386,9 @@ class PlaybackController extends Notifier<PlaybackState> {
             episodeNumber: item.episodeNumber,
             positionFraction: saveCompleted
                 ? 1.0
-                : (durationSeconds > 0 ? positionSeconds / durationSeconds : null),
+                : (durationSeconds > 0
+                      ? positionSeconds / durationSeconds
+                      : null),
           ),
     );
 

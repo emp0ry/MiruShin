@@ -336,7 +336,7 @@ class LocalHlsProxy {
 
   Future<void> _serveSegment(
     HttpRequest req, {
-    bool preserveContentType = false,
+    bool preserveContentType = true,
   }) async {
     final String? rawUrl = req.uri.queryParameters['u'];
     if (rawUrl == null) {
@@ -349,8 +349,13 @@ class LocalHlsProxy {
     final Uri uri = Uri.parse(rawUrl);
     final String? range = req.headers.value(HttpHeaders.rangeHeader);
 
-    if (!preserveContentType && req.method != 'HEAD') {
-      return _serveBufferedSegment(req, uri, range);
+    if (req.method != 'HEAD') {
+      return _serveBufferedSegment(
+        req,
+        uri,
+        range,
+        preserveContentType: preserveContentType,
+      );
     }
 
     return _serveStreamingSegment(
@@ -364,8 +369,9 @@ class LocalHlsProxy {
   Future<void> _serveBufferedSegment(
     HttpRequest req,
     Uri uri,
-    String? range,
-  ) async {
+    String? range, {
+    required bool preserveContentType,
+  }) async {
     try {
       final ({Uint8List body, HttpHeaders headers, int statusCode}) upstream =
           await _fetchBufferedSegment(uri, range);
@@ -376,7 +382,7 @@ class LocalHlsProxy {
         upstream.headers,
         req.response.headers,
         defaultContentType: 'application/octet-stream',
-        preserveContentType: false,
+        preserveContentType: preserveContentType,
       );
       req.response.contentLength = upstream.body.length;
       req.response.add(upstream.body);
@@ -387,7 +393,7 @@ class LocalHlsProxy {
         req,
         uri,
         range,
-        preserveContentType: false,
+        preserveContentType: preserveContentType,
       );
     } catch (e) {
       if (_stopping && _isShutdownError(e)) {
@@ -761,9 +767,7 @@ class LocalHlsProxy {
     r.headers.set('Cache-Control', 'no-cache');
     r.headers.set('Pragma', 'no-cache');
 
-    // Set Accept and Accept-Encoding explicitly — some CDNs reject requests
-    // that omit them, and autoUncompress on the client only adds
-    // Accept-Encoding when not already set.
+    // Set Accept explicitly — some CDNs reject requests that omit it.
     if (r.headers.value('Accept') == null) {
       r.headers.set('Accept', '*/*');
     }
@@ -782,6 +786,12 @@ class LocalHlsProxy {
         r.headers.set(k, v);
       } catch (_) {}
     });
+
+    // HLS proxying needs the bytes the player will consume, not HTTP-compressed
+    // variants. Some CDNs default to zstd/br for browser-like user agents, but
+    // Dart's HttpClient only reliably auto-decodes gzip; identity keeps both
+    // playlist rewriting and segment forwarding codec-agnostic.
+    r.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
 
     // Ensure Referer is always set — many CDNs require it.
     if (r.headers.value(HttpHeaders.refererHeader) == null) {

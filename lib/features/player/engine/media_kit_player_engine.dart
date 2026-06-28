@@ -22,6 +22,8 @@ const Duration _proxyStartupSettleTimeout = Duration(seconds: 8);
 const Duration _startupPollInterval = Duration(milliseconds: 250);
 const Duration _startupActionDelay = Duration(milliseconds: 750);
 const Duration _proxyStallFallbackDelay = Duration(seconds: 10);
+const Duration _proxyNoVideoFallbackDelay = Duration(seconds: 6);
+const Duration _noVideoErrorDelay = Duration(seconds: 12);
 const Duration _proxyRepeatedErrorFallbackWindow = Duration(seconds: 10);
 const int _proxyRepeatedErrorFallbackThreshold = 40;
 const Duration _tinyHlsDurationLimit = Duration(seconds: 30);
@@ -130,8 +132,10 @@ class MediaKitPlayerEngine extends PlayerEngine {
   bool _usingProxy = false;
   bool _directFallbackTried = false;
   bool _directFallbackInProgress = false;
+  bool _requireVideoSurfaceDuringStartup = false;
   Duration _lastProxyProgressPosition = Duration.zero;
   DateTime? _proxyStallStartedAt;
+  DateTime? _proxyNoVideoStartedAt;
   int _openGeneration = 0;
   Size _lastVideoSize = Size.zero;
   Duration _lastReliableDuration = Duration.zero;
@@ -232,6 +236,8 @@ class MediaKitPlayerEngine extends PlayerEngine {
       _usingProxy = false;
       _lastProxyProgressPosition = Duration.zero;
       _proxyStallStartedAt = null;
+      _proxyNoVideoStartedAt = null;
+      _requireVideoSurfaceDuringStartup = false;
       _lastProxyErrorText = null;
       _lastProxyErrorLogAt = null;
       _firstRepeatedProxyErrorAt = null;
@@ -269,6 +275,9 @@ class MediaKitPlayerEngine extends PlayerEngine {
       final bool isHls = _isHlsLikeSource(source);
       final bool useProxy =
           !source.disableProxy && !_previewMode && (isNetwork || isInlineDash);
+      if (source.disableProxy && !_previewMode && isNetwork) {
+        _requireVideoSurfaceDuringStartup = true;
+      }
 
       String playbackUrl = remoteUri.toString();
       if (useProxy && isInlineDash) {
@@ -324,7 +333,6 @@ class MediaKitPlayerEngine extends PlayerEngine {
           player,
           openGeneration,
           requestedStartAt: startAt ?? Duration.zero,
-          targetPlaybackSpeed: targetPlaybackSpeed,
         ),
       );
 
@@ -472,17 +480,22 @@ class MediaKitPlayerEngine extends PlayerEngine {
     mk.Player player,
     int generation, {
     required Duration requestedStartAt,
-    required double targetPlaybackSpeed,
   }) async {
     // If we can still bail to direct, only wait the short proxy window so a
     // segment-level proxy failure does not cost the full settle timeout.
-    final Duration settleTimeout = _canRetryDirectAfterProxy(player)
+    final bool retryDirectAvailable = _canRetryDirectAfterProxy(player);
+    final bool requireVideoSurface =
+        retryDirectAvailable || _requireVideoSurfaceDuringStartup;
+    final Duration settleTimeout = retryDirectAvailable
         ? _proxyStartupSettleTimeout
+        : _requireVideoSurfaceDuringStartup
+        ? _noVideoErrorDelay
         : _startupSettleTimeout;
     final bool ready = await _waitForStableStartup(
       player,
       generation,
       timeout: settleTimeout,
+      requireVideoSurface: requireVideoSurface,
     );
     if (!_isActivePlayer(player, generation)) return;
 
@@ -490,8 +503,16 @@ class MediaKitPlayerEngine extends PlayerEngine {
       if (_canRetryDirectAfterProxy(player)) {
         await _retryDirectAfterProxyIssue(
           player,
-          reason: 'proxy stream did not settle',
+          reason: retryDirectAvailable
+              ? 'proxy stream did not produce video'
+              : 'proxy stream did not settle',
+          requireVideoSurface: retryDirectAvailable,
         );
+        return;
+      }
+      if (_requireVideoSurfaceDuringStartup) {
+        _lastError = 'Playback did not produce a video surface.';
+        _syncState();
         return;
       }
       // Slow CDN stream — skip seek to avoid breaking loading.
@@ -500,9 +521,10 @@ class MediaKitPlayerEngine extends PlayerEngine {
         'MediaKit: startup did not settle within '
         '${_startupSettleTimeout.inSeconds}s — skipping startup seek.',
       );
-      if (targetPlaybackSpeed != 1.0) {
+      final double requestedSpeed = _currentTargetPlaybackSpeed;
+      if (requestedSpeed != 1.0) {
         try {
-          await player.setRate(targetPlaybackSpeed);
+          await player.setRate(requestedSpeed);
         } on Object catch (e) {
           debugPrint('MediaKit speed apply (no-settle) failed: $e');
         }
@@ -511,6 +533,9 @@ class MediaKitPlayerEngine extends PlayerEngine {
     }
 
     // Stream settled — safe to seek and apply speed.
+    if (_requireVideoSurfaceDuringStartup) {
+      _requireVideoSurfaceDuringStartup = false;
+    }
     await Future<void>.delayed(_startupActionDelay);
     if (!_isActivePlayer(player, generation)) return;
 
@@ -521,9 +546,10 @@ class MediaKitPlayerEngine extends PlayerEngine {
     }
 
     if (!_isActivePlayer(player, generation)) return;
-    if (targetPlaybackSpeed != 1.0) {
+    final double requestedSpeed = _currentTargetPlaybackSpeed;
+    if (requestedSpeed != 1.0) {
       try {
-        await player.setRate(targetPlaybackSpeed);
+        await player.setRate(requestedSpeed);
       } on Object catch (error) {
         debugPrint('MediaKit delayed speed apply failed: $error');
       }
@@ -536,6 +562,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
     mk.Player player,
     int generation, {
     Duration timeout = _startupSettleTimeout,
+    required bool requireVideoSurface,
   }) async {
     final DateTime deadline = DateTime.now().add(timeout);
     Duration lastPosition = player.state.position;
@@ -552,7 +579,9 @@ class MediaKitPlayerEngine extends PlayerEngine {
           const Duration(milliseconds: 450);
       final bool hasVideoSize =
           ((native.width ?? 0) > 0 && (native.height ?? 0) > 0);
-      final bool ready = hasVideoSize || moved || hasContent;
+      final bool ready = requireVideoSurface
+          ? hasVideoSize
+          : hasVideoSize || moved || hasContent;
 
       if (_isTinyUnreliableDuration(native.duration)) {
         debugPrint(
@@ -602,6 +631,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
   Future<void> _retryDirectAfterProxyIssue(
     mk.Player player, {
     required String reason,
+    bool requireVideoSurface = false,
   }) async {
     if (!_canRetryDirectAfterProxy(player)) return;
 
@@ -616,6 +646,8 @@ class MediaKitPlayerEngine extends PlayerEngine {
     _directFallbackInProgress = true;
     _usingProxy = false;
     _proxyStallStartedAt = null;
+    _proxyNoVideoStartedAt = null;
+    _requireVideoSurfaceDuringStartup = requireVideoSurface;
     final int generation = ++_openGeneration;
 
     debugPrint('MediaKit: $reason; retrying direct before source fallback.');
@@ -647,7 +679,6 @@ class MediaKitPlayerEngine extends PlayerEngine {
           player,
           generation,
           requestedStartAt: requestedStartAt,
-          targetPlaybackSpeed: _currentTargetPlaybackSpeed,
         ),
       );
       _syncState();
@@ -665,6 +696,44 @@ class MediaKitPlayerEngine extends PlayerEngine {
     required Duration position,
     required bool initialized,
   }) {
+    final bool hasVideoSurface =
+        ((native.width ?? 0) > 0 && (native.height ?? 0) > 0) ||
+        _lastVideoSize != Size.zero;
+    final bool missingVideo =
+        !_previewMode &&
+        _lastError == null &&
+        initialized &&
+        native.playing &&
+        !hasVideoSurface &&
+        position > const Duration(seconds: 2);
+    if (missingVideo) {
+      final DateTime now = DateTime.now();
+      final DateTime startedAt = _proxyNoVideoStartedAt ?? now;
+      _proxyNoVideoStartedAt = startedAt;
+      if (_canRetryDirectAfterProxy(player) &&
+          now.difference(startedAt) >= _proxyNoVideoFallbackDelay) {
+        _proxyNoVideoStartedAt = null;
+        unawaited(
+          _retryDirectAfterProxyIssue(
+            player,
+            reason: 'proxy playback advanced without a video surface',
+            requireVideoSurface: true,
+          ),
+        );
+        return;
+      }
+      if (!_canRetryDirectAfterProxy(player) &&
+          now.difference(startedAt) >= _noVideoErrorDelay) {
+        _proxyNoVideoStartedAt = null;
+        _lastError = 'Playback did not produce a video surface.';
+        debugPrint('MediaKit: playback advanced without a video surface.');
+        _syncState();
+        return;
+      }
+    } else {
+      _proxyNoVideoStartedAt = null;
+    }
+
     if (!_canRetryDirectAfterProxy(player)) {
       _proxyStallStartedAt = null;
       _lastProxyProgressPosition = position;
@@ -819,6 +888,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
   @override
   Future<void> setPlaybackSpeed(double speed) async {
     _playbackSpeed = speed.clamp(0.25, 3.0).toDouble();
+    _currentTargetPlaybackSpeed = _playbackSpeed;
     final mk.Player? player = _player;
     if (player != null) {
       await player.setRate(_playbackSpeed);
@@ -889,6 +959,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
     final Duration buffer = native.buffer;
     final bool hasVideoSize =
         (native.width ?? 0) > 0 && (native.height ?? 0) > 0;
+    final bool hasVideoSurface = hasVideoSize || _lastVideoSize != Size.zero;
     final bool hasContent = _hasStartupContent(native);
 
     if (hasVideoSize) {
@@ -898,7 +969,11 @@ class MediaKitPlayerEngine extends PlayerEngine {
       );
     }
 
-    if (hasContent || _lastError != null) {
+    final bool startupRequirementSatisfied = _requireVideoSurfaceDuringStartup
+        ? hasVideoSurface
+        : hasContent;
+
+    if (startupRequirementSatisfied || _lastError != null) {
       _opening = false;
       _openTimeoutTimer?.cancel();
       _openTimeoutTimer = null;
@@ -915,7 +990,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
       _lastBufferedRanges = buffered;
     }
 
-    final bool initialized = _hasMedia && hasContent;
+    final bool initialized = _hasMedia && startupRequirementSatisfied;
     final bool hasError = _lastError != null;
     final double aspectRatio = _effectiveAspectRatio(_lastVideoSize);
 
@@ -1073,8 +1148,10 @@ class MediaKitPlayerEngine extends PlayerEngine {
     _usingProxy = false;
     _directFallbackTried = false;
     _directFallbackInProgress = false;
+    _requireVideoSurfaceDuringStartup = false;
     _lastProxyProgressPosition = Duration.zero;
     _proxyStallStartedAt = null;
+    _proxyNoVideoStartedAt = null;
     _lastBufferedRanges = const <PlayerBufferedRange>[];
     _lastVideoSize = Size.zero;
     _lastReliableDuration = Duration.zero;

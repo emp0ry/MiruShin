@@ -14,8 +14,18 @@ void main() {
         0,
       );
       late final String upstreamOrigin;
-      final List<({String path, String? referer, String? origin})> seen =
-          <({String path, String? referer, String? origin})>[];
+      final List<
+        ({String path, String? referer, String? origin, String? acceptEncoding})
+      >
+      seen =
+          <
+            ({
+              String path,
+              String? referer,
+              String? origin,
+              String? acceptEncoding,
+            })
+          >[];
 
       upstreamOrigin = 'http://${upstream.address.address}:${upstream.port}';
       final StreamSubscription<HttpRequest> upstreamSub = upstream.listen((
@@ -25,6 +35,9 @@ void main() {
           path: request.uri.path,
           referer: request.headers.value(HttpHeaders.refererHeader),
           origin: request.headers.value('origin'),
+          acceptEncoding: request.headers.value(
+            HttpHeaders.acceptEncodingHeader,
+          ),
         ));
 
         switch (request.uri.path) {
@@ -119,15 +132,43 @@ void main() {
           },
         );
 
+        final masterRequest = seen.singleWhere(
+          (
+            ({
+              String path,
+              String? referer,
+              String? origin,
+              String? acceptEncoding,
+            })
+            request,
+          ) => request.path == '/master.m3u8',
+        );
         final mediaRequest = seen.singleWhere(
-          (({String path, String? referer, String? origin}) request) =>
-              request.path == '/media.m3u8',
+          (
+            ({
+              String path,
+              String? referer,
+              String? origin,
+              String? acceptEncoding,
+            })
+            request,
+          ) => request.path == '/media.m3u8',
         );
         final segmentRequest = seen.singleWhere(
-          (({String path, String? referer, String? origin}) request) =>
-              request.path == '/segment.ts',
+          (
+            ({
+              String path,
+              String? referer,
+              String? origin,
+              String? acceptEncoding,
+            })
+            request,
+          ) => request.path == '/segment.ts',
         );
 
+        expect(masterRequest.acceptEncoding, 'identity');
+        expect(mediaRequest.acceptEncoding, 'identity');
+        expect(segmentRequest.acceptEncoding, 'identity');
         expect(mediaRequest.referer, 'https://provider.example/watch');
         expect(mediaRequest.origin, 'https://provider.example');
         expect(segmentRequest.referer, 'https://provider.example/watch');
