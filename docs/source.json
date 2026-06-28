@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.1.0",
+          "date": "2026-06-28",
+          "localizedDescription": "- Added offline downloading for episodes.\n- You can save episodes from the watch page and access them later in the Downloaded library tab.\n- Downloaded episodes can be played offline without resolving streams again.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.1.0/MiruShin-ios-v2.1.0.ipa",
+          "size": 22142851,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.0.2",
           "date": "2026-06-28",
           "localizedDescription": "- Added left-edge swipe-back gesture support on mobile.",
@@ -335,11 +343,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.0.2",
+      "version": "2.1.0",
       "versionDate": "2026-06-28",
-      "versionDescription": "- Added left-edge swipe-back gesture support on mobile.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.0.2/MiruShin-ios-v2.0.2.ipa",
-      "size": 21971030,
+      "versionDescription": "- Added offline downloading for episodes.\n- You can save episodes from the watch page and access them later in the Downloaded library tab.\n- Downloaded episodes can be played offline without resolving streams again.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.1.0/MiruShin-ios-v2.1.0.ipa",
+      "size": 22142851,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
