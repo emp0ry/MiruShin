@@ -40,6 +40,7 @@ if [ -d "$APP_BUNDLE/Contents/Frameworks" ]; then
     | while IFS= read -r -d '' lib; do
         codesign --force --sign - "$lib"
       done
+
   find "$APP_BUNDLE/Contents/Frameworks" -depth -type d -name "*.framework" -print0 \
     | while IFS= read -r -d '' fw; do
         codesign --force --sign - "$fw"
@@ -51,6 +52,7 @@ codesign --verify --deep --strict "$APP_BUNDLE"
 
 ENTITLEMENTS_DUMP=$(mktemp)
 codesign -d --entitlements :- "$APP_BUNDLE" > "$ENTITLEMENTS_DUMP" 2>/dev/null
+
 if ! grep -q "com.apple.security.files.user-selected.read-write" "$ENTITLEMENTS_DUMP"; then
   echo "ERROR: staged macOS app is missing user-selected file access entitlements"
   cat "$ENTITLEMENTS_DUMP"
@@ -61,6 +63,7 @@ ln -s /Applications "$STAGE_DIR/Applications"
 
 RW_DMG="build/macos/dmg/MiruShin-temp.dmg"
 DMG_NAME="MiruShin-macos-v${VERSION}.dmg"
+
 rm -f "$RW_DMG" "$DMG_NAME"
 
 hdiutil create \
@@ -72,12 +75,46 @@ hdiutil create \
   "$RW_DMG"
 
 ATTACH_OUTPUT=$(hdiutil attach "$RW_DMG" -readwrite -noverify -noautoopen)
+
 DEVICE=$(echo "$ATTACH_OUTPUT" | awk '/\/Volumes\/MiruShin/{print $1; exit}')
+MOUNT_DIR=$(echo "$ATTACH_OUTPUT" | awk '/\/Volumes\/MiruShin/{for (i=3; i<=NF; i++) printf $i (i<NF ? " " : ""); print ""; exit}')
+
 if [ -z "$DEVICE" ]; then
   echo "ERROR: failed to mount temporary DMG"
   echo "$ATTACH_OUTPUT"
   exit 1
 fi
+
+if [ -z "$MOUNT_DIR" ]; then
+  MOUNT_DIR="/Volumes/MiruShin"
+fi
+
+cleanup_mount() {
+  set +e
+
+  if [ -n "${DEVICE:-}" ]; then
+    cd "$GITHUB_WORKSPACE" 2>/dev/null || cd /tmp
+
+    sync
+    sleep 2
+
+    for i in {1..10}; do
+      if hdiutil detach "$DEVICE" -quiet; then
+        echo "Detached $DEVICE"
+        return 0
+      fi
+
+      echo "Detach failed for $DEVICE, retry $i..."
+      lsof "$MOUNT_DIR" || true
+      sleep 2
+    done
+
+    echo "Force detaching $DEVICE"
+    hdiutil detach "$DEVICE" -force || true
+  fi
+}
+
+trap cleanup_mount EXIT
 
 osascript <<'APPLESCRIPT'
 tell application "Finder"
@@ -101,10 +138,18 @@ tell application "Finder"
     close
   end tell
 end tell
+
+tell application "Finder"
+  close every window
+end tell
 APPLESCRIPT
 
-sync
-hdiutil detach "$DEVICE"
+# Stop Finder from keeping the mounted DMG busy.
+osascript -e 'tell application "Finder" to close every window' || true
+killall Finder || true
+
+cleanup_mount
+trap - EXIT
 
 hdiutil convert \
   "$RW_DMG" \
