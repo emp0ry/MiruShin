@@ -31,6 +31,22 @@
       ],
       "versions": [
         {
+          "version": "2.0.1",
+          "date": "2026-06-28",
+          "localizedDescription": "- * Fixed an iOS PiP issue where the app crash after a stream ended.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.0.1/MiruShin-ios-v2.0.1.ipa",
+          "size": 21969067,
+          "minOSVersion": "13.0"
+        },
+        {
+          "version": "2.0.0",
+          "date": "2026-06-28",
+          "localizedDescription": "- Added Cloudflare verification support: when required, a webview opens for captcha verification, then continues automatically after verification is complete.\n- Fixed a PiP issue on iOS and macOS where playback speed could display as 2x after auto-playing the next episode, while the video actually played at 1x.\n- Improved and updated the HLS local proxy, fixing playback issues for several streams.\n- Improved subtitle parsing, including more accurate language detection and display.\n- Improved the quality picker for better handling of streams with multiple quality options.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.0.0/MiruShin-ios-v2.0.0.ipa",
+          "size": 21969049,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "1.9.0",
           "date": "2026-06-24",
           "localizedDescription": "- Added MyAnimeList and Shikimori account connections alongside AniList.\n- Sync your status, episode progress, and score across AniList, MyAnimeList, and Shikimori.\n- Sign in securely from Settings -> Connections using OAuth.\n- Choose your Library source from AniList, MyAnimeList, or Shikimori.\n- Offline updates are now queued and synced automatically when you are back online.\n- Added optional custom API credentials for MyAnimeList and Shikimori.\n- Your tokens are stored securely on your device.",
@@ -311,11 +327,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "1.9.0",
-      "versionDate": "2026-06-24",
-      "versionDescription": "- Added MyAnimeList and Shikimori account connections alongside AniList.\n- Sync your status, episode progress, and score across AniList, MyAnimeList, and Shikimori.\n- Sign in securely from Settings -> Connections using OAuth.\n- Choose your Library source from AniList, MyAnimeList, or Shikimori.\n- Offline updates are now queued and synced automatically when you are back online.\n- Added optional custom API credentials for MyAnimeList and Shikimori.\n- Your tokens are stored securely on your device.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v1.9.0/MiruShin-ios-v1.9.0.ipa",
-      "size": 21218181,
+      "version": "2.0.1",
+      "versionDate": "2026-06-28",
+      "versionDescription": "- * Fixed an iOS PiP issue where the app crash after a stream ended.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.0.1/MiruShin-ios-v2.0.1.ipa",
+      "size": 21969067,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
