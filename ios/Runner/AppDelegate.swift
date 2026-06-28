@@ -417,9 +417,20 @@ final class NativePlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         "positionMs": posMs2.isFinite ? posMs2 : 0.0,
         "durationMs": durMs2.isFinite ? durMs2 : 0.0,
       ])
-      self.currentVC = nil
-      if vc.presentingViewController != nil {
-        vc.dismiss(animated: true)
+      if vc.pipActive {
+        // Finishing while in PiP: the controller has already been auto-dismissed
+        // from the view hierarchy, so `currentVC` is the only strong reference
+        // keeping it alive. Releasing it now would deallocate the controller
+        // mid-PiP and crash. Instead, request the PiP session to stop; the
+        // controller stays retained until `didStopPictureInPicture` fires, where
+        // we release it safely (see below).
+        player.pause()
+        vc.allowsPictureInPicturePlayback = false
+      } else {
+        self.currentVC = nil
+        if vc.presentingViewController != nil {
+          vc.dismiss(animated: true)
+        }
       }
     }
     vc.endObserver = endObs
@@ -496,6 +507,18 @@ final class NativePlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
   func playerViewControllerDidStopPictureInPicture(_ playerViewController: AVPlayerViewController) {
     guard let vc = playerViewController as? MiruShinAVPlayerViewController else { return }
     vc.pipActive = false
+
+    // The episode finished during PiP (we stopped the session from the
+    // end-of-episode observer). The window is closing now, so it is finally safe
+    // to drop our strong reference and tear the player down. The Dart side has
+    // already advanced to the next episode via the "completed" event.
+    if vc.didReachEnd {
+      if let active = self.currentVC, active === vc {
+        self.currentVC = nil
+      }
+      vc.cleanupForRelease()
+      return
+    }
 
     // Re-arm PiP so it can be started AGAIN after returning to fullscreen.
     // After the first auto-dismiss + re-present cycle AVPlayerViewController
