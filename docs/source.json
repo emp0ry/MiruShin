@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.0.2",
+          "date": "2026-06-28",
+          "localizedDescription": "- Added left-edge swipe-back gesture support on mobile.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.0.2/MiruShin-ios-v2.0.2.ipa",
+          "size": 21971030,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.0.1",
           "date": "2026-06-28",
           "localizedDescription": "- Fixed an iOS PiP issue where the app crash after a stream ended.",
@@ -327,11 +335,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.0.1",
+      "version": "2.0.2",
       "versionDate": "2026-06-28",
-      "versionDescription": "- Fixed an iOS PiP issue where the app crash after a stream ended.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.0.1/MiruShin-ios-v2.0.1.ipa",
-      "size": 21969067,
+      "versionDescription": "- Added left-edge swipe-back gesture support on mobile.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.0.2/MiruShin-ios-v2.0.2.ipa",
+      "size": 21971030,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
