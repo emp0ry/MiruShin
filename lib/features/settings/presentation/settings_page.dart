@@ -26,6 +26,7 @@ import '../../../core/widgets/tv_directional_focus.dart';
 import '../../../core/widgets/tv_text_field_focus.dart';
 import '../../calendar/application/calendar_items_provider.dart';
 import '../../catalog/application/catalog_mode.dart';
+import '../../downloads/application/downloads_provider.dart';
 import '../../metadata/data/tmdb_metadata_provider.dart';
 import '../../metadata/application/metadata_providers.dart';
 import '../../player/application/player_settings.dart';
@@ -82,6 +83,8 @@ class SettingsPage extends ConsumerWidget {
             const SizedBox(height: AppSpacing.lg),
           ],
           _ApiConnectionsSection(settings: settings, controller: controller),
+          const SizedBox(height: AppSpacing.lg),
+          const _DownloadsSection(),
           const SizedBox(height: AppSpacing.lg),
           _CacheSection(settings: settings, controller: controller),
           const SizedBox(height: AppSpacing.lg),
@@ -1835,6 +1838,86 @@ final _metadataCacheSizeProvider = FutureProvider.autoDispose<String>((
     return '—';
   }
 });
+
+final _downloadsSizeProvider = FutureProvider.autoDispose<String>((ref) async {
+  ref.watch(downloadsProvider);
+  final int bytes = await ref.read(downloadStoreProvider).totalSizeBytes();
+  return _formatDownloadSize(bytes);
+});
+
+String _formatDownloadSize(int bytes) {
+  if (bytes <= 0) return '0 B';
+  const List<String> units = <String>['B', 'KB', 'MB', 'GB', 'TB'];
+  double size = bytes.toDouble();
+  int unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit += 1;
+  }
+  final int decimals = (size >= 100 || unit == 0) ? 0 : 1;
+  return '${size.toStringAsFixed(decimals)} ${units[unit]}';
+}
+
+class _DownloadsSection extends ConsumerWidget {
+  const _DownloadsSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final int episodeCount = ref.watch(downloadsProvider).length;
+    final String sizeLabel = ref
+        .watch(_downloadsSizeProvider)
+        .when(data: (String s) => s, loading: () => '…', error: (_, _) => '—');
+    return SettingsSection(
+      title: context.t('Downloads'),
+      icon: Icons.download_rounded,
+      children: <Widget>[
+        SettingsRow(
+          title: context.t('Downloaded episodes'),
+          subtitle: '$episodeCount · $sizeLabel',
+          trailing: FilledButton(
+            onPressed: episodeCount == 0
+                ? null
+                : () => _confirmDeleteAllDownloads(context, ref),
+            child: Text(context.t('Delete all')),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+Future<void> _confirmDeleteAllDownloads(
+  BuildContext context,
+  WidgetRef ref,
+) async {
+  final bool? ok = await showDialog<bool>(
+    context: context,
+    builder: (BuildContext ctx) => AlertDialog(
+      title: Text(context.t('Delete all')),
+      content: Text(
+        context.t('Remove every downloaded video from this device?'),
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, false),
+          child: Text(context.t('Cancel')),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(ctx, true),
+          child: Text(context.t('Delete')),
+        ),
+      ],
+    ),
+  );
+  if (ok != true) return;
+  await ref.read(downloadsProvider.notifier).deleteAll();
+  ref.invalidate(_downloadsSizeProvider);
+  if (context.mounted) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(context.t('Downloads deleted'))));
+  }
+}
 
 class _CacheSection extends ConsumerWidget {
   const _CacheSection({required this.settings, required this.controller});

@@ -34,8 +34,11 @@ import '../../../shared/models/media_item.dart';
 import '../../addons/application/sora_addons_provider.dart';
 import '../../addons/application/sora_source_providers.dart';
 import '../../addons/domain/sora_models.dart';
+import '../../addons/domain/sora_parsers.dart';
 import '../../catalog/application/catalog_repository.dart';
 import '../../catalog/application/catalog_mode.dart';
+import '../../downloads/application/downloads_provider.dart';
+import '../../downloads/domain/download_models.dart';
 import '../../metadata/application/metadata_providers.dart';
 import '../../metadata/domain/anime_episode_metadata.dart';
 import '../../metadata/domain/tmdb_episode_metadata.dart';
@@ -154,6 +157,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
   AnimeEpisodeMetadata? _continueEpisodeMeta;
   TmdbEpisodeMetadata? _continueTmdbEpisodeMeta;
   int _continueDisplayNum = 0;
+  bool _episodeDownloadMode = false;
   SoraSourceRequest? _sourceEpisodesRequest;
   Future<List<SoraEpisode>>? _sourceEpisodesFuture;
   List<SoraEpisode>? _sourceEpisodes;
@@ -174,6 +178,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     _continueEpisodeMeta = null;
     _continueTmdbEpisodeMeta = null;
     _continueDisplayNum = 0;
+    _episodeDownloadMode = false;
   }
 
   @override
@@ -224,6 +229,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     );
     setState(() {
       _visibleTab = 0;
+      _episodeDownloadMode = false;
       _session = _session!.copyWith(
         step: WatchStep.pickSource,
         seasonNumber: seasonNumber,
@@ -255,6 +261,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
       _continueEpisodeMeta = null;
       _continueTmdbEpisodeMeta = null;
       _continueDisplayNum = 0;
+      _episodeDownloadMode = false;
       _sourceEpisodesRequest = request;
       _sourceEpisodesFuture = episodesFuture;
       _sourceEpisodes = null;
@@ -364,6 +371,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
       _continueEpisodeMeta = null;
       _continueTmdbEpisodeMeta = null;
       _continueDisplayNum = 0;
+      _episodeDownloadMode = false;
       _session = _session!.copyWith(
         step: WatchStep.pickEpisode,
         seasonNumber: seasonNumber,
@@ -989,7 +997,10 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     }
 
     final bool showContinueButton =
-        _visibleTab == 1 && _continueEpisode != null && _continueDisplayNum > 0;
+        _visibleTab == 1 &&
+        !_episodeDownloadMode &&
+        _continueEpisode != null &&
+        _continueDisplayNum > 0;
 
     return Stack(
       children: <Widget>[
@@ -1047,8 +1058,10 @@ class _WatchPageState extends ConsumerState<WatchPage> {
                       _WatchTabBar(
                         selectedTab: _visibleTab,
                         hasEpisodes: session.source != null,
-                        onTabSelected: (int tab) =>
-                            setState(() => _visibleTab = tab),
+                        onTabSelected: (int tab) => setState(() {
+                          _visibleTab = tab;
+                          if (tab != 1) _episodeDownloadMode = false;
+                        }),
                       ),
                       const SizedBox(height: AppSpacing.xxl),
                     ],
@@ -1081,6 +1094,10 @@ class _WatchPageState extends ConsumerState<WatchPage> {
                           onEpisodePicked: _pickEpisode,
                           seasonNumber: session.seasonNumber,
                           onContinueResolved: _onContinueResolved,
+                          onDownloadModeChanged: (bool enabled) {
+                            if (_episodeDownloadMode == enabled) return;
+                            setState(() => _episodeDownloadMode = enabled);
+                          },
                           episodesFuture: _sourceEpisodesFuture,
                           sourceEpisodes: _sourceEpisodes,
                           useSourceSeasonGroups: _usesSourceSeasonFlow(item),
@@ -1127,7 +1144,11 @@ class _WatchPageState extends ConsumerState<WatchPage> {
                   ),
                 ),
                 icon: const Icon(Icons.play_arrow_rounded, size: 18),
-                label: Text('Continue EP $_continueDisplayNum'),
+                label: Text(
+                  context.tf('Continue EP {number}', <String, Object?>{
+                    'number': _continueDisplayNum,
+                  }),
+                ),
               ),
             ),
           ),
@@ -2544,6 +2565,7 @@ class _EpisodePickerSection extends ConsumerStatefulWidget {
     this.selectedEpisodeHref,
     this.seasonNumber = 1,
     this.onContinueResolved,
+    this.onDownloadModeChanged,
     this.episodesFuture,
     this.sourceEpisodes,
     this.useSourceSeasonGroups = false,
@@ -2561,6 +2583,7 @@ class _EpisodePickerSection extends ConsumerStatefulWidget {
     int,
   )?
   onContinueResolved;
+  final ValueChanged<bool>? onDownloadModeChanged;
   final Future<List<SoraEpisode>>? episodesFuture;
   final List<SoraEpisode>? sourceEpisodes;
   final bool useSourceSeasonGroups;
@@ -2573,6 +2596,9 @@ class _EpisodePickerSection extends ConsumerStatefulWidget {
 class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
   String? _lastNotifiedHref;
   int _lastNotifiedNum = -1;
+  bool _downloadMode = false;
+  bool _downloadBusy = false;
+  final Set<String> _selectedForDownload = <String>{};
   String? _episodeMetadataLoadKey;
   bool _episodeMetadataLoadEnabled = false;
   bool _episodeMetadataLoadScheduled = false;
@@ -2604,7 +2630,24 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
         oldWidget.sourceEpisodes != widget.sourceEpisodes) {
       _restartEpisodeLoad();
       _resetEpisodeMetadataLoad();
+      if (_downloadMode) {
+        _downloadMode = false;
+        _downloadBusy = false;
+        _selectedForDownload.clear();
+        widget.onDownloadModeChanged?.call(false);
+      }
     }
+  }
+
+  void _setDownloadMode(bool enabled) {
+    setState(() {
+      _downloadMode = enabled;
+      if (!enabled) {
+        _downloadBusy = false;
+        _selectedForDownload.clear();
+      }
+    });
+    widget.onDownloadModeChanged?.call(enabled);
   }
 
   SoraSourceRequest _requestForWidget() {
@@ -2784,6 +2827,9 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
   Widget build(BuildContext context) {
     final Future<List<SoraEpisode>> episodesFuture = _episodesFuture;
     final Set<String> watchedSet = ref.watch(soraEpisodeProgressProvider);
+    final Map<String, DownloadStatus> downloadKeys = ref.watch(
+      downloadedKeysProvider,
+    );
     final SettingsState settings = ref.watch(settingsProvider);
     final bool useAniListProgress =
         ref.watch(catalogModeProvider) == CatalogMode.anilist;
@@ -2802,7 +2848,29 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
             title: widget.item.type == MediaType.movie
                 ? context.t('Start Watching')
                 : context.t('Choose Episode'),
-            subtitle: context.t('Tap to resolve stream.'),
+            subtitle: _downloadMode
+                ? context.t('Select episodes to download.')
+                : context.t('Tap to resolve stream.'),
+            trailing: IconButton(
+              tooltip: _downloadBusy
+                  ? context.t('Loading...')
+                  : _downloadMode
+                  ? context.t('Cancel')
+                  : context.t('Download'),
+              icon: _downloadBusy
+                  ? const SizedBox.square(
+                      dimension: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Icon(
+                      _downloadMode
+                          ? Icons.close_rounded
+                          : Icons.download_rounded,
+                    ),
+              onPressed: _downloadBusy
+                  ? null
+                  : () => _setDownloadMode(!_downloadMode),
+            ),
           ),
           FutureBuilder<List<SoraEpisode>>(
             future: episodesFuture,
@@ -2857,18 +2925,54 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
                   description: '',
                   duration: '',
                 );
+                final SoraEpisode singleEnriched = _episodeForPlayback(
+                  episode,
+                  episodeMetadata.forNumber(episode.number),
+                  tmdbEpisodeMetadata.forNumber(episode.number),
+                );
+                final DownloadStatus? singleStatus =
+                    downloadKeys['${widget.source.addonId}|${episode.href}'];
                 return Padding(
                   padding: const EdgeInsets.symmetric(vertical: AppSpacing.lg),
-                  child: FilledButton.icon(
-                    onPressed: () => widget.onEpisodePicked(
-                      _episodeForPlayback(
-                        episode,
-                        episodeMetadata.forNumber(episode.number),
-                        tmdbEpisodeMetadata.forNumber(episode.number),
+                  child: Row(
+                    children: <Widget>[
+                      Expanded(
+                        child: FilledButton.icon(
+                          onPressed: () =>
+                              widget.onEpisodePicked(singleEnriched),
+                          icon: const Icon(Icons.play_arrow_rounded),
+                          label: Text(context.t('Play')),
+                        ),
                       ),
-                    ),
-                    icon: const Icon(Icons.play_arrow_rounded),
-                    label: Text(context.t('Play')),
+                      const SizedBox(width: AppSpacing.sm),
+                      OutlinedButton.icon(
+                        onPressed: singleStatus != null || _downloadBusy
+                            ? null
+                            : () => unawaited(
+                                _enqueueDownloads(<SoraEpisode>[
+                                  singleEnriched,
+                                ]),
+                              ),
+                        icon: _downloadBusy
+                            ? const SizedBox.square(
+                                dimension: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : Icon(
+                                singleStatus == DownloadStatus.completed
+                                    ? Icons.download_done_rounded
+                                    : Icons.download_rounded,
+                                size: 18,
+                              ),
+                        label: Text(
+                          _downloadBusy
+                              ? context.t('Loading...')
+                              : context.t('Download'),
+                        ),
+                      ),
+                    ],
                   ),
                 );
               }
@@ -2962,7 +3066,7 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
                 });
               }
 
-              return ListView.separated(
+              final Widget episodeList = ListView.separated(
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
                 itemCount: episodes.length,
@@ -3019,6 +3123,11 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
                       effectiveContinued > 0 &&
                       epNum == effectiveContinued + 1;
 
+                  final DownloadStatus? downloadStatus =
+                      downloadKeys['${widget.source.addonId}|${episode.href}'];
+                  final bool selectedForDownload = _selectedForDownload
+                      .contains(episode.href);
+
                   return _EpisodeTile(
                     episode: episode,
                     displayTitle: _episodeCardTitle(
@@ -3037,11 +3146,32 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
                     isWatched: isWatched,
                     isContinue: isContinue,
                     localProgress: localProg,
-                    onTap: () => widget.onEpisodePicked(
-                      _episodeForPlayback(episode, metadata, tmdbMetadata),
-                    ),
+                    downloadMode: _downloadMode,
+                    selectedForDownload: selectedForDownload,
+                    downloadStatus: downloadStatus,
+                    onTap: _downloadMode
+                        ? () => _toggleDownloadSelection(episode.href)
+                        : () => widget.onEpisodePicked(
+                            _episodeForPlayback(
+                              episode,
+                              metadata,
+                              tmdbMetadata,
+                            ),
+                          ),
                   );
                 },
+              );
+
+              return Column(
+                children: <Widget>[
+                  episodeList,
+                  if (_downloadMode)
+                    _downloadActionBar(
+                      episodes,
+                      episodeMetadata,
+                      tmdbEpisodeMetadata,
+                    ),
+                ],
               );
             },
           ),
@@ -3049,6 +3179,335 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
       ),
     );
   }
+
+  Widget _downloadActionBar(
+    List<SoraEpisode> episodes,
+    AnimeEpisodeMetadataBundle episodeMetadata,
+    TmdbSeasonEpisodeMetadataBundle tmdbEpisodeMetadata,
+  ) {
+    final int count = _selectedForDownload.length;
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(top: AppSpacing.md),
+      child: Row(
+        children: <Widget>[
+          TextButton(
+            onPressed: _downloadBusy
+                ? null
+                : () {
+                    final bool selectAll =
+                        _selectedForDownload.length < episodes.length;
+                    setState(() {
+                      _selectedForDownload.clear();
+                      if (selectAll) {
+                        _selectedForDownload.addAll(
+                          episodes.map((SoraEpisode e) => e.href),
+                        );
+                      }
+                    });
+                  },
+            child: Text(
+              _selectedForDownload.length < episodes.length
+                  ? context.t('Select all')
+                  : context.t('Clear'),
+            ),
+          ),
+          const Spacer(),
+          FilledButton.icon(
+            onPressed: count == 0 || _downloadBusy
+                ? null
+                : () {
+                    final List<SoraEpisode> chosen = <SoraEpisode>[
+                      for (final SoraEpisode e in episodes)
+                        if (_selectedForDownload.contains(e.href))
+                          _episodeForPlayback(
+                            e,
+                            episodeMetadata.forNumber(e.number),
+                            tmdbEpisodeMetadata.forNumber(e.number),
+                          ),
+                    ];
+                    unawaited(_enqueueDownloads(chosen));
+                  },
+            icon: _downloadBusy
+                ? SizedBox.square(
+                    dimension: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: scheme.onPrimary,
+                    ),
+                  )
+                : const Icon(Icons.download_rounded, size: 18),
+            label: Text(
+              _downloadBusy
+                  ? context.t('Loading...')
+                  : '${context.t('Download')} $count',
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _toggleDownloadSelection(String href) {
+    if (_downloadBusy) return;
+    setState(() {
+      if (!_selectedForDownload.add(href)) {
+        _selectedForDownload.remove(href);
+      }
+    });
+  }
+
+  Future<void> _enqueueDownloads(List<SoraEpisode> episodes) async {
+    if (episodes.isEmpty || _downloadBusy) return;
+    setState(() => _downloadBusy = true);
+    try {
+      final _DownloadStreamChoice? choice = await _chooseDownloadStream(
+        episodes.first,
+      );
+      if (choice == null || !mounted) return;
+
+      final DownloadController notifier = ref.read(downloadsProvider.notifier);
+      final List<SoraEpisode> queued = <SoraEpisode>[];
+      final List<SoraEpisode> skipped = <SoraEpisode>[];
+
+      for (final SoraEpisode episode in episodes) {
+        NormalizedStreamBundle bundle;
+        try {
+          bundle = episode.href == episodes.first.href
+              ? choice.bundle
+              : await _resolveDownloadBundle(episode);
+        } catch (_) {
+          skipped.add(episode);
+          continue;
+        }
+
+        final NormalizedStreamBundle? matched = _bundleWithDownloadPreference(
+          bundle,
+          choice.preference,
+        );
+        if (matched == null || !_isDownloadableSelection(matched)) {
+          skipped.add(episode);
+          continue;
+        }
+
+        await notifier.enqueue(
+          item: widget.item,
+          source: widget.source,
+          episode: episode,
+          seasonNumber: widget.seasonNumber,
+          streamPreference: choice.preference,
+        );
+        queued.add(episode);
+      }
+      if (!mounted) return;
+      if (skipped.isNotEmpty) {
+        _showSkippedDownloadsWarning(skipped);
+      }
+      if (queued.isEmpty) return;
+      _setDownloadMode(false);
+      // Open the title's downloads page so the user can watch progress.
+      context.push(
+        AppRoutes.offlineTitlePath(
+          widget.item.id,
+          addonId: widget.source.addonId,
+        ),
+      );
+    } finally {
+      if (mounted && _downloadBusy) {
+        setState(() => _downloadBusy = false);
+      }
+    }
+  }
+
+  Future<_DownloadStreamChoice?> _chooseDownloadStream(
+    SoraEpisode episode,
+  ) async {
+    final NormalizedStreamBundle bundle;
+    try {
+      bundle = await _resolveDownloadBundle(episode);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              context.tf('Stream resolution failed: {error}', <String, Object?>{
+                'error': error,
+              }),
+            ),
+          ),
+        );
+      }
+      return null;
+    }
+    if (!mounted) return null;
+    if (bundle.availableServers.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(context.t('No streams available for this source.')),
+        ),
+      );
+      return null;
+    }
+
+    final NormalizedStreamBundle? selected =
+        await showModalBottomSheet<NormalizedStreamBundle>(
+          context: context,
+          isScrollControlled: true,
+          backgroundColor: Colors.transparent,
+          barrierColor: Colors.black54,
+          elevation: 0,
+          showDragHandle: false,
+          useSafeArea: false,
+          clipBehavior: Clip.none,
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.zero,
+            side: BorderSide.none,
+          ),
+          builder: (BuildContext sheetContext) {
+            return Material(
+              type: MaterialType.transparency,
+              color: Colors.transparent,
+              shadowColor: Colors.transparent,
+              surfaceTintColor: Colors.transparent,
+              child: _StreamReadySheet(
+                bundle: bundle,
+                actionLabel: context.t('Download'),
+                actionIcon: Icons.download_rounded,
+                onPlay: (NormalizedStreamBundle selected) {
+                  Navigator.of(sheetContext).pop(selected);
+                },
+              ),
+            );
+          },
+        );
+    if (selected == null) return null;
+    if (!_isDownloadableSelection(selected)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(context.t('Selected stream is not downloadable.')),
+          ),
+        );
+      }
+      return null;
+    }
+    return _DownloadStreamChoice(
+      bundle: selected,
+      preference: _downloadPreferenceFromBundle(selected),
+    );
+  }
+
+  Future<NormalizedStreamBundle> _resolveDownloadBundle(
+    SoraEpisode episode,
+  ) async {
+    final SoraInstalledAddon? addon = ref
+        .read(soraAddonsProvider)
+        .byId(widget.source.addonId);
+    if (addon == null) {
+      throw const SoraAddonException('Addon is no longer installed.');
+    }
+    final SoraResolvedStreams streams = await ref
+        .read(soraJsRuntimeProvider)
+        .extractStreams(addon: addon, episode: episode, voiceover: null);
+    return parseSoraStreamBundle(
+      streams,
+      streamType: addon.manifest.streamType,
+    );
+  }
+
+  DownloadStreamPreference _downloadPreferenceFromBundle(
+    NormalizedStreamBundle bundle,
+  ) {
+    return DownloadStreamPreference(
+      serverId: bundle.selectedServer.id,
+      serverTitle: bundle.selectedServer.title,
+      qualityLabel: bundle.selectedQuality?.label ?? '',
+      voiceoverId: bundle.selectedVoiceOver?.id ?? '',
+      voiceoverLabel: bundle.selectedVoiceOver?.label ?? '',
+    );
+  }
+
+  NormalizedStreamBundle? _bundleWithDownloadPreference(
+    NormalizedStreamBundle bundle,
+    DownloadStreamPreference preference,
+  ) {
+    final NormalizedServer? server = _preferredDownloadServer(
+      bundle,
+      preference,
+    );
+    if (server == null) return null;
+
+    NormalizedStreamBundle selected = bundle.withServer(server);
+    final String qualityLabel = preference.qualityLabel.trim().toLowerCase();
+    if (qualityLabel.isNotEmpty) {
+      for (final NormalizedQuality quality in server.qualities) {
+        if (quality.label.trim().toLowerCase() == qualityLabel) {
+          return selected.withQuality(quality);
+        }
+      }
+      return null;
+    }
+    return selected;
+  }
+
+  NormalizedServer? _preferredDownloadServer(
+    NormalizedStreamBundle bundle,
+    DownloadStreamPreference preference,
+  ) {
+    final String serverTitle = preference.serverTitle.trim().toLowerCase();
+    if (serverTitle.isNotEmpty) {
+      for (final NormalizedServer server in bundle.availableServers) {
+        if (server.title.trim().toLowerCase() == serverTitle) return server;
+      }
+    }
+
+    final String serverId = preference.serverId.trim();
+    if (serverId.isNotEmpty) {
+      for (final NormalizedServer server in bundle.availableServers) {
+        if (server.id == serverId) return server;
+      }
+    }
+    return null;
+  }
+
+  bool _isDownloadableSelection(NormalizedStreamBundle bundle) {
+    final String url =
+        bundle.selectedQuality?.streamUrl ?? bundle.selectedServer.streamUrl;
+    final Uri? uri = Uri.tryParse(url.trim());
+    return uri != null && (uri.scheme == 'http' || uri.scheme == 'https');
+  }
+
+  void _showSkippedDownloadsWarning(List<SoraEpisode> skipped) {
+    final String labels = skipped
+        .map((SoraEpisode e) {
+          return e.displayNumber.isNotEmpty
+              ? '${context.t('Episode')} ${e.displayNumber}'
+              : e.title;
+        })
+        .where((String label) => label.trim().isNotEmpty)
+        .take(6)
+        .join(', ');
+    final String episodes = labels.isNotEmpty
+        ? labels
+        : skipped.length.toString();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          context.tf(
+            'Skipped downloads: {episodes}. Choose a stream for them separately.',
+            <String, Object?>{'episodes': episodes},
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DownloadStreamChoice {
+  const _DownloadStreamChoice({required this.bundle, required this.preference});
+
+  final NormalizedStreamBundle bundle;
+  final DownloadStreamPreference preference;
 }
 
 class _EpisodeTile extends StatelessWidget {
@@ -3061,8 +3520,14 @@ class _EpisodeTile extends StatelessWidget {
     required this.isContinue,
     required this.onTap,
     this.localProgress,
+    this.downloadMode = false,
+    this.selectedForDownload = false,
+    this.downloadStatus,
   });
 
+  final bool downloadMode;
+  final bool selectedForDownload;
+  final DownloadStatus? downloadStatus;
   final SoraEpisode episode;
   final String displayTitle;
   final String imageUrl;
@@ -3090,18 +3555,19 @@ class _EpisodeTile extends StatelessWidget {
     final bool showProgressBar =
         progressFraction > 0.02 && progressFraction < 0.99;
 
+    final bool highlight = isSelected || (downloadMode && selectedForDownload);
     return InkWell(
       borderRadius: AppRadius.all(AppRadius.lg),
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.all(AppSpacing.sm),
         decoration: BoxDecoration(
-          color: isSelected
+          color: highlight
               ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.10)
               : null,
           borderRadius: AppRadius.all(AppRadius.lg),
           border: Border.all(
-            color: isSelected
+            color: highlight
                 ? Theme.of(context).colorScheme.primary
                 : AppColors.border,
           ),
@@ -3166,7 +3632,31 @@ class _EpisodeTile extends StatelessWidget {
               ),
             ),
             const SizedBox(width: AppSpacing.sm),
-            if (isSelected)
+            if (downloadMode)
+              Icon(
+                selectedForDownload
+                    ? Icons.check_box_rounded
+                    : Icons.check_box_outline_blank_rounded,
+                color: selectedForDownload
+                    ? Theme.of(context).colorScheme.primary
+                    : null,
+                size: 22,
+              )
+            else if (downloadStatus == DownloadStatus.completed)
+              Icon(
+                Icons.download_done_rounded,
+                color: Theme.of(context).colorScheme.primary,
+                size: 20,
+              )
+            else if (downloadStatus == DownloadStatus.failed)
+              const Icon(Icons.error_outline_rounded, size: 20)
+            else if (downloadStatus != null)
+              const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            else if (isSelected)
               Icon(
                 Icons.radio_button_checked,
                 color: Theme.of(context).colorScheme.primary,
@@ -3432,10 +3922,17 @@ class _StreamResolvingSection extends ConsumerWidget {
 // ---------------------------------------------------------------------------
 
 class _StreamReadySheet extends StatefulWidget {
-  const _StreamReadySheet({required this.bundle, required this.onPlay});
+  const _StreamReadySheet({
+    required this.bundle,
+    required this.onPlay,
+    this.actionLabel,
+    this.actionIcon = Icons.play_arrow_rounded,
+  });
 
   final NormalizedStreamBundle bundle;
   final ValueChanged<NormalizedStreamBundle> onPlay;
+  final String? actionLabel;
+  final IconData actionIcon;
 
   @override
   State<_StreamReadySheet> createState() => _StreamReadySheetState();
@@ -3444,12 +3941,31 @@ class _StreamReadySheet extends StatefulWidget {
 class _StreamReadySheetState extends State<_StreamReadySheet> {
   late int _selectedIndex;
   late int _selectedVoiceOverIndex;
+  late int _selectedQualityIndex;
 
   @override
   void initState() {
     super.initState();
-    _selectedIndex = 0;
-    _selectedVoiceOverIndex = 0;
+    _selectedIndex = widget.bundle.availableServers.indexWhere(
+      (NormalizedServer s) => s.id == widget.bundle.selectedServer.id,
+    );
+    if (_selectedIndex < 0) _selectedIndex = 0;
+    _selectedVoiceOverIndex = widget.bundle.availableVoiceOvers.indexWhere(
+      (NormalizedVoiceOver v) => v.id == widget.bundle.selectedVoiceOver?.id,
+    );
+    if (_selectedVoiceOverIndex < 0) _selectedVoiceOverIndex = 0;
+    _selectedQualityIndex = _initialQualityIndex;
+  }
+
+  int get _initialQualityIndex {
+    final List<NormalizedServer> servers = widget.bundle.availableServers;
+    if (servers.isEmpty || _selectedIndex >= servers.length) return 0;
+    final List<NormalizedQuality> qualities = servers[_selectedIndex].qualities;
+    final String? selectedLabel = widget.bundle.selectedQuality?.label;
+    final int index = qualities.indexWhere(
+      (NormalizedQuality q) => q.label == selectedLabel,
+    );
+    return index < 0 ? 0 : index;
   }
 
   @override
@@ -3458,6 +3974,11 @@ class _StreamReadySheetState extends State<_StreamReadySheet> {
     final List<NormalizedServer> servers = widget.bundle.availableServers;
     final List<NormalizedVoiceOver> voiceovers =
         widget.bundle.availableVoiceOvers;
+    final NormalizedServer? selectedServer = servers.isEmpty
+        ? null
+        : servers[_selectedIndex];
+    final List<NormalizedQuality> qualities =
+        selectedServer?.qualities ?? const <NormalizedQuality>[];
 
     return Container(
       margin: const EdgeInsets.all(AppSpacing.lg),
@@ -3501,7 +4022,31 @@ class _StreamReadySheetState extends State<_StreamReadySheet> {
                         ChoiceChip(
                           label: Text(servers[i].title),
                           selected: _selectedIndex == i,
-                          onSelected: (_) => setState(() => _selectedIndex = i),
+                          onSelected: (_) => setState(() {
+                            _selectedIndex = i;
+                            _selectedQualityIndex = 0;
+                          }),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: AppSpacing.lg),
+                ],
+                if (qualities.length > 1) ...<Widget>[
+                  Text(
+                    context.t('Quality'),
+                    style: Theme.of(context).textTheme.labelMedium,
+                  ),
+                  const SizedBox(height: AppSpacing.sm),
+                  Wrap(
+                    spacing: AppSpacing.sm,
+                    runSpacing: AppSpacing.sm,
+                    children: <Widget>[
+                      for (int i = 0; i < qualities.length; i++)
+                        ChoiceChip(
+                          label: Text(qualities[i].label),
+                          selected: _selectedQualityIndex == i,
+                          onSelected: (_) =>
+                              setState(() => _selectedQualityIndex = i),
                         ),
                     ],
                   ),
@@ -3561,6 +4106,15 @@ class _StreamReadySheetState extends State<_StreamReadySheet> {
                     onPressed: () {
                       NormalizedStreamBundle selected = widget.bundle
                           .withServer(servers[_selectedIndex]);
+                      if (qualities.isNotEmpty) {
+                        final int qualityIndex =
+                            _selectedQualityIndex < qualities.length
+                            ? _selectedQualityIndex
+                            : 0;
+                        selected = selected.withQuality(
+                          qualities[qualityIndex],
+                        );
+                      }
                       if (voiceovers.length > 1) {
                         selected = selected.withVoiceOver(
                           voiceovers[_selectedVoiceOverIndex],
@@ -3568,8 +4122,8 @@ class _StreamReadySheetState extends State<_StreamReadySheet> {
                       }
                       widget.onPlay(selected);
                     },
-                    icon: const Icon(Icons.play_arrow_rounded),
-                    label: Text(context.t('Play')),
+                    icon: Icon(widget.actionIcon),
+                    label: Text(widget.actionLabel ?? context.t('Play')),
                   ),
                 ),
               ] else ...<Widget>[

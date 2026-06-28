@@ -9,6 +9,7 @@ import '../features/addons/presentation/sources_page.dart';
 import '../features/board/presentation/board_page.dart';
 import '../features/calendar/presentation/calendar_page.dart';
 import '../features/discovery/presentation/discovery_page.dart';
+import '../features/downloads/presentation/offline_title_page.dart';
 import '../features/library/presentation/library_page.dart';
 import '../features/media_details/presentation/media_details_page.dart';
 import '../features/settings/presentation/settings_page.dart';
@@ -20,8 +21,9 @@ import '../shared/models/media_item.dart';
 
 /// Root navigator key, so context-less services (e.g. the Cloudflare challenge
 /// solver) can push full-screen pages over the whole app.
-final GlobalKey<NavigatorState> rootNavigatorKey =
-    GlobalKey<NavigatorState>(debugLabel: 'root');
+final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>(
+  debugLabel: 'root',
+);
 
 GoRouter buildAppRouter(String initialLocation) => GoRouter(
   navigatorKey: rootNavigatorKey,
@@ -171,6 +173,21 @@ GoRouter buildAppRouter(String initialLocation) => GoRouter(
                 initialItem: state.extra is MediaItem
                     ? state.extra! as MediaItem
                     : null,
+              ),
+            );
+          },
+        ),
+        GoRoute(
+          path: AppRoutes.offlineTitle,
+          pageBuilder: (BuildContext context, GoRouterState state) {
+            final String id = Uri.decodeComponent(
+              state.pathParameters['id'] ?? '',
+            );
+            return _fadePage(
+              state,
+              OfflineTitlePage(
+                mediaId: id,
+                initialAddonId: state.uri.queryParameters['addon'],
               ),
             );
           },

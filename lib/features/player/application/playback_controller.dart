@@ -1,6 +1,7 @@
 // ignore_for_file: avoid_print
 import 'dart:async';
 import 'dart:collection';
+import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
@@ -2402,16 +2403,31 @@ class PlaybackController extends Notifier<PlaybackState> {
 
   Future<List<SubtitleCue>> _loadSubtitleCues(SubtitleTrack track) async {
     try {
-      final Response<String> response = await Dio().get<String>(
-        track.url,
-        options: track.headers.isNotEmpty
-            ? Options(headers: track.headers)
-            : null,
-      );
-      return const SubtitleParser().parse(response.data ?? '');
+      return const SubtitleParser().parse(await _readSubtitleSource(track));
     } on Object {
       return const <SubtitleCue>[];
     }
+  }
+
+  /// Reads a subtitle from the network, or from disk when it is a downloaded
+  /// (offline) track — its url is then a `file://` URI or an absolute path.
+  Future<String> _readSubtitleSource(SubtitleTrack track) async {
+    final Uri? uri = Uri.tryParse(track.url);
+    final bool isHttp =
+        uri != null && (uri.scheme == 'http' || uri.scheme == 'https');
+    if (!isHttp) {
+      final String path = uri != null && uri.scheme == 'file'
+          ? uri.toFilePath()
+          : track.url;
+      return File(path).readAsString();
+    }
+    final Response<String> response = await Dio().get<String>(
+      track.url,
+      options: track.headers.isNotEmpty
+          ? Options(headers: track.headers)
+          : null,
+    );
+    return response.data ?? '';
   }
 
   Future<void> retry() async {

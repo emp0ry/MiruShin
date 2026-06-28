@@ -24,6 +24,7 @@ abstract final class AppRoutes {
   static const String mediaDetails = '/media/:id';
   static const String watch = '/watch/:id';
   static const String watchPlay = '/watch/play';
+  static const String offlineTitle = '/downloads/:id';
 
   static String discoveryPath({
     MediaType? type,
@@ -52,6 +53,12 @@ abstract final class AppRoutes {
 
   static String watchPath(String id) {
     return '/watch/${Uri.encodeComponent(id)}';
+  }
+
+  static String offlineTitlePath(String id, {String? addonId}) {
+    final String path = '/downloads/${Uri.encodeComponent(id)}';
+    if (addonId == null || addonId.trim().isEmpty) return path;
+    return '$path?addon=${Uri.encodeQueryComponent(addonId)}';
   }
 }
 

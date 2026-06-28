@@ -23,6 +23,8 @@ import '../../../shared/utils/media_status_formatter.dart';
 import '../../catalog/application/catalog_mode.dart';
 import '../../catalog/application/catalog_status.dart';
 import '../../catalog/presentation/catalog_offline_banner.dart';
+import '../../downloads/application/downloads_provider.dart';
+import '../../downloads/presentation/downloaded_tab.dart';
 import '../../profile/application/anilist_user_settings_provider.dart';
 import '../application/local_library_provider.dart';
 import 'local_library_editor.dart';
@@ -785,6 +787,10 @@ class _AniListViewState extends ConsumerState<_AniListView>
   late TabController _tab;
   int _activeTabIndex = 0;
 
+  // Downloads are videos, so the Downloaded tab is only meaningful for anime.
+  bool get _showDownloads => widget.mediaType != 'MANGA';
+  int get _extraTabCount => _showDownloads ? 1 : 0;
+
   List<AniListAnimeListFolder> get _viewFolders {
     final Map<int, AniListAnimeListEntry> byEntryId =
         <int, AniListAnimeListEntry>{};
@@ -809,7 +815,7 @@ class _AniListViewState extends ConsumerState<_AniListView>
     final List<AniListAnimeListFolder> folders = _viewFolders;
     _activeTabIndex = _defaultFolderIndex(folders, widget.defaultPage);
     _tab = TabController(
-      length: folders.length,
+      length: folders.length + _extraTabCount,
       vsync: this,
       initialIndex: _activeTabIndex,
     );
@@ -820,7 +826,7 @@ class _AniListViewState extends ConsumerState<_AniListView>
   void didUpdateWidget(_AniListView old) {
     super.didUpdateWidget(old);
     final List<AniListAnimeListFolder> folders = _viewFolders;
-    final int nextLength = folders.length;
+    final int nextLength = folders.length + _extraTabCount;
     if (_tab.length != nextLength) {
       final int prev = old.defaultPage != widget.defaultPage
           ? _defaultFolderIndex(folders, widget.defaultPage)
@@ -855,6 +861,36 @@ class _AniListViewState extends ConsumerState<_AniListView>
     final ColorScheme cs = Theme.of(context).colorScheme;
     final AppThemeExtension palette = AppThemeExtension.of(context);
     final List<AniListAnimeListFolder> folders = _viewFolders;
+
+    int downloadCount = 0;
+    if (_showDownloads) {
+      ref.watch(downloadsProvider);
+      downloadCount = ref
+          .read(downloadsProvider.notifier)
+          .titlesForCatalog(CatalogMode.anilist)
+          .length;
+    }
+
+    final List<Widget> tabs = <Widget>[
+      ...folders.map((f) {
+        final String name = context.t(_folderLabel(f));
+        return Tab(text: '$name  ${f.entries.length}');
+      }),
+      if (_showDownloads)
+        Tab(text: '${context.t('Downloaded')}  $downloadCount'),
+    ];
+
+    final List<Widget> views = <Widget>[
+      ...folders.asMap().entries.map((entry) {
+        return _FolderView(
+          folder: entry.value,
+          mediaType: widget.mediaType,
+          enableRussianAliasLoad: entry.key == _activeTabIndex,
+        );
+      }),
+      if (_showDownloads) const DownloadedTab(catalog: CatalogMode.anilist),
+    ];
+
     return Column(
       children: <Widget>[
         TabBar(
@@ -866,22 +902,10 @@ class _AniListViewState extends ConsumerState<_AniListView>
           unselectedLabelColor: palette.textMutedColor,
           dividerColor: Colors.transparent,
           padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
-          tabs: folders.map((f) {
-            final String name = context.t(_folderLabel(f));
-            return Tab(text: '$name  ${f.entries.length}');
-          }).toList(),
+          tabs: tabs,
         ),
         Expanded(
-          child: TabBarView(
-            controller: _tab,
-            children: folders.asMap().entries.map((entry) {
-              return _FolderView(
-                folder: entry.value,
-                mediaType: widget.mediaType,
-                enableRussianAliasLoad: entry.key == _activeTabIndex,
-              );
-            }).toList(),
-          ),
+          child: TabBarView(controller: _tab, children: views),
         ),
       ],
     );
@@ -2864,20 +2888,21 @@ const List<LibraryStatus> _kLocalStatuses = <LibraryStatus>[
   LibraryStatus.favorite,
 ];
 
-class _LocalLibraryView extends StatefulWidget {
+class _LocalLibraryView extends ConsumerStatefulWidget {
   const _LocalLibraryView({required this.items});
   final List<LibraryItem> items;
 
   @override
-  State<_LocalLibraryView> createState() => _LocalLibraryViewState();
+  ConsumerState<_LocalLibraryView> createState() => _LocalLibraryViewState();
 }
 
-class _LocalLibraryViewState extends State<_LocalLibraryView> {
+class _LocalLibraryViewState extends ConsumerState<_LocalLibraryView> {
   static const String _preferencesPrefix = 'library.local';
 
   final TextEditingController _search = TextEditingController();
   _Sort _sort = _Sort.addedNewest;
   LibraryStatus? _selectedStatus;
+  bool _showDownloads = false;
   bool _isGrid = false;
 
   @override
@@ -3023,7 +3048,14 @@ class _LocalLibraryViewState extends State<_LocalLibraryView> {
   Widget build(BuildContext context) {
     final AppThemeExtension palette = AppThemeExtension.of(context);
 
-    if (widget.items.isEmpty) {
+    ref.watch(downloadsProvider);
+    final int downloadCount = ref
+        .read(downloadsProvider.notifier)
+        .titlesForCatalog(CatalogMode.tmdb)
+        .length;
+    final bool hasDownloads = downloadCount > 0;
+
+    if (widget.items.isEmpty && !hasDownloads) {
       return NeutralPlaceholder(
         title: 'Library is empty',
         message:
@@ -3034,104 +3066,128 @@ class _LocalLibraryViewState extends State<_LocalLibraryView> {
     }
 
     final List<LibraryStatus> presentStatuses = _presentStatuses;
+    // With no local items but existing downloads, default to the downloads view.
+    final bool showDownloads = _showDownloads || widget.items.isEmpty;
     final List<LibraryItem> items = _filtered;
 
     return Column(
       children: <Widget>[
         // ── Search / grid / sort bar ──────────────────────────────────────
-        Padding(
-          padding: const EdgeInsets.fromLTRB(
-            AppSpacing.lg,
-            AppSpacing.sm,
-            AppSpacing.lg,
-            AppSpacing.sm,
-          ),
-          child: Row(
-            children: <Widget>[
-              Expanded(
-                child: TvTextFieldFocus(
-                  releaseHorizontal: true,
-                  child: TextField(
-                    controller: _search,
-                    onChanged: (_) => setState(() {}),
-                    textInputAction: TextInputAction.search,
-                    decoration: InputDecoration(
-                      hintText: 'Search library…',
-                      prefixIcon: const Icon(Icons.search_rounded, size: 20),
-                      suffixIcon: _search.text.isNotEmpty
-                          ? IconButton(
-                              icon: const Icon(Icons.clear_rounded, size: 18),
-                              onPressed: () {
-                                _search.clear();
-                                setState(() {});
-                              },
-                            )
-                          : null,
-                      isDense: true,
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: AppSpacing.md,
-                        vertical: AppSpacing.sm,
+        if (!showDownloads)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.lg,
+              AppSpacing.sm,
+              AppSpacing.lg,
+              AppSpacing.sm,
+            ),
+            child: Row(
+              children: <Widget>[
+                Expanded(
+                  child: TvTextFieldFocus(
+                    releaseHorizontal: true,
+                    child: TextField(
+                      controller: _search,
+                      onChanged: (_) => setState(() {}),
+                      textInputAction: TextInputAction.search,
+                      decoration: InputDecoration(
+                        hintText: 'Search library…',
+                        prefixIcon: const Icon(Icons.search_rounded, size: 20),
+                        suffixIcon: _search.text.isNotEmpty
+                            ? IconButton(
+                                icon: const Icon(Icons.clear_rounded, size: 18),
+                                onPressed: () {
+                                  _search.clear();
+                                  setState(() {});
+                                },
+                              )
+                            : null,
+                        isDense: true,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: AppSpacing.md,
+                          vertical: AppSpacing.sm,
+                        ),
+                        border: OutlineInputBorder(
+                          borderRadius: AppRadius.all(AppRadius.md),
+                          borderSide: BorderSide.none,
+                        ),
+                        filled: true,
+                        fillColor: palette.surfaceSoftColor,
                       ),
-                      border: OutlineInputBorder(
-                        borderRadius: AppRadius.all(AppRadius.md),
-                        borderSide: BorderSide.none,
-                      ),
-                      filled: true,
-                      fillColor: palette.surfaceSoftColor,
                     ),
                   ),
                 ),
-              ),
-              const SizedBox(width: AppSpacing.sm),
-              _BarIcon(
-                icon: _isGrid
-                    ? Icons.view_list_rounded
-                    : Icons.grid_view_rounded,
-                tooltip: _isGrid ? 'List view' : 'Grid view',
-                onTap: () {
-                  setState(() => _isGrid = !_isGrid);
-                  unawaited(_savePreferences());
-                },
-              ),
-              const SizedBox(width: AppSpacing.xs),
-              _BarIcon(
-                icon: Icons.sort_rounded,
-                tooltip: 'Sort',
-                onTap: _openSort,
-              ),
-            ],
+                const SizedBox(width: AppSpacing.sm),
+                _BarIcon(
+                  icon: _isGrid
+                      ? Icons.view_list_rounded
+                      : Icons.grid_view_rounded,
+                  tooltip: _isGrid ? 'List view' : 'Grid view',
+                  onTap: () {
+                    setState(() => _isGrid = !_isGrid);
+                    unawaited(_savePreferences());
+                  },
+                ),
+                const SizedBox(width: AppSpacing.xs),
+                _BarIcon(
+                  icon: Icons.sort_rounded,
+                  tooltip: 'Sort',
+                  onTap: _openSort,
+                ),
+              ],
+            ),
           ),
-        ),
 
-        // ── Status filter chips ───────────────────────────────────────────
-        if (presentStatuses.length > 1)
+        // ── Status filter chips (+ Downloaded) ────────────────────────────
+        if (presentStatuses.length > 1 || hasDownloads)
           SizedBox(
             height: 44,
             child: ListView(
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
               children: <Widget>[
-                ChoiceChip(
-                  label: Text(context.t('All')),
-                  selected: _selectedStatus == null,
-                  onSelected: (_) => setState(() => _selectedStatus = null),
-                ),
-                ...presentStatuses.map(
-                  (LibraryStatus s) => Padding(
-                    padding: const EdgeInsets.only(left: AppSpacing.sm),
-                    child: ChoiceChip(
-                      label: Text(s.label),
-                      selected: _selectedStatus == s,
-                      onSelected: (_) => setState(() => _selectedStatus = s),
+                if (widget.items.isNotEmpty) ...<Widget>[
+                  ChoiceChip(
+                    label: Text(context.t('All')),
+                    selected: !showDownloads && _selectedStatus == null,
+                    onSelected: (_) => setState(() {
+                      _selectedStatus = null;
+                      _showDownloads = false;
+                    }),
+                  ),
+                  ...presentStatuses.map(
+                    (LibraryStatus s) => Padding(
+                      padding: const EdgeInsets.only(left: AppSpacing.sm),
+                      child: ChoiceChip(
+                        label: Text(s.label),
+                        selected: !showDownloads && _selectedStatus == s,
+                        onSelected: (_) => setState(() {
+                          _selectedStatus = s;
+                          _showDownloads = false;
+                        }),
+                      ),
                     ),
                   ),
-                ),
+                ],
+                if (hasDownloads)
+                  Padding(
+                    padding: EdgeInsets.only(
+                      left: widget.items.isNotEmpty ? AppSpacing.sm : 0,
+                    ),
+                    child: ChoiceChip(
+                      label: Text('${context.t('Downloaded')}  $downloadCount'),
+                      selected: showDownloads,
+                      onSelected: (_) => setState(() => _showDownloads = true),
+                    ),
+                  ),
               ],
             ),
           ),
 
         // ── Content ───────────────────────────────────────────────────────
-        if (items.isEmpty)
+        if (showDownloads)
+          const Expanded(child: DownloadedTab(catalog: CatalogMode.tmdb))
+        else if (items.isEmpty)
           Expanded(child: Center(child: Text(context.t('No results'))))
         else if (_isGrid)
           Expanded(
