@@ -49,6 +49,10 @@ abstract final class AppConstants {
       'https://auth.emp0ry.com/shikimori/authorize';
   static const String shikimoriTokenProxyUrl = 'https://auth.emp0ry.com/token';
   static const String shikimoriCallbackUrl = 'https://auth.emp0ry.com/callback';
+  // Desktop: the Worker callback page forwards the code to this localhost
+  // listener so the app captures it automatically (like MAL/AniList) instead of
+  // making the user copy it by hand.
+  static const int shikimoriDesktopCallbackPort = 28374;
   // Canonical API host. shikimori.one 301-redirects here, and that cross-host
   // redirect strips the Authorization header — so authenticated calls (whoami,
   // user_rates) must target shikimori.io directly or they arrive unauthenticated.

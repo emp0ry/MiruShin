@@ -43,8 +43,15 @@ function escapeHtml(value: string): string {
     .replaceAll('"', "&quot;");
 }
 
+// Desktop listener the app runs during the Shikimori login flow. The redirect
+// URI registered with Shikimori stays this Worker's /callback, and this page
+// forwards the code to localhost so the app captures it automatically (matching
+// the MAL/AniList flow). The manual copy box stays as a fallback.
+const SHIKIMORI_DESKTOP_CALLBACK = "http://localhost:28374/";
+
 function callbackPage(url: URL): Response {
   const code = url.searchParams.get("code")?.trim() ?? "";
+  const state = url.searchParams.get("state")?.trim() ?? "";
   const error = url.searchParams.get("error")?.trim() ?? "";
 
   if (!code) {
@@ -54,13 +61,19 @@ function callbackPage(url: URL): Response {
     );
   }
 
+  const local = new URL(SHIKIMORI_DESKTOP_CALLBACK);
+  local.searchParams.set("code", code);
+  if (state) local.searchParams.set("state", state);
+  const target = JSON.stringify(local.toString());
+
   return html(`
 <!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Authorization code</title>
+<script>setTimeout(function () { try { window.location.replace(${target}); } catch (e) {} }, 50);</script>
 <body style="font-family: system-ui; padding: 24px; line-height: 1.5;">
   <h1>Authorization code</h1>
-  <p>Copy this code back into MiruShin if the app did not close automatically:</p>
+  <p>Returning to MiruShin… if the app did not pick it up, copy this code in by hand:</p>
   <input value="${escapeHtml(code)}" readonly style="width: 100%; font-size: 16px; padding: 12px;">
 </body>
 `);

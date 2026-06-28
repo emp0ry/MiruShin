@@ -128,8 +128,8 @@ Future<void> loginShikimori(BuildContext context, WidgetRef ref) async {
       context: context,
       authUri: authUri,
       redirectUri: redirectUri,
+      desktopPort: AppConstants.shikimoriDesktopCallbackPort,
       title: context.t('Shikimori Login'),
-      manualCodeEntry: !_isMobile,
     );
     if (code == null) {
       messenger.showSnackBar(SnackBar(content: Text(canceledMessage)));
@@ -175,8 +175,8 @@ Future<void> loginShikimori(BuildContext context, WidgetRef ref) async {
 ///
 /// - Mobile: in-app WebView (intercepts the redirect, or the OOB code page when
 ///   [oobCodePathPrefix] is set).
-/// - Desktop, real redirect (MAL): localhost callback server on [desktopPort].
-/// - Desktop, provider callback page (Shikimori): paste the redirected URL/code.
+/// - Desktop (MAL, Shikimori): localhost callback server on [desktopPort]. For
+///   Shikimori the Worker callback page forwards the code to that listener.
 /// - Web: manual URL/code paste.
 Future<String?> _obtainAuthCode({
   required BuildContext context,

@@ -4,7 +4,7 @@ Cloudflare Worker used by MiruShin for default MyAnimeList and Shikimori OAuth.
 
 The Worker keeps shared OAuth app credentials out of the Flutter repository,
 GitHub Actions, and release binaries. It builds provider authorization URLs,
-handles token exchange/refresh, and serves the shared callback page at
+handles token exchange/refresh, and serves the shared Shikimori callback page at
 `https://auth.emp0ry.com/callback`.
 
 ## Routes
@@ -14,6 +14,23 @@ handles token exchange/refresh, and serves the shared callback page at
 - `GET /shikimori/authorize`
 - `POST /token`
 - `GET /callback`
+
+## Shikimori callback
+
+Shikimori registers a single redirect URL, so both mobile and desktop redirect
+to `GET /callback`.
+
+- **Mobile**: the in-app WebView intercepts the redirect and reads the `code`
+  before the page loads.
+- **Desktop**: the callback page forwards the browser to the app's local
+  listener at `http://localhost:28374/?code=…&state=…`, so the code is captured
+  automatically (the same experience as MAL/AniList). The page still shows the
+  code in a read-only box as a manual-copy fallback.
+
+The redirect URL registered with Shikimori never changes, desktop just adds one
+client-side hop from the callback page to localhost. If you change the desktop
+port, update `SHIKIMORI_DESKTOP_CALLBACK` in `src/index.ts` and
+`AppConstants.shikimoriDesktopCallbackPort` in the Flutter app together.
 
 ## Cloudflare Secrets
 
