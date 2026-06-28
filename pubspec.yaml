@@ -32,6 +32,9 @@ dependencies:
   webview_flutter_android: ^4.12.0
   webview_flutter_wkwebview: ^3.25.1
   webview_win_floating: ^3.0.3
+  # Used only for the Cloudflare challenge solver: unlike webview_flutter it can
+  # read HttpOnly cookies (cf_clearance) and covers Android/iOS/macOS/Windows.
+  flutter_inappwebview: ^6.1.5
   flutter_secure_storage: ^10.0.0
   flutter_local_notifications: ^21.0.0
   video_player: ^2.11.1

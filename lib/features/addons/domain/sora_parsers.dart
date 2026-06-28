@@ -558,13 +558,16 @@ List<SoraStreamCandidate> _parseStreamValue(Object? value) {
         .toList(growable: false);
   }
 
-  final String title = _cleanServerName(
-    _string(
-      json['title'],
-      fallback: _string(json['server'], fallback: 'Server'),
-    ),
-    _string(json['quality']),
+  final String rawTitle = _string(
+    json['title'],
+    fallback: _string(json['server'], fallback: 'Server'),
   );
+  // Server name with any embedded quality stripped. Used only when we synthesise
+  // per-quality candidates from url1080/url720/... fields, where the quality is
+  // appended explicitly. For a plain stream entry we must keep [rawTitle] so a
+  // quality baked into the title (e.g. "ALGOL (1080p)") survives for
+  // _extractQualityLabel — _serverName strips it again later for display.
+  final String title = _cleanServerName(rawTitle, _string(json['quality']));
 
   final Map<String, String> headers = _headers(json['headers']);
   final List<SoraSubtitle> subtitles = _subtitles(json);
@@ -628,7 +631,7 @@ List<SoraStreamCandidate> _parseStreamValue(Object? value) {
 
   return <SoraStreamCandidate>[
     SoraStreamCandidate(
-      title: title,
+      title: rawTitle,
       url: url,
       headers: headers,
       subtitles: subtitles,
@@ -735,115 +738,164 @@ Map<String, String> _headers(Object? value) {
 }
 
 List<SoraSubtitle> _subtitles(Map<String, dynamic> json) {
-  final Object? value =
-      json['subtitles'] ?? json['subtitle'] ?? json['subs'] ?? json['tracks'];
-
-  // Top-level headers for a bare string subtitle URL (e.g. BingeBox subtitlesHeaders).
   final Map<String, String> topLevelHeaders = _headers(
     json['subtitlesHeaders'] ?? json['subtitleHeaders'],
   );
 
-  List<SoraSubtitle> primary = const <SoraSubtitle>[];
+  final List<SoraSubtitle> result = <SoraSubtitle>[];
+  final Set<String> seen = <String>{};
 
-  if (value == null) {
-    primary = const <SoraSubtitle>[];
-  } else if (value is String) {
-    final String url = value.trim();
-    primary = url.isEmpty
-        ? const <SoraSubtitle>[]
-        : <SoraSubtitle>[
-            SoraSubtitle(
-              url: url,
-              language: '',
-              label: 'Subtitle',
-              headers: topLevelHeaders,
-            ),
-          ];
-  } else if (value is! List) {
-    final Map<String, dynamic> map = _map(value);
-    final String url = _string(
-      map['url'],
-      fallback: _string(map['file'], fallback: _string(map['src'])),
-    );
-    primary = url.isEmpty
-        ? const <SoraSubtitle>[]
-        : <SoraSubtitle>[
-            SoraSubtitle(
-              url: url,
-              language: _string(
-                map['language'],
-                fallback: _string(map['lang']),
-              ),
-              label: _string(
-                map['label'],
-                fallback: _string(map['title'], fallback: 'Subtitle'),
-              ),
-              headers: _headers(map['headers']),
-            ),
-          ];
-  } else {
-    primary = value
-        .map<SoraSubtitle?>((Object? item) {
-          if (item is String) {
-            final String url = item.trim();
-            return url.isEmpty
-                ? null
-                : SoraSubtitle(url: url, language: '', label: 'Subtitle');
-          }
-          final Map<String, dynamic> map = _map(item);
-          final String url = _string(
-            map['url'],
-            fallback: _string(map['file'], fallback: _string(map['src'])),
-          );
-          if (url.isEmpty) return null;
-          return SoraSubtitle(
-            url: url,
-            language: _string(map['language'], fallback: _string(map['lang'])),
-            label: _string(
-              map['label'],
-              fallback: _string(map['title'], fallback: 'Subtitle'),
-            ),
-            headers: _headers(map['headers']),
-          );
-        })
-        .whereType<SoraSubtitle>()
-        .toList(growable: false);
+  void add(SoraSubtitle? sub) {
+    if (sub == null || sub.url.isEmpty || !seen.add(sub.url)) return;
+    result.add(sub);
   }
 
-  // Merge allSubtitles array (rich per-track list with headers) alongside any
-  // primary tracks already parsed from the default subtitle key.
+  // The rich `allSubtitles` array is authoritative: it carries real per-track
+  // labels/languages, so it's parsed first and wins on URL collisions.
   final Object? allSubs = json['allSubtitles'];
-  if (allSubs is List && allSubs.isNotEmpty) {
-    final Set<String> seen = <String>{
-      for (final SoraSubtitle s in primary) s.url,
-    };
-    final List<SoraSubtitle> extras = allSubs
-        .map<SoraSubtitle?>((Object? item) {
-          final Map<String, dynamic> map = _map(item);
-          final String url = _string(
-            map['url'],
-            fallback: _string(map['file'], fallback: _string(map['src'])),
-          );
-          if (url.isEmpty || !seen.add(url)) return null;
-          return SoraSubtitle(
-            url: url,
-            language: _string(map['language'], fallback: _string(map['lang'])),
-            label: _string(
-              map['label'],
-              fallback: _string(map['title'], fallback: 'Subtitle'),
-            ),
-            headers: _headers(map['headers']),
-          );
-        })
-        .whereType<SoraSubtitle>()
-        .toList(growable: false);
-    if (extras.isNotEmpty) {
-      return <SoraSubtitle>[...primary, ...extras];
+  if (allSubs is List) {
+    for (final Object? item in allSubs) {
+      add(_parseSubtitleEntry(_map(item), topLevelHeaders));
     }
   }
 
-  return primary;
+  // The default `subtitle(s)` key is usually just the pre-selected track (often
+  // a bare URL with no language). Add only what the rich list didn't already
+  // cover, so a duplicate of a labelled track doesn't reappear as a nameless
+  // "Subtitle".
+  final Object? value =
+      json['subtitles'] ?? json['subtitle'] ?? json['subs'] ?? json['tracks'];
+  if (value is String) {
+    final String url = value.trim();
+    if (url.isNotEmpty) {
+      add(
+        SoraSubtitle(
+          url: url,
+          language: '',
+          label: _subtitleLabel('', '', url),
+          headers: topLevelHeaders,
+        ),
+      );
+    }
+  } else if (value is List) {
+    for (final Object? item in value) {
+      if (item is String) {
+        final String url = item.trim();
+        if (url.isNotEmpty) {
+          add(
+            SoraSubtitle(
+              url: url,
+              language: '',
+              label: _subtitleLabel('', '', url),
+              headers: topLevelHeaders,
+            ),
+          );
+        }
+      } else {
+        add(_parseSubtitleEntry(_map(item), topLevelHeaders));
+      }
+    }
+  } else if (value != null) {
+    add(_parseSubtitleEntry(_map(value), topLevelHeaders));
+  }
+
+  return result;
 }
+
+SoraSubtitle? _parseSubtitleEntry(
+  Map<String, dynamic> map,
+  Map<String, String> fallbackHeaders,
+) {
+  final String url = _string(
+    map['url'],
+    fallback: _string(map['file'], fallback: _string(map['src'])),
+  );
+  if (url.isEmpty) return null;
+  final String language = _string(
+    map['language'],
+    fallback: _string(map['lang']),
+  );
+  final String rawLabel = _string(
+    map['label'],
+    fallback: _string(map['title'], fallback: _string(map['name'])),
+  );
+  final Map<String, String> headers = _headers(map['headers']);
+  return SoraSubtitle(
+    url: url,
+    language: language,
+    label: _subtitleLabel(rawLabel, language, url),
+    headers: headers.isEmpty ? fallbackHeaders : headers,
+  );
+}
+
+/// Produces a human-readable track name. Prefers a real label, then the
+/// language (codes like `en`/`eng` are mapped to names), then a hint from the
+/// URL filename — never a meaningless "Subtitle" unless nothing else is known.
+String _subtitleLabel(String label, String language, [String url = '']) {
+  final String trimmed = label.trim();
+  final bool generic =
+      trimmed.isEmpty ||
+      RegExp(
+        r'^(sub(title)?s?|track|cc|caption|default|unknown|none)$',
+        caseSensitive: false,
+      ).hasMatch(trimmed);
+  if (!generic) {
+    // A label that is itself a language code (e.g. "eng") → expand to the name.
+    final String mapped = _languageName(trimmed);
+    return mapped.isNotEmpty ? mapped : trimmed;
+  }
+  final String fromLang = _languageName(language);
+  if (fromLang.isNotEmpty) return fromLang;
+  final String raw = language.trim();
+  if (raw.isNotEmpty) return raw;
+  final String fromUrl = _languageFromUrl(url);
+  if (fromUrl.isNotEmpty) return fromUrl;
+  return 'Subtitle';
+}
+
+/// Maps an ISO-639 code (or an English language name) to a display name, or ''
+/// when unrecognised.
+String _languageName(String value) {
+  return _languageNames[value.trim().toLowerCase()] ?? '';
+}
+
+/// Best-effort language detection from a subtitle filename, e.g.
+/// `…/foo.en.vtt` or `…/sub_eng.srt`.
+String _languageFromUrl(String url) {
+  final RegExpMatch? match = RegExp(
+    r'[._\-]([a-z]{2,3})\.(?:vtt|srt|ass|ssa|sub|txt)(?:[?#]|$)',
+    caseSensitive: false,
+  ).firstMatch(url.toLowerCase());
+  if (match != null) {
+    return _languageName(match.group(1)!);
+  }
+  return '';
+}
+
+const Map<String, String> _languageNames = <String, String>{
+  'en': 'English', 'eng': 'English', 'english': 'English',
+  'ms': 'Malay', 'may': 'Malay', 'msa': 'Malay', 'malay': 'Malay',
+  'ru': 'Russian', 'rus': 'Russian', 'russian': 'Russian',
+  'ja': 'Japanese', 'jpn': 'Japanese', 'japanese': 'Japanese',
+  'fr': 'French', 'fra': 'French', 'fre': 'French', 'french': 'French',
+  'es': 'Spanish', 'spa': 'Spanish', 'spanish': 'Spanish',
+  'de': 'German', 'deu': 'German', 'ger': 'German', 'german': 'German',
+  'ar': 'Arabic', 'ara': 'Arabic', 'arabic': 'Arabic',
+  'pt': 'Portuguese', 'por': 'Portuguese', 'portuguese': 'Portuguese',
+  'pt-br': 'Portuguese (BR)', 'id': 'Indonesian', 'ind': 'Indonesian',
+  'indonesian': 'Indonesian',
+  'ko': 'Korean', 'kor': 'Korean', 'korean': 'Korean',
+  'zh': 'Chinese', 'zho': 'Chinese', 'chi': 'Chinese', 'chinese': 'Chinese',
+  'it': 'Italian', 'ita': 'Italian', 'italian': 'Italian',
+  'tr': 'Turkish', 'tur': 'Turkish', 'turkish': 'Turkish',
+  'hi': 'Hindi', 'hin': 'Hindi', 'hindi': 'Hindi',
+  'th': 'Thai', 'tha': 'Thai', 'thai': 'Thai',
+  'vi': 'Vietnamese', 'vie': 'Vietnamese', 'vietnamese': 'Vietnamese',
+  'pl': 'Polish', 'pol': 'Polish', 'polish': 'Polish',
+  'nl': 'Dutch', 'nld': 'Dutch', 'dut': 'Dutch', 'dutch': 'Dutch',
+  'uk': 'Ukrainian', 'ukr': 'Ukrainian', 'ukrainian': 'Ukrainian',
+  'fil': 'Filipino', 'tl': 'Filipino', 'tgl': 'Filipino', 'filipino': 'Filipino',
+};
 
 List<String> _stringList(Object? value) {
   if (value is String) {

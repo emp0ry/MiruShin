@@ -5,8 +5,10 @@ import 'dart:io' show Platform;
 import 'package:dio/dio.dart';
 import 'package:flutter_js/flutter_js.dart';
 
+import '../application/cloudflare_challenge_service.dart';
 import '../domain/sora_models.dart';
 import '../domain/sora_parsers.dart';
+import 'cloudflare_challenge.dart';
 import 'sora_addon_store.dart';
 
 class SoraJsRuntime {
@@ -34,6 +36,7 @@ class SoraJsRuntime {
 
   final SoraAddonStore _store;
   final Dio _dio;
+  final CloudflareChallengeService _cf = CloudflareChallengeService.instance;
   final Map<String, _LoadedSoraModule> _loaded = <String, _LoadedSoraModule>{};
   final List<String> _loadOrder = <String>[];
   Future<void> _jsTail = Future<void>.value();
@@ -777,6 +780,66 @@ class SoraJsRuntime {
 
   // ── HTTP helpers ──────────────────────────────────────────────────────────
 
+  /// Merges any stored Cloudflare clearance for [uri] into [headers] (the
+  /// `Cookie` header plus the User-Agent the clearance was minted with).
+  /// Mutates and returns [headers].
+  Future<Map<String, String>> _applyCloudflareCookies(
+    Uri uri,
+    Map<String, String> headers,
+  ) async {
+    final String? cookie = await _cf.cookies.cookieFor(uri);
+    if (cookie == null || cookie.isEmpty) return headers;
+    final String existing = headers['Cookie'] ?? '';
+    headers['Cookie'] = existing.isEmpty ? cookie : '$existing; $cookie';
+    final String? ua = await _cf.cookies.userAgentFor(uri);
+    if (ua != null && ua.isNotEmpty) headers['User-Agent'] = ua;
+    return headers;
+  }
+
+  Map<String, dynamic> _responseHeaderMap(Response<dynamic> response) {
+    final Map<String, dynamic> map = <String, dynamic>{};
+    response.headers.forEach((String name, List<String> values) {
+      if (values.isEmpty) return;
+      map[name] = values.length == 1 ? values.first : values;
+    });
+    return map;
+  }
+
+  bool _isCloudflareChallenge(Response<String> response) {
+    return CloudflareChallenge.isChallenge(
+      response.statusCode,
+      _responseHeaderMap(response),
+      response.data ?? '',
+    );
+  }
+
+  /// Runs [send] and, if the response is a Cloudflare challenge, presents the
+  /// interactive solver and retries once with the freshly captured clearance.
+  /// If the retry is still walled the captured cookie is dropped, so the next
+  /// attempt solves afresh instead of replaying a bad cookie. [userAgent] is the
+  /// UA the first attempt used (informational; the solver captures the WebView's
+  /// own UA for replay).
+  Future<Response<String>> _sendWithCloudflare(
+    Uri uri,
+    String userAgent,
+    Future<Response<String>> Function() send,
+  ) async {
+    Response<String> response = await send();
+    if (!_isCloudflareChallenge(response)) return response;
+
+    final CloudflareSolveResult? solved = await _cf.solve(
+      url: uri,
+      userAgent: userAgent,
+    );
+    if (solved == null || solved.cookies.trim().isEmpty) return response;
+
+    response = await send();
+    if (_isCloudflareChallenge(response)) {
+      await _cf.cookies.clear(uri);
+    }
+    return response;
+  }
+
   Future<String> _httpFetchBody(
     SoraInstalledAddon addon,
     Map<String, dynamic> payload,
@@ -786,7 +849,7 @@ class SoraJsRuntime {
         _string(payload['url']),
         addon.manifest.baseUrl,
       );
-      final Map<String, String> headers = <String, String>{
+      final Map<String, String> baseHeaders = <String, String>{
         'User-Agent': _userAgent,
         'Accept':
             'text/html,application/xhtml+xml,application/json,text/plain,*/*',
@@ -795,6 +858,7 @@ class SoraJsRuntime {
           'Referer': addon.manifest.baseUrl,
         ..._stringMap(payload['headers']),
       };
+      final String reqUserAgent = baseHeaders['User-Agent'] ?? _userAgent;
       final String method = _string(
         payload['method'],
         fallback: 'GET',
@@ -805,33 +869,41 @@ class SoraJsRuntime {
           : rawBody;
       final _LoadedSoraModule? module = _loaded[addon.id];
       final bool searchCall = module?.isSearchCall ?? false;
-      final CancelToken cancelToken = CancelToken();
-      module?.registerCancelToken(cancelToken);
-      final Response<String> response;
-      try {
-        response = await _dio.requestUri<String>(
+
+      Future<Response<String>> send() async {
+        final Map<String, String> headers = await _applyCloudflareCookies(
           uri,
-          data: body,
-          options: Options(
-            method: method,
-            responseType: ResponseType.plain,
-            headers: headers,
-            receiveTimeout: searchCall
-                ? const Duration(seconds: 10)
-                : const Duration(seconds: 20),
-            followRedirects: true,
-            validateStatus: (_) => true,
-          ),
-          cancelToken: cancelToken,
+          Map<String, String>.of(baseHeaders),
         );
-      } finally {
-        module?.unregisterCancelToken(cancelToken);
+        final CancelToken cancelToken = CancelToken();
+        module?.registerCancelToken(cancelToken);
+        try {
+          return await _dio.requestUri<String>(
+            uri,
+            data: body,
+            options: Options(
+              method: method,
+              responseType: ResponseType.plain,
+              headers: headers,
+              receiveTimeout: searchCall
+                  ? const Duration(seconds: 10)
+                  : const Duration(seconds: 20),
+              followRedirects: true,
+              validateStatus: (_) => true,
+            ),
+            cancelToken: cancelToken,
+          );
+        } finally {
+          module?.unregisterCancelToken(cancelToken);
+        }
       }
-      final Map<String, dynamic> responseHeaders = <String, dynamic>{};
-      response.headers.forEach((String name, List<String> values) {
-        if (values.isEmpty) return;
-        responseHeaders[name] = values.length == 1 ? values.first : values;
-      });
+
+      final Response<String> response = await _sendWithCloudflare(
+        uri,
+        reqUserAgent,
+        send,
+      );
+      final Map<String, dynamic> responseHeaders = _responseHeaderMap(response);
       return jsonEncode(<String, dynamic>{
         '__miruResponse': true,
         'status': response.statusCode ?? 0,
@@ -861,38 +933,53 @@ class SoraJsRuntime {
       final String htmlContent = _string(payload['htmlContent']);
       final String body;
       Uri responseUri = uri;
+      String? capturedCookies;
       if (htmlContent.isNotEmpty) {
         body = htmlContent;
       } else {
         final int timeoutSec =
             _int(payload['timeoutSeconds'], fallback: 7).clamp(1, 30).toInt();
-        final Map<String, String> headers = <String, String>{
+        final Map<String, String> baseHeaders = <String, String>{
           'User-Agent': _userAgent,
           'Accept':
               'text/html,application/xhtml+xml,application/json,text/plain,*/*',
           'Accept-Language': _acceptLanguage(addon.manifest.language),
           ..._stringMap(payload['headers']),
         };
+        final String reqUserAgent = baseHeaders['User-Agent'] ?? _userAgent;
         final _LoadedSoraModule? module = _loaded[addon.id];
-        final CancelToken cancelToken = CancelToken();
-        module?.registerCancelToken(cancelToken);
-        final Response<String> response;
-        try {
-          response = await _dio.requestUri<String>(
+
+        Future<Response<String>> send() async {
+          final Map<String, String> headers = await _applyCloudflareCookies(
             uri,
-            options: Options(
-              method: 'GET',
-              responseType: ResponseType.plain,
-              headers: headers,
-              receiveTimeout: Duration(seconds: timeoutSec),
-              followRedirects: true,
-              validateStatus: (_) => true,
-            ),
-            cancelToken: cancelToken,
+            Map<String, String>.of(baseHeaders),
           );
-        } finally {
-          module?.unregisterCancelToken(cancelToken);
+          final CancelToken cancelToken = CancelToken();
+          module?.registerCancelToken(cancelToken);
+          try {
+            return await _dio.requestUri<String>(
+              uri,
+              options: Options(
+                method: 'GET',
+                responseType: ResponseType.plain,
+                headers: headers,
+                receiveTimeout: Duration(seconds: timeoutSec),
+                followRedirects: true,
+                validateStatus: (_) => true,
+              ),
+              cancelToken: cancelToken,
+            );
+          } finally {
+            module?.unregisterCancelToken(cancelToken);
+          }
         }
+
+        final Response<String> response = await _sendWithCloudflare(
+          uri,
+          reqUserAgent,
+          send,
+        );
+        capturedCookies = await _cf.cookies.cookieFor(uri);
         responseUri = response.realUri;
         requests.add(responseUri.toString());
         body = response.data ?? '';
@@ -911,12 +998,12 @@ class SoraJsRuntime {
         'originalUrl': originalUrl,
         'requests': requests.toList(),
         'html': _bool(payload['returnHTML']) ? body : null,
-        'cookies': null,
+        'cookies': capturedCookies,
         'success': true,
         'cutoffTriggered': cutoffUrl.isNotEmpty,
         'cutoffUrl': cutoffUrl.isEmpty ? null : cutoffUrl,
         'htmlCaptured': _bool(payload['returnHTML']),
-        'cookiesCaptured': false,
+        'cookiesCaptured': capturedCookies != null,
         'elementsClicked': const <String>[],
         'waitResults': const <String, bool>{},
       });
@@ -1357,15 +1444,30 @@ class SoraJsRuntime {
     String href,
   ) async {
     final Uri uri = _resolveUrl(href, addon.manifest.baseUrl);
-    final Response<String> response = await _dio.getUri<String>(
+    final Map<String, String> baseHeaders = _defaultEpisodeHeaders(addon);
+    final String reqUserAgent = baseHeaders['User-Agent'] ?? _userAgent;
+
+    Future<Response<String>> send() async {
+      final Map<String, String> headers = await _applyCloudflareCookies(
+        uri,
+        Map<String, String>.of(baseHeaders),
+      );
+      return _dio.getUri<String>(
+        uri,
+        options: Options(
+          responseType: ResponseType.plain,
+          headers: headers,
+          receiveTimeout: const Duration(seconds: 20),
+          followRedirects: true,
+          validateStatus: (_) => true,
+        ),
+      );
+    }
+
+    final Response<String> response = await _sendWithCloudflare(
       uri,
-      options: Options(
-        responseType: ResponseType.plain,
-        headers: _defaultEpisodeHeaders(addon),
-        receiveTimeout: const Duration(seconds: 20),
-        followRedirects: true,
-        validateStatus: (_) => true,
-      ),
+      reqUserAgent,
+      send,
     );
     return response.data ?? '';
   }

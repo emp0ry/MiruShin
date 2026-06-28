@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -9,7 +10,9 @@ import 'package:go_router/go_router.dart';
 
 import '../core/constants/app_constants.dart';
 import '../core/platform/tv_platform.dart';
+import '../features/addons/application/cloudflare_challenge_service.dart';
 import '../features/addons/application/sora_addons_provider.dart';
+import '../features/addons/presentation/cloudflare_challenge_page.dart';
 import 'app_routes.dart';
 import '../features/profile/application/anilist_user_settings_provider.dart';
 import '../features/settings/presentation/settings_state.dart';
@@ -34,6 +37,17 @@ class _MiruShinAppState extends ConsumerState<MiruShinApp> {
   void initState() {
     super.initState();
     _router = buildAppRouter(widget.initialRoute);
+    if (_cloudflareWebViewSupported) {
+      CloudflareChallengeService.instance.registerSolver(
+        _solveCloudflareChallenge,
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    CloudflareChallengeService.instance.registerSolver(null);
+    super.dispose();
   }
 
   @override
@@ -90,6 +104,59 @@ class _MiruShinAppState extends ConsumerState<MiruShinApp> {
       routerConfig: _router,
     );
   }
+}
+
+/// Whether an interactive Cloudflare challenge WebView (flutter_inappwebview)
+/// is available on this platform. Linux has no implementation that can read the
+/// HttpOnly `cf_clearance` cookie, so the solver is left unregistered there and
+/// challenged fetches surface their error instead of opening a broken WebView.
+bool get _cloudflareWebViewSupported {
+  if (kIsWeb) return false;
+  switch (defaultTargetPlatform) {
+    case TargetPlatform.android:
+    case TargetPlatform.iOS:
+    case TargetPlatform.macOS:
+    case TargetPlatform.windows:
+      return true;
+    case TargetPlatform.linux:
+    case TargetPlatform.fuchsia:
+      return false;
+  }
+}
+
+/// Shows the interactive challenge page in the root overlay and returns the
+/// captured cookies. Registered into [CloudflareChallengeService] at app start.
+///
+/// An overlay entry (rather than a pushed route) is deliberate: a Sora source
+/// can fire many parallel fetches, and the flow that triggered them often pops
+/// its own routes when it finishes — which would tear a pushed challenge page
+/// down before the user solves it. An overlay sits outside the navigation stack,
+/// so it survives until the user solves or cancels.
+Future<CloudflareSolveResult?> _solveCloudflareChallenge({
+  required Uri url,
+  required String userAgent,
+}) {
+  final OverlayState? overlay = rootNavigatorKey.currentState?.overlay;
+  if (overlay == null) return Future<CloudflareSolveResult?>.value();
+
+  final Completer<CloudflareSolveResult?> completer =
+      Completer<CloudflareSolveResult?>();
+  late final OverlayEntry entry;
+
+  void close(CloudflareSolveResult? result) {
+    if (completer.isCompleted) return;
+    entry.remove();
+    completer.complete(result);
+  }
+
+  entry = OverlayEntry(
+    builder: (_) => CloudflareChallengePage(
+      url: url,
+      onResult: close,
+    ),
+  );
+  overlay.insert(entry);
+  return completer.future;
 }
 
 class _MouseDragScrollBehavior extends MaterialScrollBehavior {

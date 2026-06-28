@@ -1,0 +1,244 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+
+import '../../../app/localization/app_localizations.dart';
+import '../application/cloudflare_challenge_service.dart';
+
+/// Interactive Cloudflare challenge solver.
+///
+/// Mirrors the proven reference recipe (Sora/Shirox's `CloudflareBypassManager`):
+///
+/// - Navigates to the **site root** `scheme://host/`, not the API endpoint the
+///   fetch was aimed at. Cloudflare's JS challenge / Turnstile only runs in a
+///   real document context; an API URL just returns the challenge body.
+/// - Sets **no custom User-Agent**. Turnstile fingerprints the real browser, so
+///   spoofing the UA makes Cloudflare reject the challenge even after the user
+///   taps. Instead the page captures the WebView's *native* UA and reports it,
+///   because `cf_clearance` is bound to the UA and must be replayed on later
+///   requests.
+/// - Reads cookies from **this WebView's own store** (via `webViewController`)
+///   so a fresh challenge isn't confused by stale cookies elsewhere.
+///
+/// As soon as a `cf_clearance` cookie appears it captures every cookie for the
+/// host plus the native UA and reports them through [onResult]; the host removes
+/// the overlay. Hosted in an [OverlayEntry] (not a route) so unrelated
+/// navigation — e.g. a source-resolution flow popping its own routes — can't
+/// tear it down before the user solves.
+class CloudflareChallengePage extends StatefulWidget {
+  const CloudflareChallengePage({
+    required this.url,
+    required this.onResult,
+    super.key,
+  });
+
+  final Uri url;
+  final ValueChanged<CloudflareSolveResult?> onResult;
+
+  @override
+  State<CloudflareChallengePage> createState() =>
+      _CloudflareChallengePageState();
+}
+
+class _CloudflareChallengePageState extends State<CloudflareChallengePage> {
+  static const Duration _timeout = Duration(minutes: 3);
+  static const Duration _pollInterval = Duration(milliseconds: 700);
+
+  /// After this many consecutive cookie-read failures we assume the WebView
+  /// engine is unavailable (e.g. the native plugin isn't registered because the
+  /// app was hot-restarted after adding it, or the platform has no support) and
+  /// bail out instead of spamming the log for the full timeout window.
+  static const int _maxConsecutiveErrors = 5;
+
+  final CookieManager _cookies = CookieManager.instance();
+  InAppWebViewController? _controller;
+  Timer? _pollTimer;
+  Timer? _timeoutTimer;
+  int _consecutiveErrors = 0;
+  bool _completed = false;
+  bool _loading = true;
+
+  /// The page we actually load: the site root, where the challenge can run.
+  late final WebUri _rootUri = WebUri(
+    Uri(scheme: widget.url.scheme, host: widget.url.host, path: '/').toString(),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    _pollTimer = Timer.periodic(_pollInterval, (_) => _checkForClearance());
+    _timeoutTimer = Timer(_timeout, () => _finish(null));
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    _timeoutTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _checkForClearance() async {
+    if (_completed || _controller == null) return;
+    try {
+      final List<Cookie> cookies = await _cookies.getCookies(
+        url: _rootUri,
+        webViewController: _controller,
+      );
+      _consecutiveErrors = 0;
+      final bool cleared = cookies.any((Cookie c) => c.name == 'cf_clearance');
+      if (!cleared) return;
+
+      // A cf_clearance cookie alone isn't proof we passed — a stale one may
+      // linger in the shared store (it's HttpOnly, so we can't pre-delete it).
+      // Only accept once the page is genuinely past the wall: the challenge
+      // interstitial keeps the title "Just a moment…" and a `__cf_chl` URL until
+      // it completes and reloads the real page with a fresh, valid cookie.
+      if (await _stillOnChallenge()) return;
+
+      final String header = cookies
+          .where((Cookie c) => '${c.value}'.isNotEmpty)
+          .map((Cookie c) => '${c.name}=${c.value}')
+          .join('; ');
+      // cf_clearance is bound to the UA that solved it — capture the WebView's
+      // real UA so the runtime can replay it on subsequent requests.
+      String userAgent = '';
+      try {
+        final Object? ua = await _controller?.evaluateJavascript(
+          source: 'navigator.userAgent',
+        );
+        if (ua is String) userAgent = ua;
+      } catch (_) {
+        // Non-fatal: an empty UA just means the runtime keeps its default.
+      }
+      _finish((cookies: header, userAgent: userAgent));
+    } catch (error) {
+      _consecutiveErrors++;
+      if (kDebugMode && _consecutiveErrors == 1) {
+        debugPrint('[Cloudflare] cookie poll failed: $error');
+      }
+      // The WebView engine isn't answering (most often: a native plugin added
+      // this session needs a full app relaunch, not a hot restart). Give up
+      // rather than spam the poll until the timeout.
+      if (_consecutiveErrors >= _maxConsecutiveErrors) {
+        if (kDebugMode) {
+          debugPrint(
+            '[Cloudflare] WebView unavailable after $_consecutiveErrors '
+            'attempts; aborting. If you just added the plugin, fully relaunch '
+            'the app (cold start), not a hot restart.',
+          );
+        }
+        _finish(null);
+      }
+    }
+  }
+
+  /// Whether the WebView is still showing the Cloudflare interstitial (so a
+  /// present cf_clearance cookie can't yet be trusted).
+  Future<bool> _stillOnChallenge() async {
+    final InAppWebViewController? controller = _controller;
+    if (controller == null) return true;
+    try {
+      final String title = (await controller.getTitle())?.toLowerCase() ?? '';
+      // Cloudflare's interstitial title is "Just a moment..." in all locales.
+      if (title.contains('just a moment')) return true;
+      final String url = (await controller.getUrl())?.toString() ?? '';
+      return url.contains('__cf_chl');
+    } catch (_) {
+      // If we can't read the state, assume still challenging and keep waiting.
+      return true;
+    }
+  }
+
+  void _finish(CloudflareSolveResult? result) {
+    if (_completed) return;
+    _completed = true;
+    _pollTimer?.cancel();
+    _timeoutTimer?.cancel();
+    widget.onResult(result);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // BackButtonListener catches the Android system-back even though this lives
+    // in an overlay rather than a route, so back cancels the challenge instead
+    // of popping the page underneath it.
+    return BackButtonListener(
+      onBackButtonPressed: () async {
+        _finish(null);
+        return true;
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(context.t('Security check')),
+          leading: IconButton(
+            autofocus: true,
+            icon: const Icon(Icons.close_rounded),
+            tooltip: context.t('Cancel'),
+            onPressed: () => _finish(null),
+          ),
+          bottom: PreferredSize(
+            preferredSize: const Size.fromHeight(28),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Text(
+                context.t(
+                  'Complete the verification to continue. This closes by itself.',
+                ),
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+          ),
+        ),
+        body: Column(
+          children: <Widget>[
+            if (_loading) const LinearProgressIndicator(minHeight: 2),
+            Expanded(
+              child: InAppWebView(
+                // No initialUrlRequest: we clear stale cookies first, then load
+                // (below), so a stale/expired cf_clearance can't be read back as
+                // a false "solved". We deliberately DON'T use an incognito store
+                // — the challenge must write cf_clearance into the same default
+                // store CookieManager.getCookies reads, or the poll never sees
+                // it and the sheet never closes.
+                // No custom userAgent on purpose — see the class doc.
+                initialSettings: InAppWebViewSettings(
+                  javaScriptEnabled: true,
+                  thirdPartyCookiesEnabled: true,
+                  transparentBackground: true,
+                ),
+                onWebViewCreated: (InAppWebViewController controller) async {
+                  _controller = controller;
+                  try {
+                    await _cookies.deleteCookies(
+                      url: _rootUri,
+                      webViewController: controller,
+                    );
+                  } catch (_) {
+                    // Best-effort; the challenge still overwrites on success.
+                  }
+                  if (!_completed) {
+                    await controller.loadUrl(
+                      urlRequest: URLRequest(url: _rootUri),
+                    );
+                  }
+                },
+                onLoadStop: (_, _) {
+                  if (mounted) setState(() => _loading = false);
+                  unawaited(_checkForClearance());
+                },
+                onProgressChanged: (_, int progress) {
+                  if (mounted) setState(() => _loading = progress < 100);
+                },
+                onReceivedError: (_, _, _) {
+                  if (mounted) setState(() => _loading = false);
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

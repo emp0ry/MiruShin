@@ -18,7 +18,13 @@ import '../features/watch/domain/normalized_models.dart';
 import '../features/watch/presentation/watch_page.dart';
 import '../shared/models/media_item.dart';
 
+/// Root navigator key, so context-less services (e.g. the Cloudflare challenge
+/// solver) can push full-screen pages over the whole app.
+final GlobalKey<NavigatorState> rootNavigatorKey =
+    GlobalKey<NavigatorState>(debugLabel: 'root');
+
 GoRouter buildAppRouter(String initialLocation) => GoRouter(
+  navigatorKey: rootNavigatorKey,
   initialLocation: initialLocation,
   routes: <RouteBase>[
     GoRoute(
