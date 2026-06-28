@@ -156,8 +156,12 @@ class FvpPlayerEngine extends PlayerEngine {
       final Uri remoteUri = isInlineDash
           ? Uri(scheme: 'http', host: InternetAddress.loopbackIPv4.address)
           : Uri.parse(source.url);
+      final bool isNetwork = _isNetworkUrl(source.url);
+      final bool isHls = _isHlsLikeSource(source);
+      final bool useProxy =
+          !source.disableProxy && !_previewMode && (isNetwork || isInlineDash);
       String playbackUrl = remoteUri.toString();
-      if (!source.disableProxy && !_previewMode && isInlineDash) {
+      if (useProxy && isInlineDash) {
         await _proxy.stop();
         await _proxy.start();
         playbackUrl = _proxy.inlineDashUrl(
@@ -165,12 +169,10 @@ class FvpPlayerEngine extends PlayerEngine {
           headers: source.headers,
         );
         debugPrint('FVP open inline DASH via proxy: $playbackUrl');
-      } else if (!source.disableProxy &&
-          !_previewMode &&
-          _requiresPinnedProxy(remoteUri)) {
+      } else if (useProxy) {
         await _proxy.stop();
         await _proxy.start();
-        playbackUrl = _isHlsLikeSource(source)
+        playbackUrl = isHls
             ? _proxy.playlistUrl(remoteUri, headers: source.headers)
             : _proxy.mediaUrl(remoteUri, headers: source.headers);
         debugPrint('FVP open via proxy: $playbackUrl');
@@ -253,6 +255,12 @@ class FvpPlayerEngine extends PlayerEngine {
     return lower.contains('solodcdn.com') ||
         lower.contains(':hls:manifest.m3u8') ||
         lower.contains('.mp4:hls:');
+  }
+
+  bool _isNetworkUrl(String url) {
+    if (LocalHlsProxy.isInlineDashUrl(url)) return true;
+    final Uri? uri = Uri.tryParse(url);
+    return uri != null && (uri.scheme == 'http' || uri.scheme == 'https');
   }
 
   Duration _safeFragileHlsStartupPosition(Duration position) {
@@ -722,12 +730,6 @@ class FvpPlayerEngine extends PlayerEngine {
   bool _isGoogleVideoHost(String host) {
     final String lower = host.toLowerCase();
     return lower == 'googlevideo.com' || lower.endsWith('.googlevideo.com');
-  }
-
-  bool _requiresPinnedProxy(Uri uri) {
-    if (uri.scheme != 'http' && uri.scheme != 'https') return false;
-    if (!_isOkCdnHost(uri.host)) return false;
-    return (uri.queryParameters['urls']?.trim().isNotEmpty ?? false);
   }
 
   bool _isHlsLikeSource(PlayerSource source) {

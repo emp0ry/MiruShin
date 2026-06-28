@@ -245,7 +245,9 @@ class LocalHlsProxy {
     // Headers arrive via two channels:
     //   1. `h` query-param (JSON, set by the engine when building the URL).
     //   2. Inbound HTTP headers forwarded by MPV from httpHeaders.
-    // We merge both; inbound headers win so the latest session values are used.
+    // The explicit query payload is the source of truth. Child playlist/segment
+    // requests can arrive with localhost Referer/Origin values, so inbound
+    // headers only fill gaps instead of replacing provider headers.
     _absorbQueryHeaders(req.uri.queryParameters['h']);
     _absorbInboundHeaders(req.headers);
 
@@ -629,12 +631,17 @@ class LocalHlsProxy {
   }
 
   String _proxiedPlaylist(Uri r) => _canProxy(r)
-      ? '$_base/m3u8?u=${Uri.encodeQueryComponent(r.toString())}'
+      ? '$_base/m3u8?u=${Uri.encodeQueryComponent(r.toString())}${_headersQuerySuffix()}'
       : r.toString();
 
   String _proxiedSegment(Uri r) => _canProxy(r)
-      ? '$_base/seg?u=${Uri.encodeQueryComponent(r.toString())}'
+      ? '$_base/seg?u=${Uri.encodeQueryComponent(r.toString())}${_headersQuerySuffix()}'
       : r.toString();
+
+  String _headersQuerySuffix() {
+    if (_forwardHeaders.isEmpty) return '';
+    return '&h=${Uri.encodeQueryComponent(jsonEncode(_forwardHeaders))}';
+  }
 
   String _rewriteUriAttr(
     Uri base,
@@ -863,16 +870,7 @@ class LocalHlsProxy {
     for (final String name in interestingHeaders) {
       final String? v = headers.value(name);
       if (v == null || v.trim().isEmpty) continue;
-      final String canonical = switch (name) {
-        'user-agent' => HttpHeaders.userAgentHeader,
-        'referer' => HttpHeaders.refererHeader,
-        'origin' => 'Origin',
-        'cookie' => 'Cookie',
-        'authorization' => 'Authorization',
-        'accept' => HttpHeaders.acceptHeader,
-        _ => name,
-      };
-      _forwardHeaders[canonical] = v.trim();
+      _putForwardHeader(name, v, overwrite: false);
     }
   }
 
@@ -880,13 +878,42 @@ class LocalHlsProxy {
     if (rawH == null || rawH.isEmpty) return;
     try {
       final Map<String, dynamic> dec = jsonDecode(rawH) as Map<String, dynamic>;
-      final Map<String, String> fromParam = dec.map(
-        (String k, dynamic v) => MapEntry<String, String>(k, v.toString()),
-      );
-      // Merge; don't overwrite the whole map so previous captures survive.
-      _forwardHeaders.addAll(fromParam);
+      for (final MapEntry<String, dynamic> entry in dec.entries) {
+        _putForwardHeader(entry.key, entry.value.toString(), overwrite: true);
+      }
     } catch (e) {
       debugPrint('HlsProxy: failed to parse h-param: $e');
+    }
+  }
+
+  void _putForwardHeader(String name, String value, {required bool overwrite}) {
+    final String canonical = _canonicalForwardHeaderName(name);
+    final String trimmed = value.trim();
+    if (canonical.isEmpty || trimmed.isEmpty) return;
+    if (overwrite) {
+      _forwardHeaders[canonical] = trimmed;
+    } else {
+      _forwardHeaders.putIfAbsent(canonical, () => trimmed);
+    }
+  }
+
+  String _canonicalForwardHeaderName(String name) {
+    switch (name.trim().toLowerCase()) {
+      case 'user-agent':
+        return HttpHeaders.userAgentHeader;
+      case 'referer':
+      case 'referrer':
+        return HttpHeaders.refererHeader;
+      case 'origin':
+        return 'Origin';
+      case 'cookie':
+        return HttpHeaders.cookieHeader;
+      case 'authorization':
+        return 'Authorization';
+      case 'accept':
+        return HttpHeaders.acceptHeader;
+      default:
+        return name.trim();
     }
   }
 

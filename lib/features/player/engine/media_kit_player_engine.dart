@@ -22,6 +22,8 @@ const Duration _proxyStartupSettleTimeout = Duration(seconds: 8);
 const Duration _startupPollInterval = Duration(milliseconds: 250);
 const Duration _startupActionDelay = Duration(milliseconds: 750);
 const Duration _proxyStallFallbackDelay = Duration(seconds: 10);
+const Duration _proxyRepeatedErrorFallbackWindow = Duration(seconds: 10);
+const int _proxyRepeatedErrorFallbackThreshold = 40;
 const Duration _tinyHlsDurationLimit = Duration(seconds: 30);
 
 // MPV buffer config mirrors FVP's _bufferConfigFor() logic.
@@ -750,12 +752,25 @@ class MediaKitPlayerEngine extends PlayerEngine {
           if (error == _lastProxyErrorText &&
               _firstRepeatedProxyErrorAt != null &&
               now.difference(_firstRepeatedProxyErrorAt!) <
-                  const Duration(seconds: 10)) {
+                  _proxyRepeatedErrorFallbackWindow) {
             _repeatedProxyErrorCount++;
           } else {
             _lastProxyErrorText = error;
             _firstRepeatedProxyErrorAt = now;
             _repeatedProxyErrorCount = 1;
+          }
+
+          if (_repeatedProxyErrorCount >=
+              _proxyRepeatedErrorFallbackThreshold) {
+            unawaited(
+              _retryDirectAfterProxyIssue(
+                player,
+                reason:
+                    'proxy emitted repeated stream errors '
+                    '(x$_repeatedProxyErrorCount): $error',
+              ),
+            );
+            return;
           }
 
           // Collapse the log: once per distinct error, then at most every 5s.
