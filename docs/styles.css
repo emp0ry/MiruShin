@@ -1437,6 +1437,14 @@ main section[id],
   transform: translateY(0);
 }
 
+/* Legal/Privacy documents render fully on load, not gated behind scrolling
+   (and stay readable even if JavaScript never runs). */
+.document-main .reveal {
+  opacity: 1;
+  transform: none;
+  transition: none;
+}
+
 @media (max-width: 1080px) {
   .hero-grid,
   .split-layout,
