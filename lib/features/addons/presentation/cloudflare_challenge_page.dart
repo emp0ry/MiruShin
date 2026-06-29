@@ -355,19 +355,10 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
   ) async {
     if (kDebugMode) {
       debugPrint(
-        '[Cloudflare] onCreateWindow: '
+        '[Cloudflare] suppressed popup window: '
         '${createWindowAction.request.url} '
         'windowId=${createWindowAction.windowId}',
       );
-    }
-    if (_isWindows) {
-      try {
-        await controller.loadUrl(urlRequest: createWindowAction.request);
-      } catch (error) {
-        if (kDebugMode) {
-          debugPrint('[Cloudflare] popup redirect failed: $error');
-        }
-      }
     }
     return false;
   }
