@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 
 import '../../../core/constants/app_constants.dart';
+import '../../../core/network/auth_worker_proof.dart';
 import 'oauth_token_bundle.dart';
 
 /// Shikimori OAuth2 (authorization code).
@@ -25,6 +26,7 @@ class ShikimoriOAuthService {
       return Uri.parse(AppConstants.shikimoriAuthorizeProxyUrl).replace(
         queryParameters: <String, String>{
           'state': state,
+          ...AuthWorkerProof.queryParameters(),
         },
       );
     }
@@ -91,6 +93,7 @@ class ShikimoriOAuthService {
       options: Options(
         contentType: Headers.jsonContentType,
         responseType: ResponseType.json,
+        headers: AuthWorkerProof.headers(),
       ),
     );
   }

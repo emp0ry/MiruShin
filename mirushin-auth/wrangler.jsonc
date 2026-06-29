@@ -1,23 +1,34 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "mirushin-auth",
-  "main": "src/index.ts",
-  "compatibility_date": "2026-06-24",
-  "observability": {
-    "enabled": true
-  },
-  "upload_source_maps": true,
-  "compatibility_flags": [
-    "nodejs_compat"
-  ],
-  "vars": {
-    "SHIKIMORI_REDIRECT_URI": "https://auth.emp0ry.com/callback",
-    "SHIKIMORI_USER_AGENT": "MiruShin"
-  },
-  "routes": [
-    {
-      "pattern": "auth.emp0ry.com",
-      "custom_domain": true
-    }
-  ]
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "mirushin-auth",
+	"main": "src/index.ts",
+	"account_id": "9ace69a96e4bd3de2e9e153231bdf873",
+	"compatibility_date": "2026-06-24",
+	"observability": {
+		"enabled": true
+	},
+	"upload_source_maps": true,
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"vars": {
+		"SHIKIMORI_REDIRECT_URI": "https://auth.emp0ry.com/callback",
+		"SHIKIMORI_USER_AGENT": "MiruShin"
+	},
+	// Temporary WebRTC signaling for the watch-party feature. Create the namespace
+	// with `wrangler kv namespace create WATCH_PARTY` and paste its id below before
+	// deploying. Room entries are written with a short TTL so they self-expire.
+	"kv_namespaces": [
+		{
+			"binding": "WATCH_PARTY",
+			"id": "b93d6d8031004010b24678a5346cecf7",
+			"remote": true
+		}
+	],
+	"routes": [
+		{
+			"pattern": "auth.emp0ry.com",
+			"custom_domain": true
+		}
+	]
 }

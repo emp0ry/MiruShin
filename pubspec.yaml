@@ -1,7 +1,7 @@
 name: mirushin
 description: "New way to watch and discover media."
 publish_to: 'none'
-version: 2.1.0+40
+version: 2.2.0+41
 
 environment:
   sdk: ^3.11.4
@@ -49,6 +49,12 @@ dependencies:
   timezone: ^0.11.0
   package_info_plus: ^9.0.1
   envied: ^1.3.5
+  crypto: ^3.0.7
+  # Watch-party synchronized playback: P2P sync over WebRTC DataChannel, with QR
+  # code pairing (generate + scan) as a fallback to manual room codes.
+  flutter_webrtc: ^1.4.0
+  qr_flutter: ^4.1.0
+  mobile_scanner: ^7.1.2
 
 dev_dependencies:
   flutter_test:

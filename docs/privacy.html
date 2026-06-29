@@ -6,14 +6,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="dark">
     <meta name="theme-color" content="#120b24">
-    <meta name="description" content="Privacy Policy for MiruShin, covering local settings, user tokens, third-party services, tracker sync, the OAuth proxy, and user-installed Sora-compatible modules.">
+    <meta name="description" content="Privacy Policy for MiruShin, covering local settings, user tokens, third-party services, tracker sync, the OAuth proxy, Watch with Friends signaling, and user-installed Sora-compatible modules.">
     <meta name="author" content="emp0ry">
     <meta name="publisher" content="emp0ry">
     <meta name="copyright" content="MiruShin">
     <meta name="application-name" content="MiruShin">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
     <meta name="googlebot" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
-    <meta name="keywords" content="MiruShin privacy policy, MiruShin data, AniList privacy, MyAnimeList privacy, Shikimori privacy, TMDB privacy, Sora modules, Flutter media player privacy, emp0ry">
+    <meta name="keywords" content="MiruShin privacy policy, MiruShin data, Watch with Friends privacy, AniList privacy, MyAnimeList privacy, Shikimori privacy, TMDB privacy, Sora modules, Flutter media player privacy, emp0ry">
     <meta name="referrer" content="strict-origin-when-cross-origin">
     <meta name="format-detection" content="telephone=no, address=no, email=no">
     <meta http-equiv="Content-Security-Policy" content="
@@ -53,7 +53,7 @@
     <meta property="og:type" content="article">
     <meta property="og:site_name" content="MiruShin">
     <meta property="og:title" content="Privacy Policy | MiruShin">
-    <meta property="og:description" content="How MiruShin handles local settings, user tokens, third-party services, tracker sync, the OAuth proxy, and user-installed Sora-compatible modules.">
+    <meta property="og:description" content="How MiruShin handles local settings, user tokens, third-party services, tracker sync, the OAuth proxy, Watch with Friends signaling, and user-installed Sora-compatible modules.">
     <meta property="og:url" content="https://mirushin.emp0ry.com/privacy.html">
     <meta property="og:image" content="https://mirushin.emp0ry.com/assets/social-preview.png">
     <meta property="og:image:secure_url" content="https://mirushin.emp0ry.com/assets/social-preview.png">
@@ -62,10 +62,10 @@
     <meta property="og:image:height" content="630">
     <meta property="og:image:alt" content="MiruShin social preview showing the discovery board and popular anime rail.">
     <meta property="article:author" content="https://github.com/emp0ry">
-    <meta property="article:published_time" content="2026-06-24">
+    <meta property="article:published_time" content="2026-06-29">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Privacy Policy | MiruShin">
-    <meta name="twitter:description" content="How MiruShin handles local settings, user tokens, third-party services, tracker sync, the OAuth proxy, and user-installed Sora-compatible modules.">
+    <meta name="twitter:description" content="How MiruShin handles local settings, user tokens, third-party services, tracker sync, the OAuth proxy, Watch with Friends signaling, and user-installed Sora-compatible modules.">
     <meta name="twitter:image" content="https://mirushin.emp0ry.com/assets/social-preview.png">
     <meta name="twitter:image:alt" content="MiruShin social preview showing the discovery board and popular anime rail.">
     <link rel="stylesheet" href="styles.css">
@@ -113,7 +113,7 @@
           "@id": "https://mirushin.emp0ry.com/privacy.html#webpage",
           "url": "https://mirushin.emp0ry.com/privacy.html",
           "name": "Privacy Policy | MiruShin",
-          "description": "Privacy Policy for MiruShin, covering local settings, user tokens, third-party services, tracker sync, the OAuth proxy, and user-installed Sora-compatible modules.",
+          "description": "Privacy Policy for MiruShin, covering local settings, user tokens, third-party services, tracker sync, the OAuth proxy, Watch with Friends signaling, and user-installed Sora-compatible modules.",
           "isPartOf": {
             "@id": "https://mirushin.emp0ry.com/#website"
           },
@@ -123,7 +123,7 @@
           "author": {
             "@id": "https://mirushin.emp0ry.com/#creator"
           },
-          "datePublished": "2026-06-24",
+          "datePublished": "2026-06-29",
           "isAccessibleForFree": true,
           "inLanguage": "en-US"
         },
@@ -179,7 +179,7 @@
           <span class="section-kicker">Policy</span>
           <h1>Privacy Policy</h1>
           <p>
-            Effective date: June 24, 2026. This policy applies to MiruShin, published by
+            Effective date: June 29, 2026. This policy applies to MiruShin, published by
             <code>emp0ry</code>, and the repository at
             <a href="https://github.com/emp0ry/MiruShin" target="_blank" rel="noreferrer">github.com/emp0ry/MiruShin</a>.
           </p>
@@ -199,6 +199,7 @@
             <p>
               Default MyAnimeList and Shikimori login uses a small Cloudflare Worker at
               <code>auth.emp0ry.com</code> to keep shared OAuth app credentials out of the public app binary.
+              Watch with Friends also uses that Worker for short-lived room pairing.
             </p>
 
             <h2>Data Stored on Your Device</h2>
@@ -219,7 +220,7 @@
               <li>AniList for login, profile data, tracking, library sync, reviews, and social features</li>
               <li>MyAnimeList for login, profile data, tracker sync, and export/import workflows</li>
               <li>Shikimori for login, profile data, tracker sync, title data, and metadata enrichment flows</li>
-              <li>Cloudflare Workers for default MyAnimeList and Shikimori OAuth authorization/token proxying</li>
+              <li>Cloudflare Workers for default MyAnimeList and Shikimori OAuth authorization/token proxying, and for short-lived Watch with Friends room pairing</li>
               <li>AniSkip for skip-marker data</li>
               <li>Discord for Rich Presence features on supported desktop platforms</li>
               <li>User-installed Sora modules and any services those modules contact</li>
@@ -240,6 +241,19 @@
               The Worker is used to avoid shipping shared OAuth app credentials in public releases.
               It is not an analytics service. Cloudflare may process request metadata as part of
               providing and securing the Worker service.
+            </p>
+
+            <h2>Watch with Friends</h2>
+            <p>
+              Watch with Friends uses <code>auth.emp0ry.com</code> only to exchange a temporary room
+              offer and answer while devices pair. After pairing, playback sync events travel over a
+              peer-to-peer WebRTC data channel between the devices.
+            </p>
+            <p>
+              These events can include the selected title/episode descriptor, addon and episode
+              identifiers, playback position, play/pause state, speed, selected server/quality/voiceover
+              identifiers, and host-granted guest permissions. MiruShin does not route video streams
+              through the Worker.
             </p>
 
             <h2>No First-Party Analytics Service</h2>

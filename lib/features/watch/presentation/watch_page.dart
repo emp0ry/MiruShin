@@ -559,6 +559,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
   void _playResolvedBundle(
     NormalizedStreamBundle bundle, {
     bool isAutoNext = false,
+    String? explicitQualityLabel,
   }) {
     _preferredServerId = bundle.selectedServer.id;
     _preferredServerTitle = bundle.selectedServer.title;
@@ -614,6 +615,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
               seasonNumber: _session!.seasonNumber,
               startInFullscreen: startFs,
               startPosition: startPosition,
+              initialQualityId: explicitQualityLabel,
               // Auto-loaded episodes are real playback the user is watching:
               // they must track progress and be able to chain the next auto-next.
               ignoreProgress: false,
@@ -905,7 +907,10 @@ class _WatchPageState extends ConsumerState<WatchPage> {
               bundle: bundle,
               onPlay: (NormalizedStreamBundle selected) {
                 Navigator.of(sheetContext).pop();
-                _playResolvedBundle(selected);
+                _playResolvedBundle(
+                  selected,
+                  explicitQualityLabel: selected.selectedQuality?.label,
+                );
               },
             ),
           );

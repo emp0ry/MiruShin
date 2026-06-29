@@ -56,6 +56,7 @@ class _GestureOverlayState extends ConsumerState<GestureOverlay> {
   double _vStartVolume = 1.0;
   bool _vRight = false;
   bool _temporarySpeedActive = false;
+  bool _temporarySpeedPressing = false;
   bool _pinchActive = false;
   bool _pinchHandled = false;
   bool _suppressPointerGestures = false;
@@ -130,14 +131,27 @@ class _GestureOverlayState extends ConsumerState<GestureOverlay> {
   }
 
   void _startTemporarySpeed() {
-    if (_temporarySpeedActive) return;
-    _temporarySpeedActive = true;
+    if (_temporarySpeedActive || _temporarySpeedPressing) return;
+    _temporarySpeedPressing = true;
     unawaited(
-      ref.read(playbackControllerProvider.notifier).beginTemporarySpeed(),
+      ref.read(playbackControllerProvider.notifier).beginTemporarySpeed().then((
+        bool started,
+      ) {
+        if (!mounted || !started || !_temporarySpeedPressing) {
+          if (started) {
+            unawaited(
+              ref.read(playbackControllerProvider.notifier).endTemporarySpeed(),
+            );
+          }
+          return;
+        }
+        _temporarySpeedActive = true;
+      }),
     );
   }
 
   void _endTemporarySpeed() {
+    _temporarySpeedPressing = false;
     if (!_temporarySpeedActive) return;
     _temporarySpeedActive = false;
     unawaited(

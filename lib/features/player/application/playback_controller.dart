@@ -28,6 +28,23 @@ import '../engine/player_engine.dart';
 import '../engine/player_engine_factory.dart';
 import 'player_settings.dart';
 
+/// Hook the watch-party host uses to broadcast its global playback changes to
+/// guests. Implemented by the watch-party controller and registered via
+/// [PlaybackController.setPlaybackSyncSink]. Kept in the player layer so the
+/// player never depends on the watch-party feature (no import cycle).
+abstract interface class PlaybackSyncSink {
+  void onHostPlay(Duration position, double speed);
+  void onHostPause(Duration position, double speed);
+  void onHostSeek(Duration position, double speed, bool playing);
+  void onHostSpeed(
+    double speed,
+    Duration position,
+    bool playing, {
+    bool temporary = false,
+  });
+  void onHostSourceChanged();
+}
+
 final playbackControllerProvider =
     NotifierProvider<PlaybackController, PlaybackState>(PlaybackController.new);
 
@@ -247,27 +264,179 @@ class PlaybackController extends Notifier<PlaybackState> {
 
   void Function()? _nextEpisodeHandler;
 
+  // Watch-party sync. Guests are locked by default, but the host can grant a
+  // small set of remote-control permissions. applyRemote* raises
+  // [_applyingRemote] so host-driven events neither re-broadcast nor get gated.
+  PlaybackSyncSink? _syncSink;
+  bool _guestLocked = false;
+  bool _guestCanControlPlayback = false;
+  bool _guestCanSeek = false;
+  bool _guestCanChangeSpeed = false;
+  bool _applyingRemote = false;
+  double? _remoteTemporaryPlaybackSpeed;
+
+  void setPlaybackSyncSink(PlaybackSyncSink? sink) {
+    _syncSink = sink;
+    if (sink == null) _clearRemoteTemporarySpeed();
+  }
+
+  void setGuestLocked(bool locked) {
+    _guestLocked = locked;
+    if (!locked) {
+      _guestCanControlPlayback = false;
+      _guestCanSeek = false;
+      _guestCanChangeSpeed = false;
+    }
+  }
+
+  void setGuestPermissions({
+    required bool canControlPlayback,
+    required bool canSeek,
+    required bool canChangeSpeed,
+  }) {
+    _guestCanControlPlayback = canControlPlayback;
+    _guestCanSeek = canSeek;
+    _guestCanChangeSpeed = canChangeSpeed;
+  }
+
+  bool get _guestControlLocked => _guestLocked && !_applyingRemote;
+  bool get _suppressPlaybackControl =>
+      _guestControlLocked && !_guestCanControlPlayback;
+  bool get _suppressSeekControl => _guestControlLocked && !_guestCanSeek;
+  bool get _suppressSpeedControl =>
+      _guestControlLocked && !_guestCanChangeSpeed;
+  bool get _suppressGuestGlobalControl => _guestControlLocked;
+
+  /// Current engine position, for the host heartbeat and guest drift checks.
+  Duration get currentEnginePosition => _currentPositionFor(state.engine);
+  bool get isEnginePlaying => state.engine?.state.value.isPlaying ?? false;
+  double get currentPlaybackSpeed {
+    final PlayerSettings settings =
+        ref.read(playerSettingsProvider).value ?? const PlayerSettings();
+    final double? remoteTemporarySpeed = _remoteTemporaryPlaybackSpeed;
+    if (_temporarySpeedHolds <= 0 &&
+        remoteTemporarySpeed != null &&
+        state.temporarySpeedActive) {
+      return remoteTemporarySpeed;
+    }
+    return _effectivePlaybackSpeed(settings);
+  }
+
+  void _broadcastPlayState() {
+    final PlaybackSyncSink? sink = _syncSink;
+    if (sink == null || _applyingRemote) return;
+    final Duration pos = currentEnginePosition;
+    final double speed = currentPlaybackSpeed;
+    if (isEnginePlaying) {
+      sink.onHostPlay(pos, speed);
+    } else {
+      sink.onHostPause(pos, speed);
+    }
+  }
+
+  void _broadcastSeek(Duration target) {
+    if (_syncSink == null || _applyingRemote) return;
+    _syncSink!.onHostSeek(target, currentPlaybackSpeed, isEnginePlaying);
+  }
+
+  void _broadcastSpeed(double speed, {bool temporary = false}) {
+    if (_syncSink == null || _applyingRemote) return;
+    _syncSink!.onHostSpeed(
+      speed,
+      currentEnginePosition,
+      isEnginePlaying,
+      temporary: temporary,
+    );
+  }
+
+  void _broadcastSourceChanged() {
+    if (_syncSink == null || _applyingRemote) return;
+    _syncSink!.onHostSourceChanged();
+  }
+
+  /// Apply a host play/pause without re-broadcasting (guest side).
+  Future<void> applyRemotePlay() async {
+    final PlayerEngine? engine = state.engine;
+    if (engine == null || engine.state.value.isPlaying) return;
+    _applyingRemote = true;
+    try {
+      await engine.play();
+      state = state.copyWith();
+      _updateMediaSession();
+    } finally {
+      _applyingRemote = false;
+    }
+  }
+
+  Future<void> applyRemotePause() async {
+    final PlayerEngine? engine = state.engine;
+    if (engine == null || !engine.state.value.isPlaying) return;
+    _applyingRemote = true;
+    try {
+      await engine.pause();
+      state = state.copyWith();
+      _updateMediaSession();
+    } finally {
+      _applyingRemote = false;
+    }
+  }
+
+  Future<void> applyRemoteSeek(Duration position) async {
+    _applyingRemote = true;
+    try {
+      await seekTo(position);
+    } finally {
+      _applyingRemote = false;
+    }
+  }
+
+  Future<void> applyRemoteSpeed(double speed, {bool temporary = false}) async {
+    _applyingRemote = true;
+    try {
+      if (temporary) {
+        _remoteTemporaryPlaybackSpeed = speed;
+        await state.engine?.setPlaybackSpeed(speed);
+        state = state.copyWith(temporarySpeedActive: true);
+        _updateMediaSession();
+      } else {
+        _remoteTemporaryPlaybackSpeed = null;
+        await setSpeed(speed);
+      }
+    } finally {
+      _applyingRemote = false;
+    }
+  }
+
+  void _clearRemoteTemporarySpeed() {
+    if (_remoteTemporaryPlaybackSpeed == null) return;
+    _remoteTemporaryPlaybackSpeed = null;
+    if (_temporarySpeedHolds > 0) return;
+    final PlayerSettings settings =
+        ref.read(playerSettingsProvider).value ?? const PlayerSettings();
+    unawaited(state.engine?.setPlaybackSpeed(settings.playbackSpeed));
+    state = state.copyWith(temporarySpeedActive: false);
+    _updateMediaSession();
+  }
+
   @override
   PlaybackState build() {
     MediaSessionService.init(
       onPlay: () {
         final PlayerEngine? e = state.engine;
         if (e != null && !e.state.value.isPlaying) {
-          unawaited(e.play());
-          state = state.copyWith();
-          _updateMediaSession();
+          unawaited(togglePlay());
         }
       },
       onPause: () {
         final PlayerEngine? e = state.engine;
         if (e != null && e.state.value.isPlaying) {
-          unawaited(e.pause());
-          state = state.copyWith();
-          _updateMediaSession();
+          unawaited(pause());
         }
       },
       onTogglePlay: () => unawaited(togglePlay()),
-      onNext: () => _nextEpisodeHandler?.call(),
+      onNext: () {
+        if (!_suppressGuestGlobalControl) _nextEpisodeHandler?.call();
+      },
       onSeekTo: (Duration pos) => unawaited(seekTo(pos)),
     );
     ref.listen<SettingsState>(settingsProvider, (previous, next) {
@@ -519,7 +688,10 @@ class PlaybackController extends Notifier<PlaybackState> {
       return;
     }
     final MediaServer server = item.servers.first;
-    final StreamQuality quality = _initialQuality(server);
+    final StreamQuality quality = _initialQuality(
+      server,
+      explicitId: item.initialQualityId,
+    );
     final EpisodeProgress? prog = item.ignoreProgress
         ? null
         : await _loadProgressForItem(item);
@@ -531,6 +703,9 @@ class PlaybackController extends Notifier<PlaybackState> {
       position: startPos,
       autoplay: true,
     );
+    // Host: a freshly loaded episode is a global source/episode change. (Guests
+    // have no sink registered, so this is a no-op on the receiving side.)
+    _broadcastSourceChanged();
   }
 
   Future<EpisodeProgress?> _loadProgressForItem(MediaPlaybackItem item) async {
@@ -1305,7 +1480,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     }
   }
 
-  StreamQuality _initialQuality(MediaServer server) {
+  StreamQuality _initialQuality(MediaServer server, {String? explicitId}) {
     final PlayerSettings settings =
         ref.read(playerSettingsProvider).value ?? const PlayerSettings();
     if (server.qualities.isEmpty) return StreamQuality.auto;
@@ -1314,6 +1489,15 @@ class PlaybackController extends Notifier<PlaybackState> {
         (StreamQuality q) => q.isAuto,
         orElse: () => server.qualities.first,
       );
+    }
+    // A quality the user picked explicitly for this playback (e.g. from the
+    // stream sheet) wins over the saved global preference.
+    if (explicitId != null && explicitId.trim().isNotEmpty) {
+      for (final StreamQuality quality in server.qualities) {
+        if (quality.id == explicitId || quality.label == explicitId) {
+          return quality;
+        }
+      }
     }
     for (final StreamQuality quality in server.qualities) {
       if (quality.id == settings.preferredQuality ||
@@ -1328,11 +1512,13 @@ class PlaybackController extends Notifier<PlaybackState> {
   }
 
   Future<void> pause() async {
+    if (_suppressPlaybackControl) return;
     final PlayerEngine? engine = state.engine;
     if (engine == null || !engine.state.value.isPlaying) return;
     await engine.pause();
     state = state.copyWith();
     _updateMediaSession();
+    _broadcastPlayState();
   }
 
   // Save progress from the native player (position is known, engine is paused).
@@ -1404,6 +1590,7 @@ class PlaybackController extends Notifier<PlaybackState> {
   }
 
   Future<void> togglePlay() async {
+    if (_suppressPlaybackControl) return;
     final PlayerEngine? engine = state.engine;
     if (engine == null) return;
     if (_queuedSeekEngine == engine && _queuedSeekTarget != null) {
@@ -1412,9 +1599,11 @@ class PlaybackController extends Notifier<PlaybackState> {
     engine.state.value.isPlaying ? await engine.pause() : await engine.play();
     state = state.copyWith();
     _updateMediaSession();
+    _broadcastPlayState();
   }
 
   Future<void> seekBy(Duration offset, {Duration? flushDelay}) async {
+    if (_suppressSeekControl) return;
     final PlayerEngine? engine = state.engine;
     if (engine == null || !engine.state.value.isInitialized) return;
     final Duration duration = engine.state.value.duration;
@@ -1428,15 +1617,18 @@ class PlaybackController extends Notifier<PlaybackState> {
       target,
       delay: flushDelay ?? _interactiveSeekDelay,
     );
+    _broadcastSeek(target);
   }
 
   Future<void> seekTo(Duration position) async {
+    if (_suppressSeekControl) return;
     final PlayerEngine? engine = state.engine;
     if (engine == null || !engine.state.value.isInitialized) return;
     final Duration duration = engine.state.value.duration;
     final Duration target = _clampSeekPosition(position, duration);
     _noteManualSeekTarget(target, duration);
     _queueInteractiveSeek(engine, target, delay: Duration.zero);
+    _broadcastSeek(target);
   }
 
   // Treat a seek to the last few seconds of a reliable stream as completion:
@@ -2223,34 +2415,44 @@ class PlaybackController extends Notifier<PlaybackState> {
   }
 
   Future<void> setSpeed(double speed) async {
+    if (_suppressSpeedControl) return;
+    _remoteTemporaryPlaybackSpeed = null;
     await ref.read(playerSettingsProvider.notifier).setSpeed(speed);
     final PlayerSettings settings =
         ref.read(playerSettingsProvider).value ?? const PlayerSettings();
     await state.engine?.setPlaybackSpeed(_effectivePlaybackSpeed(settings));
-    state = state.copyWith();
+    state = state.copyWith(temporarySpeedActive: _temporarySpeedHolds > 0);
     _updateMediaSession();
+    _broadcastSpeed(speed);
   }
 
-  Future<void> beginTemporarySpeed() async {
+  Future<bool> beginTemporarySpeed() async {
+    if (_suppressSpeedControl) return false;
     final PlayerEngine? engine = state.engine;
-    if (engine == null) return;
+    if (engine == null) return false;
+    _remoteTemporaryPlaybackSpeed = null;
     _temporarySpeedHolds += 1;
     final PlayerSettings settings =
         ref.read(playerSettingsProvider).value ?? const PlayerSettings();
-    await engine.setPlaybackSpeed(_effectivePlaybackSpeed(settings));
+    final double temporarySpeed = _effectivePlaybackSpeed(settings);
+    await engine.setPlaybackSpeed(temporarySpeed);
     state = state.copyWith(temporarySpeedActive: true);
     _updateMediaSession();
+    _broadcastSpeed(temporarySpeed, temporary: true);
+    return true;
   }
 
   Future<void> endTemporarySpeed() async {
     if (_temporarySpeedHolds <= 0) return;
     _temporarySpeedHolds -= 1;
     if (_temporarySpeedHolds > 0) return;
+    _remoteTemporaryPlaybackSpeed = null;
     final PlayerSettings settings =
         ref.read(playerSettingsProvider).value ?? const PlayerSettings();
     await state.engine?.setPlaybackSpeed(settings.playbackSpeed);
     state = state.copyWith(temporarySpeedActive: false);
     _updateMediaSession();
+    _broadcastSpeed(settings.playbackSpeed);
   }
 
   double _effectivePlaybackSpeed(PlayerSettings settings) {
@@ -2266,6 +2468,7 @@ class PlaybackController extends Notifier<PlaybackState> {
   }
 
   Future<void> switchServer(MediaServer server) async {
+    if (_suppressGuestGlobalControl) return;
     final MediaPlaybackItem? item = state.item;
     final PlayerEngine? current = state.engine;
     if (item == null) return;
@@ -2276,9 +2479,11 @@ class PlaybackController extends Notifier<PlaybackState> {
       position: _currentPositionFor(current),
       autoplay: current?.state.value.isPlaying ?? true,
     );
+    _broadcastSourceChanged();
   }
 
   Future<void> switchQuality(StreamQuality quality) async {
+    if (_suppressGuestGlobalControl) return;
     final MediaPlaybackItem? item = state.item;
     final MediaServer? server = state.server;
     final PlayerEngine? current = state.engine;
@@ -2293,6 +2498,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       subtitle: state.subtitle,
       preserveAspectRatio: current?.state.value.aspectRatio,
     );
+    _broadcastSourceChanged();
   }
 
   Future<void> reloadWithBackend(PlayerBackend backend) async {
@@ -2320,6 +2526,7 @@ class PlaybackController extends Notifier<PlaybackState> {
   }
 
   Future<void> switchVoiceover(VoiceOverTrack voiceover) async {
+    if (_suppressGuestGlobalControl) return;
     final MediaPlaybackItem? item = state.item;
     final MediaServer? currentServer = state.server;
     final PlayerEngine? current = state.engine;
@@ -2329,6 +2536,7 @@ class PlaybackController extends Notifier<PlaybackState> {
         voiceUrl == null ||
         voiceUrl.isEmpty) {
       state = state.copyWith(voiceover: voiceover);
+      _broadcastSourceChanged();
       return;
     }
 
@@ -2360,6 +2568,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       voiceover: voiceover,
       subtitle: state.subtitle,
     );
+    _broadcastSourceChanged();
   }
 
   Future<void> selectSubtitle(
@@ -2450,6 +2659,7 @@ class PlaybackController extends Notifier<PlaybackState> {
   }
 
   Future<void> skipTo(Duration target) async {
+    if (_suppressSeekControl) return;
     final PlayerEngine? engine = state.engine;
     if (engine == null) return;
     final Duration from = _currentPositionFor(engine);
@@ -2476,9 +2686,11 @@ class PlaybackController extends Notifier<PlaybackState> {
       const Duration(seconds: 5),
       () => state = state.copyWith(clearLastSkippedFrom: true),
     );
+    _broadcastSeek(clampedTarget);
   }
 
   Future<void> undoSkip() async {
+    if (_suppressSeekControl) return;
     final Duration? from = state.lastSkippedFrom;
     if (from == null) return;
     final PlayerEngine? engine = state.engine;
@@ -2499,6 +2711,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       _beginSeekSettle(engine, target);
     }
     state = state.copyWith(clearLastSkippedFrom: true);
+    _broadcastSeek(target);
   }
 
   void setControlsVisible(bool visible) =>

@@ -34,7 +34,6 @@ final skipMarkersProvider = FutureProvider.autoDispose<SkipMarkers>((
   if (item == null) return const SkipMarkers();
 
   final SkipMarkers addonMarkers = item.skipMarkers;
-  if (item.ignoreProgress) return addonMarkers;
 
   final PlayerSettings settings =
       ref.watch(playerSettingsProvider).value ?? const PlayerSettings();

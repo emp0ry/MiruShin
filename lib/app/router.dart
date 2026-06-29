@@ -17,6 +17,9 @@ import '../features/player/domain/player_models.dart';
 import '../features/player/presentation/player_page.dart';
 import '../features/watch/domain/normalized_models.dart';
 import '../features/watch/presentation/watch_page.dart';
+import '../features/watch_party/presentation/create_room_screen.dart';
+import '../features/watch_party/presentation/join_room_screen.dart';
+import '../features/watch_party/presentation/watch_party_screen.dart';
 import '../shared/models/media_item.dart';
 
 /// Root navigator key, so context-less services (e.g. the Cloudflare challenge
@@ -37,6 +40,21 @@ GoRouter buildAppRouter(String initialLocation) => GoRouter(
       path: AppRoutes.watchPlay,
       pageBuilder: (BuildContext context, GoRouterState state) =>
           _playerPage(state),
+    ),
+    GoRoute(
+      path: AppRoutes.watchParty,
+      pageBuilder: (BuildContext context, GoRouterState state) =>
+          _fadePage(state, const WatchPartyScreen()),
+    ),
+    GoRoute(
+      path: AppRoutes.watchPartyCreate,
+      pageBuilder: (BuildContext context, GoRouterState state) =>
+          _fadePage(state, const CreateRoomScreen()),
+    ),
+    GoRoute(
+      path: AppRoutes.watchPartyJoin,
+      pageBuilder: (BuildContext context, GoRouterState state) =>
+          _fadePage(state, const JoinRoomScreen()),
     ),
     ShellRoute(
       builder: (BuildContext context, GoRouterState state, Widget child) {
@@ -215,6 +233,7 @@ CustomTransitionPage<void> _playerPage(GoRouterState state) {
     startPosition: args.startPosition,
     ignoreProgress: args.ignoreProgress,
     seasons: args.episodeSeasons,
+    initialQualityId: args.initialQualityId,
   );
   return _fadePage(
     state,
@@ -271,6 +290,7 @@ class PlayerRouteArgs {
     this.startPosition = Duration.zero,
     this.ignoreProgress = false,
     this.episodeSeasons = const <Season>[],
+    this.initialQualityId,
   });
 
   final NormalizedStreamBundle bundle;
@@ -279,6 +299,10 @@ class PlayerRouteArgs {
   final bool startInFullscreen;
   final Duration startPosition;
   final bool ignoreProgress;
+
+  /// Quality the user explicitly chose in the stream sheet, honored over the
+  /// saved global preference. Null for auto-play / auto-next.
+  final String? initialQualityId;
 
   /// Full episode list (grouped into seasons) for the in-player Episodes sheet,
   /// so the user can jump to any episode without leaving the player.

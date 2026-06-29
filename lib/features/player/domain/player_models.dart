@@ -494,6 +494,7 @@ class MediaPlaybackItem {
     this.episodeNumber = 1.0,
     this.episodeCount,
     this.ignoreProgress = false,
+    this.initialQualityId,
   });
 
   final String id;
@@ -514,6 +515,10 @@ class MediaPlaybackItem {
   final int? episodeCount;
   final bool ignoreProgress;
 
+  /// Quality the user explicitly picked for this playback (id/label), which wins
+  /// over the saved global preferred quality. Null falls back to the preference.
+  final String? initialQualityId;
+
   Episode? get currentEpisode {
     for (final Season season in seasons) {
       for (final Episode episode in season.episodes) {
@@ -530,6 +535,7 @@ class MediaPlaybackItem {
     Duration startPosition = Duration.zero,
     bool ignoreProgress = false,
     List<Season> seasons = const <Season>[],
+    String? initialQualityId,
   }) {
     final StreamType streamType = streamTypeFrom(bundle.streamType);
 
@@ -621,6 +627,10 @@ class MediaPlaybackItem {
       episodeNumber: episodeNumber,
       episodeCount: _episodeCountForPlayback(item, seasonNumber),
       ignoreProgress: ignoreProgress,
+      // Only an explicit per-playback choice (e.g. from the stream sheet) is
+      // carried; the auto-play/auto-next paths pass null so the saved global
+      // preferred quality still applies.
+      initialQualityId: initialQualityId,
     );
   }
 }

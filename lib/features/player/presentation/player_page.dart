@@ -7,7 +7,10 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
+import '../../../app/app_routes.dart';
 import '../../../app/localization/app_localizations.dart';
+import '../../watch_party/application/watch_party_controller.dart';
+import '../../watch_party/domain/watch_party_models.dart';
 import '../../../core/platform/tv_platform.dart';
 import '../../../core/widgets/tv_focusable.dart';
 import '../../catalog/application/catalog_mode.dart';
@@ -345,20 +348,68 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   bool get _shouldStartFullscreen => _isMobile || widget.startInFullscreen;
 
   bool _handleGlobalKeyEvent(KeyEvent event) {
-    if (!mounted || _nativePipActive || event is! KeyDownEvent) return false;
+    if (!mounted || _nativePipActive) return false;
+    if (event is! KeyDownEvent &&
+        event is! KeyRepeatEvent &&
+        event is! KeyUpEvent) {
+      return false;
+    }
+    if (!(ModalRoute.of(context)?.isCurrent ?? true)) return false;
 
     final PlaybackState state = ref.read(playbackControllerProvider);
-    if (!_isYoutubeTrailerPlayback(state, widget.item)) return false;
+    if (_isYoutubeTrailerPlayback(state, widget.item)) {
+      if (event is! KeyDownEvent) return false;
+      if (event.logicalKey == LogicalKeyboardKey.keyF) {
+        _handleTrailerFullscreenShortcut();
+        return true;
+      }
+      if (event.logicalKey == LogicalKeyboardKey.escape) {
+        _handleTrailerEscapeShortcut();
+        return true;
+      }
+      return false;
+    }
 
-    if (event.logicalKey == LogicalKeyboardKey.keyF) {
-      _handleTrailerFullscreenShortcut();
-      return true;
+    // The player's Focus subtree already routes these shortcuts through its
+    // onKeyEvent whenever it (or a focused descendant) is active. Handling them
+    // here too would process a single press twice — e.g. open the quality or
+    // episodes sheet twice, or toggle play back and forth. Only act as a
+    // fallback when focus has drifted outside the player.
+    if (_playerFocusNode.hasFocus) return false;
+
+    if (!_isPlayerShortcutKey(event.logicalKey) || _isEditableTextFocused()) {
+      return false;
     }
-    if (event.logicalKey == LogicalKeyboardKey.escape) {
-      _handleTrailerEscapeShortcut();
-      return true;
-    }
-    return false;
+
+    final PlayerSettings settings =
+        ref.read(playerSettingsProvider).value ?? const PlayerSettings();
+    return _handlePlayerKeyEvent(event, state, settings) ==
+        KeyEventResult.handled;
+  }
+
+  bool _isPlayerShortcutKey(LogicalKeyboardKey key) {
+    return key == LogicalKeyboardKey.space ||
+        key == LogicalKeyboardKey.mediaPlayPause ||
+        key == LogicalKeyboardKey.arrowLeft ||
+        key == LogicalKeyboardKey.arrowRight ||
+        key == LogicalKeyboardKey.arrowUp ||
+        key == LogicalKeyboardKey.arrowDown ||
+        key == LogicalKeyboardKey.keyM ||
+        key == LogicalKeyboardKey.keyC ||
+        key == LogicalKeyboardKey.keyP ||
+        key == LogicalKeyboardKey.keyV ||
+        key == LogicalKeyboardKey.keyE ||
+        key == LogicalKeyboardKey.keyQ ||
+        key == LogicalKeyboardKey.keyF ||
+        key == LogicalKeyboardKey.escape;
+  }
+
+  bool _isEditableTextFocused() {
+    final BuildContext? focusContext =
+        FocusManager.instance.primaryFocus?.context;
+    if (focusContext == null) return false;
+    return focusContext.widget is EditableText ||
+        focusContext.findAncestorWidgetOfExactType<EditableText>() != null;
   }
 
   void _requestPlayerFocus() {
@@ -581,6 +632,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   }) async {
     if (_exitingPlayer) return;
     final bool advancing = playNext || selectEpisodeHref != null;
+    if (!advancing && _shouldBlockPartyPlayerExit()) {
+      _showPartyPlayerExitBlocked();
+      return;
+    }
     final bool wasFullscreen = _isFullscreen;
     final bool shouldStartNextFullscreen =
         advancing && (wasFullscreen || _shouldStartFullscreen);
@@ -696,6 +751,41 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     unawaited(_exitPlayer());
   }
 
+  bool _shouldBlockPartyPlayerExit() {
+    final WatchPartyRoomState party = ref.read(watchPartyProvider);
+    if (!party.isGuest) return false;
+    return switch (party.status) {
+      WatchPartyConnectionStatus.signaling ||
+      WatchPartyConnectionStatus.connecting ||
+      WatchPartyConnectionStatus.connected ||
+      WatchPartyConnectionStatus.reconnecting => true,
+      WatchPartyConnectionStatus.idle ||
+      WatchPartyConnectionStatus.closed ||
+      WatchPartyConnectionStatus.error => false,
+    };
+  }
+
+  void _showPartyPlayerExitBlocked() {
+    if (!mounted) return;
+    // Clear any queued copies first so repeated back-presses don't stack the
+    // snackbar (which made it look like it never went away), then show one that
+    // auto-dismisses after a couple of seconds.
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 2),
+          content: const Text(
+            'Leave the watch party before leaving the player.',
+          ),
+          action: SnackBarAction(
+            label: 'Party',
+            onPressed: () => context.push(AppRoutes.watchParty),
+          ),
+        ),
+      );
+  }
+
   void _cancelSpaceHold({required bool restoreSpeed}) {
     _spaceHoldTimer?.cancel();
     _spaceHoldTimer = null;
@@ -722,8 +812,24 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       _spaceHoldTimer?.cancel();
       _spaceHoldTimer = Timer(_spaceHoldSpeedDelay, () {
         if (!mounted || !_spacePressed) return;
+        // Mark the hold synchronously: once the hold timer fires this press is a
+        // speed-hold, not a tap. beginTemporarySpeed() is async, so a KeyUp that
+        // races it must still see the flag set or it would treat the release as
+        // a tap and toggle play (pausing). If the boost can't start (e.g. a
+        // speed-locked guest) or the key is already released, undo it.
         _spaceTemporarySpeedActive = true;
-        unawaited(notifier.beginTemporarySpeed());
+        unawaited(
+          notifier.beginTemporarySpeed().then((bool started) {
+            if (!started) {
+              _spaceTemporarySpeedActive = false;
+              return;
+            }
+            if (!mounted || !_spacePressed) {
+              _spaceTemporarySpeedActive = false;
+              unawaited(notifier.endTemporarySpeed());
+            }
+          }),
+        );
       });
       return KeyEventResult.handled;
     }
@@ -904,6 +1010,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
           : KeyEventResult.ignored;
     }
     if (key == LogicalKeyboardKey.keyE) {
+      if (event is! KeyDownEvent) return KeyEventResult.handled;
       _showEpisodes(
         context,
         state.item,
@@ -913,6 +1020,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.keyQ) {
+      if (event is! KeyDownEvent) return KeyEventResult.handled;
       _showQualityMenu(context, ref);
       return KeyEventResult.handled;
     }
@@ -1494,9 +1602,14 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
 
 bool _isYoutubeTrailerPlayback(PlaybackState state, MediaPlaybackItem item) {
   if (state.server?.id == 'youtube-trailer') return true;
-  return item.servers.any(
-    (MediaServer server) => server.id == 'youtube-trailer',
-  );
+  if (_isYoutubeTrailerItem(item)) return true;
+  return isSamePlaybackRouteItem(state.item, item) &&
+      _isYoutubeTrailerItem(state.item!);
+}
+
+bool _isYoutubeTrailerItem(MediaPlaybackItem item) {
+  return item.externalIds['mirushin_trailer'] == 'true' ||
+      (item.servers.length == 1 && item.servers.first.id == 'youtube-trailer');
 }
 
 class _YoutubeTrailerSurface extends StatelessWidget {
@@ -1705,9 +1818,6 @@ class _VideoSurface extends StatelessWidget {
 }
 
 SkipMarkers _effectiveSkipMarkers(SkipMarkers? resolved, SkipMarkers fallback) {
-  if (!fallback.isEmpty) {
-    return fallback;
-  }
   if (resolved == null || resolved.isEmpty) {
     return fallback;
   }
@@ -2107,6 +2217,7 @@ class _PlayerChrome extends ConsumerWidget {
                             color: Colors.white,
                           ),
                         ),
+                      _WatchPartyButton(party: ref.watch(watchPartyProvider)),
                       IconButton(
                         tooltip: 'Settings',
                         onPressed: () => _showSettings(context, ref),
@@ -3568,6 +3679,34 @@ class _ChromeButton extends StatelessWidget {
       label: Text(
         context.t(label),
         style: const TextStyle(color: Colors.white),
+      ),
+    );
+  }
+}
+
+/// Top-bar action that opens the watch-party hub. Tinted when a party is active
+/// so the host/guest can see at a glance that sync is on.
+class _WatchPartyButton extends StatelessWidget {
+  const _WatchPartyButton({required this.party});
+
+  final WatchPartyRoomState party;
+
+  @override
+  Widget build(BuildContext context) {
+    final bool active = party.isActive;
+    final Color color = active
+        ? Theme.of(context).colorScheme.primary
+        : Colors.white;
+    return IconButton(
+      tooltip: party.isGuest
+          ? 'Watch party (guest)'
+          : active
+          ? 'Watch party (host)'
+          : 'Watch with Friend',
+      onPressed: () => context.push(AppRoutes.watchParty),
+      icon: Icon(
+        active ? Icons.group_rounded : Icons.group_add_outlined,
+        color: color,
       ),
     );
   }

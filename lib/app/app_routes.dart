@@ -24,6 +24,9 @@ abstract final class AppRoutes {
   static const String mediaDetails = '/media/:id';
   static const String watch = '/watch/:id';
   static const String watchPlay = '/watch/play';
+  static const String watchParty = '/watch-party';
+  static const String watchPartyCreate = '/watch-party/create';
+  static const String watchPartyJoin = '/watch-party/join';
   static const String offlineTitle = '/downloads/:id';
 
   static String discoveryPath({

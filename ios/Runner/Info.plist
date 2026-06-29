@@ -4,6 +4,8 @@
 	<dict>
 		<key>CADisableMinimumFrameDurationOnPhone</key>
 		<true/>
+		<key>NSCameraUsageDescription</key>
+		<string>MiruShin uses the camera to scan a friend's watch-party QR code.</string>
 		<key>CFBundleDevelopmentRegion</key>
 		<string>$(DEVELOPMENT_LANGUAGE)</string>
 		<key>CFBundleDisplayName</key>

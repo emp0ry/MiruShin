@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:dio/dio.dart';
 
 import '../../../core/constants/app_constants.dart';
+import '../../../core/network/auth_worker_proof.dart';
 import 'oauth_token_bundle.dart';
 
 /// MyAnimeList OAuth2 (authorization code + PKCE).
@@ -41,6 +42,7 @@ class MalOAuthService {
           'code_challenge': codeChallenge,
           'redirect_uri': redirectUri,
           'state': state,
+          ...AuthWorkerProof.queryParameters(),
         },
       );
     }
@@ -109,6 +111,7 @@ class MalOAuthService {
       options: Options(
         contentType: Headers.jsonContentType,
         responseType: ResponseType.json,
+        headers: AuthWorkerProof.headers(),
       ),
     );
   }

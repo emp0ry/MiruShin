@@ -59,6 +59,7 @@ MiruShin lets you browse trending titles, build your library, keep your progress
 | 🔥 **Discover** | Browse trending, popular, and filtered rails. Switch between TMDB and AniList catalogs anytime. |
 | 📚 **Library** | Keep your own library, sync AniList, MyAnimeList, and Shikimori, continue watching, and track your progress in one place. |
 | ▶️ **Watch** | Play HLS, MP4, and DASH with quality selection, voiceovers, subtitles, and autoplay next. |
+| 👥 **Watch Together** | Create a Watch with Friends room by code or QR and sync playback peer-to-peer across devices. |
 | 📥 **Offline** | Download episodes from the watch page and play them later from the Downloaded library tab. |
 | ⏭️ **Skip Smartly** | AniSkip markers let you jump openings and endings automatically. |
 | 👤 **Profile** | View AniList activity, favourites, feed, statistics, reviews, and export your list. |
@@ -68,6 +69,7 @@ MiruShin lets you browse trending titles, build your library, keep your progress
 
 - 📺 **Android TV** with remote-friendly navigation throughout.
 - 🖼️ **Picture-in-Picture** and native player handoff where the platform supports it.
+- 🔐 **Host-controlled watch-party permissions** for guest play/pause, seek, and speed changes.
 - 🎮 **Discord Rich Presence** on supported desktops.
 - 🔄 **Tracker sync** for AniList, MyAnimeList, and Shikimori account workflows.
 - 📤 **Exports** to MyAnimeList XML and Shikimori JSON.
@@ -121,6 +123,7 @@ Want more? Two optional steps unlock the rest:
 
 - **Sign in to AniList, MyAnimeList, or Shikimori** to sync library status and progress. AniList also unlocks profile pages, social surfaces, exports, and the AniList catalog.
 - **Add modules to watch** by opening the **Addons** page and pasting a trusted module manifest URL, then install and enable it. Need modules? Join the [Sora Discord](https://discord.gg/XR3SrmUbpd) to find them.
+- **Watch with friends** from Settings or the player. The host creates a short-lived room code/QR, guests join on their own device, and playback events sync after pairing.
 
 > [!TIP]
 > Switch between TMDB and AniList anytime by tapping the top-left logo (or via **More** in compact mode).
@@ -190,7 +193,8 @@ On mobile the OAuth flow uses an embedded WebView callback; on desktop MiruShin 
 ### MyAnimeList and Shikimori OAuth
 
 Default MyAnimeList and Shikimori login goes through the Cloudflare Worker in
-[`mirushin-auth`](mirushin-auth/). Shared OAuth app credentials are Cloudflare
+[`mirushin-auth`](mirushin-auth/). The same Worker also provides short-lived
+Watch with Friends WebRTC pairing. Shared OAuth app credentials are Cloudflare
 secrets and are not committed to this repository or bundled into Flutter builds.
 
 To deploy your own Worker:
@@ -202,6 +206,7 @@ npx wrangler secret put SHIKIMORI_CLIENT_ID
 npx wrangler secret put SHIKIMORI_CLIENT_SECRET
 npx wrangler secret put MAL_CLIENT_ID_DESKTOP
 npx wrangler secret put MAL_CLIENT_ID_MOBILE
+npx wrangler kv namespace create WATCH_PARTY
 npm run deploy
 ```
 
@@ -210,6 +215,10 @@ Configure provider redirect URLs as:
 - Shikimori: `https://auth.emp0ry.com/callback`
 - MyAnimeList desktop: `http://localhost:28373/token`
 - MyAnimeList mobile: `app://mirushin/auth`
+
+For the live `auth.emp0ry.com` domain, apply the Worker edge-security rules in
+`mirushin-auth/scripts/apply-edge-security.mjs` so invalid auth/watch-party
+traffic is blocked by Cloudflare before it reaches the Worker.
 
 ### Project layout
 

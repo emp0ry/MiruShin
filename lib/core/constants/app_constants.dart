@@ -63,6 +63,15 @@ abstract final class AppConstants {
   static const String shikimoriOobHost = 'shikimori.one';
   static const String shikimoriOobCodePathPrefix = '/oauth/authorize/';
 
+  // Watch-party WebRTC signaling lives in the same Worker (mirushin-auth). It is
+  // used only for temporary pairing; once the P2P DataChannel opens the room is
+  // deleted and all playback sync flows directly between peers.
+  static const String watchPartyBaseUrl = 'https://auth.emp0ry.com/watch-party';
+  // Lightweight anti-abuse proof shared with mirushin-auth. This is a speed bump
+  // against generic scripts, not a true secret once the app is distributed.
+  static const String authWorkerProofSecret =
+      'mirushin-auth-proof-v1-2e2f2fe7f1194af4a2c0d517d316fd3a';
+
   static Future<void> init() async {
     try {
       final PackageInfo info = await PackageInfo.fromPlatform();

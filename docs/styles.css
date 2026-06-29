@@ -867,6 +867,25 @@ main section[id],
   border-left: 1.08rem solid var(--accent-soft);
 }
 
+.icon-party::before {
+  left: 0.72rem;
+  top: 0.86rem;
+  width: 0.9rem;
+  height: 0.9rem;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  box-shadow: 1rem 0.42rem 0 var(--teal);
+}
+
+.icon-party::after {
+  left: 0.94rem;
+  right: 0.94rem;
+  bottom: 0.9rem;
+  height: 0.44rem;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), var(--teal));
+}
+
 .icon-grid::before {
   left: 0.8rem;
   top: 0.8rem;

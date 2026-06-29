@@ -70,6 +70,8 @@ class SettingsPage extends ConsumerWidget {
           const SizedBox(height: AppSpacing.lg),
           _AppearanceSection(settings: settings, controller: controller),
           const SizedBox(height: AppSpacing.lg),
+          const _WatchPartySection(),
+          const SizedBox(height: AppSpacing.lg),
           const _PlayerEngineSection(),
           const SizedBox(height: AppSpacing.lg),
           _LanguageSection(
@@ -133,6 +135,32 @@ class _UpdateSection extends ConsumerWidget {
       },
       loading: () => const SizedBox.shrink(),
       error: (_, _) => const SizedBox.shrink(),
+    );
+  }
+}
+
+class _WatchPartySection extends StatelessWidget {
+  const _WatchPartySection();
+
+  @override
+  Widget build(BuildContext context) {
+    return SettingsSection(
+      title: context.t('Watch with Friends'),
+      icon: Icons.groups_rounded,
+      children: <Widget>[
+        SettingsRow(
+          title: context.t('Watch party'),
+          subtitle: context.t(
+            'Create or join a room to watch the same episode in sync. Each device '
+            'plays its own local stream; only playback control is shared.',
+          ),
+          trailing: FilledButton.icon(
+            onPressed: () => context.push(AppRoutes.watchParty),
+            icon: const Icon(Icons.groups_rounded),
+            label: Text(context.t('Open')),
+          ),
+        ),
+      ],
     );
   }
 }
