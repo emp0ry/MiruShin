@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -58,8 +59,9 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
 
   /// Number of consecutive polls a fresh `cf_clearance` must persist before we
   /// accept it even if [_stillOnChallenge] keeps reporting true (a Windows/
-  /// WebView2 stale-title workaround). At [_pollInterval] this is ~2 seconds.
-  static const int _clearanceConfirmPolls = 3;
+  /// WebView2 stale-title workaround). At [_pollInterval] this is ~8 seconds.
+  static const int _windowsClearanceConfirmPolls = 12;
+  static const Duration _windowsClearanceIdleDelay = Duration(seconds: 2);
 
   CookieManager _cookies = CookieManager.instance();
   WebViewEnvironment? _webViewEnvironment;
@@ -70,6 +72,8 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
   int _consecutiveErrors = 0;
   // Consecutive polls in which a cf_clearance cookie has been present.
   int _clearanceSeen = 0;
+  DateTime? _clearanceFirstSeenAt;
+  DateTime _lastWebViewActivityAt = DateTime.now();
   bool _completed = false;
   bool _loading = true;
   // Becomes true once the pre-navigation cookie flush is done (or timed out).
@@ -258,9 +262,11 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
       }
       if (!cleared) {
         _clearanceSeen = 0;
+        _clearanceFirstSeenAt = null;
         return;
       }
       _clearanceSeen++;
+      _clearanceFirstSeenAt ??= DateTime.now();
 
       // A cf_clearance cookie alone isn't proof we passed — confirm the page is
       // genuinely past the wall: the challenge interstitial keeps the title
@@ -268,8 +274,7 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
       // real page. The fallback acceptance is Windows-only: on macOS/iOS the
       // stale-cookie check is reliable and matches the proven v2.1.0 flow.
       final bool stillChallenging = await _stillOnChallenge();
-      if (stillChallenging &&
-          (!_isWindows || _clearanceSeen < _clearanceConfirmPolls)) {
+      if (stillChallenging && (!_isWindows || !_windowsClearanceSettled())) {
         return;
       }
 
@@ -279,15 +284,7 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
           .join('; ');
       // cf_clearance is bound to the UA that solved it — capture the WebView's
       // real UA so the runtime can replay it on subsequent requests.
-      String userAgent = '';
-      try {
-        final Object? ua = await _controller?.evaluateJavascript(
-          source: 'navigator.userAgent',
-        );
-        if (ua is String) userAgent = ua;
-      } catch (_) {
-        // Non-fatal: an empty UA just means the runtime keeps its default.
-      }
+      final String userAgent = await _readUserAgent();
       _finish((cookies: header, userAgent: userAgent));
     } catch (error) {
       if (_completed) return;
@@ -311,6 +308,68 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
     }
   }
 
+  bool _windowsClearanceSettled() {
+    final DateTime now = DateTime.now();
+    final DateTime? firstSeen = _clearanceFirstSeenAt;
+    final Duration cookieAge = firstSeen == null
+        ? Duration.zero
+        : now.difference(firstSeen);
+    final Duration idleFor = now.difference(_lastWebViewActivityAt);
+    final bool settled =
+        _clearanceSeen >= _windowsClearanceConfirmPolls &&
+        idleFor >= _windowsClearanceIdleDelay;
+
+    if (!settled && kDebugMode) {
+      debugPrint(
+        '[Cloudflare] waiting for Windows clearance settle: '
+        'seen=$_clearanceSeen/$_windowsClearanceConfirmPolls, '
+        'cookieAge=${cookieAge.inMilliseconds}ms, '
+        'idle=${idleFor.inMilliseconds}ms',
+      );
+    }
+    return settled;
+  }
+
+  void _markWebViewActivity() {
+    _lastWebViewActivityAt = DateTime.now();
+  }
+
+  Future<String> _readUserAgent() async {
+    final InAppWebViewController? controller = _controller;
+    if (controller == null) return '';
+    try {
+      final String ua = _normalizeUserAgent(
+        await controller.evaluateJavascript(source: 'navigator.userAgent'),
+      );
+      if (ua.isNotEmpty) return ua;
+    } catch (_) {
+      // Try the WebView2 DevTools API below.
+    }
+    if (!_isWindows) return '';
+    try {
+      final Object? result = await controller
+          .callDevToolsProtocolMethod(methodName: 'Browser.getVersion')
+          .timeout(const Duration(milliseconds: 1500), onTimeout: () => null);
+      if (result is Map) {
+        return _normalizeUserAgent(result['userAgent']);
+      }
+    } catch (_) {}
+    return '';
+  }
+
+  String _normalizeUserAgent(Object? raw) {
+    if (raw is! String) return '';
+    final String trimmed = raw.trim();
+    if (trimmed.isEmpty) return '';
+    try {
+      final Object? decoded = jsonDecode(trimmed);
+      if (decoded is String && decoded.trim().isNotEmpty) {
+        return decoded.trim();
+      }
+    } catch (_) {}
+    return trimmed;
+  }
+
   /// Whether the WebView is still showing the Cloudflare interstitial (so a
   /// present cf_clearance cookie can't yet be trusted).
   Future<bool> _stillOnChallenge() async {
@@ -332,6 +391,7 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
       if (kDebugMode) {
         debugPrint('[Cloudflare] state: title="$title" url="$url"');
       }
+      if (_isWindows && title.isEmpty) return true;
       // Cloudflare's interstitial title is "Just a moment..." in all locales.
       if (title.contains('just a moment')) return true;
       return url.contains('__cf_chl');
@@ -421,12 +481,21 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
               ),
               onWebViewCreated: (InAppWebViewController controller) {
                 _controller = controller;
+                _markWebViewActivity();
                 if (kDebugMode) {
                   debugPrint('[Cloudflare] onWebViewCreated');
                 }
               },
               onCreateWindow: _handleCreateWindow,
+              onLoadStart: (_, WebUri? url) {
+                _markWebViewActivity();
+                if (kDebugMode) {
+                  debugPrint('[Cloudflare] onLoadStart: $url');
+                }
+                if (mounted) setState(() => _loading = true);
+              },
               onLoadStop: (_, WebUri? url) {
+                _markWebViewActivity();
                 if (kDebugMode) {
                   debugPrint('[Cloudflare] onLoadStop: $url');
                 }
@@ -434,11 +503,19 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
                 unawaited(_checkForClearance());
               },
               onProgressChanged: (_, int progress) {
+                if (progress < 100) _markWebViewActivity();
                 if (mounted) {
                   setState(() => _loading = progress < 100);
                 }
               },
+              onUpdateVisitedHistory: (_, WebUri? url, _) {
+                _markWebViewActivity();
+                if (kDebugMode) {
+                  debugPrint('[Cloudflare] history: $url');
+                }
+              },
               onReceivedError: (_, _, WebResourceError error) {
+                _markWebViewActivity();
                 if (kDebugMode) {
                   debugPrint(
                     '[Cloudflare] onReceivedError: '
