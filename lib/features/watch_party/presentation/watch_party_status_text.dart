@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../app/localization/app_localizations.dart';
 import '../domain/watch_party_models.dart';
 
 /// A compact, colour-coded line describing the current connection status.
@@ -13,25 +14,31 @@ class WatchPartyStatusText extends StatelessWidget {
     final ColorScheme colors = Theme.of(context).colorScheme;
     final (String label, Color color) = switch (party.status) {
       WatchPartyConnectionStatus.idle => (
-        'Not connected',
+        context.t('Not connected'),
         colors.onSurfaceVariant,
       ),
       WatchPartyConnectionStatus.signaling => (
-        'Waiting for the other device…',
+        context.t('Waiting for the other device…'),
         colors.onSurfaceVariant,
       ),
       WatchPartyConnectionStatus.connecting => (
-        'Connecting…',
+        context.t('Connecting…'),
         colors.onSurfaceVariant,
       ),
-      WatchPartyConnectionStatus.connected => ('Connected', colors.primary),
+      WatchPartyConnectionStatus.connected => (
+        context.t('Connected'),
+        colors.primary,
+      ),
       WatchPartyConnectionStatus.reconnecting => (
-        'Reconnecting…',
+        context.t('Reconnecting…'),
         colors.tertiary,
       ),
-      WatchPartyConnectionStatus.closed => ('Disconnected', colors.error),
+      WatchPartyConnectionStatus.closed => (
+        context.t('Disconnected'),
+        colors.error,
+      ),
       WatchPartyConnectionStatus.error => (
-        party.lastError ?? 'Something went wrong',
+        party.lastError ?? context.t('Something went wrong'),
         colors.error,
       ),
     };

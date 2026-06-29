@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../app/localization/app_localizations.dart';
 import '../application/watch_party_controller.dart';
 import '../domain/watch_party_models.dart';
 
@@ -17,17 +18,17 @@ class WatchPartyPermissionControls extends ConsumerWidget {
       final List<Widget> chips = <Widget>[
         _PermissionChip(
           icon: Icons.play_arrow_rounded,
-          label: 'Play / pause',
+          label: context.t('Play / pause'),
           enabled: party.permissions.canControlPlayback,
         ),
         _PermissionChip(
           icon: Icons.fast_forward_rounded,
-          label: 'Seek',
+          label: context.t('Seek'),
           enabled: party.permissions.canSeek,
         ),
         _PermissionChip(
           icon: Icons.speed_rounded,
-          label: 'Speed',
+          label: context.t('Speed'),
           enabled: party.permissions.canChangeSpeed,
         ),
       ];
@@ -35,7 +36,7 @@ class WatchPartyPermissionControls extends ConsumerWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
           Text(
-            'Your controls',
+            context.t('Your controls'),
             style: Theme.of(context).textTheme.labelLarge?.copyWith(
               color: colors.onSurfaceVariant,
               fontWeight: FontWeight.w700,
@@ -54,7 +55,7 @@ class WatchPartyPermissionControls extends ConsumerWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
         Text(
-          'Guest permissions',
+          context.t('Guest permissions'),
           style: Theme.of(context).textTheme.labelLarge?.copyWith(
             color: colors.onSurfaceVariant,
             fontWeight: FontWeight.w700,
@@ -64,21 +65,21 @@ class WatchPartyPermissionControls extends ConsumerWidget {
         SwitchListTile.adaptive(
           contentPadding: EdgeInsets.zero,
           secondary: const Icon(Icons.play_arrow_rounded),
-          title: const Text('Play / pause'),
+          title: Text(context.t('Play / pause')),
           value: party.permissions.canControlPlayback,
           onChanged: controller.setGuestPlaybackControlAllowed,
         ),
         SwitchListTile.adaptive(
           contentPadding: EdgeInsets.zero,
           secondary: const Icon(Icons.fast_forward_rounded),
-          title: const Text('Seek'),
+          title: Text(context.t('Seek')),
           value: party.permissions.canSeek,
           onChanged: controller.setGuestSeekAllowed,
         ),
         SwitchListTile.adaptive(
           contentPadding: EdgeInsets.zero,
           secondary: const Icon(Icons.speed_rounded),
-          title: const Text('Speed'),
+          title: Text(context.t('Speed')),
           value: party.permissions.canChangeSpeed,
           onChanged: controller.setGuestSpeedAllowed,
         ),

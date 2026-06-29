@@ -632,9 +632,28 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   }) async {
     if (_exitingPlayer) return;
     final bool advancing = playNext || selectEpisodeHref != null;
-    if (!advancing && _shouldBlockPartyPlayerExit()) {
-      _showPartyPlayerExitBlocked();
-      return;
+    // When fully exiting the player (not advancing to the next episode) and the
+    // local device is a GUEST in a watch party, leave the party automatically
+    // and show a brief 2-second confirmation before the screen closes.
+    // Hosts are intentionally excluded: the host stays in the party after
+    // leaving the player so the session can continue when they re-open it.
+    if (!advancing) {
+      final WatchPartyRoomState party = ref.read(watchPartyProvider);
+      if (party.isGuest) {
+        unawaited(ref.read(watchPartyProvider.notifier).leave());
+        if (mounted) {
+          ScaffoldMessenger.of(context)
+            ..clearSnackBars()
+            ..showSnackBar(
+              SnackBar(
+                duration: const Duration(seconds: 2),
+                content: Text(context.t('Left watch party')),
+              ),
+            );
+        }
+        await Future<void>.delayed(const Duration(seconds: 2));
+        if (!mounted) return;
+      }
     }
     final bool wasFullscreen = _isFullscreen;
     final bool shouldStartNextFullscreen =
@@ -751,40 +770,6 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     unawaited(_exitPlayer());
   }
 
-  bool _shouldBlockPartyPlayerExit() {
-    final WatchPartyRoomState party = ref.read(watchPartyProvider);
-    if (!party.isGuest) return false;
-    return switch (party.status) {
-      WatchPartyConnectionStatus.signaling ||
-      WatchPartyConnectionStatus.connecting ||
-      WatchPartyConnectionStatus.connected ||
-      WatchPartyConnectionStatus.reconnecting => true,
-      WatchPartyConnectionStatus.idle ||
-      WatchPartyConnectionStatus.closed ||
-      WatchPartyConnectionStatus.error => false,
-    };
-  }
-
-  void _showPartyPlayerExitBlocked() {
-    if (!mounted) return;
-    // Clear any queued copies first so repeated back-presses don't stack the
-    // snackbar (which made it look like it never went away), then show one that
-    // auto-dismisses after a couple of seconds.
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(
-        SnackBar(
-          duration: const Duration(seconds: 2),
-          content: const Text(
-            'Leave the watch party before leaving the player.',
-          ),
-          action: SnackBarAction(
-            label: 'Party',
-            onPressed: () => context.push(AppRoutes.watchParty),
-          ),
-        ),
-      );
-  }
 
   void _cancelSpaceHold({required bool restoreSpeed}) {
     _spaceHoldTimer?.cancel();
@@ -3699,10 +3684,10 @@ class _WatchPartyButton extends StatelessWidget {
         : Colors.white;
     return IconButton(
       tooltip: party.isGuest
-          ? 'Watch party (guest)'
+          ? context.t('Watch party (guest)')
           : active
-          ? 'Watch party (host)'
-          : 'Watch with Friend',
+          ? context.t('Watch party (host)')
+          : context.t('Watch with Friend'),
       onPressed: () => context.push(AppRoutes.watchParty),
       icon: Icon(
         active ? Icons.group_rounded : Icons.group_add_outlined,

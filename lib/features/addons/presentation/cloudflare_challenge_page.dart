@@ -64,6 +64,11 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
   int _consecutiveErrors = 0;
   bool _completed = false;
   bool _loading = true;
+  // Becomes true once the pre-navigation cookie flush is done (or timed out).
+  // Only then is the InAppWebView widget inserted with initialUrlRequest so
+  // the first navigation already starts clean, without an async loadUrl call
+  // inside onWebViewCreated (which can silently no-op on Windows/WebView2).
+  bool _ready = false;
 
   /// The page we actually load: the site root, where the challenge can run.
   late final WebUri _rootUri = WebUri(
@@ -79,6 +84,19 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
     _loadingFallbackTimer = Timer(_loadingFallback, () {
       if (mounted && _loading) setState(() => _loading = false);
     });
+    _preClearCookies();
+  }
+
+  Future<void> _preClearCookies() async {
+    try {
+      // Delete without webViewController — the WebView2 instance doesn't exist
+      // yet, and using webViewController in onWebViewCreated can race against
+      // WebView2 initialisation and silently block the subsequent navigation.
+      await _cookies
+          .deleteCookies(url: _rootUri)
+          .timeout(const Duration(seconds: 3), onTimeout: () => false);
+    } catch (_) {}
+    if (mounted && !_completed) setState(() => _ready = true);
   }
 
   @override
@@ -228,50 +246,34 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
               // or WKWebView transparent-background loading states (iOS/macOS).
               child: ColoredBox(
                 color: Colors.white,
-                child: InAppWebView(
-                // No initialUrlRequest: we clear stale cookies first, then load
-                // (below), so a stale/expired cf_clearance can't be read back as
-                // a false "solved". We deliberately DON'T use an incognito store
-                // — the challenge must write cf_clearance into the same default
-                // store CookieManager.getCookies reads, or the poll never sees
-                // it and the sheet never closes.
-                // No custom userAgent on purpose — see the class doc.
-                initialSettings: InAppWebViewSettings(
-                  javaScriptEnabled: true,
-                  thirdPartyCookiesEnabled: true,
-                  transparentBackground: true,
-                ),
-                onWebViewCreated: (InAppWebViewController controller) async {
-                  _controller = controller;
-                  try {
-                    // Timeout guard: on Windows/WebView2 the deleteCookies
-                    // callback can hang indefinitely, blocking loadUrl below.
-                    await _cookies
-                        .deleteCookies(
-                          url: _rootUri,
-                          webViewController: controller,
-                        )
-                        .timeout(const Duration(seconds: 3), onTimeout: () => false);
-                  } catch (_) {
-                    // Best-effort; the challenge still overwrites on success.
-                  }
-                  if (!_completed) {
-                    await controller.loadUrl(
-                      urlRequest: URLRequest(url: _rootUri),
-                    );
-                  }
-                },
-                onLoadStop: (_, _) {
-                  if (mounted) setState(() => _loading = false);
-                  unawaited(_checkForClearance());
-                },
-                onProgressChanged: (_, int progress) {
-                  if (mounted) setState(() => _loading = progress < 100);
-                },
-                onReceivedError: (_, _, _) {
-                  if (mounted) setState(() => _loading = false);
-                },
-              ),
+                // The InAppWebView is only inserted once _preClearCookies()
+                // finishes so initialUrlRequest fires on a clean cookie store,
+                // without a racing async loadUrl call inside onWebViewCreated
+                // (which silently no-ops on Windows/WebView2 in some cases).
+                child: _ready
+                    ? InAppWebView(
+                        // No custom userAgent on purpose — see the class doc.
+                        initialUrlRequest: URLRequest(url: _rootUri),
+                        initialSettings: InAppWebViewSettings(
+                          javaScriptEnabled: true,
+                          thirdPartyCookiesEnabled: true,
+                          transparentBackground: true,
+                        ),
+                        onWebViewCreated: (InAppWebViewController controller) {
+                          _controller = controller;
+                        },
+                        onLoadStop: (_, _) {
+                          if (mounted) setState(() => _loading = false);
+                          unawaited(_checkForClearance());
+                        },
+                        onProgressChanged: (_, int progress) {
+                          if (mounted) setState(() => _loading = progress < 100);
+                        },
+                        onReceivedError: (_, _, _) {
+                          if (mounted) setState(() => _loading = false);
+                        },
+                      )
+                    : const SizedBox.expand(),
               ),
             ),
           ],

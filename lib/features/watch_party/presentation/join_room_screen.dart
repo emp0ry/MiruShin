@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+import '../../../app/localization/app_localizations.dart';
 import '../application/watch_party_controller.dart';
 import '../domain/watch_party_models.dart';
 import 'watch_party_qr.dart';
@@ -89,7 +90,7 @@ class _JoinRoomScreenState extends ConsumerState<JoinRoomScreen> {
             party.status == WatchPartyConnectionStatus.reconnecting);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Join a room')),
+      appBar: AppBar(title: Text(context.t('Join a room'))),
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
@@ -110,7 +111,9 @@ class _JoinRoomScreenState extends ConsumerState<JoinRoomScreen> {
                     )
                   else ...<Widget>[
                     Text(
-                      'Enter the 6-character room code from the host.',
+                      context.t(
+                        'Enter the 6-character room code from the host.',
+                      ),
                       textAlign: TextAlign.center,
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
@@ -146,7 +149,7 @@ class _JoinRoomScreenState extends ConsumerState<JoinRoomScreen> {
                   FilledButton.icon(
                     onPressed: joining ? null : () => _join(_controller.text),
                     icon: const Icon(Icons.login_rounded),
-                    label: const Text('Join'),
+                    label: Text(context.t('Join')),
                   ),
                   if (_scannerSupported) ...<Widget>[
                     const SizedBox(height: 12),
@@ -158,7 +161,9 @@ class _JoinRoomScreenState extends ConsumerState<JoinRoomScreen> {
                             : Icons.qr_code_scanner_rounded,
                       ),
                       label: Text(
-                        _scanning ? 'Enter code manually' : 'Scan QR',
+                        _scanning
+                            ? context.t('Enter code manually')
+                            : context.t('Scan QR'),
                       ),
                     ),
                   ],

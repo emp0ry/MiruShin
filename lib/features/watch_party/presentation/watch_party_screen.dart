@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../app/app_routes.dart';
+import '../../../app/localization/app_localizations.dart';
 import '../application/watch_party_controller.dart';
 import '../domain/watch_party_models.dart';
 import 'watch_party_permission_controls.dart';
@@ -19,7 +20,7 @@ class WatchPartyScreen extends ConsumerWidget {
     final ColorScheme colors = Theme.of(context).colorScheme;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Watch with Friend')),
+      appBar: AppBar(title: Text(context.t('Watch with Friend'))),
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 420),
@@ -38,15 +39,17 @@ class WatchPartyScreen extends ConsumerWidget {
                       ),
                       const SizedBox(height: 16),
                       Text(
-                        'Watch the same episode together, in sync.',
+                        context.t(
+                          'Watch the same episode together, in sync.',
+                        ),
                         textAlign: TextAlign.center,
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        'Each device plays its own local stream. Only playback '
-                        'control is shared. The host controls play, pause, seek, '
-                        'speed and the episode/source.',
+                        context.t(
+                          'Each device plays its own local stream. Only playback control is shared. The host controls play, pause, seek, speed and the episode/source.',
+                        ),
                         textAlign: TextAlign.center,
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: colors.onSurfaceVariant,
@@ -57,13 +60,13 @@ class WatchPartyScreen extends ConsumerWidget {
                         onPressed: () =>
                             context.push(AppRoutes.watchPartyCreate),
                         icon: const Icon(Icons.add_rounded),
-                        label: const Text('Create a room'),
+                        label: Text(context.t('Create a room')),
                       ),
                       const SizedBox(height: 12),
                       OutlinedButton.icon(
                         onPressed: () => context.push(AppRoutes.watchPartyJoin),
                         icon: const Icon(Icons.login_rounded),
-                        label: const Text('Join a room'),
+                        label: Text(context.t('Join a room')),
                       ),
                     ],
                   ),
@@ -93,14 +96,16 @@ class _ActivePartyCard extends ConsumerWidget {
         ),
         const SizedBox(height: 16),
         Text(
-          party.isHost ? 'You are the host' : 'You joined as a guest',
+          party.isHost
+              ? context.t('You are the host')
+              : context.t('You joined as a guest'),
           textAlign: TextAlign.center,
           style: Theme.of(context).textTheme.titleMedium,
         ),
         if (party.roomCode != null) ...<Widget>[
           const SizedBox(height: 8),
           Text(
-            'Room ${party.roomCode}',
+            '${context.t('Room')} ${party.roomCode}',
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
               letterSpacing: 2,
@@ -116,7 +121,7 @@ class _ActivePartyCard extends ConsumerWidget {
         OutlinedButton.icon(
           onPressed: () => ref.read(watchPartyProvider.notifier).leave(),
           icon: const Icon(Icons.logout_rounded),
-          label: const Text('Leave party'),
+          label: Text(context.t('Leave party')),
         ),
       ],
     );

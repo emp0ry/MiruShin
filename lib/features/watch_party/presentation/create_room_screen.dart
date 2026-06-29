@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import '../../../app/localization/app_localizations.dart';
 import '../application/watch_party_controller.dart';
 import '../domain/watch_party_models.dart';
 import 'watch_party_permission_controls.dart';
@@ -37,7 +38,7 @@ class _CreateRoomScreenState extends ConsumerState<CreateRoomScreen> {
     final String? code = party.roomCode;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Create a room')),
+      appBar: AppBar(title: Text(context.t('Create a room'))),
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
@@ -49,7 +50,7 @@ class _CreateRoomScreenState extends ConsumerState<CreateRoomScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: <Widget>[
                   Text(
-                    'Share this code or QR with your friend.',
+                    context.t('Share this code or QR with your friend.'),
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
@@ -68,8 +69,8 @@ class _CreateRoomScreenState extends ConsumerState<CreateRoomScreen> {
                             color: Colors.white,
                             borderRadius: BorderRadius.circular(26),
                             border: Border.all(
-                              color: colors.primary.withValues(alpha: 0.75),
-                              width: 1.2,
+                              color: colors.primary,
+                              width: 3,
                             ),
                             boxShadow: <BoxShadow>[
                               BoxShadow(
@@ -99,13 +100,13 @@ class _CreateRoomScreenState extends ConsumerState<CreateRoomScreen> {
                                 ),
                                 errorStateBuilder:
                                     (BuildContext _, Object? _) =>
-                                        const SizedBox(
+                                        SizedBox(
                                           width: 200,
                                           height: 200,
                                           child: Center(
                                             child: Text(
-                                              'QR unavailable',
-                                              style: TextStyle(
+                                              context.t('QR unavailable'),
+                                              style: const TextStyle(
                                                 color: Colors.black54,
                                               ),
                                             ),
@@ -122,7 +123,9 @@ class _CreateRoomScreenState extends ConsumerState<CreateRoomScreen> {
                       onTap: () {
                         Clipboard.setData(ClipboardData(text: code));
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Room code copied')),
+                          SnackBar(
+                            content: Text(context.t('Room code copied')),
+                          ),
                         );
                       },
                       borderRadius: BorderRadius.circular(12),
@@ -169,13 +172,15 @@ class _CreateRoomScreenState extends ConsumerState<CreateRoomScreen> {
                       onPressed: () =>
                           ref.read(watchPartyProvider.notifier).createRoom(),
                       icon: const Icon(Icons.refresh_rounded),
-                      label: const Text('Create new room'),
+                      label: Text(context.t('Create new room')),
                     ),
                   ],
                   if (party.isConnected) ...<Widget>[
                     const SizedBox(height: 12),
                     Text(
-                      'Connected! Open an episode and your friend will follow along.',
+                      context.t(
+                        'Connected! Open an episode and your friend will follow along.',
+                      ),
                       textAlign: TextAlign.center,
                       style: Theme.of(
                         context,
