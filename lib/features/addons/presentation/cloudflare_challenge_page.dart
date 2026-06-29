@@ -61,8 +61,10 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
   /// WebView2 stale-title workaround). At [_pollInterval] this is ~2 seconds.
   static const int _clearanceConfirmPolls = 3;
 
-  final CookieManager _cookies = CookieManager.instance();
+  CookieManager _cookies = CookieManager.instance();
+  WebViewEnvironment? _webViewEnvironment;
   InAppWebViewController? _controller;
+  InAppWebViewController? _popupController;
   Timer? _pollTimer;
   Timer? _timeoutTimer;
   Timer? _loadingFallbackTimer;
@@ -76,6 +78,10 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
   // the first navigation already starts clean, without an async loadUrl call
   // inside onWebViewCreated (which can silently no-op on Windows/WebView2).
   bool _ready = false;
+  int? _popupWindowId;
+
+  bool get _isWindows =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
 
   /// The page we actually load: the site root, where the challenge can run.
   late final WebUri _rootUri = WebUri(
@@ -91,7 +97,27 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
     _loadingFallbackTimer = Timer(_loadingFallback, () {
       if (mounted && _loading) setState(() => _loading = false);
     });
-    _preClearCookies();
+    _prepareWebView();
+  }
+
+  Future<void> _prepareWebView() async {
+    if (_isWindows) {
+      try {
+        final WebViewEnvironment environment = await WebViewEnvironment.create()
+            .timeout(const Duration(seconds: 3));
+        if (_completed) {
+          unawaited(environment.dispose());
+          return;
+        }
+        _webViewEnvironment = environment;
+        _cookies = CookieManager.instance(webViewEnvironment: environment);
+      } catch (error) {
+        if (kDebugMode) {
+          debugPrint('[Cloudflare] WebView2 environment create failed: $error');
+        }
+      }
+    }
+    await _preClearCookies();
   }
 
   Future<void> _preClearCookies() async {
@@ -114,9 +140,15 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
     // may be mid-teardown (avoids a native crash on Windows/WebView2 exit).
     _completed = true;
     _controller = null;
+    _popupController = null;
     _pollTimer?.cancel();
     _timeoutTimer?.cancel();
     _loadingFallbackTimer?.cancel();
+    final WebViewEnvironment? environment = _webViewEnvironment;
+    _webViewEnvironment = null;
+    if (environment != null) {
+      unawaited(environment.dispose());
+    }
     super.dispose();
   }
 
@@ -129,34 +161,103 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
     }
   }
 
-  /// Reads cookies for the root host. On Windows/WebView2 the cookie store
-  /// scoped to [_controller] and the default environment store can diverge —
-  /// the challenge may persist `cf_clearance` into one while a read targets the
-  /// other — so we query both and merge, preferring controller-scoped values.
-  /// On iOS/macOS the controller read already returns everything; the default
-  /// read just returns the same set, so the merge is harmless.
+  /// Reads cookies for the root host, merging the available sources.
+  ///
+  /// On Windows/WebView2, CookieManager reads from its WebViewEnvironment and
+  /// ignores the controller argument. The challenge WebView is therefore bound
+  /// to [_webViewEnvironment], and we also ask the visible/hidden controllers
+  /// through DevTools as a final fallback. On iOS/macOS the controller read is
+  /// canonical; the default read returns the same set, so merging is harmless.
   Future<List<Cookie>> _readCookies() async {
-    final List<Cookie> fromController = await _cookies.getCookies(
-      url: _rootUri,
-      webViewController: _controller,
-    );
-    final bool hasClearance = fromController.any(
-      (Cookie c) => c.name == 'cf_clearance',
-    );
-    if (hasClearance) return fromController;
-    // cf_clearance not in the controller store — also try the default store.
-    List<Cookie> fromDefault = const <Cookie>[];
-    try {
-      fromDefault = await _cookies.getCookies(url: _rootUri);
-    } catch (_) {
-      // Ignore: the controller read above is the primary source.
+    if (!_isWindows) {
+      final List<Cookie> fromController = await _safeGetCookies(
+        withController: true,
+      );
+      if (fromController.any((Cookie c) => c.name == 'cf_clearance')) {
+        return fromController;
+      }
+      final List<Cookie> fromDefault = await _safeGetCookies(
+        withController: false,
+      );
+      if (fromDefault.isEmpty) return fromController;
+      final Map<String, Cookie> merged = <String, Cookie>{
+        for (final Cookie c in fromDefault) c.name: c,
+        for (final Cookie c in fromController) c.name: c,
+      };
+      return merged.values.toList(growable: false);
     }
-    if (fromDefault.isEmpty) return fromController;
+
     final Map<String, Cookie> merged = <String, Cookie>{
-      for (final Cookie c in fromDefault) c.name: c,
-      for (final Cookie c in fromController) c.name: c,
+      for (final Cookie c in await _safeGetCookies(withController: false))
+        c.name: c,
+      for (final Cookie c in await _safeGetCookies(withController: true))
+        c.name: c,
+      for (final Cookie c in await _readDevToolsCookies(_controller)) c.name: c,
+      for (final Cookie c in await _readDevToolsCookies(_popupController))
+        c.name: c,
     };
     return merged.values.toList(growable: false);
+  }
+
+  /// A single getCookies call guarded by a timeout so it cannot hang the poll.
+  Future<List<Cookie>> _safeGetCookies({required bool withController}) async {
+    try {
+      return await _cookies
+          .getCookies(
+            url: _rootUri,
+            webViewController: withController ? _controller : null,
+          )
+          .timeout(
+            const Duration(milliseconds: 1500),
+            onTimeout: () => const <Cookie>[],
+          );
+    } catch (_) {
+      return const <Cookie>[];
+    }
+  }
+
+  Future<List<Cookie>> _readDevToolsCookies(
+    InAppWebViewController? controller,
+  ) async {
+    if (!_isWindows) return const <Cookie>[];
+    if (controller == null) return const <Cookie>[];
+    try {
+      final Object? result = await controller
+          .callDevToolsProtocolMethod(
+            methodName: 'Network.getCookies',
+            parameters: <String, dynamic>{
+              'urls': <String>[_rootUri.toString()],
+            },
+          )
+          .timeout(const Duration(milliseconds: 1500), onTimeout: () => null);
+      final Object? rawCookies = result is Map ? result['cookies'] : null;
+      if (rawCookies is! List) return const <Cookie>[];
+      return rawCookies
+          .map(_cookieFromDevTools)
+          .whereType<Cookie>()
+          .toList(growable: false);
+    } catch (_) {
+      return const <Cookie>[];
+    }
+  }
+
+  Cookie? _cookieFromDevTools(Object? raw) {
+    if (raw is! Map) return null;
+    final Object? name = raw['name'];
+    if (name is! String || name.isEmpty) return null;
+    final Object? expires = raw['expires'];
+    return Cookie(
+      name: name,
+      value: raw['value'],
+      domain: raw['domain'] is String ? raw['domain'] as String : null,
+      path: raw['path'] is String ? raw['path'] as String : null,
+      isSecure: raw['secure'] is bool ? raw['secure'] as bool : null,
+      isHttpOnly: raw['httpOnly'] is bool ? raw['httpOnly'] as bool : null,
+      isSessionOnly: raw['session'] is bool ? raw['session'] as bool : null,
+      expiresDate: expires is num && expires > 0
+          ? (expires * 1000).round()
+          : null,
+    );
   }
 
   Future<void> _checkForClearance() async {
@@ -167,6 +268,12 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
       if (_completed) return;
       _consecutiveErrors = 0;
       final bool cleared = cookies.any((Cookie c) => c.name == 'cf_clearance');
+      if (kDebugMode) {
+        debugPrint(
+          '[Cloudflare] poll: ${cookies.length} cookies, '
+          'cf_clearance=$cleared, names=${cookies.map((Cookie c) => c.name).toList()}',
+        );
+      }
       if (!cleared) {
         _clearanceSeen = 0;
         return;
@@ -230,10 +337,23 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
     final InAppWebViewController? controller = _controller;
     if (controller == null) return true;
     try {
-      final String title = (await controller.getTitle())?.toLowerCase() ?? '';
+      final String title =
+          (await controller.getTitle().timeout(
+            const Duration(milliseconds: 1000),
+            onTimeout: () => '',
+          ))?.toLowerCase() ??
+          '';
+      final String url =
+          (await controller.getUrl().timeout(
+            const Duration(milliseconds: 1000),
+            onTimeout: () => null,
+          ))?.toString() ??
+          '';
+      if (kDebugMode) {
+        debugPrint('[Cloudflare] state: title="$title" url="$url"');
+      }
       // Cloudflare's interstitial title is "Just a moment..." in all locales.
       if (title.contains('just a moment')) return true;
-      final String url = (await controller.getUrl())?.toString() ?? '';
       return url.contains('__cf_chl');
     } catch (_) {
       // If we can't read the state, assume still challenging and keep waiting.
@@ -247,6 +367,38 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
     _pollTimer?.cancel();
     _timeoutTimer?.cancel();
     widget.onResult(result);
+  }
+
+  Future<bool?> _handleCreateWindow(
+    InAppWebViewController controller,
+    CreateWindowAction createWindowAction,
+  ) async {
+    if (kDebugMode) {
+      debugPrint(
+        '[Cloudflare] onCreateWindow: '
+        '${createWindowAction.request.url} '
+        'windowId=${createWindowAction.windowId}',
+      );
+    }
+    if (_isWindows) {
+      if (mounted && !_completed) {
+        setState(() => _popupWindowId = createWindowAction.windowId);
+      } else {
+        _popupWindowId = createWindowAction.windowId;
+      }
+      return true;
+    }
+    return false;
+  }
+
+  void _closePopupWindow() {
+    _popupController = null;
+    if (mounted && !_completed && _popupWindowId != null) {
+      setState(() => _popupWindowId = null);
+    } else {
+      _popupWindowId = null;
+    }
+    unawaited(_checkForClearance());
   }
 
   @override
@@ -295,27 +447,109 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
                 // without a racing async loadUrl call inside onWebViewCreated
                 // (which silently no-ops on Windows/WebView2 in some cases).
                 child: _ready
-                    ? InAppWebView(
-                        // No custom userAgent on purpose — see the class doc.
-                        initialUrlRequest: URLRequest(url: _rootUri),
-                        initialSettings: InAppWebViewSettings(
-                          javaScriptEnabled: true,
-                          thirdPartyCookiesEnabled: true,
-                          transparentBackground: true,
-                        ),
-                        onWebViewCreated: (InAppWebViewController controller) {
-                          _controller = controller;
-                        },
-                        onLoadStop: (_, _) {
-                          if (mounted) setState(() => _loading = false);
-                          unawaited(_checkForClearance());
-                        },
-                        onProgressChanged: (_, int progress) {
-                          if (mounted) setState(() => _loading = progress < 100);
-                        },
-                        onReceivedError: (_, _, _) {
-                          if (mounted) setState(() => _loading = false);
-                        },
+                    ? Stack(
+                        fit: StackFit.expand,
+                        children: <Widget>[
+                          if (_isWindows && _popupWindowId != null)
+                            Positioned(
+                              left: 0,
+                              top: 0,
+                              width: 1,
+                              height: 1,
+                              child: IgnorePointer(
+                                child: ExcludeFocus(
+                                  child: InAppWebView(
+                                    key: ValueKey<int>(_popupWindowId!),
+                                    windowId: _popupWindowId,
+                                    webViewEnvironment: _webViewEnvironment,
+                                    initialSettings: InAppWebViewSettings(
+                                      javaScriptEnabled: true,
+                                      thirdPartyCookiesEnabled: true,
+                                      transparentBackground: true,
+                                    ),
+                                    onWebViewCreated:
+                                        (InAppWebViewController controller) {
+                                          _popupController = controller;
+                                          if (kDebugMode) {
+                                            debugPrint(
+                                              '[Cloudflare] popup WebView created',
+                                            );
+                                          }
+                                        },
+                                    onCreateWindow: _isWindows
+                                        ? _handleCreateWindow
+                                        : null,
+                                    onCloseWindow: _isWindows
+                                        ? (_) => _closePopupWindow()
+                                        : null,
+                                    onLoadStop: (_, WebUri? url) {
+                                      if (kDebugMode) {
+                                        debugPrint(
+                                          '[Cloudflare] popup onLoadStop: $url',
+                                        );
+                                      }
+                                      unawaited(_checkForClearance());
+                                    },
+                                    onReceivedError: (_, _, WebResourceError error) {
+                                      if (kDebugMode) {
+                                        debugPrint(
+                                          '[Cloudflare] popup onReceivedError: '
+                                          '${error.type} ${error.description}',
+                                        );
+                                      }
+                                    },
+                                  ),
+                                ),
+                              ),
+                            ),
+                          InAppWebView(
+                            // No custom userAgent on purpose — see the class doc.
+                            key: const ValueKey<String>(
+                              'cloudflare-main-webview',
+                            ),
+                            webViewEnvironment: _webViewEnvironment,
+                            initialUrlRequest: URLRequest(url: _rootUri),
+                            initialSettings: InAppWebViewSettings(
+                              javaScriptEnabled: true,
+                              thirdPartyCookiesEnabled: true,
+                              transparentBackground: true,
+                            ),
+                            onWebViewCreated:
+                                (InAppWebViewController controller) {
+                                  _controller = controller;
+                                  if (kDebugMode) {
+                                    debugPrint('[Cloudflare] onWebViewCreated');
+                                  }
+                                },
+                            onCreateWindow: _isWindows
+                                ? _handleCreateWindow
+                                : null,
+                            onCloseWindow: _isWindows
+                                ? (_) => _closePopupWindow()
+                                : null,
+                            onLoadStop: (_, WebUri? url) {
+                              if (kDebugMode) {
+                                debugPrint('[Cloudflare] onLoadStop: $url');
+                              }
+                              if (mounted) setState(() => _loading = false);
+                              unawaited(_checkForClearance());
+                            },
+                            onProgressChanged: (_, int progress) {
+                              if (mounted) {
+                                setState(() => _loading = progress < 100);
+                              }
+                            },
+                            onReceivedError: (_, _, WebResourceError error) {
+                              if (kDebugMode) {
+                                debugPrint(
+                                  '[Cloudflare] onReceivedError: '
+                                  '${error.type} ${error.description}',
+                                );
+                              }
+                              if (mounted) setState(() => _loading = false);
+                            },
+                          ),
+                        ],
                       )
                     : const SizedBox.expand(),
               ),

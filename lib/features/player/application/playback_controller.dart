@@ -178,6 +178,8 @@ class PlaybackController extends Notifier<PlaybackState> {
   static const Duration _seekSettleMinHold = Duration(milliseconds: 700);
   static const Duration _seekSettleTimeout = Duration(milliseconds: 5000);
   static const Duration _seekSettleTolerance = Duration(milliseconds: 1200);
+  static const Duration _resumeSeekRetryInterval = Duration(milliseconds: 650);
+  static const Duration _resumeSeekRetryTimeout = Duration(seconds: 75);
   static const Duration _engineOpenTimeout = Duration(seconds: 45);
   static const List<Duration> _startupSpeedReapplyDelays = <Duration>[
     Duration(milliseconds: 500),
@@ -849,7 +851,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     unawaited(_disposeSeekPreviewEngine());
     _resumeGuardPosition = position;
     _resumeGuardUntil = position > const Duration(seconds: 3)
-        ? DateTime.now().add(const Duration(seconds: 15))
+        ? DateTime.now().add(_resumeSeekRetryTimeout)
         : null;
     final PlayerEngine? previous = state.engine;
     state = state.copyWith(
@@ -1043,12 +1045,11 @@ class PlaybackController extends Notifier<PlaybackState> {
     int generation,
     int manualSeekEpoch,
   ) async {
-    for (final Duration delay in const <Duration>[
-      Duration(milliseconds: 1800),
-      Duration(milliseconds: 2500),
-      Duration(milliseconds: 4000),
-    ]) {
-      await Future<void>.delayed(delay);
+    final DateTime deadline = DateTime.now().add(_resumeSeekRetryTimeout);
+    bool attemptedSeek = false;
+
+    while (DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(_resumeSeekRetryInterval);
       if (generation != _playbackGeneration ||
           manualSeekEpoch != _manualSeekEpoch ||
           state.engine != engine) {
@@ -1056,13 +1057,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       }
 
       if (_initialSeekAccepted(engine, position)) {
-        return;
-      }
-      await Future<void>.delayed(const Duration(milliseconds: 700));
-      if (generation != _playbackGeneration ||
-          manualSeekEpoch != _manualSeekEpoch ||
-          state.engine != engine ||
-          _initialSeekAccepted(engine, position)) {
+        _clearResumeGuard();
         return;
       }
 
@@ -1071,11 +1066,26 @@ class PlaybackController extends Notifier<PlaybackState> {
 
       try {
         await engine.seekTo(position);
+        attemptedSeek = true;
       } on Object {
         // Some native backends reject an early startup seek. Later loop ticks
         // can retry if the stream is still behind the saved resume point.
       }
       state = state.copyWith();
+    }
+
+    if (state.engine == engine &&
+        generation == _playbackGeneration &&
+        manualSeekEpoch == _manualSeekEpoch &&
+        !_initialSeekAccepted(engine, position) &&
+        kDebugMode) {
+      debugPrint(
+        'Resume seek was not accepted after '
+        '${_resumeSeekRetryTimeout.inSeconds}s '
+        '(target=${position.inSeconds}s, '
+        'position=${engine.state.value.position.inSeconds}s, '
+        'attempted=$attemptedSeek).',
+      );
     }
   }
 
@@ -1083,6 +1093,11 @@ class PlaybackController extends Notifier<PlaybackState> {
     final PlayerEngineState value = engine.state.value;
     if (!value.isInitialized) return false;
     return value.position + const Duration(seconds: 3) >= position;
+  }
+
+  void _clearResumeGuard() {
+    _resumeGuardPosition = Duration.zero;
+    _resumeGuardUntil = null;
   }
 
   void _reinforcePlaybackSpeed(PlayerEngine engine, int generation) {
@@ -1611,6 +1626,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       _seekBaseFor(engine) + offset,
       duration,
     );
+    _clearResumeGuard();
     _noteManualSeekTarget(target, duration);
     _queueInteractiveSeek(
       engine,
@@ -1626,6 +1642,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     if (engine == null || !engine.state.value.isInitialized) return;
     final Duration duration = engine.state.value.duration;
     final Duration target = _clampSeekPosition(position, duration);
+    _clearResumeGuard();
     _noteManualSeekTarget(target, duration);
     _queueInteractiveSeek(engine, target, delay: Duration.zero);
     _broadcastSeek(target);
@@ -2666,6 +2683,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     final Duration duration = engine.state.value.duration;
     final Duration clampedTarget = _clampSeekPosition(target, duration);
     _manualSeekEpoch++;
+    _clearResumeGuard();
     _clearInteractiveSeek();
     // Skip jumps (notably the auto ED-skip, which lands on the episode end) must
     // feed completion detection like slider/gesture seeks do — otherwise jumping
@@ -2700,6 +2718,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       engine.state.value.duration,
     );
     _manualSeekEpoch++;
+    _clearResumeGuard();
     _clearInteractiveSeek();
     _setSeekPreview(engine, target);
     try {
