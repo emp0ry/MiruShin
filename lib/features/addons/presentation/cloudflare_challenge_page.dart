@@ -268,13 +268,16 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
       _clearanceSeen++;
       _clearanceFirstSeenAt ??= DateTime.now();
 
-      // A cf_clearance cookie alone isn't proof we passed — confirm the page is
-      // genuinely past the wall: the challenge interstitial keeps the title
-      // "Just a moment…" and a `__cf_chl` URL until it completes and reloads the
-      // real page. The fallback acceptance is Windows-only: on macOS/iOS the
-      // stale-cookie check is reliable and matches the proven v2.1.0 flow.
+      // A cf_clearance cookie alone isn't proof we passed. Cloudflare/WebView2
+      // can expose it before the visible Turnstile/CAPTCHA step has completed,
+      // so Windows also verifies the document no longer looks like a challenge
+      // and has settled before auto-closing.
       final bool stillChallenging = await _stillOnChallenge();
-      if (stillChallenging && (!_isWindows || !_windowsClearanceSettled())) {
+      if (stillChallenging) {
+        if (_isWindows) _windowsClearanceSettled();
+        return;
+      }
+      if (_isWindows && !_windowsClearanceSettled()) {
         return;
       }
 
@@ -370,6 +373,109 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
     return trimmed;
   }
 
+  Future<bool?> _windowsDomShowsChallenge(
+    InAppWebViewController controller,
+  ) async {
+    if (!_isWindows) return null;
+    try {
+      final Object? raw = await controller
+          .evaluateJavascript(
+            source: r'''
+(() => {
+  const text = (document.body?.innerText || '').toLowerCase();
+  const html = (document.documentElement?.innerHTML || '').toLowerCase();
+  const selectors = [
+    '#challenge-stage',
+    '#challenge-running',
+    '#challenge-spinner',
+    '#cf-challenge-running',
+    '#cf-please-wait',
+    '.cf-turnstile',
+    '[name="cf-turnstile-response"]',
+    'form[action*="__cf_chl"]',
+    'iframe[src*="challenges.cloudflare.com"]',
+    'iframe[src*="turnstile"]',
+    'script[src*="/cdn-cgi/challenge-platform"]'
+  ];
+  return {
+    readyState: document.readyState,
+    title: document.title || '',
+    href: location.href || '',
+    hasSelector: selectors.some((selector) => document.querySelector(selector) !== null),
+    text: text.slice(0, 5000),
+    html: html.slice(0, 12000)
+  };
+})()
+''',
+          )
+          .timeout(const Duration(milliseconds: 1500), onTimeout: () => null);
+      final Map<String, dynamic>? state = _objectMap(raw);
+      if (state == null) return null;
+
+      final String readyState = '${state['readyState']}'.toLowerCase();
+      final String href = '${state['href']}'.toLowerCase();
+      final String title = '${state['title']}'.toLowerCase();
+      final String text = '${state['text']}'.toLowerCase();
+      final String html = '${state['html']}'.toLowerCase();
+      final bool hasSelector = state['hasSelector'] == true;
+      final String haystack = '$title\n$href\n$text\n$html';
+      final bool hasMarker = _windowsChallengeMarkers.any(haystack.contains);
+
+      if (kDebugMode) {
+        debugPrint(
+          '[Cloudflare] dom: ready=$readyState '
+          'selector=$hasSelector marker=$hasMarker '
+          'title="$title" href="$href"',
+        );
+      }
+
+      if (readyState == 'loading') return true;
+      if (hasSelector || hasMarker) return true;
+      if (title.trim().isEmpty && text.trim().isEmpty) return true;
+      return false;
+    } catch (error) {
+      if (kDebugMode) {
+        debugPrint('[Cloudflare] DOM challenge probe failed: $error');
+      }
+      return null;
+    }
+  }
+
+  static const List<String> _windowsChallengeMarkers = <String>[
+    'cdn-cgi/challenge-platform',
+    '__cf_chl',
+    'cf_chl',
+    'cf-browser-verification',
+    'cf-turnstile',
+    'turnstile',
+    'just a moment',
+    'verify you are human',
+    'confirm you are human',
+    'checking if the site connection is secure',
+    'review the security of your connection',
+    'needs to review the security',
+    'enable javascript and cookies to continue',
+    'cloudflare ray id',
+    'performance & security by cloudflare',
+  ];
+
+  Map<String, dynamic>? _objectMap(Object? raw) {
+    if (raw is Map) {
+      return raw.map((Object? key, Object? value) => MapEntry('$key', value));
+    }
+    if (raw is String && raw.trim().isNotEmpty) {
+      try {
+        final Object? decoded = jsonDecode(raw);
+        if (decoded is Map) {
+          return decoded.map(
+            (Object? key, Object? value) => MapEntry('$key', value),
+          );
+        }
+      } catch (_) {}
+    }
+    return null;
+  }
+
   /// Whether the WebView is still showing the Cloudflare interstitial (so a
   /// present cf_clearance cookie can't yet be trusted).
   Future<bool> _stillOnChallenge() async {
@@ -394,7 +500,12 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
       if (_isWindows && title.isEmpty) return true;
       // Cloudflare's interstitial title is "Just a moment..." in all locales.
       if (title.contains('just a moment')) return true;
-      return url.contains('__cf_chl');
+      if (url.contains('__cf_chl')) return true;
+      final bool? domShowsChallenge = await _windowsDomShowsChallenge(
+        controller,
+      );
+      if (domShowsChallenge != null) return domShowsChallenge;
+      return _isWindows;
     } catch (_) {
       // If we can't read the state, assume still challenging and keep waiting.
       return true;
