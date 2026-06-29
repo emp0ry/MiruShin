@@ -56,12 +56,19 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
   /// bail out instead of spamming the log for the full timeout window.
   static const int _maxConsecutiveErrors = 5;
 
+  /// Number of consecutive polls a fresh `cf_clearance` must persist before we
+  /// accept it even if [_stillOnChallenge] keeps reporting true (a Windows/
+  /// WebView2 stale-title workaround). At [_pollInterval] this is ~2 seconds.
+  static const int _clearanceConfirmPolls = 3;
+
   final CookieManager _cookies = CookieManager.instance();
   InAppWebViewController? _controller;
   Timer? _pollTimer;
   Timer? _timeoutTimer;
   Timer? _loadingFallbackTimer;
   int _consecutiveErrors = 0;
+  // Consecutive polls in which a cf_clearance cookie has been present.
+  int _clearanceSeen = 0;
   bool _completed = false;
   bool _loading = true;
   // Becomes true once the pre-navigation cookie flush is done (or timed out).
@@ -122,25 +129,62 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
     }
   }
 
+  /// Reads cookies for the root host. On Windows/WebView2 the cookie store
+  /// scoped to [_controller] and the default environment store can diverge —
+  /// the challenge may persist `cf_clearance` into one while a read targets the
+  /// other — so we query both and merge, preferring controller-scoped values.
+  /// On iOS/macOS the controller read already returns everything; the default
+  /// read just returns the same set, so the merge is harmless.
+  Future<List<Cookie>> _readCookies() async {
+    final List<Cookie> fromController = await _cookies.getCookies(
+      url: _rootUri,
+      webViewController: _controller,
+    );
+    final bool hasClearance = fromController.any(
+      (Cookie c) => c.name == 'cf_clearance',
+    );
+    if (hasClearance) return fromController;
+    // cf_clearance not in the controller store — also try the default store.
+    List<Cookie> fromDefault = const <Cookie>[];
+    try {
+      fromDefault = await _cookies.getCookies(url: _rootUri);
+    } catch (_) {
+      // Ignore: the controller read above is the primary source.
+    }
+    if (fromDefault.isEmpty) return fromController;
+    final Map<String, Cookie> merged = <String, Cookie>{
+      for (final Cookie c in fromDefault) c.name: c,
+      for (final Cookie c in fromController) c.name: c,
+    };
+    return merged.values.toList(growable: false);
+  }
+
   Future<void> _checkForClearance() async {
     if (_completed || _controller == null) return;
     try {
-      final List<Cookie> cookies = await _cookies.getCookies(
-        url: _rootUri,
-        webViewController: _controller,
-      );
+      final List<Cookie> cookies = await _readCookies();
       // Re-check after the await: dispose may have run while we were waiting.
       if (_completed) return;
       _consecutiveErrors = 0;
       final bool cleared = cookies.any((Cookie c) => c.name == 'cf_clearance');
-      if (!cleared) return;
+      if (!cleared) {
+        _clearanceSeen = 0;
+        return;
+      }
+      _clearanceSeen++;
 
-      // A cf_clearance cookie alone isn't proof we passed — a stale one may
-      // linger in the shared store (it's HttpOnly, so we can't pre-delete it).
-      // Only accept once the page is genuinely past the wall: the challenge
-      // interstitial keeps the title "Just a moment…" and a `__cf_chl` URL until
-      // it completes and reloads the real page with a fresh, valid cookie.
-      if (await _stillOnChallenge()) return;
+      // A cf_clearance cookie alone isn't proof we passed — confirm the page is
+      // genuinely past the wall: the challenge interstitial keeps the title
+      // "Just a moment…" and a `__cf_chl` URL until it completes and reloads the
+      // real page. We pre-clear cookies before loading, so any cf_clearance that
+      // appears now is freshly minted, not stale. On Windows/WebView2 getTitle/
+      // getUrl can return stale values and keep _stillOnChallenge() true forever,
+      // so once the fresh cookie has persisted across a few polls (~2s) we accept
+      // it regardless of the heuristic.
+      if (_clearanceSeen < _clearanceConfirmPolls &&
+          await _stillOnChallenge()) {
+        return;
+      }
 
       final String header = cookies
           .where((Cookie c) => '${c.value}'.isNotEmpty)
