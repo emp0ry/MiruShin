@@ -223,7 +223,12 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
           children: <Widget>[
             if (_loading) const LinearProgressIndicator(minHeight: 2),
             Expanded(
-              child: InAppWebView(
+              // White background under the WebView so the dark Flutter surface
+              // never shows through during WebView2 inter-frame gaps (Windows)
+              // or WKWebView transparent-background loading states (iOS/macOS).
+              child: ColoredBox(
+                color: Colors.white,
+                child: InAppWebView(
                 // No initialUrlRequest: we clear stale cookies first, then load
                 // (below), so a stale/expired cf_clearance can't be read back as
                 // a false "solved". We deliberately DON'T use an incognito store
@@ -266,6 +271,7 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
                 onReceivedError: (_, _, _) {
                   if (mounted) setState(() => _loading = false);
                 },
+              ),
               ),
             ),
           ],
