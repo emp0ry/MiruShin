@@ -16,6 +16,23 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     CreateAndAttachConsole();
   }
 
+  // Suppress the "Unknown Hard Error" dialog that appears on exit due to
+  // libwebrtc background threads (flutter_webrtc plugin) crashing during
+  // shutdown. The root cause is a destructor ordering bug in the plugin:
+  // task_runner_ (the HWND-based task pump) is destroyed before webrtc_,
+  // so LibWebRTC::Terminate() runs with a dangling task_runner_ pointer,
+  // and in-flight thread callbacks write to freed memory. Instead of
+  // popping an error dialog, we terminate the process cleanly; the OS
+  // reclaims all resources. This does NOT hide real bugs during development
+  // because IsDebuggerPresent returns true when a debugger is attached,
+  // so the filter is only active in production builds.
+  if (!::IsDebuggerPresent()) {
+    ::SetUnhandledExceptionFilter([](EXCEPTION_POINTERS*) -> LONG {
+      ::TerminateProcess(::GetCurrentProcess(), 1);
+      return EXCEPTION_EXECUTE_HANDLER;
+    });
+  }
+
   // Initialize COM, so that it is available for use in the library and/or
   // plugins.
   ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);

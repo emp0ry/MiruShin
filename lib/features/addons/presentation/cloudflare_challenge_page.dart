@@ -42,9 +42,13 @@ class CloudflareChallengePage extends StatefulWidget {
       _CloudflareChallengePageState();
 }
 
-class _CloudflareChallengePageState extends State<CloudflareChallengePage> {
+class _CloudflareChallengePageState extends State<CloudflareChallengePage>
+    with WidgetsBindingObserver {
   static const Duration _timeout = Duration(minutes: 3);
   static const Duration _pollInterval = Duration(milliseconds: 700);
+  // On Windows/WebView2, onLoadStop and onProgressChanged may not fire
+  // reliably. Hide the spinner after this fallback delay regardless.
+  static const Duration _loadingFallback = Duration(seconds: 6);
 
   /// After this many consecutive cookie-read failures we assume the WebView
   /// engine is unavailable (e.g. the native plugin isn't registered because the
@@ -56,6 +60,7 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage> {
   InAppWebViewController? _controller;
   Timer? _pollTimer;
   Timer? _timeoutTimer;
+  Timer? _loadingFallbackTimer;
   int _consecutiveErrors = 0;
   bool _completed = false;
   bool _loading = true;
@@ -68,15 +73,35 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _pollTimer = Timer.periodic(_pollInterval, (_) => _checkForClearance());
     _timeoutTimer = Timer(_timeout, () => _finish(null));
+    _loadingFallbackTimer = Timer(_loadingFallback, () {
+      if (mounted && _loading) setState(() => _loading = false);
+    });
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    // Set _completed first so any in-flight _checkForClearance call aborts
+    // after its current await instead of continuing into plugin calls that
+    // may be mid-teardown (avoids a native crash on Windows/WebView2 exit).
+    _completed = true;
+    _controller = null;
     _pollTimer?.cancel();
     _timeoutTimer?.cancel();
+    _loadingFallbackTimer?.cancel();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Dismiss the challenge before the engine tears down so the WebView2
+    // environment is cleaned up while plugin channels are still alive.
+    if (state == AppLifecycleState.detached) {
+      _finish(null);
+    }
   }
 
   Future<void> _checkForClearance() async {
@@ -86,6 +111,8 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage> {
         url: _rootUri,
         webViewController: _controller,
       );
+      // Re-check after the await: dispose may have run while we were waiting.
+      if (_completed) return;
       _consecutiveErrors = 0;
       final bool cleared = cookies.any((Cookie c) => c.name == 'cf_clearance');
       if (!cleared) return;
@@ -114,6 +141,7 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage> {
       }
       _finish((cookies: header, userAgent: userAgent));
     } catch (error) {
+      if (_completed) return;
       _consecutiveErrors++;
       if (kDebugMode && _consecutiveErrors == 1) {
         debugPrint('[Cloudflare] cookie poll failed: $error');
@@ -211,10 +239,14 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage> {
                 onWebViewCreated: (InAppWebViewController controller) async {
                   _controller = controller;
                   try {
-                    await _cookies.deleteCookies(
-                      url: _rootUri,
-                      webViewController: controller,
-                    );
+                    // Timeout guard: on Windows/WebView2 the deleteCookies
+                    // callback can hang indefinitely, blocking loadUrl below.
+                    await _cookies
+                        .deleteCookies(
+                          url: _rootUri,
+                          webViewController: controller,
+                        )
+                        .timeout(const Duration(seconds: 3), onTimeout: () => false);
                   } catch (_) {
                     // Best-effort; the challenge still overwrites on success.
                   }
