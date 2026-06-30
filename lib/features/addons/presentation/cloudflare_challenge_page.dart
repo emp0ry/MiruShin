@@ -68,7 +68,7 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
 
   final CookieManager _cookies = CookieManager.instance();
   InAppWebViewController? _controller;
-  HeadlessInAppWebView? _popupWebView;
+  int? _popupWindowId;
   InAppWebViewController? _popupController;
   Timer? _pollTimer;
   Timer? _timeoutTimer;
@@ -137,11 +137,7 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
     _pollTimer?.cancel();
     _timeoutTimer?.cancel();
     _loadingFallbackTimer?.cancel();
-    final HeadlessInAppWebView? popupWebView = _popupWebView;
-    _popupWebView = null;
-    if (popupWebView != null) {
-      unawaited(popupWebView.dispose());
-    }
+    _popupWindowId = null;
     super.dispose();
   }
 
@@ -770,18 +766,48 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
     }
     if (!_isWindows) return false;
 
-    try {
-      await _popupWebView?.dispose();
-      _popupController = null;
+    if (mounted && !_completed) {
+      setState(() {
+        _popupWindowId = createWindowAction.windowId;
+        _popupController = null;
+      });
+      _markWebViewActivity();
+    }
+    return true;
+  }
 
-      final HeadlessInAppWebView popupWebView = HeadlessInAppWebView(
-        windowId: createWindowAction.windowId,
+  void _disposePopupWebView() {
+    if (mounted && !_completed) {
+      setState(() {
+        _popupWindowId = null;
+        _popupController = null;
+      });
+    } else {
+      _popupController = null;
+      _popupWindowId = null;
+    }
+    unawaited(_checkForClearance());
+  }
+
+  Widget _buildWindowsPopupWebView(int windowId) {
+    // flutter_inappwebview_windows completes WebView2's NewWindowRequested
+    // deferral only when a real InAppWebView with this windowId is mounted.
+    // A tiny mounted child satisfies the native contract without covering the
+    // challenge the user is solving in the main WebView.
+    return Positioned(
+      left: 0,
+      top: 0,
+      width: 1,
+      height: 1,
+      child: InAppWebView(
+        key: ValueKey<String>('cloudflare-popup-webview-$windowId'),
+        windowId: windowId,
         initialSettings: InAppWebViewSettings(
           javaScriptEnabled: true,
           javaScriptCanOpenWindowsAutomatically: true,
           supportMultipleWindows: true,
           thirdPartyCookiesEnabled: true,
-          transparentBackground: true,
+          transparentBackground: false,
         ),
         onWebViewCreated: (InAppWebViewController popupController) {
           _popupController = popupController;
@@ -790,6 +816,7 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
             debugPrint('[Cloudflare] popup WebView created');
           }
         },
+        onCreateWindow: _handleCreateWindow,
         onLoadStart: (_, WebUri? url) {
           _markWebViewActivity();
           if (kDebugMode) {
@@ -824,33 +851,8 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
             );
           }
         },
-      );
-
-      _popupWebView = popupWebView;
-      await popupWebView.run();
-      return true;
-    } catch (error) {
-      if (kDebugMode) {
-        debugPrint('[Cloudflare] popup WebView failed: $error');
-      }
-      _popupWebView = null;
-      _popupController = null;
-      // Returning false lets flutter_inappwebview_windows run its default
-      // behavior, which loads the popup request in the main WebView and causes
-      // Cloudflare's verification page to restart. Treat it as handled even if
-      // the child WebView failed to attach.
-      return true;
-    }
-  }
-
-  void _disposePopupWebView() {
-    final HeadlessInAppWebView? popupWebView = _popupWebView;
-    _popupWebView = null;
-    _popupController = null;
-    if (popupWebView != null) {
-      unawaited(popupWebView.dispose());
-    }
-    unawaited(_checkForClearance());
+      ),
+    );
   }
 
   Widget _buildDefaultWebView() {
@@ -892,71 +894,77 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
   }
 
   Widget _buildWindowsWebView() {
+    final int? popupWindowId = _popupWindowId;
     return ColoredBox(
       color: Colors.white,
       // The InAppWebView is only inserted once _preClearCookies()
       // finishes so initialUrlRequest fires on a clean cookie store,
       // without a racing async loadUrl call inside onWebViewCreated
       // (which silently no-ops on Windows/WebView2 in some cases).
-      child: _ready
-          ? InAppWebView(
-              // No custom userAgent on purpose — see the class doc.
-              key: const ValueKey<String>('cloudflare-main-webview'),
-              initialUrlRequest: URLRequest(url: _rootUri),
-              initialSettings: InAppWebViewSettings(
-                javaScriptEnabled: true,
-                javaScriptCanOpenWindowsAutomatically: true,
-                supportMultipleWindows: true,
-                thirdPartyCookiesEnabled: true,
-                transparentBackground: true,
-              ),
-              onWebViewCreated: (InAppWebViewController controller) {
-                _controller = controller;
-                _markWebViewActivity();
-                if (kDebugMode) {
-                  debugPrint('[Cloudflare] onWebViewCreated');
-                }
-              },
-              onCreateWindow: _handleCreateWindow,
-              onLoadStart: (_, WebUri? url) {
-                _markWebViewActivity();
-                if (kDebugMode) {
-                  debugPrint('[Cloudflare] onLoadStart: $url');
-                }
-                if (mounted) setState(() => _loading = true);
-              },
-              onLoadStop: (_, WebUri? url) {
-                _markWebViewActivity();
-                if (kDebugMode) {
-                  debugPrint('[Cloudflare] onLoadStop: $url');
-                }
-                if (mounted) setState(() => _loading = false);
-                unawaited(_checkForClearance());
-              },
-              onProgressChanged: (_, int progress) {
-                if (progress < 100) _markWebViewActivity();
-                if (mounted) {
-                  setState(() => _loading = progress < 100);
-                }
-              },
-              onUpdateVisitedHistory: (_, WebUri? url, _) {
-                _markWebViewActivity();
-                if (kDebugMode) {
-                  debugPrint('[Cloudflare] history: $url');
-                }
-              },
-              onReceivedError: (_, _, WebResourceError error) {
-                _markWebViewActivity();
-                if (kDebugMode) {
-                  debugPrint(
-                    '[Cloudflare] onReceivedError: '
-                    '${error.type} ${error.description}',
-                  );
-                }
-                if (mounted) setState(() => _loading = false);
-              },
-            )
-          : const SizedBox.expand(),
+      child: Stack(
+        children: <Widget>[
+          _ready
+              ? InAppWebView(
+                  // No custom userAgent on purpose — see the class doc.
+                  key: const ValueKey<String>('cloudflare-main-webview'),
+                  initialUrlRequest: URLRequest(url: _rootUri),
+                  initialSettings: InAppWebViewSettings(
+                    javaScriptEnabled: true,
+                    javaScriptCanOpenWindowsAutomatically: true,
+                    supportMultipleWindows: true,
+                    thirdPartyCookiesEnabled: true,
+                    transparentBackground: false,
+                  ),
+                  onWebViewCreated: (InAppWebViewController controller) {
+                    _controller = controller;
+                    _markWebViewActivity();
+                    if (kDebugMode) {
+                      debugPrint('[Cloudflare] onWebViewCreated');
+                    }
+                  },
+                  onCreateWindow: _handleCreateWindow,
+                  onLoadStart: (_, WebUri? url) {
+                    _markWebViewActivity();
+                    if (kDebugMode) {
+                      debugPrint('[Cloudflare] onLoadStart: $url');
+                    }
+                    if (mounted) setState(() => _loading = true);
+                  },
+                  onLoadStop: (_, WebUri? url) {
+                    _markWebViewActivity();
+                    if (kDebugMode) {
+                      debugPrint('[Cloudflare] onLoadStop: $url');
+                    }
+                    if (mounted) setState(() => _loading = false);
+                    unawaited(_checkForClearance());
+                  },
+                  onProgressChanged: (_, int progress) {
+                    if (progress < 100) _markWebViewActivity();
+                    if (mounted) {
+                      setState(() => _loading = progress < 100);
+                    }
+                  },
+                  onUpdateVisitedHistory: (_, WebUri? url, _) {
+                    _markWebViewActivity();
+                    if (kDebugMode) {
+                      debugPrint('[Cloudflare] history: $url');
+                    }
+                  },
+                  onReceivedError: (_, _, WebResourceError error) {
+                    _markWebViewActivity();
+                    if (kDebugMode) {
+                      debugPrint(
+                        '[Cloudflare] onReceivedError: '
+                        '${error.type} ${error.description}',
+                      );
+                    }
+                    if (mounted) setState(() => _loading = false);
+                  },
+                )
+              : const SizedBox.expand(),
+          if (popupWindowId != null) _buildWindowsPopupWebView(popupWindowId),
+        ],
+      ),
     );
   }
 
