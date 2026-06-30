@@ -1,12 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import '../../../app/localization/app_localizations.dart';
 import '../application/cloudflare_challenge_service.dart';
+import '../data/cloudflare_challenge.dart';
 
 /// Interactive Cloudflare challenge solver.
 ///
@@ -62,6 +64,7 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
   /// WebView2 stale-title workaround). At [_pollInterval] this is ~8 seconds.
   static const int _windowsClearanceConfirmPolls = 12;
   static const Duration _windowsClearanceIdleDelay = Duration(seconds: 2);
+  static const Duration _windowsVerificationCooldown = Duration(seconds: 3);
 
   CookieManager _cookies = CookieManager.instance();
   WebViewEnvironment? _webViewEnvironment;
@@ -74,6 +77,8 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
   int _clearanceSeen = 0;
   DateTime? _clearanceFirstSeenAt;
   DateTime _lastWebViewActivityAt = DateTime.now();
+  bool _verificationInFlight = false;
+  DateTime? _lastVerificationAt;
   bool _completed = false;
   bool _loading = true;
   // Becomes true once the pre-navigation cookie flush is done (or timed out).
@@ -288,6 +293,13 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
       // cf_clearance is bound to the UA that solved it — capture the WebView's
       // real UA so the runtime can replay it on subsequent requests.
       final String userAgent = await _readUserAgent();
+      if (_isWindows &&
+          !await _verifyWindowsClearance(
+            cookies: header,
+            userAgent: userAgent,
+          )) {
+        return;
+      }
       _finish((cookies: header, userAgent: userAgent));
     } catch (error) {
       if (_completed) return;
@@ -331,6 +343,110 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
       );
     }
     return settled;
+  }
+
+  Future<bool> _verifyWindowsClearance({
+    required String cookies,
+    required String userAgent,
+  }) async {
+    if (!_isWindows) return true;
+    if (cookies.trim().isEmpty || userAgent.trim().isEmpty) {
+      if (kDebugMode) {
+        debugPrint(
+          '[Cloudflare] Windows clearance verify waiting: '
+          'cookies=${cookies.trim().isNotEmpty}, ua=${userAgent.trim().isNotEmpty}',
+        );
+      }
+      return false;
+    }
+    if (_verificationInFlight) return false;
+
+    final DateTime now = DateTime.now();
+    final DateTime? lastVerification = _lastVerificationAt;
+    if (lastVerification != null &&
+        now.difference(lastVerification) < _windowsVerificationCooldown) {
+      return false;
+    }
+
+    _lastVerificationAt = now;
+    _verificationInFlight = true;
+    try {
+      final Response<String> response =
+          await Dio(
+            BaseOptions(
+              connectTimeout: const Duration(seconds: 10),
+              receiveTimeout: const Duration(seconds: 15),
+              followRedirects: true,
+              validateStatus: (_) => true,
+              responseType: ResponseType.plain,
+            ),
+          ).getUri<String>(
+            Uri.parse(_rootUri.toString()),
+            options: Options(
+              responseType: ResponseType.plain,
+              headers: <String, String>{
+                'User-Agent': userAgent,
+                'Cookie': cookies,
+                'Accept':
+                    'text/html,application/xhtml+xml,application/json,text/plain,*/*',
+              },
+            ),
+          );
+      final Map<String, dynamic> headers = _responseHeaderMap(response);
+      final String body = response.data ?? '';
+      final bool challenged =
+          CloudflareChallenge.isChallenge(response.statusCode, headers, body) ||
+          _headersShowChallenge(headers) ||
+          _bodyShowsChallenge(body);
+
+      if (kDebugMode) {
+        debugPrint(
+          '[Cloudflare] Windows clearance verify: '
+          'status=${response.statusCode} challenged=$challenged '
+          'url=${response.realUri}',
+        );
+      }
+      return !challenged;
+    } catch (error) {
+      if (kDebugMode) {
+        debugPrint('[Cloudflare] Windows clearance verify failed: $error');
+      }
+      return false;
+    } finally {
+      _verificationInFlight = false;
+    }
+  }
+
+  Map<String, dynamic> _responseHeaderMap(Response<dynamic> response) {
+    final Map<String, dynamic> map = <String, dynamic>{};
+    response.headers.forEach((String name, List<String> values) {
+      if (values.isEmpty) return;
+      map[name] = values.length == 1 ? values.first : values;
+    });
+    return map;
+  }
+
+  bool _headersShowChallenge(Map<String, dynamic> headers) {
+    return _headerValue(
+      headers,
+      'cf-mitigated',
+    ).toLowerCase().contains('challenge');
+  }
+
+  String _headerValue(Map<String, dynamic> headers, String name) {
+    final String target = name.toLowerCase();
+    for (final MapEntry<String, dynamic> entry in headers.entries) {
+      if (entry.key.toLowerCase() != target) continue;
+      final Object? value = entry.value;
+      if (value is List) return value.join(', ');
+      return value?.toString() ?? '';
+    }
+    return '';
+  }
+
+  bool _bodyShowsChallenge(String body) {
+    final String haystack = body.toLowerCase();
+    return _windowsChallengeMarkers.any(haystack.contains);
   }
 
   void _markWebViewActivity() {
