@@ -69,6 +69,8 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
   CookieManager _cookies = CookieManager.instance();
   WebViewEnvironment? _webViewEnvironment;
   InAppWebViewController? _controller;
+  HeadlessInAppWebView? _popupWebView;
+  InAppWebViewController? _popupController;
   Timer? _pollTimer;
   Timer? _timeoutTimer;
   Timer? _loadingFallbackTimer;
@@ -148,9 +150,15 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
     // may be mid-teardown (avoids a native crash on Windows/WebView2 exit).
     _completed = true;
     _controller = null;
+    _popupController = null;
     _pollTimer?.cancel();
     _timeoutTimer?.cancel();
     _loadingFallbackTimer?.cancel();
+    final HeadlessInAppWebView? popupWebView = _popupWebView;
+    _popupWebView = null;
+    if (popupWebView != null) {
+      unawaited(popupWebView.dispose());
+    }
     final WebViewEnvironment? environment = _webViewEnvironment;
     _webViewEnvironment = null;
     if (environment != null) {
@@ -186,6 +194,8 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
       for (final Cookie c in await _safeGetCookies(withController: true))
         c.name: c,
       for (final Cookie c in await _readDevToolsCookies(_controller)) c.name: c,
+      for (final Cookie c in await _readDevToolsCookies(_popupController))
+        c.name: c,
     };
     return merged.values.toList(growable: false);
   }
@@ -647,12 +657,95 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
   ) async {
     if (kDebugMode) {
       debugPrint(
-        '[Cloudflare] suppressed popup window: '
+        '[Cloudflare] onCreateWindow: '
         '${createWindowAction.request.url} '
         'windowId=${createWindowAction.windowId}',
       );
     }
-    return false;
+    if (!_isWindows) return false;
+
+    await _popupWebView?.dispose();
+    _popupController = null;
+
+    final HeadlessInAppWebView popupWebView = HeadlessInAppWebView(
+      windowId: createWindowAction.windowId,
+      webViewEnvironment: _webViewEnvironment,
+      initialSettings: InAppWebViewSettings(
+        javaScriptEnabled: true,
+        javaScriptCanOpenWindowsAutomatically: true,
+        supportMultipleWindows: true,
+        thirdPartyCookiesEnabled: true,
+        transparentBackground: true,
+      ),
+      onWebViewCreated: (InAppWebViewController popupController) {
+        _popupController = popupController;
+        _markWebViewActivity();
+        if (kDebugMode) {
+          debugPrint('[Cloudflare] popup WebView created');
+        }
+      },
+      onLoadStart: (_, WebUri? url) {
+        _markWebViewActivity();
+        if (kDebugMode) {
+          debugPrint('[Cloudflare] popup onLoadStart: $url');
+        }
+      },
+      onLoadStop: (_, WebUri? url) {
+        _markWebViewActivity();
+        if (kDebugMode) {
+          debugPrint('[Cloudflare] popup onLoadStop: $url');
+        }
+        unawaited(_checkForClearance());
+      },
+      onProgressChanged: (_, int progress) {
+        if (progress < 100) _markWebViewActivity();
+      },
+      onUpdateVisitedHistory: (_, WebUri? url, _) {
+        _markWebViewActivity();
+        if (kDebugMode) {
+          debugPrint('[Cloudflare] popup history: $url');
+        }
+      },
+      onCloseWindow: (_) {
+        _disposePopupWebView();
+      },
+      onReceivedError: (_, _, WebResourceError error) {
+        _markWebViewActivity();
+        if (kDebugMode) {
+          debugPrint(
+            '[Cloudflare] popup onReceivedError: '
+            '${error.type} ${error.description}',
+          );
+        }
+      },
+    );
+
+    _popupWebView = popupWebView;
+    try {
+      await popupWebView.run();
+      return true;
+    } catch (error) {
+      if (kDebugMode) {
+        debugPrint('[Cloudflare] popup WebView failed: $error');
+      }
+      _popupWebView = null;
+      _popupController = null;
+      // Returning false lets flutter_inappwebview_windows run its default
+      // behavior, which loads the popup request in the main WebView and causes
+      // Cloudflare's verification page to restart. Treat it as handled even if
+      // the child WebView failed to attach.
+      return true;
+    }
+  }
+
+  void _disposePopupWebView() {
+    final HeadlessInAppWebView? popupWebView = _popupWebView;
+    _popupWebView = null;
+    _popupController = null;
+    if (popupWebView != null) {
+      unawaited(popupWebView.dispose());
+    }
+    unawaited(_checkForClearance());
   }
 
   Widget _buildDefaultWebView() {
@@ -708,6 +801,8 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
               initialUrlRequest: URLRequest(url: _rootUri),
               initialSettings: InAppWebViewSettings(
                 javaScriptEnabled: true,
+                javaScriptCanOpenWindowsAutomatically: true,
+                supportMultipleWindows: true,
                 thirdPartyCookiesEnabled: true,
                 transparentBackground: true,
               ),
