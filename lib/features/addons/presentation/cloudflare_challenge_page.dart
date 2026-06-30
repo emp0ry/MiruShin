@@ -188,16 +188,32 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
       return _safeGetCookies(withController: true);
     }
 
-    final Map<String, Cookie> merged = <String, Cookie>{
-      for (final Cookie c in await _safeGetCookies(withController: false))
-        c.name: c,
-      for (final Cookie c in await _safeGetCookies(withController: true))
-        c.name: c,
-      for (final Cookie c in await _readDevToolsCookies(_controller)) c.name: c,
-      for (final Cookie c in await _readDevToolsCookies(_popupController))
-        c.name: c,
-    };
+    final Map<String, Cookie> merged = <String, Cookie>{};
+    void addAll(Iterable<Cookie> cookies) {
+      for (final Cookie cookie in cookies) {
+        _mergeCookie(merged, cookie);
+      }
+    }
+
+    addAll(await _safeGetCookies(withController: false));
+    addAll(await _safeGetCookies(withController: true));
+    addAll(await _readDevToolsCookies(_controller));
+    addAll(await _readDevToolsCookies(_popupController));
+    addAll(await _readDocumentCookies(_controller));
+    addAll(await _readDocumentCookies(_popupController));
+
     return merged.values.toList(growable: false);
+  }
+
+  void _mergeCookie(Map<String, Cookie> merged, Cookie cookie) {
+    final String value = _cookieValue(cookie);
+    if (cookie.name.isEmpty || value.isEmpty) return;
+    final Cookie? existing = merged[cookie.name];
+    if (existing == null ||
+        _cookieValue(existing).isEmpty ||
+        cookie.name == 'cf_clearance') {
+      merged[cookie.name] = cookie;
+    }
   }
 
   /// A single getCookies call guarded by a timeout so it cannot hang the poll.
@@ -222,19 +238,108 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
   ) async {
     if (!_isWindows) return const <Cookie>[];
     if (controller == null) return const <Cookie>[];
+    final List<Cookie> cookies = <Cookie>[];
+    try {
+      await controller
+          .callDevToolsProtocolMethod(methodName: 'Network.enable')
+          .timeout(const Duration(milliseconds: 1000), onTimeout: () => null);
+    } catch (_) {}
+
+    final List<String> urls = await _devToolsCookieUrls(controller);
+    cookies.addAll(
+      await _readDevToolsCookieMethod(
+        controller,
+        methodName: 'Network.getCookies',
+        parameters: <String, dynamic>{'urls': urls},
+      ),
+    );
+    cookies.addAll(
+      await _readDevToolsCookieMethod(
+        controller,
+        methodName: 'Network.getAllCookies',
+      ),
+    );
+    cookies.addAll(
+      await _readDevToolsCookieMethod(
+        controller,
+        methodName: 'Storage.getCookies',
+      ),
+    );
+
+    final Map<String, Cookie> merged = <String, Cookie>{};
+    for (final Cookie cookie in cookies.where(_cookieMatchesRootHost)) {
+      _mergeCookie(merged, cookie);
+    }
+    return merged.values.toList(growable: false);
+  }
+
+  Future<List<String>> _devToolsCookieUrls(
+    InAppWebViewController controller,
+  ) async {
+    final Set<String> urls = <String>{_rootUri.toString()};
+    try {
+      final WebUri? current = await controller.getUrl().timeout(
+        const Duration(milliseconds: 800),
+        onTimeout: () => null,
+      );
+      if (current != null && current.host == _rootUri.host) {
+        urls.add(current.toString());
+      }
+    } catch (_) {}
+    return urls.toList(growable: false);
+  }
+
+  Future<List<Cookie>> _readDevToolsCookieMethod(
+    InAppWebViewController controller, {
+    required String methodName,
+    Map<String, dynamic>? parameters,
+  }) async {
     try {
       final Object? result = await controller
           .callDevToolsProtocolMethod(
-            methodName: 'Network.getCookies',
-            parameters: <String, dynamic>{
-              'urls': <String>[_rootUri.toString()],
-            },
+            methodName: methodName,
+            parameters: parameters,
           )
           .timeout(const Duration(milliseconds: 1500), onTimeout: () => null);
       final Object? rawCookies = result is Map ? result['cookies'] : null;
       if (rawCookies is! List) return const <Cookie>[];
-      return rawCookies
+      final List<Cookie> cookies = rawCookies
           .map(_cookieFromDevTools)
+          .whereType<Cookie>()
+          .toList(growable: false);
+      if (kDebugMode && cookies.any((Cookie c) => c.name == 'cf_clearance')) {
+        debugPrint(
+          '[Cloudflare] $methodName found cf_clearance '
+          '(${cookies.length} cookies)',
+        );
+      }
+      return cookies;
+    } catch (_) {
+      return const <Cookie>[];
+    }
+  }
+
+  Future<List<Cookie>> _readDocumentCookies(
+    InAppWebViewController? controller,
+  ) async {
+    if (!_isWindows || controller == null) return const <Cookie>[];
+    try {
+      final String raw = _normalizeUserAgent(
+        await controller
+            .evaluateJavascript(source: 'document.cookie')
+            .timeout(const Duration(milliseconds: 1000), onTimeout: () => ''),
+      );
+      if (raw.isEmpty) return const <Cookie>[];
+      return raw
+          .split(';')
+          .map((String part) {
+            final int equals = part.indexOf('=');
+            if (equals <= 0) return null;
+            final String name = part.substring(0, equals).trim();
+            final String value = part.substring(equals + 1).trim();
+            if (name.isEmpty || value.isEmpty) return null;
+            return Cookie(name: name, value: value, domain: _rootUri.host);
+          })
           .whereType<Cookie>()
           .toList(growable: false);
     } catch (_) {
@@ -246,10 +351,12 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
     if (raw is! Map) return null;
     final Object? name = raw['name'];
     if (name is! String || name.isEmpty) return null;
+    final Object? value = raw['value'];
+    if (value == null || '$value'.isEmpty) return null;
     final Object? expires = raw['expires'];
     return Cookie(
       name: name,
-      value: raw['value'],
+      value: '$value',
       domain: raw['domain'] is String ? raw['domain'] as String : null,
       path: raw['path'] is String ? raw['path'] as String : null,
       isSecure: raw['secure'] is bool ? raw['secure'] as bool : null,
@@ -261,6 +368,25 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
     );
   }
 
+  bool _cookieMatchesRootHost(Cookie cookie) {
+    final String host = _rootUri.host.toLowerCase();
+    final String? rawDomain = cookie.domain;
+    if (rawDomain == null || rawDomain.isEmpty) return true;
+    final String domain = rawDomain.toLowerCase().replaceFirst(
+      RegExp(r'^\.+'),
+      '',
+    );
+    return host == domain || host.endsWith('.$domain');
+  }
+
+  String _cookieValue(Cookie cookie) {
+    final Object? value = cookie.value;
+    if (value == null) return '';
+    final String text = '$value'.trim();
+    if (text.toLowerCase() == 'null') return '';
+    return text;
+  }
+
   Future<void> _checkForClearance() async {
     if (_completed || _controller == null) return;
     try {
@@ -268,7 +394,9 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
       // Re-check after the await: dispose may have run while we were waiting.
       if (_completed) return;
       _consecutiveErrors = 0;
-      final bool cleared = cookies.any((Cookie c) => c.name == 'cf_clearance');
+      final bool cleared = cookies.any(
+        (Cookie c) => c.name == 'cf_clearance' && _cookieValue(c).isNotEmpty,
+      );
       if (kDebugMode) {
         debugPrint(
           '[Cloudflare] poll: ${cookies.length} cookies, '
@@ -297,8 +425,8 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
       }
 
       final String header = cookies
-          .where((Cookie c) => '${c.value}'.isNotEmpty)
-          .map((Cookie c) => '${c.name}=${c.value}')
+          .where((Cookie c) => _cookieValue(c).isNotEmpty)
+          .map((Cookie c) => '${c.name}=${_cookieValue(c)}')
           .join('; ');
       // cf_clearance is bound to the UA that solved it — capture the WebView's
       // real UA so the runtime can replay it on subsequent requests.
