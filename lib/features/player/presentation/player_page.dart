@@ -57,6 +57,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   static const Duration _spaceHoldSpeedDelay = Duration(milliseconds: 260);
   static const Duration _exitCleanupTimeout = Duration(seconds: 2);
   static const Duration _controlsHideDelay = Duration(seconds: 4);
+  static const Duration _transientOverlayAmbientDelay = Duration(seconds: 5);
   static const Duration _macosTrailerControlsHideDelay = Duration(seconds: 4);
   static const Duration _defaultTrailerControlsHideDelay = Duration(seconds: 5);
 
@@ -770,7 +771,6 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     unawaited(_exitPlayer());
   }
 
-
   void _cancelSpaceHold({required bool restoreSpeed}) {
     _spaceHoldTimer?.cancel();
     _spaceHoldTimer = null;
@@ -1475,8 +1475,11 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                                     controlsVisible:
                                         state.controlsVisible && !state.locked,
                                   ),
-                                if (state.error == null)
-                                  _SkipButtons(item: state.item ?? widget.item),
+                                if (state.error == null && !state.locked)
+                                  _SkipButtons(
+                                    item: state.item ?? widget.item,
+                                    controlsVisible: state.controlsVisible,
+                                  ),
                                 if (state.lastSkippedFrom != null)
                                   Positioned(
                                     right: 24,
@@ -3353,8 +3356,10 @@ class _SubtitleOverlayState extends State<_SubtitleOverlay> {
 }
 
 class _SkipButtons extends ConsumerStatefulWidget {
-  const _SkipButtons({required this.item});
+  const _SkipButtons({required this.item, required this.controlsVisible});
+
   final MediaPlaybackItem item;
+  final bool controlsVisible;
 
   @override
   ConsumerState<_SkipButtons> createState() => _SkipButtonsState();
@@ -3426,7 +3431,6 @@ class _SkipButtonsState extends ConsumerState<_SkipButtons> {
       _opHideTimer?.cancel();
       _opHideTimer = Timer(const Duration(seconds: 5), () {
         if (!mounted) return;
-        _opWindowStart = null;
         setState(() {});
       });
     } else if (!flags.inOp) {
@@ -3440,7 +3444,6 @@ class _SkipButtonsState extends ConsumerState<_SkipButtons> {
       _edHideTimer?.cancel();
       _edHideTimer = Timer(const Duration(seconds: 5), () {
         if (!mounted) return;
-        _edWindowStart = null;
         setState(() {});
       });
     } else if (!flags.inEd) {
@@ -3486,7 +3489,9 @@ class _SkipButtonsState extends ConsumerState<_SkipButtons> {
         p >= markers.openingStart! &&
         p < markers.openingEnd! &&
         _opWindowStart != null &&
-        now.difference(_opWindowStart!) <= const Duration(seconds: 5);
+        (widget.controlsVisible ||
+            now.difference(_opWindowStart!) <=
+                _PlayerPageState._transientOverlayAmbientDelay);
     final bool showEd =
         settings.showSkipEndingButton &&
         !settings.autoSkipEnding &&
@@ -3494,7 +3499,9 @@ class _SkipButtonsState extends ConsumerState<_SkipButtons> {
         p >= markers.endingStart! &&
         p < markers.endingEnd! &&
         _edWindowStart != null &&
-        now.difference(_edWindowStart!) <= const Duration(seconds: 5);
+        (widget.controlsVisible ||
+            now.difference(_edWindowStart!) <=
+                _PlayerPageState._transientOverlayAmbientDelay);
 
     if (showOp) {
       target = markers.openingEnd;

@@ -21,6 +21,9 @@ const Duration _previewPrepareTimeout = Duration(milliseconds: 1800);
 const Duration _previewTextureTimeout = Duration(milliseconds: 1200);
 const Duration _startupRetryDelay = Duration(seconds: 45);
 const Duration _videoSurfaceStartupTimeout = Duration(seconds: 20);
+const Duration _nativeDisposeSettleDelay = Duration(milliseconds: 250);
+const Duration _mediaClearSettleDelay = Duration(milliseconds: 80);
+const int _minimumTextureMdkVersion = 8960;
 const int _startupRetryLimit = 0;
 const Duration _fragileHlsSmallResumeThreshold = Duration(seconds: 30);
 const Duration _firstFramePollInterval = Duration(milliseconds: 250);
@@ -78,6 +81,7 @@ class FvpPlayerEngine extends PlayerEngine {
   List<PlayerBufferedRange> _lastBufferedRanges = const <PlayerBufferedRange>[];
   DateTime? _invalidSince;
   bool _reportedInvalid = false;
+  static int? _cachedMdkRuntimeVersion;
 
   @override
   ValueListenable<PlayerEngineState> get state => _state;
@@ -118,6 +122,16 @@ class FvpPlayerEngine extends PlayerEngine {
     }
 
     await _disposePlayerOnly();
+    try {
+      _ensureTextureRuntimeCompatible();
+    } on Object catch (error) {
+      _state.value = _state.value.copyWith(
+        isBuffering: false,
+        hasError: true,
+        errorDescription: error.toString(),
+      );
+      rethrow;
+    }
     final int openGeneration = ++_openGeneration;
 
     final mdk.Player player = mdk.Player();
@@ -221,10 +235,10 @@ class FvpPlayerEngine extends PlayerEngine {
       player.state = autoplay
           ? mdk.PlaybackState.playing
           : mdk.PlaybackState.paused;
-      // FVP examples call updateTexture() without awaiting. Awaiting it can
-      // keep PlaybackController in loading forever on streams that start
-      // asynchronously or require playlist/segment requests through proxy.
-      unawaited(player.updateTexture());
+      // Do not leave a raw updateTexture() future parked on a stream that may
+      // never report video. On failed HLS loads that pending native texture
+      // work can overlap with the next fallback source and crash inside FVP.
+      unawaited(_updateTextureWhenVideoAvailable(player, openGeneration));
 
       _startPositionTimer();
       _startOpenTimeout();
@@ -339,6 +353,62 @@ class FvpPlayerEngine extends PlayerEngine {
         player.buffered() > 0 ||
         status.test(mdk.MediaStatus.prepared) ||
         status.test(mdk.MediaStatus.loaded);
+  }
+
+  void _ensureTextureRuntimeCompatible() {
+    final int runtimeVersion = _cachedMdkRuntimeVersion ??= mdk.version();
+    if (runtimeVersion >= _minimumTextureMdkVersion) return;
+
+    throw StateError(
+      'FVP MDK runtime $runtimeVersion is older than the texture renderer '
+      'ABI $_minimumTextureMdkVersion.',
+    );
+  }
+
+  bool _isActivePlayer(mdk.Player player, int generation) {
+    return generation == _openGeneration &&
+        _player == player &&
+        _hasMedia &&
+        _lastError == null;
+  }
+
+  Future<void> _updateTextureWhenVideoAvailable(
+    mdk.Player player,
+    int generation,
+  ) async {
+    for (int attempt = 0; attempt < _firstFramePollAttempts; attempt += 1) {
+      if (!_isActivePlayer(player, generation)) return;
+
+      final Size videoSize = _videoSize(player.mediaInfo);
+      if (videoSize.width > 0 && videoSize.height > 0) {
+        break;
+      }
+
+      final mdk.MediaStatus status = player.mediaStatus;
+      if (status.test(mdk.MediaStatus.invalid) ||
+          status.test(mdk.MediaStatus.end)) {
+        return;
+      }
+
+      await Future<void>.delayed(_firstFramePollInterval);
+    }
+
+    if (!_isActivePlayer(player, generation)) return;
+
+    final Size videoSize = _videoSize(player.mediaInfo);
+    if (videoSize.width <= 0 || videoSize.height <= 0) return;
+
+    try {
+      await player.updateTexture();
+    } on Object catch (error) {
+      if (!_isActivePlayer(player, generation)) return;
+      _lastError = 'FVP texture creation failed: $error';
+      debugPrint(_lastError);
+    }
+
+    if (_isActivePlayer(player, generation)) {
+      _syncState();
+    }
   }
 
   Future<void> _retryOpenCurrentSource() async {
@@ -1022,8 +1092,9 @@ class FvpPlayerEngine extends PlayerEngine {
         status.test(mdk.MediaStatus.loading) ||
         status.test(mdk.MediaStatus.stalled);
     final bool nativeEnded = status.test(mdk.MediaStatus.end);
-    final bool startupRequirementSatisfied =
-        _requireVideoSurfaceDuringStartup ? hasVideoSize : hasContent;
+    final bool startupRequirementSatisfied = _requireVideoSurfaceDuringStartup
+        ? hasVideoSize
+        : hasContent;
     final bool initialized =
         !nativeInvalid && _hasMedia && startupRequirementSatisfied;
 
@@ -1201,8 +1272,27 @@ class FvpPlayerEngine extends PlayerEngine {
     final mdk.Player? player = _player;
     _player = null;
     if (player != null) {
-      player.state = mdk.PlaybackState.stopped;
-      player.dispose();
+      try {
+        player.state = mdk.PlaybackState.stopped;
+      } on Object catch (error) {
+        debugPrint('FVP stop during dispose ignored: $error');
+      }
+
+      if (player.textureId.value == null && player.media.isNotEmpty) {
+        try {
+          player.media = '';
+          await Future<void>.delayed(_mediaClearSettleDelay);
+        } on Object catch (error) {
+          debugPrint('FVP media clear during dispose ignored: $error');
+        }
+      }
+
+      try {
+        player.dispose();
+      } on Object catch (error) {
+        debugPrint('FVP dispose ignored: $error');
+      }
+      await Future<void>.delayed(_nativeDisposeSettleDelay);
     }
   }
 }
