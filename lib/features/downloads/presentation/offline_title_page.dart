@@ -116,10 +116,9 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
         : moduleEpisodes
               .where((DownloadedEpisode e) => e.seasonNumber == selectedSeason)
               .toList(growable: false);
-    final int effectiveContinued = _effectiveContinued(visibleEpisodes);
-    final DownloadedEpisode? continueEpisode = _continueEpisodeFor(
+    final DownloadedEpisode? continueEpisode = offlineContinueEpisode(
       visibleEpisodes,
-      effectiveContinued,
+      isWatched: (DownloadedEpisode e) => _localProgress(e)?.isWatched == true,
     );
 
     return Stack(
@@ -193,7 +192,7 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
                         media,
                         moduleEpisodes,
                         selectedSeason,
-                        effectiveContinued,
+                        continueEpisode?.id,
                       ),
                     ],
                   ),
@@ -225,31 +224,6 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
     );
   }
 
-  int _effectiveContinued(List<DownloadedEpisode> moduleEpisodes) {
-    int maxWatched = 0;
-    for (final DownloadedEpisode e in moduleEpisodes) {
-      if (!e.isComplete || e.episodeNumber < 1) continue;
-      final EpisodeProgress? progress = _localProgress(e);
-      if (progress?.isWatched != true) continue;
-      final int n = e.episodeNumber.round();
-      if (n > maxWatched) maxWatched = n;
-    }
-    return maxWatched;
-  }
-
-  DownloadedEpisode? _continueEpisodeFor(
-    List<DownloadedEpisode> moduleEpisodes,
-    int effectiveContinued,
-  ) {
-    if (effectiveContinued <= 0) return null;
-    for (final DownloadedEpisode e in moduleEpisodes) {
-      if (e.isComplete && e.episodeNumber.round() == effectiveContinued + 1) {
-        return e;
-      }
-    }
-    return null;
-  }
-
   EpisodeProgress? _localProgress(DownloadedEpisode ep) {
     final LocalLibraryController library = ref.read(
       localLibraryProvider.notifier,
@@ -279,7 +253,7 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
     MediaItem media,
     List<DownloadedEpisode> moduleEpisodes,
     int? selectedSeason,
-    int effectiveContinued,
+    String? continueEpisodeId,
   ) {
     if (selectedSeason != null) {
       final List<DownloadedEpisode> seasonEpisodes = moduleEpisodes
@@ -292,7 +266,7 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
         moduleEpisodes,
         selectedSeason,
         seasonEpisodes,
-        effectiveContinued,
+        continueEpisodeId,
       );
     }
 
@@ -333,7 +307,7 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
           moduleEpisodes,
           season,
           seasonEpisodes,
-          effectiveContinued,
+          continueEpisodeId,
         ),
       );
     }
@@ -347,7 +321,7 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
     List<DownloadedEpisode> moduleEpisodes,
     int season,
     List<DownloadedEpisode> seasonEpisodes,
-    int effectiveContinued,
+    String? continueEpisodeId,
   ) {
     final List<Widget> rows = <Widget>[];
 
@@ -372,7 +346,7 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
             media,
             ep,
             moduleEpisodes,
-            effectiveContinued,
+            continueEpisodeId,
           ),
         );
       } else {
@@ -394,7 +368,7 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
           media,
           e,
           moduleEpisodes,
-          effectiveContinued,
+          continueEpisodeId,
         ),
       );
     }
@@ -531,7 +505,7 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
     MediaItem media,
     DownloadedEpisode ep,
     List<DownloadedEpisode> moduleEpisodes,
-    int effectiveContinued,
+    String? continueEpisodeId,
   ) {
     final bool complete = ep.isComplete;
     final String numberLabel = ep.displayNumber.isNotEmpty
@@ -539,10 +513,7 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
         : context.t('Episode');
     final EpisodeProgress? localProgress = _localProgress(ep);
     final bool watched = localProgress?.isWatched ?? false;
-    final bool isContinue =
-        complete &&
-        effectiveContinued > 0 &&
-        ep.episodeNumber.round() == effectiveContinued + 1;
+    final bool isContinue = complete && ep.id == continueEpisodeId;
     final String displayTitle = downloadedEpisodeDisplayTitle(ep);
     final String status = _statusLabel(context, ep, localProgress, isContinue);
     return Padding(

@@ -98,6 +98,33 @@ DownloadedEpisode? downloadedEpisodeByHref(
   return null;
 }
 
+/// Picks the downloaded episode the offline page should label as "Continue".
+///
+/// A fresh full download that starts at episode 1 has no continuation yet, but
+/// if earlier episodes are not available locally we continue from the first
+/// playable gap episode.
+DownloadedEpisode? offlineContinueEpisode(
+  List<DownloadedEpisode> episodes, {
+  required bool Function(DownloadedEpisode episode) isWatched,
+}) {
+  final List<DownloadedEpisode> sorted = _sortedCompleted(episodes)
+      .where((DownloadedEpisode e) => e.episodeNumber >= 1)
+      .toList(growable: false);
+  if (sorted.isEmpty) return null;
+
+  bool hasWatchedDownload = false;
+  for (final DownloadedEpisode e in sorted) {
+    if (isWatched(e)) {
+      hasWatchedDownload = true;
+      continue;
+    }
+    final bool startsAfterFirstEpisode =
+        e.seasonNumber > 1 || e.episodeNumber.round() > 1;
+    return hasWatchedDownload || startsAfterFirstEpisode ? e : null;
+  }
+  return null;
+}
+
 List<DownloadedEpisode> _sortedCompleted(List<DownloadedEpisode> episodes) {
   final List<DownloadedEpisode> list =
       episodes
