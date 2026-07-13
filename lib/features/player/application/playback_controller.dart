@@ -178,6 +178,7 @@ class PlaybackController extends Notifier<PlaybackState> {
   static const Duration _seekSettleRetryInterval = Duration(milliseconds: 700);
   static const Duration _seekSettleTolerance = Duration(milliseconds: 1200);
   static const int _seekSettleRetryLimit = 10;
+  static const Duration _engineSeekTimeout = Duration(seconds: 4);
   static const Duration _resumeSeekRetryInterval = Duration(milliseconds: 650);
   static const Duration _resumeSeekRetryTimeout = Duration(seconds: 75);
   static const Duration _engineOpenTimeout = Duration(seconds: 45);
@@ -1068,7 +1069,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       if (!value.isInitialized) continue;
 
       try {
-        await engine.seekTo(position);
+        await _seekEngineTo(engine, position, reason: 'Resume seek');
         attemptedSeek = true;
       } on Object {
         // Some native backends reject an early startup seek. Later loop ticks
@@ -1172,7 +1173,11 @@ class PlaybackController extends Notifier<PlaybackState> {
       if (position > const Duration(seconds: 5) &&
           position < const Duration(seconds: 30)) {
         try {
-          await engine.seekTo(Duration.zero);
+          await _seekEngineTo(
+            engine,
+            Duration.zero,
+            reason: 'Fresh-start seek',
+          );
           state = state.copyWith();
         } on Object {
           // Startup guard should never break playback if the backend rejects
@@ -2252,6 +2257,23 @@ class PlaybackController extends Notifier<PlaybackState> {
     return position;
   }
 
+  Future<void> _seekEngineTo(
+    PlayerEngine engine,
+    Duration target, {
+    String reason = 'seek',
+  }) async {
+    try {
+      await engine.seekTo(target).timeout(_engineSeekTimeout);
+    } on TimeoutException catch (error) {
+      if (kDebugMode) {
+        debugPrint(
+          '$reason timed out after ${_engineSeekTimeout.inSeconds}s '
+          '(target=${target.inMilliseconds}ms): $error',
+        );
+      }
+    }
+  }
+
   void _queueInteractiveSeek(
     PlayerEngine engine,
     Duration target, {
@@ -2290,7 +2312,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     _seekInFlight = true;
 
     try {
-      await engine.seekTo(target);
+      await _seekEngineTo(engine, target, reason: 'Interactive seek');
     } on Object {
       // Keep rapid seek gestures from surfacing as uncaught async errors if
       // the native player rejects a stale target during stream transitions.
@@ -2411,7 +2433,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     _seekInFlight = true;
     _settlingSeekRetryInFlight = true;
     try {
-      await engine.seekTo(target);
+      await _seekEngineTo(engine, target, reason: 'Manual seek retry');
     } on Object catch (error) {
       if (kDebugMode) {
         debugPrint('Manual seek retry ignored: $error');
@@ -2733,7 +2755,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     _noteManualSeekTarget(clampedTarget, duration);
     _setSeekPreview(engine, clampedTarget);
     try {
-      await engine.seekTo(clampedTarget);
+      await _seekEngineTo(engine, clampedTarget, reason: 'Skip seek');
     } on Object {
       // Native backends may reject stale skip targets during stream changes.
     }
@@ -2764,7 +2786,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     _clearInteractiveSeek();
     _setSeekPreview(engine, target);
     try {
-      await engine.seekTo(target);
+      await _seekEngineTo(engine, target, reason: 'Undo seek');
     } on Object {
       // Ignore stale undo seeks while the player is being replaced.
     }
@@ -2777,6 +2799,16 @@ class PlaybackController extends Notifier<PlaybackState> {
 
   void setControlsVisible(bool visible) =>
       state = state.copyWith(controlsVisible: visible);
+  void hideControls({bool clearTransientChrome = false}) {
+    if (clearTransientChrome) {
+      _cancelSeekSettle(clearPreview: true);
+    }
+    state = state.copyWith(
+      controlsVisible: false,
+      clearSeekPreviewPosition: clearTransientChrome,
+    );
+  }
+
   void setLocked(bool locked) => state = state.copyWith(locked: locked);
 
   void _startProgressSaver() {

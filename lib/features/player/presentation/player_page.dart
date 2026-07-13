@@ -113,7 +113,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   @override
   void initState() {
     super.initState();
-    HardwareKeyboard.instance.addHandler(_handleGlobalKeyEvent);
+    FocusManager.instance.addEarlyKeyEventHandler(_handlePlayerShortcutEvent);
     unawaited(WakelockPlus.enable());
     // Re-assert the wakelock every 60 s – guards against any platform-level
     // release that the one-shot enable() might not survive (e.g. system sleep
@@ -323,7 +323,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
 
   @override
   void dispose() {
-    HardwareKeyboard.instance.removeHandler(_handleGlobalKeyEvent);
+    FocusManager.instance.removeEarlyKeyEventHandler(
+      _handlePlayerShortcutEvent,
+    );
     _tvObservedEngine?.state.removeListener(_onTvPlaybackTick);
     _nativePlayerSub?.cancel();
     _trailerCommandSub?.cancel();
@@ -347,44 +349,38 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
 
   bool get _shouldStartFullscreen => _isMobile || widget.startInFullscreen;
 
-  bool _handleGlobalKeyEvent(KeyEvent event) {
-    if (!mounted || _nativePipActive) return false;
+  KeyEventResult _handlePlayerShortcutEvent(KeyEvent event) {
+    if (!mounted || _nativePipActive) return KeyEventResult.ignored;
     if (event is! KeyDownEvent &&
         event is! KeyRepeatEvent &&
         event is! KeyUpEvent) {
-      return false;
+      return KeyEventResult.ignored;
     }
-    if (!(ModalRoute.of(context)?.isCurrent ?? true)) return false;
+    if (!(ModalRoute.of(context)?.isCurrent ?? true)) {
+      return KeyEventResult.ignored;
+    }
 
     final PlaybackState state = ref.read(playbackControllerProvider);
     if (_isYoutubeTrailerPlayback(state, widget.item)) {
-      if (event is! KeyDownEvent) return false;
+      if (event is! KeyDownEvent) return KeyEventResult.ignored;
       if (event.logicalKey == LogicalKeyboardKey.keyF) {
         _handleTrailerFullscreenShortcut();
-        return true;
+        return KeyEventResult.handled;
       }
       if (event.logicalKey == LogicalKeyboardKey.escape) {
         _handleTrailerEscapeShortcut();
-        return true;
+        return KeyEventResult.handled;
       }
-      return false;
+      return KeyEventResult.ignored;
     }
 
-    // The player's Focus subtree already routes these shortcuts through its
-    // onKeyEvent whenever it (or a focused descendant) is active. Handling them
-    // here too would process a single press twice — e.g. open the quality or
-    // episodes sheet twice, or toggle play back and forth. Only act as a
-    // fallback when focus has drifted outside the player.
-    if (_playerFocusNode.hasFocus) return false;
-
     if (!_isPlayerShortcutKey(event.logicalKey) || _isEditableTextFocused()) {
-      return false;
+      return KeyEventResult.ignored;
     }
 
     final PlayerSettings settings =
         ref.read(playerSettingsProvider).value ?? const PlayerSettings();
-    return _handlePlayerKeyEvent(event, state, settings) ==
-        KeyEventResult.handled;
+    return _handlePlayerKeyEvent(event, state, settings);
   }
 
   bool _isPlayerShortcutKey(LogicalKeyboardKey key) {
@@ -468,15 +464,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     }
     _hideTimer = Timer(delay, () {
       if (!mounted) return;
-      // A seek-preview / scrub is in progress: keep the controls (and cursor)
-      // visible and re-arm the timer instead of giving up. Otherwise a preview
-      // that lingers would strand the chrome and cursor on screen until the
-      // user toggles fullscreen, which is exactly the reported bug.
-      if (ref.read(playbackControllerProvider).seekPreviewPosition != null) {
-        _scheduleHide(delay);
-        return;
-      }
-      ref.read(playbackControllerProvider.notifier).setControlsVisible(false);
+      _hideControls(clearTransientChrome: false);
     });
   }
 
@@ -600,11 +588,13 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     }
   }
 
-  void _hideControls() {
+  void _hideControls({bool clearTransientChrome = true}) {
     _hideTimer?.cancel();
-    ref.read(playbackControllerProvider.notifier).setControlsVisible(false);
-    // Never leave the D-pad on a hidden chrome button.
-    if (_isTv) _requestPlayerFocus();
+    ref
+        .read(playbackControllerProvider.notifier)
+        .hideControls(clearTransientChrome: clearTransientChrome);
+    // Never leave keyboard/D-pad focus on a hidden chrome button or slider.
+    _requestPlayerFocus();
   }
 
   void _toggleControls() {
@@ -1167,6 +1157,13 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         state.controlsVisible &&
         !state.locked &&
         !(state.engine?.state.value.isPlaying ?? false);
+    final PlayerEngineState? engineValue = state.engine?.state.value;
+    final bool forceChromeForLoading =
+        state.loading &&
+        (engineValue == null ||
+            (!engineValue.isInitialized &&
+                !engineValue.isPlaying &&
+                engineValue.duration <= Duration.zero));
     final playerShortcuts = <ShortcutActivator, Intent>{
       const SingleActivator(LogicalKeyboardKey.space): _TogglePlayIntent(),
       if (!tvPausedChromeNavigation) ...const <ShortcutActivator, Intent>{
@@ -1381,6 +1378,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                         onExit: (_) => _hideControls(),
                         child: GestureOverlay(
                           onTap: _toggleControls,
+                          onActivity: _showControls,
                           seekInterval: settings.seekInterval,
                           isMobile: _isMobile,
                           isZoomed: settings.verticalStretch,
@@ -1418,7 +1416,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                                   state: state,
                                   settings: settings,
                                 ),
-                                if (state.loading &&
+                                if (forceChromeForLoading &&
                                     !state.controlsVisible &&
                                     state.error == null)
                                   const Center(
@@ -1432,9 +1430,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                                     // be backed out of.
                                     opacity:
                                         (state.controlsVisible ||
-                                                state.seekPreviewPosition !=
-                                                    null ||
-                                                state.loading) &&
+                                                forceChromeForLoading) &&
                                             !state.locked
                                         ? 1
                                         : 0,
@@ -1442,7 +1438,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                                     child: IgnorePointer(
                                       ignoring:
                                           (!state.controlsVisible &&
-                                              !state.loading) ||
+                                              !forceChromeForLoading) ||
                                           state.locked,
                                       child: _PlayerChrome(
                                         isFullscreen: _isFullscreen,
@@ -2233,8 +2229,12 @@ class _PlayerChrome extends ConsumerWidget {
                           PlayerEngineState engineState,
                           Widget? _,
                         ) {
+                          final bool opening =
+                              state.loading &&
+                              !engineState.isInitialized &&
+                              !engineState.isPlaying;
                           final bool showLoading =
-                              state.loading ||
+                              opening ||
                               !engineState.isInitialized ||
                               (engineState.isBuffering && !seekPreviewBuffered);
                           if (showLoading) {

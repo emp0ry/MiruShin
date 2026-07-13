@@ -10,6 +10,7 @@ class GestureOverlay extends ConsumerStatefulWidget {
   const GestureOverlay({
     required this.child,
     required this.onTap,
+    required this.onActivity,
     required this.seekInterval,
     required this.isMobile,
     required this.isZoomed,
@@ -22,6 +23,7 @@ class GestureOverlay extends ConsumerStatefulWidget {
 
   final Widget child;
   final VoidCallback onTap;
+  final VoidCallback onActivity;
   final Duration seekInterval;
   final bool isMobile;
   final bool isZoomed;
@@ -86,6 +88,12 @@ class _GestureOverlayState extends ConsumerState<GestureOverlay> {
       kind == PointerDeviceKind.stylus ||
       kind == PointerDeviceKind.invertedStylus ||
       kind == PointerDeviceKind.unknown;
+
+  void _notifyActivityIfControlsVisible() {
+    if (ref.read(playbackControllerProvider).controlsVisible) {
+      widget.onActivity();
+    }
+  }
 
   void _cancelPendingTap() {
     _singleTapTimer?.cancel();
@@ -208,6 +216,7 @@ class _GestureOverlayState extends ConsumerState<GestureOverlay> {
   }
 
   void _handlePointerDown(PointerDownEvent event) {
+    _notifyActivityIfControlsVisible();
     if (!_isTouchPointer(event.kind)) return;
     _activePinchPointers[event.pointer] = event.localPosition;
     if (_activePinchPointers.length == 2) {
@@ -217,6 +226,7 @@ class _GestureOverlayState extends ConsumerState<GestureOverlay> {
   }
 
   void _handlePointerMove(PointerMoveEvent event) {
+    _notifyActivityIfControlsVisible();
     if (!_activePinchPointers.containsKey(event.pointer)) return;
     _activePinchPointers[event.pointer] = event.localPosition;
     final double? startDistance = _pinchStartDistance;
@@ -230,6 +240,7 @@ class _GestureOverlayState extends ConsumerState<GestureOverlay> {
   }
 
   void _handlePointerEnd(PointerEvent event) {
+    _notifyActivityIfControlsVisible();
     if (!_activePinchPointers.containsKey(event.pointer)) return;
     _activePinchPointers.remove(event.pointer);
     if (_activePinchPointers.length >= 2) {
@@ -243,16 +254,19 @@ class _GestureOverlayState extends ConsumerState<GestureOverlay> {
   }
 
   void _handlePointerPanZoomStart(PointerPanZoomStartEvent event) {
+    _notifyActivityIfControlsVisible();
     _trackpadPinchScale = 1.0;
     _beginPinchGesture();
   }
 
   void _handlePointerPanZoomUpdate(PointerPanZoomUpdateEvent event) {
+    _notifyActivityIfControlsVisible();
     _trackpadPinchScale = event.scale;
     _handlePinchScale(_trackpadPinchScale);
   }
 
   void _handlePointerPanZoomEnd(PointerPanZoomEndEvent event) {
+    _notifyActivityIfControlsVisible();
     if (_pinchActive) {
       _endPinchGesture();
     }
@@ -338,6 +352,7 @@ class _GestureOverlayState extends ConsumerState<GestureOverlay> {
       onPointerMove: _handlePointerMove,
       onPointerUp: _handlePointerEnd,
       onPointerCancel: _handlePointerEnd,
+      onPointerSignal: (_) => _notifyActivityIfControlsVisible(),
       onPointerPanZoomStart: _handlePointerPanZoomStart,
       onPointerPanZoomUpdate: _handlePointerPanZoomUpdate,
       onPointerPanZoomEnd: _handlePointerPanZoomEnd,
