@@ -517,13 +517,18 @@ class FvpPlayerEngine extends PlayerEngine {
     final mdk.Player? player = _player;
     if (player == null) return;
     final int targetMs = position.inMilliseconds.clamp(0, 1 << 62).toInt();
-    await _seekWithVerification(
+    final bool accepted = await _seekWithVerification(
       player,
       targetMs,
       flag: _previewMode ? _previewSeekFlag : _vodSeekFlag,
       attempts: 4,
       verificationDelay: _seekVerificationDelay,
     );
+    if (!accepted) {
+      throw StateError(
+        'FVP seek did not settle at ${position.inMilliseconds}ms.',
+      );
+    }
     _syncState();
   }
 

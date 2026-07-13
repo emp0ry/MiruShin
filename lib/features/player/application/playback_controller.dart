@@ -176,8 +176,10 @@ class PlaybackController extends Notifier<PlaybackState> {
   );
   static const Duration _seekSettleTick = Duration(milliseconds: 80);
   static const Duration _seekSettleMinHold = Duration(milliseconds: 700);
-  static const Duration _seekSettleTimeout = Duration(milliseconds: 5000);
+  static const Duration _seekSettleTimeout = Duration(seconds: 12);
+  static const Duration _seekSettleRetryInterval = Duration(milliseconds: 700);
   static const Duration _seekSettleTolerance = Duration(milliseconds: 1200);
+  static const int _seekSettleRetryLimit = 10;
   static const Duration _resumeSeekRetryInterval = Duration(milliseconds: 650);
   static const Duration _resumeSeekRetryTimeout = Duration(seconds: 75);
   static const Duration _engineOpenTimeout = Duration(seconds: 45);
@@ -255,6 +257,9 @@ class PlaybackController extends Notifier<PlaybackState> {
   Duration? _settlingSeekTarget;
   DateTime? _settlingSeekUntil;
   DateTime? _settlingSeekEarliestClear;
+  DateTime? _settlingSeekNextRetryAt;
+  int _settlingSeekRetryCount = 0;
+  bool _settlingSeekRetryInFlight = false;
   int _temporarySpeedHolds = 0;
   final Set<String> _syncedToAnilist = <String>{};
 
@@ -2312,6 +2317,9 @@ class PlaybackController extends Notifier<PlaybackState> {
     final DateTime now = DateTime.now();
     _settlingSeekUntil = now.add(_seekSettleTimeout);
     _settlingSeekEarliestClear = now.add(_seekSettleMinHold);
+    _settlingSeekNextRetryAt = now.add(_seekSettleRetryInterval);
+    _settlingSeekRetryCount = 0;
+    _settlingSeekRetryInFlight = false;
     _setSeekPreview(engine, target, preserveBufferedEnd: true);
     _settleSeekPreview();
     _seekSettleTimer = Timer.periodic(
@@ -2350,6 +2358,22 @@ class PlaybackController extends Notifier<PlaybackState> {
     final bool canClearRememberedBuffer =
         !hasRememberedBuffer || !nativeStillBuffering;
 
+    if (!settled && !timedOut) {
+      _maybeRetrySettlingSeek(engine, target, now);
+    }
+
+    if (timedOut && !settled) {
+      if (kDebugMode) {
+        debugPrint(
+          'Seek did not settle at ${target.inMilliseconds}ms after '
+          '${_seekSettleTimeout.inSeconds}s; '
+          'actual=${position.inMilliseconds}ms.',
+        );
+      }
+      _cancelSeekSettle(clearPreview: true);
+      return;
+    }
+
     if (!timedOut &&
         (!settled || !heldLongEnough || !canClearRememberedBuffer)) {
       return;
@@ -2359,6 +2383,51 @@ class PlaybackController extends Notifier<PlaybackState> {
     _cancelSeekSettle(clearPreview: false);
     if (shouldClear && state.engine == engine) {
       state = state.copyWith(clearSeekPreviewPosition: true);
+    }
+  }
+
+  void _maybeRetrySettlingSeek(
+    PlayerEngine engine,
+    Duration target,
+    DateTime now,
+  ) {
+    if (_settlingSeekRetryInFlight) return;
+    if (_settlingSeekRetryCount >= _seekSettleRetryLimit) return;
+    final DateTime? nextRetryAt = _settlingSeekNextRetryAt;
+    if (nextRetryAt != null && now.isBefore(nextRetryAt)) return;
+
+    _settlingSeekRetryCount += 1;
+    _settlingSeekNextRetryAt = now.add(_seekSettleRetryInterval);
+    unawaited(_retrySettlingSeek(engine, target));
+  }
+
+  Future<void> _retrySettlingSeek(PlayerEngine engine, Duration target) async {
+    if (_settlingSeekRetryInFlight) return;
+    if (_seekInFlight) return;
+    if (state.engine != engine ||
+        _settlingSeekEngine != engine ||
+        _settlingSeekTarget != target) {
+      return;
+    }
+
+    _seekInFlight = true;
+    _settlingSeekRetryInFlight = true;
+    try {
+      await engine.seekTo(target);
+    } on Object catch (error) {
+      if (kDebugMode) {
+        debugPrint('Manual seek retry ignored: $error');
+      }
+    } finally {
+      _settlingSeekRetryInFlight = false;
+      _seekInFlight = false;
+      if (_queuedSeekTarget != null) {
+        unawaited(_flushInteractiveSeek());
+      } else if (state.engine == engine &&
+          _settlingSeekEngine == engine &&
+          _settlingSeekTarget == target) {
+        _settlingSeekNextRetryAt = DateTime.now().add(_seekSettleRetryInterval);
+      }
     }
   }
 
@@ -2374,6 +2443,9 @@ class PlaybackController extends Notifier<PlaybackState> {
     _settlingSeekTarget = null;
     _settlingSeekUntil = null;
     _settlingSeekEarliestClear = null;
+    _settlingSeekNextRetryAt = null;
+    _settlingSeekRetryCount = 0;
+    _settlingSeekRetryInFlight = false;
     if (clearPreview && state.seekPreviewPosition != null) {
       state = state.copyWith(clearSeekPreviewPosition: true);
     }

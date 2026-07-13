@@ -27,6 +27,9 @@ const Duration _noVideoErrorDelay = Duration(seconds: 12);
 const Duration _proxyRepeatedErrorFallbackWindow = Duration(seconds: 10);
 const int _proxyRepeatedErrorFallbackThreshold = 40;
 const Duration _tinyHlsDurationLimit = Duration(seconds: 30);
+const Duration _seekVerificationDelay = Duration(milliseconds: 180);
+const Duration _seekAcceptanceTolerance = Duration(milliseconds: 1500);
+const int _seekVerificationAttempts = 4;
 
 // MPV buffer config mirrors FVP's _bufferConfigFor() logic.
 // demuxer-max-bytes: bytes to keep cached; demuxer-readahead-secs: look-ahead.
@@ -880,9 +883,64 @@ class MediaKitPlayerEngine extends PlayerEngine {
   Future<void> seekTo(Duration position) async {
     final mk.Player? player = _player;
     if (player == null) return;
-    _state.value = _state.value.copyWith(position: position, isBuffering: true);
-    await player.seek(position);
+    final bool accepted = await _seekWithVerification(player, position);
+    if (!accepted) {
+      throw StateError(
+        'MediaKit seek did not settle at ${position.inMilliseconds}ms.',
+      );
+    }
     _syncState();
+  }
+
+  Future<bool> _seekWithVerification(
+    mk.Player player,
+    Duration position,
+  ) async {
+    final Duration target = position < Duration.zero ? Duration.zero : position;
+    for (int attempt = 0; attempt < _seekVerificationAttempts; attempt += 1) {
+      final mk.Player? active = _player;
+      if (active == null || active != player || !_hasMedia) return false;
+
+      final Duration before = active.state.position;
+      _state.value = _state.value.copyWith(position: target, isBuffering: true);
+      await active.seek(target);
+      await Future<void>.delayed(_seekVerificationDelay);
+
+      final mk.Player? verifyPlayer = _player;
+      if (verifyPlayer == null || verifyPlayer != player || !_hasMedia) {
+        return false;
+      }
+
+      _syncState();
+      if (_seekWasAccepted(
+        before: before,
+        actual: verifyPlayer.state.position,
+        target: target,
+      )) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool _seekWasAccepted({
+    required Duration before,
+    required Duration actual,
+    required Duration target,
+  }) {
+    final int toleranceMs = _seekAcceptanceTolerance.inMilliseconds;
+    final int beforeMs = before.inMilliseconds;
+    final int actualMs = actual.inMilliseconds;
+    final int targetMs = target.inMilliseconds;
+    if ((actualMs - targetMs).abs() <= toleranceMs) {
+      return true;
+    }
+
+    final bool seekingForward = targetMs >= beforeMs;
+    if (seekingForward) {
+      return actualMs >= targetMs - toleranceMs;
+    }
+    return actualMs <= targetMs + toleranceMs;
   }
 
   @override

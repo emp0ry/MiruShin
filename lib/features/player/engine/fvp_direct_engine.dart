@@ -9,6 +9,8 @@ import 'player_engine.dart';
 const mdk.SeekFlag _vodSeekFlag = mdk.SeekFlag(
   mdk.SeekFlag.fromStart | mdk.SeekFlag.inCache,
 );
+const Duration _seekVerificationDelay = Duration(milliseconds: 180);
+const Duration _seekAcceptanceTolerance = Duration(milliseconds: 1500);
 
 class FvpDirectEngine extends PlayerEngine {
   FvpDirectEngine();
@@ -114,8 +116,10 @@ class FvpDirectEngine extends PlayerEngine {
   @override
   Future<void> seekTo(Duration position) async {
     if (_disposed || !_prepared) return;
+    _lastError = null;
     try {
       final int targetMs = position.inMilliseconds.clamp(0, 1 << 62).toInt();
+      final int beforeMs = _player.position.clamp(0, 1 << 62).toInt();
       final PlayerEngineState current = _state.value;
       final Duration target = Duration(milliseconds: targetMs);
       _state.value = _state.value.copyWith(
@@ -130,12 +134,40 @@ class FvpDirectEngine extends PlayerEngine {
         flags: _vodSeekFlag,
       );
       if (result < 0) {
-        _lastError = 'FVP Direct seek failed ($result).';
+        throw StateError('FVP Direct seek failed ($result).');
+      }
+      await Future<void>.delayed(_seekVerificationDelay);
+      final int actualMs = _player.position.clamp(0, 1 << 62).toInt();
+      if (!_seekWasAccepted(
+        beforeMs: beforeMs,
+        actualMs: actualMs,
+        targetMs: targetMs,
+      )) {
+        throw StateError('FVP Direct seek did not settle at ${targetMs}ms.');
       }
     } on Object catch (error) {
       _lastError = error.toString();
+      _syncState(forceError: true);
+      rethrow;
     }
-    _syncState(forceError: _lastError != null);
+    _syncState();
+  }
+
+  bool _seekWasAccepted({
+    required int beforeMs,
+    required int actualMs,
+    required int targetMs,
+  }) {
+    final int toleranceMs = _seekAcceptanceTolerance.inMilliseconds;
+    if ((actualMs - targetMs).abs() <= toleranceMs) {
+      return true;
+    }
+
+    final bool seekingForward = targetMs >= beforeMs;
+    if (seekingForward) {
+      return actualMs >= targetMs - toleranceMs;
+    }
+    return actualMs <= targetMs + toleranceMs;
   }
 
   @override
