@@ -11,6 +11,7 @@ import '../../../core/platform/tv_platform.dart';
 import '../../../core/responsive/responsive_grid.dart';
 import '../../../core/widgets/adaptive_page.dart';
 import '../../../core/widgets/glass_card.dart';
+import '../../../core/widgets/include_exclude_filter_chip.dart';
 import '../../../core/widgets/media_poster_card.dart';
 import '../../../core/widgets/neutral_placeholder.dart';
 import '../../../core/widgets/section_header.dart';
@@ -25,6 +26,7 @@ import '../../metadata/data/tmdb_metadata_provider.dart';
 import '../../profile/application/anilist_user_settings_provider.dart';
 import '../../profile/application/anilist_profile_provider.dart';
 import '../../settings/presentation/settings_state.dart';
+import '../../tracking/data/anilist_api_client.dart';
 import '../../tracking/application/anilist_library_provider.dart';
 import '../../tracking/presentation/anilist_entry_editor.dart';
 import '../../../shared/models/anilist_models.dart';
@@ -48,47 +50,87 @@ const List<_AniListDiscoveryKind> _kVisibleAniListDiscoveryKinds =
 class _AniListDiscoveryFilter {
   const _AniListDiscoveryFilter({
     this.formatIn = const <String>[],
+    this.formatNotIn = const <String>[],
     this.statusIn = const <String>[],
+    this.statusNotIn = const <String>[],
+    this.sourceIn = const <String>[],
+    this.sourceNotIn = const <String>[],
     this.season,
     this.yearFrom,
     this.yearTo,
     this.countryOfOrigin,
     this.genreIn = const <String>[],
+    this.genreNotIn = const <String>[],
+    this.tagIn = const <String>[],
+    this.tagNotIn = const <String>[],
+    this.isAdult,
+    this.isLicensed,
     this.onList,
   });
 
   final List<String> formatIn;
+  final List<String> formatNotIn;
   final List<String> statusIn;
+  final List<String> statusNotIn;
+  final List<String> sourceIn;
+  final List<String> sourceNotIn;
   final String? season;
   final int? yearFrom;
   final int? yearTo;
   final String? countryOfOrigin;
   final List<String> genreIn;
+  final List<String> genreNotIn;
+  final List<String> tagIn;
+  final List<String> tagNotIn;
+  final bool? isAdult;
+  final bool? isLicensed;
   final bool? onList;
 
   bool get hasAnyFilter =>
       formatIn.isNotEmpty ||
+      formatNotIn.isNotEmpty ||
       statusIn.isNotEmpty ||
+      statusNotIn.isNotEmpty ||
+      sourceIn.isNotEmpty ||
+      sourceNotIn.isNotEmpty ||
       season != null ||
       yearFrom != null ||
       yearTo != null ||
       countryOfOrigin != null ||
       genreIn.isNotEmpty ||
+      genreNotIn.isNotEmpty ||
+      tagIn.isNotEmpty ||
+      tagNotIn.isNotEmpty ||
+      isAdult != null ||
+      isLicensed != null ||
       onList != null;
 
   _AniListDiscoveryFilter copyWith({
     List<String>? formatIn,
+    List<String>? formatNotIn,
     List<String>? statusIn,
+    List<String>? statusNotIn,
+    List<String>? sourceIn,
+    List<String>? sourceNotIn,
     Object? season = _sentinel,
     Object? yearFrom = _sentinel,
     Object? yearTo = _sentinel,
     Object? countryOfOrigin = _sentinel,
     List<String>? genreIn,
+    List<String>? genreNotIn,
+    List<String>? tagIn,
+    List<String>? tagNotIn,
+    Object? isAdult = _sentinel,
+    Object? isLicensed = _sentinel,
     Object? onList = _sentinel,
   }) {
     return _AniListDiscoveryFilter(
       formatIn: formatIn ?? this.formatIn,
+      formatNotIn: formatNotIn ?? this.formatNotIn,
       statusIn: statusIn ?? this.statusIn,
+      statusNotIn: statusNotIn ?? this.statusNotIn,
+      sourceIn: sourceIn ?? this.sourceIn,
+      sourceNotIn: sourceNotIn ?? this.sourceNotIn,
       season: season == _sentinel ? this.season : season as String?,
       yearFrom: yearFrom == _sentinel ? this.yearFrom : yearFrom as int?,
       yearTo: yearTo == _sentinel ? this.yearTo : yearTo as int?,
@@ -96,6 +138,13 @@ class _AniListDiscoveryFilter {
           ? this.countryOfOrigin
           : countryOfOrigin as String?,
       genreIn: genreIn ?? this.genreIn,
+      genreNotIn: genreNotIn ?? this.genreNotIn,
+      tagIn: tagIn ?? this.tagIn,
+      tagNotIn: tagNotIn ?? this.tagNotIn,
+      isAdult: isAdult == _sentinel ? this.isAdult : isAdult as bool?,
+      isLicensed: isLicensed == _sentinel
+          ? this.isLicensed
+          : isLicensed as bool?,
       onList: onList == _sentinel ? this.onList : onList as bool?,
     );
   }
@@ -104,25 +153,43 @@ class _AniListDiscoveryFilter {
   bool operator ==(Object other) =>
       other is _AniListDiscoveryFilter &&
       _listEq(other.formatIn, formatIn) &&
+      _listEq(other.formatNotIn, formatNotIn) &&
       _listEq(other.statusIn, statusIn) &&
+      _listEq(other.statusNotIn, statusNotIn) &&
+      _listEq(other.sourceIn, sourceIn) &&
+      _listEq(other.sourceNotIn, sourceNotIn) &&
       other.season == season &&
       other.yearFrom == yearFrom &&
       other.yearTo == yearTo &&
       other.countryOfOrigin == countryOfOrigin &&
       _listEq(other.genreIn, genreIn) &&
+      _listEq(other.genreNotIn, genreNotIn) &&
+      _listEq(other.tagIn, tagIn) &&
+      _listEq(other.tagNotIn, tagNotIn) &&
+      other.isAdult == isAdult &&
+      other.isLicensed == isLicensed &&
       other.onList == onList;
 
   @override
-  int get hashCode => Object.hash(
+  int get hashCode => Object.hashAll(<Object?>[
     Object.hashAll(formatIn),
+    Object.hashAll(formatNotIn),
     Object.hashAll(statusIn),
+    Object.hashAll(statusNotIn),
+    Object.hashAll(sourceIn),
+    Object.hashAll(sourceNotIn),
     season,
     yearFrom,
     yearTo,
     countryOfOrigin,
     Object.hashAll(genreIn),
+    Object.hashAll(genreNotIn),
+    Object.hashAll(tagIn),
+    Object.hashAll(tagNotIn),
+    isAdult,
+    isLicensed,
     onList,
-  );
+  ]);
 
   static bool _listEq(List<String> a, List<String> b) {
     if (a.length != b.length) return false;
@@ -138,40 +205,52 @@ const Object _sentinel = Object();
 class _TmdbDiscoveryFilter {
   const _TmdbDiscoveryFilter({
     this.genreIds = const <int>[],
+    this.genreNotIds = const <int>[],
     this.yearFrom,
     this.yearTo,
     this.minRating,
     this.originalLanguage,
+    this.includeAdult,
   });
 
   final List<int> genreIds;
+  final List<int> genreNotIds;
   final int? yearFrom;
   final int? yearTo;
   final double? minRating;
   final String? originalLanguage;
+  final bool? includeAdult;
 
   bool get hasAnyFilter =>
       genreIds.isNotEmpty ||
+      genreNotIds.isNotEmpty ||
       yearFrom != null ||
       yearTo != null ||
       minRating != null ||
-      originalLanguage != null;
+      originalLanguage != null ||
+      includeAdult != null;
 
   _TmdbDiscoveryFilter copyWith({
     List<int>? genreIds,
+    List<int>? genreNotIds,
     Object? yearFrom = _sentinel,
     Object? yearTo = _sentinel,
     Object? minRating = _sentinel,
     Object? originalLanguage = _sentinel,
+    Object? includeAdult = _sentinel,
   }) {
     return _TmdbDiscoveryFilter(
       genreIds: genreIds ?? this.genreIds,
+      genreNotIds: genreNotIds ?? this.genreNotIds,
       yearFrom: yearFrom == _sentinel ? this.yearFrom : yearFrom as int?,
       yearTo: yearTo == _sentinel ? this.yearTo : yearTo as int?,
       minRating: minRating == _sentinel ? this.minRating : minRating as double?,
       originalLanguage: originalLanguage == _sentinel
           ? this.originalLanguage
           : originalLanguage as String?,
+      includeAdult: includeAdult == _sentinel
+          ? this.includeAdult
+          : includeAdult as bool?,
     );
   }
 
@@ -179,19 +258,23 @@ class _TmdbDiscoveryFilter {
   bool operator ==(Object other) =>
       other is _TmdbDiscoveryFilter &&
       _intListEq(other.genreIds, genreIds) &&
+      _intListEq(other.genreNotIds, genreNotIds) &&
       other.yearFrom == yearFrom &&
       other.yearTo == yearTo &&
       other.minRating == minRating &&
-      other.originalLanguage == originalLanguage;
+      other.originalLanguage == originalLanguage &&
+      other.includeAdult == includeAdult;
 
   @override
-  int get hashCode => Object.hash(
+  int get hashCode => Object.hashAll(<Object?>[
     Object.hashAll(genreIds),
+    Object.hashAll(genreNotIds),
     yearFrom,
     yearTo,
     minRating,
     originalLanguage,
-  );
+    includeAdult,
+  ]);
 
   static bool _intListEq(List<int> a, List<int> b) {
     if (a.length != b.length) return false;
@@ -236,6 +319,7 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
 
   _AniListDiscoveryFilter _advancedFilter = const _AniListDiscoveryFilter();
   List<String> _cachedGenres = <String>[];
+  List<AniListMediaTagInfo> _cachedTags = <AniListMediaTagInfo>[];
   _TmdbDiscoveryFilter _tmdbAdvancedFilter = const _TmdbDiscoveryFilter();
 
   @override
@@ -344,13 +428,14 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
   }
 
   Future<void> _openFilterSheet() async {
-    if (_cachedGenres.isEmpty) {
+    if (_cachedGenres.isEmpty || _cachedTags.isEmpty) {
       try {
-        _cachedGenres = await ref
-            .read(aniListProfileClientProvider)
-            .fetchGenres();
+        final client = ref.read(aniListProfileClientProvider);
+        _cachedGenres = await client.fetchGenres();
+        _cachedTags = await client.fetchMediaTags();
       } catch (_) {
         _cachedGenres = const <String>[];
+        _cachedTags = const <AniListMediaTagInfo>[];
       }
     }
     if (!mounted) return;
@@ -363,6 +448,7 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
           builder: (BuildContext context) => _DiscoveryAdvancedFilterSheet(
             initial: _advancedFilter,
             genres: _cachedGenres,
+            tags: _cachedTags,
             kind: _selectedAniListKind,
           ),
         );
@@ -434,10 +520,14 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
           genreIds: _tmdbAdvancedFilter.genreIds.isEmpty
               ? null
               : _tmdbAdvancedFilter.genreIds,
+          withoutGenreIds: _tmdbAdvancedFilter.genreNotIds.isEmpty
+              ? null
+              : _tmdbAdvancedFilter.genreNotIds,
           yearFrom: _tmdbAdvancedFilter.yearFrom,
           yearTo: _tmdbAdvancedFilter.yearTo,
           minRating: _tmdbAdvancedFilter.minRating,
           originalLanguage: _tmdbAdvancedFilter.originalLanguage,
+          includeAdult: _tmdbAdvancedFilter.includeAdult,
         );
       }
 
@@ -447,6 +537,12 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
         final String type = _selectedAniListKind == _AniListDiscoveryKind.manga
             ? 'MANGA'
             : 'ANIME';
+        final List<String> sourceIn = _effectiveAniListSourceIn(
+          _advancedFilter,
+        );
+        if (_aniListSourceFilterHasNoMatches(_advancedFilter)) {
+          return const <MediaItem>[];
+        }
         return ref
             .read(aniListProfileClientProvider)
             .getAdvancedFilteredCatalog(
@@ -455,9 +551,16 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
               formatIn: _advancedFilter.formatIn.isEmpty
                   ? null
                   : _advancedFilter.formatIn,
+              formatNotIn: _advancedFilter.formatNotIn.isEmpty
+                  ? null
+                  : _advancedFilter.formatNotIn,
               statusIn: _advancedFilter.statusIn.isEmpty
                   ? null
                   : _advancedFilter.statusIn,
+              statusNotIn: _advancedFilter.statusNotIn.isEmpty
+                  ? null
+                  : _advancedFilter.statusNotIn,
+              sourceIn: sourceIn.isEmpty ? null : sourceIn,
               season: _advancedFilter.season,
               startDateGreater: _advancedFilter.yearFrom != null
                   ? int.parse('${_advancedFilter.yearFrom}0101')
@@ -469,6 +572,17 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
               genreIn: _advancedFilter.genreIn.isEmpty
                   ? null
                   : _advancedFilter.genreIn,
+              genreNotIn: _advancedFilter.genreNotIn.isEmpty
+                  ? null
+                  : _advancedFilter.genreNotIn,
+              tagIn: _advancedFilter.tagIn.isEmpty
+                  ? null
+                  : _advancedFilter.tagIn,
+              tagNotIn: _advancedFilter.tagNotIn.isEmpty
+                  ? null
+                  : _advancedFilter.tagNotIn,
+              isAdult: _advancedFilter.isAdult,
+              isLicensed: _advancedFilter.isLicensed,
               onList: _advancedFilter.onList,
               page: page,
             );
@@ -820,6 +934,35 @@ Future<void> _openAniListEntryEditor(
   );
 }
 
+List<String> _effectiveAniListSourceIn(_AniListDiscoveryFilter filter) {
+  final Set<String> included = filter.sourceIn.toSet();
+  final Set<String> excluded = filter.sourceNotIn.toSet();
+  if (included.isEmpty && excluded.isEmpty) return const <String>[];
+  final Set<String> sourceValues = included.isEmpty
+      ? _DiscoveryAdvancedFilterSheetState._sources
+            .map((source) => source.value)
+            .toSet()
+      : included;
+  sourceValues.removeAll(excluded);
+  return sourceValues.toList()..sort();
+}
+
+bool _aniListSourceFilterHasNoMatches(_AniListDiscoveryFilter filter) {
+  if (filter.sourceIn.isEmpty && filter.sourceNotIn.isEmpty) return false;
+  return _effectiveAniListSourceIn(filter).isEmpty;
+}
+
+String _displayTagCategory(String raw) {
+  final String trimmed = raw.trim();
+  if (trimmed.isEmpty) return 'Other';
+  final List<String> parts = trimmed
+      .split('-')
+      .map((String part) => part.trim())
+      .where((String part) => part.isNotEmpty)
+      .toList(growable: false);
+  return parts.isEmpty ? trimmed : parts.last;
+}
+
 class _DiscoveryFooter extends StatelessWidget {
   const _DiscoveryFooter({
     required this.loadingMore,
@@ -990,11 +1133,13 @@ class _DiscoveryAdvancedFilterSheet extends StatefulWidget {
   const _DiscoveryAdvancedFilterSheet({
     required this.initial,
     required this.genres,
+    required this.tags,
     required this.kind,
   });
 
   final _AniListDiscoveryFilter initial;
   final List<String> genres;
+  final List<AniListMediaTagInfo> tags;
   final _AniListDiscoveryKind kind;
 
   @override
@@ -1005,6 +1150,7 @@ class _DiscoveryAdvancedFilterSheet extends StatefulWidget {
 class _DiscoveryAdvancedFilterSheetState
     extends State<_DiscoveryAdvancedFilterSheet> {
   late _AniListDiscoveryFilter _draft;
+  final TextEditingController _tagSearch = TextEditingController();
 
   static const List<({String value, String label})> _animeFormats =
       <({String value, String label})>[
@@ -1033,6 +1179,25 @@ class _DiscoveryAdvancedFilterSheetState
         (value: 'HIATUS', label: 'Hiatus'),
       ];
 
+  static const List<({String value, String label})> _sources =
+      <({String value, String label})>[
+        (value: 'ORIGINAL', label: 'Original'),
+        (value: 'ANIME', label: 'Anime'),
+        (value: 'MANGA', label: 'Manga'),
+        (value: 'LIGHT_NOVEL', label: 'Light Novel'),
+        (value: 'NOVEL', label: 'Novel'),
+        (value: 'WEB_NOVEL', label: 'Web Novel'),
+        (value: 'VISUAL_NOVEL', label: 'Visual Novel'),
+        (value: 'VIDEO_GAME', label: 'Video Game'),
+        (value: 'GAME', label: 'Game'),
+        (value: 'COMIC', label: 'Comic'),
+        (value: 'DOUJINSHI', label: 'Doujinshi'),
+        (value: 'LIVE_ACTION', label: 'Live Action'),
+        (value: 'MULTIMEDIA_PROJECT', label: 'Multimedia Project'),
+        (value: 'PICTURE_BOOK', label: 'Picture Book'),
+        (value: 'OTHER', label: 'Other'),
+      ];
+
   static const List<({String value, String label})> _seasons =
       <({String value, String label})>[
         (value: 'WINTER', label: 'Winter'),
@@ -1053,6 +1218,61 @@ class _DiscoveryAdvancedFilterSheetState
   void initState() {
     super.initState();
     _draft = widget.initial;
+  }
+
+  @override
+  void dispose() {
+    _tagSearch.dispose();
+    super.dispose();
+  }
+
+  IncludeExcludeState _boolState(bool? value) {
+    return switch (value) {
+      true => IncludeExcludeState.included,
+      false => IncludeExcludeState.excluded,
+      null => IncludeExcludeState.neutral,
+    };
+  }
+
+  Map<String, List<AniListMediaTagInfo>> _tagsByCategory() {
+    final String query = _tagSearch.text.trim().toLowerCase();
+    final Set<String> selectedTags = <String>{
+      ..._draft.tagIn,
+      ..._draft.tagNotIn,
+    };
+    final List<AniListMediaTagInfo> tags = widget.tags
+        .where((AniListMediaTagInfo tag) {
+          if (selectedTags.contains(tag.name)) return true;
+          if (query.isEmpty) return true;
+          return tag.name.toLowerCase().contains(query) ||
+              tag.category.toLowerCase().contains(query) ||
+              _displayTagCategory(tag.category).toLowerCase().contains(query);
+        })
+        .toList(growable: false);
+    final Map<String, List<AniListMediaTagInfo>> grouped =
+        <String, List<AniListMediaTagInfo>>{};
+    for (final AniListMediaTagInfo tag in tags) {
+      final String category = tag.category.trim().isEmpty
+          ? 'Other'
+          : tag.category.trim();
+      grouped.putIfAbsent(category, () => <AniListMediaTagInfo>[]).add(tag);
+    }
+    for (final List<AniListMediaTagInfo> group in grouped.values) {
+      group.sort(
+        (AniListMediaTagInfo a, AniListMediaTagInfo b) =>
+            a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+      );
+    }
+    return Map<String, List<AniListMediaTagInfo>>.fromEntries(
+      grouped.entries.toList()..sort(
+        (
+          MapEntry<String, List<AniListMediaTagInfo>> a,
+          MapEntry<String, List<AniListMediaTagInfo>> b,
+        ) => _displayTagCategory(
+          a.key,
+        ).toLowerCase().compareTo(_displayTagCategory(b.key).toLowerCase()),
+      ),
+    );
   }
 
   @override
@@ -1087,21 +1307,52 @@ class _DiscoveryAdvancedFilterSheetState
           children: <Widget>[
             // Format
             _FilterSectionHeader(context.t('Format')),
-            _MultiSelectChips(
+            _IncludeExcludeChips<String>(
               options: formats,
-              selected: _draft.formatIn,
-              onChanged: (List<String> val) =>
-                  setState(() => _draft = _draft.copyWith(formatIn: val)),
+              included: _draft.formatIn.toSet(),
+              excluded: _draft.formatNotIn.toSet(),
+              onChanged: (Set<String> included, Set<String> excluded) {
+                setState(() {
+                  _draft = _draft.copyWith(
+                    formatIn: included.toList()..sort(),
+                    formatNotIn: excluded.toList()..sort(),
+                  );
+                });
+              },
             ),
             const SizedBox(height: AppSpacing.lg),
 
             // Status
             _FilterSectionHeader(context.t('Status')),
-            _MultiSelectChips(
+            _IncludeExcludeChips<String>(
               options: _statuses,
-              selected: _draft.statusIn,
-              onChanged: (List<String> val) =>
-                  setState(() => _draft = _draft.copyWith(statusIn: val)),
+              included: _draft.statusIn.toSet(),
+              excluded: _draft.statusNotIn.toSet(),
+              onChanged: (Set<String> included, Set<String> excluded) {
+                setState(() {
+                  _draft = _draft.copyWith(
+                    statusIn: included.toList()..sort(),
+                    statusNotIn: excluded.toList()..sort(),
+                  );
+                });
+              },
+            ),
+            const SizedBox(height: AppSpacing.lg),
+
+            // Source
+            _FilterSectionHeader(context.t('Source')),
+            _IncludeExcludeChips<String>(
+              options: _sources,
+              included: _draft.sourceIn.toSet(),
+              excluded: _draft.sourceNotIn.toSet(),
+              onChanged: (Set<String> included, Set<String> excluded) {
+                setState(() {
+                  _draft = _draft.copyWith(
+                    sourceIn: included.toList()..sort(),
+                    sourceNotIn: excluded.toList()..sort(),
+                  );
+                });
+              },
             ),
             const SizedBox(height: AppSpacing.lg),
 
@@ -1192,27 +1443,130 @@ class _DiscoveryAdvancedFilterSheetState
             // Genres
             if (widget.genres.isNotEmpty) ...<Widget>[
               _FilterSectionHeader(context.t('Genres')),
-              _MultiSelectChips(
+              _IncludeExcludeChips<String>(
                 options: widget.genres
                     .map((String g) => (value: g, label: g))
                     .toList(),
-                selected: _draft.genreIn,
-                onChanged: (List<String> val) =>
-                    setState(() => _draft = _draft.copyWith(genreIn: val)),
+                included: _draft.genreIn.toSet(),
+                excluded: _draft.genreNotIn.toSet(),
+                onChanged: (Set<String> included, Set<String> excluded) {
+                  setState(() {
+                    _draft = _draft.copyWith(
+                      genreIn: included.toList()..sort(),
+                      genreNotIn: excluded.toList()..sort(),
+                    );
+                  });
+                },
               ),
               const SizedBox(height: AppSpacing.lg),
             ],
 
-            // On List
-            _FilterSectionHeader(context.t('Library')),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: Text(context.t('Only show titles in my list')),
-              value: _draft.onList == true,
-              onChanged: (bool val) => setState(
-                () => _draft = _draft.copyWith(onList: val ? true : null),
-              ),
+            // Flags
+            _FilterSectionHeader(context.t('Flags')),
+            Wrap(
+              spacing: AppSpacing.sm,
+              runSpacing: AppSpacing.xs,
+              children: <Widget>[
+                IncludeExcludeFilterChip(
+                  label: context.t('Adult'),
+                  state: _boolState(_draft.isAdult),
+                  onInclude: () =>
+                      setState(() => _draft = _draft.copyWith(isAdult: true)),
+                  onExclude: () =>
+                      setState(() => _draft = _draft.copyWith(isAdult: false)),
+                  onClear: () =>
+                      setState(() => _draft = _draft.copyWith(isAdult: null)),
+                ),
+                IncludeExcludeFilterChip(
+                  label: context.t('Licensed'),
+                  state: _boolState(_draft.isLicensed),
+                  onInclude: () => setState(
+                    () => _draft = _draft.copyWith(isLicensed: true),
+                  ),
+                  onExclude: () => setState(
+                    () => _draft = _draft.copyWith(isLicensed: false),
+                  ),
+                  onClear: () => setState(
+                    () => _draft = _draft.copyWith(isLicensed: null),
+                  ),
+                ),
+                IncludeExcludeFilterChip(
+                  label: context.t('In my list'),
+                  state: _boolState(_draft.onList),
+                  onInclude: () =>
+                      setState(() => _draft = _draft.copyWith(onList: true)),
+                  onExclude: () =>
+                      setState(() => _draft = _draft.copyWith(onList: false)),
+                  onClear: () =>
+                      setState(() => _draft = _draft.copyWith(onList: null)),
+                ),
+              ],
             ),
+
+            // Tags stay at the bottom because this can be the longest section.
+            if (widget.tags.isNotEmpty) ...<Widget>[
+              const SizedBox(height: AppSpacing.lg),
+              _FilterSectionHeader(context.t('Tags')),
+              TextField(
+                controller: _tagSearch,
+                decoration: InputDecoration(
+                  hintText: context.t('Search tags'),
+                  prefixIcon: const Icon(Icons.search_rounded),
+                  isDense: true,
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              if (_tagsByCategory().isEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
+                  child: Text(context.t('No tags found')),
+                )
+              else
+                ..._tagsByCategory().entries.map((
+                  MapEntry<String, List<AniListMediaTagInfo>> entry,
+                ) {
+                  final bool hasSelected = entry.value.any(
+                    (AniListMediaTagInfo tag) =>
+                        _draft.tagIn.contains(tag.name) ||
+                        _draft.tagNotIn.contains(tag.name),
+                  );
+                  return ExpansionTile(
+                    tilePadding: EdgeInsets.zero,
+                    initiallyExpanded:
+                        hasSelected || _tagSearch.text.trim().isNotEmpty,
+                    title: Text(context.t(_displayTagCategory(entry.key))),
+                    children: <Widget>[
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: _IncludeExcludeChips<String>(
+                          options: entry.value
+                              .map(
+                                (AniListMediaTagInfo tag) => (
+                                  value: tag.name,
+                                  label: tag.isAdult
+                                      ? '${tag.name}  18+'
+                                      : tag.name,
+                                ),
+                              )
+                              .toList(),
+                          included: _draft.tagIn.toSet(),
+                          excluded: _draft.tagNotIn.toSet(),
+                          onChanged:
+                              (Set<String> included, Set<String> excluded) {
+                                setState(() {
+                                  _draft = _draft.copyWith(
+                                    tagIn: included.toList()..sort(),
+                                    tagNotIn: excluded.toList()..sort(),
+                                  );
+                                });
+                              },
+                        ),
+                      ),
+                    ],
+                  );
+                }),
+            ],
             const SizedBox(height: AppSpacing.xl),
 
             Row(
@@ -1259,16 +1613,30 @@ class _FilterSectionHeader extends StatelessWidget {
   }
 }
 
-class _MultiSelectChips extends StatelessWidget {
-  const _MultiSelectChips({
+class _IncludeExcludeChips<T> extends StatelessWidget {
+  const _IncludeExcludeChips({
     required this.options,
-    required this.selected,
+    required this.included,
+    required this.excluded,
     required this.onChanged,
   });
 
-  final List<({String value, String label})> options;
-  final List<String> selected;
-  final ValueChanged<List<String>> onChanged;
+  final List<({T value, String label})> options;
+  final Set<T> included;
+  final Set<T> excluded;
+  final void Function(Set<T> included, Set<T> excluded) onChanged;
+
+  void _update(T value, IncludeExcludeState state) {
+    final Set<T> nextIncluded = Set<T>.from(included);
+    final Set<T> nextExcluded = Set<T>.from(excluded);
+    setIncludeExcludeSelection<T>(
+      included: nextIncluded,
+      excluded: nextExcluded,
+      value: value,
+      state: state,
+    );
+    onChanged(nextIncluded, nextExcluded);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1277,18 +1645,12 @@ class _MultiSelectChips extends StatelessWidget {
       runSpacing: AppSpacing.xs,
       children: options
           .map(
-            (({String value, String label}) opt) => FilterChip(
-              label: Text(opt.label),
-              selected: selected.contains(opt.value),
-              onSelected: (bool on) {
-                final List<String> next = List<String>.of(selected);
-                if (on) {
-                  next.add(opt.value);
-                } else {
-                  next.remove(opt.value);
-                }
-                onChanged(next);
-              },
+            (({T value, String label}) opt) => IncludeExcludeFilterChip(
+              label: opt.label,
+              state: includeExcludeStateOf<T>(opt.value, included, excluded),
+              onInclude: () => _update(opt.value, IncludeExcludeState.included),
+              onExclude: () => _update(opt.value, IncludeExcludeState.excluded),
+              onClear: () => _update(opt.value, IncludeExcludeState.neutral),
             ),
           )
           .toList(),
@@ -1428,6 +1790,14 @@ class _TmdbDiscoveryFilterSheetState extends State<_TmdbDiscoveryFilterSheet> {
     _draft = widget.initial;
   }
 
+  IncludeExcludeState _adultState() {
+    return switch (_draft.includeAdult) {
+      true => IncludeExcludeState.included,
+      false => IncludeExcludeState.excluded,
+      null => IncludeExcludeState.neutral,
+    };
+  }
+
   @override
   Widget build(BuildContext context) {
     final List<({int id, String label})> genres = _genresForType(
@@ -1460,28 +1830,36 @@ class _TmdbDiscoveryFilterSheetState extends State<_TmdbDiscoveryFilterSheet> {
           children: <Widget>[
             // Genres
             _FilterSectionHeader(context.t('Genres')),
-            Wrap(
-              spacing: AppSpacing.sm,
-              runSpacing: AppSpacing.xs,
-              children: genres
+            _IncludeExcludeChips<int>(
+              options: genres
                   .map(
-                    (({int id, String label}) g) => FilterChip(
-                      label: Text(g.label),
-                      selected: _draft.genreIds.contains(g.id),
-                      onSelected: (bool on) {
-                        final List<int> next = List<int>.of(_draft.genreIds);
-                        if (on) {
-                          next.add(g.id);
-                        } else {
-                          next.remove(g.id);
-                        }
-                        setState(
-                          () => _draft = _draft.copyWith(genreIds: next),
-                        );
-                      },
-                    ),
+                    (({int id, String label}) g) =>
+                        (value: g.id, label: g.label),
                   )
                   .toList(),
+              included: _draft.genreIds.toSet(),
+              excluded: _draft.genreNotIds.toSet(),
+              onChanged: (Set<int> included, Set<int> excluded) {
+                setState(() {
+                  _draft = _draft.copyWith(
+                    genreIds: included.toList()..sort(),
+                    genreNotIds: excluded.toList()..sort(),
+                  );
+                });
+              },
+            ),
+            const SizedBox(height: AppSpacing.lg),
+
+            _FilterSectionHeader(context.t('Age restriction')),
+            IncludeExcludeFilterChip(
+              label: context.t('Adult'),
+              state: _adultState(),
+              onInclude: () =>
+                  setState(() => _draft = _draft.copyWith(includeAdult: true)),
+              onExclude: () =>
+                  setState(() => _draft = _draft.copyWith(includeAdult: false)),
+              onClear: () =>
+                  setState(() => _draft = _draft.copyWith(includeAdult: null)),
             ),
             const SizedBox(height: AppSpacing.lg),
 

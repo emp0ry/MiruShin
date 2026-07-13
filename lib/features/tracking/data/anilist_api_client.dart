@@ -9,6 +9,18 @@ import '../../metadata/data/shikimori_client.dart';
 int aniListDisplayScoreToRaw(double score) =>
     (score * 10).round().clamp(0, 100).toInt();
 
+class AniListMediaTagInfo {
+  const AniListMediaTagInfo({
+    required this.name,
+    required this.category,
+    required this.isAdult,
+  });
+
+  final String name;
+  final String category;
+  final bool isAdult;
+}
+
 class AniListApiClient {
   AniListApiClient({
     String? accessToken,
@@ -221,7 +233,10 @@ class AniListApiClient {
   Future<List<MediaItem>> getAdvancedFilteredCatalog({
     required String type,
     List<String>? formatIn,
+    List<String>? formatNotIn,
     List<String>? statusIn,
+    List<String>? statusNotIn,
+    List<String>? sourceIn,
     String? season,
     int? startDateGreater,
     int? startDateLesser,
@@ -230,6 +245,8 @@ class AniListApiClient {
     List<String>? genreNotIn,
     List<String>? tagIn,
     List<String>? tagNotIn,
+    bool? isAdult,
+    bool? isLicensed,
     bool? onList,
     String sort = 'POPULARITY_DESC',
     int page = 1,
@@ -239,7 +256,10 @@ class AniListApiClient {
       'sort': sort,
       'page': page,
       'format_in': ?(formatIn?.isEmpty == false ? formatIn : null),
+      'format_not_in': ?(formatNotIn?.isEmpty == false ? formatNotIn : null),
       'status_in': ?(statusIn?.isEmpty == false ? statusIn : null),
+      'status_not_in': ?(statusNotIn?.isEmpty == false ? statusNotIn : null),
+      'source_in': ?(sourceIn?.isEmpty == false ? sourceIn : null),
       'season': ?season,
       'startDate_greater': ?startDateGreater,
       'startDate_lesser': ?startDateLesser,
@@ -248,8 +268,11 @@ class AniListApiClient {
       'genre_not_in': ?(genreNotIn?.isEmpty == false ? genreNotIn : null),
       'tag_in': ?(tagIn?.isEmpty == false ? tagIn : null),
       'tag_not_in': ?(tagNotIn?.isEmpty == false ? tagNotIn : null),
+      'isAdult': ?isAdult,
+      'isLicensed': ?isLicensed,
       'onList': ?onList,
     };
+    final String adultClause = isAdult == null ? _isAdultClause : '';
     return _catalogMediaPage(
       type: type,
       query:
@@ -259,7 +282,10 @@ class AniListApiClient {
         \$sort: [MediaSort],
         \$page: Int,
         \$format_in: [MediaFormat],
+        \$format_not_in: [MediaFormat],
         \$status_in: [MediaStatus],
+        \$status_not_in: [MediaStatus],
+        \$source_in: [MediaSource],
         \$season: MediaSeason,
         \$startDate_greater: FuzzyDateInt,
         \$startDate_lesser: FuzzyDateInt,
@@ -268,6 +294,8 @@ class AniListApiClient {
         \$genre_not_in: [String],
         \$tag_in: [String],
         \$tag_not_in: [String],
+        \$isAdult: Boolean,
+        \$isLicensed: Boolean,
         \$onList: Boolean
       ) {
         Page(page: \$page, perPage: 20) {
@@ -275,7 +303,10 @@ class AniListApiClient {
             type: \$type,
             sort: \$sort,
             format_in: \$format_in,
+            format_not_in: \$format_not_in,
             status_in: \$status_in,
+            status_not_in: \$status_not_in,
+            source_in: \$source_in,
             season: \$season,
             startDate_greater: \$startDate_greater,
             startDate_lesser: \$startDate_lesser,
@@ -284,8 +315,10 @@ class AniListApiClient {
             genre_not_in: \$genre_not_in,
             tag_in: \$tag_in,
             tag_not_in: \$tag_not_in,
+            isAdult: \$isAdult,
+            isLicensed: \$isLicensed,
             onList: \$onList
-            $_isAdultClause
+            $adultClause
           ) {
             $_mediaFields
           }
@@ -305,6 +338,31 @@ class AniListApiClient {
     final Object? genres = data['GenreCollection'];
     if (genres is! List<dynamic>) return const <String>[];
     return genres.whereType<String>().toList(growable: false);
+  }
+
+  Future<List<AniListMediaTagInfo>> fetchMediaTags() async {
+    final Map<String, dynamic> data = await _post(r'''
+      query MediaTags {
+        MediaTagCollection {
+          name
+          category
+          isAdult
+        }
+      }
+      ''', const <String, dynamic>{});
+    final Object? tags = data['MediaTagCollection'];
+    if (tags is! List<dynamic>) return const <AniListMediaTagInfo>[];
+    return tags
+        .whereType<Map<String, dynamic>>()
+        .map((Map<String, dynamic> json) {
+          return AniListMediaTagInfo(
+            name: _string(json['name']),
+            category: _string(json['category'], fallback: 'Other'),
+            isAdult: json['isAdult'] == true,
+          );
+        })
+        .where((AniListMediaTagInfo tag) => tag.name.isNotEmpty)
+        .toList(growable: false);
   }
 
   Future<MediaItem?> getAnimeDetails(int id) async {
@@ -2244,6 +2302,12 @@ class AniListApiClient {
     final String format = _string(json['format']);
     final int popularity = _int(json['popularity']);
     final int favourites = _int(json['favourites']);
+    final bool? isAdult = json['isAdult'] is bool
+        ? json['isAdult'] as bool
+        : null;
+    final bool? isLicensed = json['isLicensed'] is bool
+        ? json['isLicensed'] as bool
+        : null;
     final MediaTrailer? trailer = _trailerFromJson(json['trailer']);
 
     // Build full start/end date strings
@@ -2286,7 +2350,7 @@ class AniListApiClient {
       studioBuf.write('$sName:${isAnim ? '1' : '0'}');
     }
 
-    // Tags: "name:rank:generalSpoiler:mediaSpoiler"
+    // Tags: "name:rank:generalSpoiler:mediaSpoiler:category"
     final List<dynamic> tagList = json['tags'] is List
         ? json['tags'] as List<dynamic>
         : <dynamic>[];
@@ -2298,8 +2362,11 @@ class AniListApiClient {
       final int rank = _int(tag['rank']);
       final bool gs = tag['isGeneralSpoiler'] == true;
       final bool ms = tag['isMediaSpoiler'] == true;
+      final String category = _string(tag['category']);
       if (tagBuf.isNotEmpty) tagBuf.write('|');
-      tagBuf.write('$tName:$rank:${gs ? '1' : '0'}:${ms ? '1' : '0'}');
+      tagBuf.write(
+        '$tName:$rank:${gs ? '1' : '0'}:${ms ? '1' : '0'}:$category',
+      );
     }
 
     return MediaItem(
@@ -2332,6 +2399,8 @@ class AniListApiClient {
         if (seasonYear > 0) 'anilist_season_year': seasonYear.toString(),
         if (country.isNotEmpty) 'anilist_country': country,
         if (format.isNotEmpty) 'anilist_format': format,
+        if (isAdult != null) 'anilist_is_adult': isAdult.toString(),
+        if (isLicensed != null) 'anilist_is_licensed': isLicensed.toString(),
         if (json['isFavourite'] is bool)
           'anilist_is_favourite': (json['isFavourite'] == true).toString(),
         if (popularity > 0) 'anilist_popularity': popularity.toString(),
@@ -2805,6 +2874,9 @@ class AniListApiClient {
     trailer { id site thumbnail }
     status
     isFavourite
+    source
+    isAdult
+    isLicensed
     startDate { year }
     siteUrl
   ''';
@@ -2826,6 +2898,10 @@ class AniListApiClient {
     duration
     status
     isFavourite
+    source
+    isAdult
+    isLicensed
+    tags { name rank isGeneralSpoiler isMediaSpoiler category }
     startDate { year }
     siteUrl
   ''';
@@ -2848,6 +2924,8 @@ class AniListApiClient {
     duration
     status
     isFavourite
+    isAdult
+    isLicensed
     source
     season
     seasonYear

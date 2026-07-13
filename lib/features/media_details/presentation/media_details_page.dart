@@ -436,6 +436,8 @@ class _AniListInfoPanelState extends State<_AniListInfoPanel> {
     return '$n';
   }
 
+  static bool _isAniListTagBit(String value) => value == '0' || value == '1';
+
   @override
   Widget build(BuildContext context) {
     final ColorScheme cs = Theme.of(context).colorScheme;
@@ -524,10 +526,19 @@ class _AniListInfoPanelState extends State<_AniListInfoPanel> {
       for (final String entry in tagsRaw.split('|')) {
         final List<String> parts = entry.split(':');
         if (parts.length < 4) continue;
-        final String name = parts.sublist(0, parts.length - 3).join(':');
-        final int rank = int.tryParse(parts[parts.length - 3]) ?? 0;
+        final bool hasCategory =
+            parts.length >= 5 &&
+            int.tryParse(parts[parts.length - 4]) != null &&
+            _isAniListTagBit(parts[parts.length - 3]) &&
+            _isAniListTagBit(parts[parts.length - 2]);
+        final int rankIndex = hasCategory ? parts.length - 4 : parts.length - 3;
+        final int generalSpoilerIndex = rankIndex + 1;
+        final int mediaSpoilerIndex = rankIndex + 2;
+        final String name = parts.sublist(0, rankIndex).join(':');
+        final int rank = int.tryParse(parts[rankIndex]) ?? 0;
         final bool isSpoiler =
-            parts[parts.length - 2] == '1' || parts[parts.length - 1] == '1';
+            parts[generalSpoilerIndex] == '1' ||
+            parts[mediaSpoilerIndex] == '1';
         tags.add((name: name, rank: rank, spoiler: isSpoiler));
       }
       tags.sort((a, b) => b.rank.compareTo(a.rank));

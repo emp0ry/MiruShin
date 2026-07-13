@@ -13,6 +13,7 @@ import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_radius.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../app/theme/app_theme_extension.dart';
+import '../../../core/widgets/include_exclude_filter_chip.dart';
 import '../../../core/widgets/neutral_placeholder.dart';
 import '../../../core/widgets/tv_focusable.dart';
 import '../../../core/widgets/tv_text_field_focus.dart';
@@ -961,10 +962,21 @@ class _FolderViewState extends ConsumerState<_FolderView>
   final TextEditingController _search = TextEditingController();
   _Sort _sort = _Sort.titleAZ;
   final Set<AniListListStatus> _statuses = {};
+  final Set<AniListListStatus> _statusExcludes = {};
   final Set<String> _mediaStatuses = {};
+  final Set<String> _mediaStatusExcludes = {};
   final Set<String> _genres = {};
+  final Set<String> _genreExcludes = {};
   final Set<String> _formats = {};
+  final Set<String> _formatExcludes = {};
+  final Set<String> _sources = {};
+  final Set<String> _sourceExcludes = {};
+  final Set<String> _tags = {};
+  final Set<String> _tagExcludes = {};
   final Set<_LibraryFlag> _flags = {};
+  final Set<_LibraryFlag> _flagExcludes = {};
+  bool? _adultFilter;
+  bool? _licensedFilter;
   double _minScore = 0;
   bool _isGrid = false;
 
@@ -1032,14 +1044,39 @@ class _FolderViewState extends ConsumerState<_FolderView>
     );
     final List<String> savedGenres =
         prefs.getStringList('$prefix.genres') ?? const <String>[];
+    final List<String> savedGenreExcludes =
+        prefs.getStringList('$prefix.genres.excluded') ?? const <String>[];
     final List<String> savedFormats =
         prefs.getStringList('$prefix.formats') ?? const <String>[];
+    final List<String> savedFormatExcludes =
+        prefs.getStringList('$prefix.formats.excluded') ?? const <String>[];
     final List<String> savedStatuses =
         prefs.getStringList('$prefix.statuses') ?? const <String>[];
+    final List<String> savedStatusExcludes =
+        prefs.getStringList('$prefix.statuses.excluded') ?? const <String>[];
     final List<String> savedMediaStatuses =
         prefs.getStringList('$prefix.mediaStatuses') ?? const <String>[];
+    final List<String> savedMediaStatusExcludes =
+        prefs.getStringList('$prefix.mediaStatuses.excluded') ??
+        const <String>[];
+    final List<String> savedSources =
+        prefs.getStringList('$prefix.sources') ?? const <String>[];
+    final List<String> savedSourceExcludes =
+        prefs.getStringList('$prefix.sources.excluded') ?? const <String>[];
+    final List<String> savedTags =
+        prefs.getStringList('$prefix.tags') ?? const <String>[];
+    final List<String> savedTagExcludes =
+        prefs.getStringList('$prefix.tags.excluded') ?? const <String>[];
     final List<String> savedFlags =
         prefs.getStringList('$prefix.flags') ?? const <String>[];
+    final List<String> savedFlagExcludes =
+        prefs.getStringList('$prefix.flags.excluded') ?? const <String>[];
+    final bool? savedAdultFilter = _boolFilterFromPref(
+      prefs.getString('$prefix.adultFilter'),
+    );
+    final bool? savedLicensedFilter = _boolFilterFromPref(
+      prefs.getString('$prefix.licensedFilter'),
+    );
     final double savedMinScore = prefs.getDouble('$prefix.minScore') ?? 0;
     final bool savedGrid = prefs.getBool('$prefix.grid') ?? _isGrid;
     if (!mounted) return;
@@ -1051,18 +1088,53 @@ class _FolderViewState extends ConsumerState<_FolderView>
         ..addAll(
           savedStatuses.map(_statusFromName).whereType<AniListListStatus>(),
         );
+      _statusExcludes
+        ..clear()
+        ..addAll(
+          savedStatusExcludes
+              .map(_statusFromName)
+              .whereType<AniListListStatus>(),
+        );
       _mediaStatuses
         ..clear()
         ..addAll(savedMediaStatuses);
+      _mediaStatusExcludes
+        ..clear()
+        ..addAll(savedMediaStatusExcludes);
       _genres
         ..clear()
         ..addAll(savedGenres);
+      _genreExcludes
+        ..clear()
+        ..addAll(savedGenreExcludes);
       _formats
         ..clear()
         ..addAll(savedFormats);
+      _formatExcludes
+        ..clear()
+        ..addAll(savedFormatExcludes);
+      _sources
+        ..clear()
+        ..addAll(savedSources);
+      _sourceExcludes
+        ..clear()
+        ..addAll(savedSourceExcludes);
+      _tags
+        ..clear()
+        ..addAll(savedTags);
+      _tagExcludes
+        ..clear()
+        ..addAll(savedTagExcludes);
       _flags
         ..clear()
         ..addAll(savedFlags.map(_flagFromName).whereType<_LibraryFlag>());
+      _flagExcludes
+        ..clear()
+        ..addAll(
+          savedFlagExcludes.map(_flagFromName).whereType<_LibraryFlag>(),
+        );
+      _adultFilter = savedAdultFilter;
+      _licensedFilter = savedLicensedFilter;
       _minScore = savedMinScore.clamp(0, 10).toDouble();
     });
   }
@@ -1077,15 +1149,48 @@ class _FolderViewState extends ConsumerState<_FolderView>
       _statuses.map((AniListListStatus status) => status.name).toList()..sort(),
     );
     await prefs.setStringList(
+      '$prefix.statuses.excluded',
+      _statusExcludes.map((AniListListStatus status) => status.name).toList()
+        ..sort(),
+    );
+    await prefs.setStringList(
       '$prefix.mediaStatuses',
       _mediaStatuses.toList()..sort(),
     );
+    await prefs.setStringList(
+      '$prefix.mediaStatuses.excluded',
+      _mediaStatusExcludes.toList()..sort(),
+    );
     await prefs.setStringList('$prefix.genres', _genres.toList()..sort());
+    await prefs.setStringList(
+      '$prefix.genres.excluded',
+      _genreExcludes.toList()..sort(),
+    );
     await prefs.setStringList('$prefix.formats', _formats.toList()..sort());
+    await prefs.setStringList(
+      '$prefix.formats.excluded',
+      _formatExcludes.toList()..sort(),
+    );
+    await prefs.setStringList('$prefix.sources', _sources.toList()..sort());
+    await prefs.setStringList(
+      '$prefix.sources.excluded',
+      _sourceExcludes.toList()..sort(),
+    );
+    await prefs.setStringList('$prefix.tags', _tags.toList()..sort());
+    await prefs.setStringList(
+      '$prefix.tags.excluded',
+      _tagExcludes.toList()..sort(),
+    );
     await prefs.setStringList(
       '$prefix.flags',
       _flags.map((_LibraryFlag flag) => flag.name).toList()..sort(),
     );
+    await prefs.setStringList(
+      '$prefix.flags.excluded',
+      _flagExcludes.map((_LibraryFlag flag) => flag.name).toList()..sort(),
+    );
+    await _saveBoolFilter(prefs, '$prefix.adultFilter', _adultFilter);
+    await _saveBoolFilter(prefs, '$prefix.licensedFilter', _licensedFilter);
     await prefs.setDouble('$prefix.minScore', _minScore);
   }
 
@@ -1107,6 +1212,8 @@ class _FolderViewState extends ConsumerState<_FolderView>
               ...e.mediaItem.aliases,
               russianAlias,
               ...e.mediaItem.genres,
+              _humanizeAniListSource(_anilistSourceValue(e.mediaItem)),
+              ..._anilistTagNames(e.mediaItem),
               e.format ?? '',
               e.status.label,
               _humanizeMediaStatus(e.mediaItem.statusLabel),
@@ -1123,11 +1230,27 @@ class _FolderViewState extends ConsumerState<_FolderView>
           .where((AniListAnimeListEntry e) => _statuses.contains(e.status))
           .toList(growable: false);
     }
+    if (_statusExcludes.isNotEmpty) {
+      list = list
+          .where(
+            (AniListAnimeListEntry e) => !_statusExcludes.contains(e.status),
+          )
+          .toList(growable: false);
+    }
 
     if (_mediaStatuses.isNotEmpty) {
       list = list
           .where(
             (AniListAnimeListEntry e) => _mediaStatuses.contains(
+              _humanizeMediaStatus(e.mediaItem.statusLabel),
+            ),
+          )
+          .toList(growable: false);
+    }
+    if (_mediaStatusExcludes.isNotEmpty) {
+      list = list
+          .where(
+            (AniListAnimeListEntry e) => !_mediaStatusExcludes.contains(
               _humanizeMediaStatus(e.mediaItem.statusLabel),
             ),
           )
@@ -1139,10 +1262,75 @@ class _FolderViewState extends ConsumerState<_FolderView>
           .where((e) => _genres.any(e.mediaItem.genres.contains))
           .toList(growable: false);
     }
+    if (_genreExcludes.isNotEmpty) {
+      list = list
+          .where((e) => !_genreExcludes.any(e.mediaItem.genres.contains))
+          .toList(growable: false);
+    }
 
     if (_formats.isNotEmpty) {
       list = list
           .where((e) => e.format != null && _formats.contains(e.format))
+          .toList(growable: false);
+    }
+    if (_formatExcludes.isNotEmpty) {
+      list = list
+          .where((e) => e.format == null || !_formatExcludes.contains(e.format))
+          .toList(growable: false);
+    }
+
+    if (_sources.isNotEmpty) {
+      list = list
+          .where(
+            (AniListAnimeListEntry e) =>
+                _sources.contains(_anilistSourceValue(e.mediaItem)),
+          )
+          .toList(growable: false);
+    }
+    if (_sourceExcludes.isNotEmpty) {
+      list = list
+          .where(
+            (AniListAnimeListEntry e) =>
+                !_sourceExcludes.contains(_anilistSourceValue(e.mediaItem)),
+          )
+          .toList(growable: false);
+    }
+
+    if (_tags.isNotEmpty) {
+      list = list
+          .where(
+            (AniListAnimeListEntry e) =>
+                _tags.any(_anilistTagNames(e.mediaItem).contains),
+          )
+          .toList(growable: false);
+    }
+    if (_tagExcludes.isNotEmpty) {
+      list = list
+          .where(
+            (AniListAnimeListEntry e) =>
+                !_tagExcludes.any(_anilistTagNames(e.mediaItem).contains),
+          )
+          .toList(growable: false);
+    }
+
+    if (_adultFilter != null) {
+      list = list
+          .where((AniListAnimeListEntry e) {
+            final bool isAdult =
+                _anilistBoolMetadata(e.mediaItem, 'anilist_is_adult') == true;
+            return _adultFilter == true ? isAdult : !isAdult;
+          })
+          .toList(growable: false);
+    }
+
+    if (_licensedFilter != null) {
+      list = list
+          .where((AniListAnimeListEntry e) {
+            final bool isLicensed =
+                _anilistBoolMetadata(e.mediaItem, 'anilist_is_licensed') ==
+                true;
+            return _licensedFilter == true ? isLicensed : !isLicensed;
+          })
           .toList(growable: false);
     }
 
@@ -1157,6 +1345,15 @@ class _FolderViewState extends ConsumerState<_FolderView>
           .where(
             (AniListAnimeListEntry e) =>
                 _flags.every((_LibraryFlag flag) => _matchesFlag(e, flag)),
+          )
+          .toList(growable: false);
+    }
+    if (_flagExcludes.isNotEmpty) {
+      list = list
+          .where(
+            (AniListAnimeListEntry e) => !_flagExcludes.any(
+              (_LibraryFlag flag) => _matchesFlag(e, flag),
+            ),
           )
           .toList(growable: false);
     }
@@ -1242,11 +1439,22 @@ class _FolderViewState extends ConsumerState<_FolderView>
   int get _activeFilterCount {
     int count =
         _statuses.length +
+        _statusExcludes.length +
         _mediaStatuses.length +
+        _mediaStatusExcludes.length +
         _genres.length +
+        _genreExcludes.length +
         _formats.length +
-        _flags.length;
+        _formatExcludes.length +
+        _sources.length +
+        _sourceExcludes.length +
+        _tags.length +
+        _tagExcludes.length +
+        _flags.length +
+        _flagExcludes.length;
     if (_minScore > 0) count += 1;
+    if (_adultFilter != null) count += 1;
+    if (_licensedFilter != null) count += 1;
     return count;
   }
 
@@ -1323,14 +1531,73 @@ class _FolderViewState extends ConsumerState<_FolderView>
       for (final e in widget.folder.entries)
         if (e.format != null) e.format!,
     }.toList()..sort());
+    final List<String> allSources =
+        ({
+          for (final e in widget.folder.entries)
+            if (_anilistSourceValue(e.mediaItem).isNotEmpty)
+              _anilistSourceValue(e.mediaItem),
+        }.toList()..sort(
+          (String a, String b) => _humanizeAniListSource(
+            a,
+          ).toLowerCase().compareTo(_humanizeAniListSource(b).toLowerCase()),
+        ));
+    final Map<String, String> allTagCategories = <String, String>{};
+    for (final AniListAnimeListEntry entry in widget.folder.entries) {
+      for (final ({String category, String name}) tag in _anilistTagInfos(
+        entry.mediaItem,
+      )) {
+        allTagCategories.putIfAbsent(tag.name, () => tag.category);
+      }
+    }
+    final List<({String category, String name})> allTags =
+        allTagCategories.entries
+            .map(
+              (MapEntry<String, String> entry) =>
+                  (name: entry.key, category: entry.value),
+            )
+            .toList()
+          ..sort(_compareAniListTags);
     final Set<AniListListStatus> tmpStatuses = Set<AniListListStatus>.from(
       _statuses,
     );
+    final Set<AniListListStatus> tmpStatusExcludes =
+        Set<AniListListStatus>.from(_statusExcludes);
     final Set<String> tmpMediaStatuses = Set<String>.from(_mediaStatuses);
+    final Set<String> tmpMediaStatusExcludes = Set<String>.from(
+      _mediaStatusExcludes,
+    );
     final Set<String> tmpGenres = Set<String>.from(_genres);
+    final Set<String> tmpGenreExcludes = Set<String>.from(_genreExcludes);
     final Set<String> tmpFormats = Set<String>.from(_formats);
+    final Set<String> tmpFormatExcludes = Set<String>.from(_formatExcludes);
+    final Set<String> tmpSources = Set<String>.from(_sources);
+    final Set<String> tmpSourceExcludes = Set<String>.from(_sourceExcludes);
+    final Set<String> tmpTags = Set<String>.from(_tags);
+    final Set<String> tmpTagExcludes = Set<String>.from(_tagExcludes);
     final Set<_LibraryFlag> tmpFlags = Set<_LibraryFlag>.from(_flags);
+    final Set<_LibraryFlag> tmpFlagExcludes = Set<_LibraryFlag>.from(
+      _flagExcludes,
+    );
+    bool? tmpAdultFilter = _adultFilter;
+    bool? tmpLicensedFilter = _licensedFilter;
     double tmpMinScore = _minScore;
+    final TextEditingController tagSearch = TextEditingController();
+    Map<String, List<({String category, String name})>> visibleTagGroups() {
+      return _groupAniListTags(
+        allTags.where((({String category, String name}) tag) {
+          final String query = tagSearch.text.trim().toLowerCase();
+          final String displayCategory = _displayAniListTagCategory(
+            tag.category,
+          ).toLowerCase();
+          return query.isEmpty ||
+              tag.name.toLowerCase().contains(query) ||
+              tag.category.toLowerCase().contains(query) ||
+              displayCategory.contains(query) ||
+              tmpTags.contains(tag.name) ||
+              tmpTagExcludes.contains(tag.name);
+        }),
+      );
+    }
 
     showModalBottomSheet<void>(
       context: context,
@@ -1341,9 +1608,9 @@ class _FolderViewState extends ConsumerState<_FolderView>
         builder: (ctx, setLocal) => AniListSheetSurface(
           child: DraggableScrollableSheet(
             expand: false,
-            initialChildSize: 0.55,
+            initialChildSize: 0.75,
             minChildSize: 0.3,
-            maxChildSize: 0.9,
+            maxChildSize: 0.95,
             builder: (ctx, ctrl) => Column(
               children: <Widget>[
                 const SizedBox(height: AppSpacing.sm),
@@ -1372,10 +1639,21 @@ class _FolderViewState extends ConsumerState<_FolderView>
                       TextButton(
                         onPressed: () => setLocal(() {
                           tmpStatuses.clear();
+                          tmpStatusExcludes.clear();
                           tmpMediaStatuses.clear();
+                          tmpMediaStatusExcludes.clear();
                           tmpGenres.clear();
+                          tmpGenreExcludes.clear();
                           tmpFormats.clear();
+                          tmpFormatExcludes.clear();
+                          tmpSources.clear();
+                          tmpSourceExcludes.clear();
+                          tmpTags.clear();
+                          tmpTagExcludes.clear();
                           tmpFlags.clear();
+                          tmpFlagExcludes.clear();
+                          tmpAdultFilter = null;
+                          tmpLicensedFilter = null;
                           tmpMinScore = 0;
                         }),
                         child: Text(context.t('Clear all')),
@@ -1386,18 +1664,47 @@ class _FolderViewState extends ConsumerState<_FolderView>
                             _statuses
                               ..clear()
                               ..addAll(tmpStatuses);
+                            _statusExcludes
+                              ..clear()
+                              ..addAll(tmpStatusExcludes);
                             _mediaStatuses
                               ..clear()
                               ..addAll(tmpMediaStatuses);
+                            _mediaStatusExcludes
+                              ..clear()
+                              ..addAll(tmpMediaStatusExcludes);
                             _genres
                               ..clear()
                               ..addAll(tmpGenres);
+                            _genreExcludes
+                              ..clear()
+                              ..addAll(tmpGenreExcludes);
                             _formats
                               ..clear()
                               ..addAll(tmpFormats);
+                            _formatExcludes
+                              ..clear()
+                              ..addAll(tmpFormatExcludes);
+                            _sources
+                              ..clear()
+                              ..addAll(tmpSources);
+                            _sourceExcludes
+                              ..clear()
+                              ..addAll(tmpSourceExcludes);
+                            _tags
+                              ..clear()
+                              ..addAll(tmpTags);
+                            _tagExcludes
+                              ..clear()
+                              ..addAll(tmpTagExcludes);
                             _flags
                               ..clear()
                               ..addAll(tmpFlags);
+                            _flagExcludes
+                              ..clear()
+                              ..addAll(tmpFlagExcludes);
+                            _adultFilter = tmpAdultFilter;
+                            _licensedFilter = tmpLicensedFilter;
                             _minScore = tmpMinScore;
                           });
                           unawaited(_savePreferences());
@@ -1428,18 +1735,30 @@ class _FolderViewState extends ConsumerState<_FolderView>
                         Wrap(
                           spacing: AppSpacing.sm,
                           runSpacing: AppSpacing.sm,
-                          children: allStatuses.map((AniListListStatus status) {
-                            final bool selected = tmpStatuses.contains(status);
-                            return FilterChip(
-                              label: Text(status.label),
-                              selected: selected,
-                              onSelected: (bool value) => setLocal(
-                                () => value
-                                    ? tmpStatuses.add(status)
-                                    : tmpStatuses.remove(status),
-                              ),
-                            );
-                          }).toList(),
+                          children: <Widget>[
+                            _FilterTriStateChips<AniListListStatus>(
+                              options: allStatuses
+                                  .map(
+                                    (AniListListStatus status) =>
+                                        (value: status, label: status.label),
+                                  )
+                                  .toList(),
+                              included: tmpStatuses,
+                              excluded: tmpStatusExcludes,
+                              onChanged:
+                                  (
+                                    Set<AniListListStatus> included,
+                                    Set<AniListListStatus> excluded,
+                                  ) => setLocal(() {
+                                    tmpStatuses
+                                      ..clear()
+                                      ..addAll(included);
+                                    tmpStatusExcludes
+                                      ..clear()
+                                      ..addAll(excluded);
+                                  }),
+                            ),
+                          ],
                         ),
                         const SizedBox(height: AppSpacing.md),
                       ],
@@ -1452,20 +1771,30 @@ class _FolderViewState extends ConsumerState<_FolderView>
                         Wrap(
                           spacing: AppSpacing.sm,
                           runSpacing: AppSpacing.sm,
-                          children: allMediaStatuses.map((String status) {
-                            final bool selected = tmpMediaStatuses.contains(
-                              status,
-                            );
-                            return FilterChip(
-                              label: Text(status),
-                              selected: selected,
-                              onSelected: (bool value) => setLocal(
-                                () => value
-                                    ? tmpMediaStatuses.add(status)
-                                    : tmpMediaStatuses.remove(status),
-                              ),
-                            );
-                          }).toList(),
+                          children: <Widget>[
+                            _FilterTriStateChips<String>(
+                              options: allMediaStatuses
+                                  .map(
+                                    (String status) =>
+                                        (value: status, label: status),
+                                  )
+                                  .toList(),
+                              included: tmpMediaStatuses,
+                              excluded: tmpMediaStatusExcludes,
+                              onChanged:
+                                  (
+                                    Set<String> included,
+                                    Set<String> excluded,
+                                  ) => setLocal(() {
+                                    tmpMediaStatuses
+                                      ..clear()
+                                      ..addAll(included);
+                                    tmpMediaStatusExcludes
+                                      ..clear()
+                                      ..addAll(excluded);
+                                  }),
+                            ),
+                          ],
                         ),
                         const SizedBox(height: AppSpacing.md),
                       ],
@@ -1478,18 +1807,57 @@ class _FolderViewState extends ConsumerState<_FolderView>
                         Wrap(
                           spacing: AppSpacing.sm,
                           runSpacing: AppSpacing.sm,
-                          children: allFormats.map((f) {
-                            final bool sel = tmpFormats.contains(f);
-                            return FilterChip(
-                              label: Text(f),
-                              selected: sel,
-                              onSelected: (v) => setLocal(
-                                () => v
-                                    ? tmpFormats.add(f)
-                                    : tmpFormats.remove(f),
-                              ),
-                            );
-                          }).toList(),
+                          children: <Widget>[
+                            _FilterTriStateChips<String>(
+                              options: allFormats
+                                  .map((String f) => (value: f, label: f))
+                                  .toList(),
+                              included: tmpFormats,
+                              excluded: tmpFormatExcludes,
+                              onChanged:
+                                  (
+                                    Set<String> included,
+                                    Set<String> excluded,
+                                  ) => setLocal(() {
+                                    tmpFormats
+                                      ..clear()
+                                      ..addAll(included);
+                                    tmpFormatExcludes
+                                      ..clear()
+                                      ..addAll(excluded);
+                                  }),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: AppSpacing.md),
+                      ],
+                      if (allSources.isNotEmpty) ...<Widget>[
+                        Text(
+                          'Source',
+                          style: Theme.of(context).textTheme.labelLarge,
+                        ),
+                        const SizedBox(height: AppSpacing.xs),
+                        _FilterTriStateChips<String>(
+                          options: allSources
+                              .map(
+                                (String source) => (
+                                  value: source,
+                                  label: _humanizeAniListSource(source),
+                                ),
+                              )
+                              .toList(),
+                          included: tmpSources,
+                          excluded: tmpSourceExcludes,
+                          onChanged:
+                              (Set<String> included, Set<String> excluded) =>
+                                  setLocal(() {
+                                    tmpSources
+                                      ..clear()
+                                      ..addAll(included);
+                                    tmpSourceExcludes
+                                      ..clear()
+                                      ..addAll(excluded);
+                                  }),
                         ),
                         const SizedBox(height: AppSpacing.md),
                       ],
@@ -1501,18 +1869,62 @@ class _FolderViewState extends ConsumerState<_FolderView>
                       Wrap(
                         spacing: AppSpacing.sm,
                         runSpacing: AppSpacing.sm,
-                        children: _LibraryFlag.values.map((_LibraryFlag flag) {
-                          final bool selected = tmpFlags.contains(flag);
-                          return FilterChip(
-                            label: Text(flag.label),
-                            selected: selected,
-                            onSelected: (bool value) => setLocal(
-                              () => value
-                                  ? tmpFlags.add(flag)
-                                  : tmpFlags.remove(flag),
-                            ),
-                          );
-                        }).toList(),
+                        children: <Widget>[
+                          _FilterTriStateChips<_LibraryFlag>(
+                            options: _LibraryFlag.values
+                                .map(
+                                  (_LibraryFlag flag) =>
+                                      (value: flag, label: flag.label),
+                                )
+                                .toList(),
+                            included: tmpFlags,
+                            excluded: tmpFlagExcludes,
+                            onChanged:
+                                (
+                                  Set<_LibraryFlag> included,
+                                  Set<_LibraryFlag> excluded,
+                                ) => setLocal(() {
+                                  tmpFlags
+                                    ..clear()
+                                    ..addAll(included);
+                                  tmpFlagExcludes
+                                    ..clear()
+                                    ..addAll(excluded);
+                                }),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: AppSpacing.md),
+                      Text(
+                        'Age and licensing',
+                        style: Theme.of(context).textTheme.labelLarge,
+                      ),
+                      const SizedBox(height: AppSpacing.xs),
+                      Wrap(
+                        spacing: AppSpacing.sm,
+                        runSpacing: AppSpacing.sm,
+                        children: <Widget>[
+                          IncludeExcludeFilterChip(
+                            label: 'Adult',
+                            state: _boolIncludeExcludeState(tmpAdultFilter),
+                            onInclude: () =>
+                                setLocal(() => tmpAdultFilter = true),
+                            onExclude: () =>
+                                setLocal(() => tmpAdultFilter = false),
+                            onClear: () =>
+                                setLocal(() => tmpAdultFilter = null),
+                          ),
+                          IncludeExcludeFilterChip(
+                            label: 'Licensed',
+                            state: _boolIncludeExcludeState(tmpLicensedFilter),
+                            onInclude: () =>
+                                setLocal(() => tmpLicensedFilter = true),
+                            onExclude: () =>
+                                setLocal(() => tmpLicensedFilter = false),
+                            onClear: () =>
+                                setLocal(() => tmpLicensedFilter = null),
+                          ),
+                        ],
                       ),
                       const SizedBox(height: AppSpacing.md),
                       Row(
@@ -1552,21 +1964,105 @@ class _FolderViewState extends ConsumerState<_FolderView>
                       if (allGenres.isEmpty)
                         Text(context.t('No genres available'))
                       else
-                        Wrap(
-                          spacing: AppSpacing.sm,
-                          runSpacing: AppSpacing.sm,
-                          children: allGenres.map((g) {
-                            final bool sel = tmpGenres.contains(g);
-                            return FilterChip(
-                              label: Text(g),
-                              selected: sel,
-                              onSelected: (v) => setLocal(
-                                () =>
-                                    v ? tmpGenres.add(g) : tmpGenres.remove(g),
-                              ),
-                            );
-                          }).toList(),
+                        _FilterTriStateChips<String>(
+                          options: allGenres
+                              .map((String g) => (value: g, label: g))
+                              .toList(),
+                          included: tmpGenres,
+                          excluded: tmpGenreExcludes,
+                          onChanged:
+                              (Set<String> included, Set<String> excluded) =>
+                                  setLocal(() {
+                                    tmpGenres
+                                      ..clear()
+                                      ..addAll(included);
+                                    tmpGenreExcludes
+                                      ..clear()
+                                      ..addAll(excluded);
+                                  }),
                         ),
+                      if (allTags.isNotEmpty) ...<Widget>[
+                        const SizedBox(height: AppSpacing.md),
+                        Text(
+                          context.t('Tags'),
+                          style: Theme.of(context).textTheme.labelLarge,
+                        ),
+                        const SizedBox(height: AppSpacing.xs),
+                        TextField(
+                          controller: tagSearch,
+                          decoration: InputDecoration(
+                            hintText: context.t('Search tags'),
+                            prefixIcon: const Icon(Icons.search_rounded),
+                            isDense: true,
+                          ),
+                          onChanged: (_) => setLocal(() {}),
+                        ),
+                        const SizedBox(height: AppSpacing.sm),
+                        if (visibleTagGroups().isEmpty)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(
+                              vertical: AppSpacing.sm,
+                            ),
+                            child: Text(context.t('No tags found')),
+                          )
+                        else
+                          ...visibleTagGroups().entries.map((
+                            MapEntry<
+                              String,
+                              List<({String category, String name})>
+                            >
+                            entry,
+                          ) {
+                            final bool hasSelected = entry.value.any(
+                              (({String category, String name}) tag) =>
+                                  tmpTags.contains(tag.name) ||
+                                  tmpTagExcludes.contains(tag.name),
+                            );
+                            return ExpansionTile(
+                              tilePadding: EdgeInsets.zero,
+                              initiallyExpanded:
+                                  hasSelected ||
+                                  tagSearch.text.trim().isNotEmpty,
+                              title: Text(
+                                context.t(
+                                  _displayAniListTagCategory(entry.key),
+                                ),
+                              ),
+                              children: <Widget>[
+                                Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: _FilterTriStateChips<String>(
+                                    options: entry.value
+                                        .map(
+                                          (
+                                            ({String category, String name})
+                                            tag,
+                                          ) => (
+                                            value: tag.name,
+                                            label: tag.name,
+                                          ),
+                                        )
+                                        .toList(),
+                                    included: tmpTags,
+                                    excluded: tmpTagExcludes,
+                                    onChanged:
+                                        (
+                                          Set<String> included,
+                                          Set<String> excluded,
+                                        ) => setLocal(() {
+                                          tmpTags
+                                            ..clear()
+                                            ..addAll(included);
+                                          tmpTagExcludes
+                                            ..clear()
+                                            ..addAll(excluded);
+                                        }),
+                                  ),
+                                ),
+                              ],
+                            );
+                          }),
+                      ],
                     ],
                   ),
                 ),
@@ -1575,7 +2071,7 @@ class _FolderViewState extends ConsumerState<_FolderView>
           ),
         ),
       ),
-    );
+    ).whenComplete(tagSearch.dispose);
   }
 
   @override
@@ -2469,6 +2965,185 @@ _LibraryFlag? _flagFromName(String name) {
   return null;
 }
 
+LibraryStatus? _libraryStatusFromName(String name) {
+  for (final LibraryStatus status in LibraryStatus.values) {
+    if (status.name == name) return status;
+  }
+  return null;
+}
+
+String _mediaTypeFilterValue(MediaItem item) {
+  return switch (item.type) {
+    MediaType.movie => 'Movie',
+    MediaType.series => 'Series',
+    MediaType.anime => 'Anime',
+  };
+}
+
+String _providerFilterValue(MediaItem item) {
+  return item.sourceProvider.trim();
+}
+
+bool? _boolFilterFromPref(String? value) {
+  return switch (value) {
+    'include' => true,
+    'exclude' => false,
+    _ => null,
+  };
+}
+
+Future<void> _saveBoolFilter(
+  SharedPreferences prefs,
+  String key,
+  bool? value,
+) async {
+  if (value == null) {
+    await prefs.remove(key);
+  } else {
+    await prefs.setString(key, value ? 'include' : 'exclude');
+  }
+}
+
+IncludeExcludeState _boolIncludeExcludeState(bool? value) {
+  return switch (value) {
+    true => IncludeExcludeState.included,
+    false => IncludeExcludeState.excluded,
+    null => IncludeExcludeState.neutral,
+  };
+}
+
+String _anilistSourceValue(MediaItem item) {
+  return item.externalIds['anilist_source']?.trim() ?? '';
+}
+
+String _humanizeAniListSource(String raw) {
+  final String normalized = raw.trim().toUpperCase();
+  return switch (normalized) {
+    'TV' => 'TV',
+    'ONA' => 'ONA',
+    'OVA' => 'OVA',
+    'MANGA' => 'Manga',
+    'LIGHT_NOVEL' => 'Light Novel',
+    'WEB_NOVEL' => 'Web Novel',
+    'VISUAL_NOVEL' => 'Visual Novel',
+    'VIDEO_GAME' => 'Video Game',
+    'LIVE_ACTION' => 'Live Action',
+    'MULTIMEDIA_PROJECT' => 'Multimedia Project',
+    'PICTURE_BOOK' => 'Picture Book',
+    _ =>
+      normalized
+          .split('_')
+          .where((String part) => part.isNotEmpty)
+          .map((String part) => '${part[0]}${part.substring(1).toLowerCase()}')
+          .join(' '),
+  };
+}
+
+List<String> _anilistTagNames(MediaItem item) {
+  return _anilistTagInfos(item).map((tag) => tag.name).toSet().toList()..sort();
+}
+
+List<({String category, String name})> _anilistTagInfos(MediaItem item) {
+  final String? raw = item.externalIds['anilist_tags'];
+  if (raw == null || raw.trim().isEmpty) {
+    return const <({String category, String name})>[];
+  }
+  final Map<String, String> byName = <String, String>{};
+  for (final String entry in raw.split('|')) {
+    final ({String category, String name})? tag = _anilistTagInfoFromCache(
+      entry,
+    );
+    if (tag == null || tag.name.isEmpty) continue;
+    byName.putIfAbsent(tag.name, () => tag.category);
+  }
+  return byName.entries
+      .map(
+        (MapEntry<String, String> entry) =>
+            (name: entry.key, category: entry.value),
+      )
+      .toList()
+    ..sort(_compareAniListTags);
+}
+
+({String category, String name})? _anilistTagInfoFromCache(String entry) {
+  final List<String> parts = entry.split(':');
+  if (parts.length >= 5 &&
+      int.tryParse(parts[parts.length - 4]) != null &&
+      _isBit(parts[parts.length - 3]) &&
+      _isBit(parts[parts.length - 2])) {
+    final String name = parts.sublist(0, parts.length - 4).join(':').trim();
+    final String category = parts.last.trim();
+    return (name: name, category: category.isEmpty ? 'Other' : category);
+  }
+  if (parts.length >= 4 &&
+      int.tryParse(parts[parts.length - 3]) != null &&
+      _isBit(parts[parts.length - 2]) &&
+      _isBit(parts[parts.length - 1])) {
+    final String name = parts.sublist(0, parts.length - 3).join(':').trim();
+    return (name: name, category: 'Other');
+  }
+  final String fallback = entry.trim();
+  return fallback.isEmpty ? null : (name: fallback, category: 'Other');
+}
+
+bool _isBit(String value) => value == '0' || value == '1';
+
+Map<String, List<({String category, String name})>> _groupAniListTags(
+  Iterable<({String category, String name})> tags,
+) {
+  final Map<String, List<({String category, String name})>> grouped =
+      <String, List<({String category, String name})>>{};
+  for (final ({String category, String name}) tag in tags) {
+    final String category = tag.category.trim().isEmpty
+        ? 'Other'
+        : tag.category.trim();
+    grouped.putIfAbsent(category, () => <({String category, String name})>[]);
+    grouped[category]!.add(tag);
+  }
+  for (final List<({String category, String name})> group in grouped.values) {
+    group.sort(_compareAniListTags);
+  }
+  return Map<String, List<({String category, String name})>>.fromEntries(
+    grouped.entries.toList()..sort(
+      (
+        MapEntry<String, List<({String category, String name})>> a,
+        MapEntry<String, List<({String category, String name})>> b,
+      ) => _displayAniListTagCategory(a.key).toLowerCase().compareTo(
+        _displayAniListTagCategory(b.key).toLowerCase(),
+      ),
+    ),
+  );
+}
+
+int _compareAniListTags(
+  ({String category, String name}) a,
+  ({String category, String name}) b,
+) {
+  final int category = _displayAniListTagCategory(a.category)
+      .toLowerCase()
+      .compareTo(_displayAniListTagCategory(b.category).toLowerCase());
+  if (category != 0) return category;
+  return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+}
+
+String _displayAniListTagCategory(String raw) {
+  final String trimmed = raw.trim();
+  if (trimmed.isEmpty) return 'Other';
+  final List<String> parts = trimmed
+      .split('-')
+      .map((String part) => part.trim())
+      .where((String part) => part.isNotEmpty)
+      .toList(growable: false);
+  return parts.isEmpty ? trimmed : parts.last;
+}
+
+bool? _anilistBoolMetadata(MediaItem item, String key) {
+  final String? value = item.externalIds[key]?.trim().toLowerCase();
+  if (value == 'true') return true;
+  if (value == 'false') return false;
+  return null;
+}
+
 bool _matchesFlag(AniListAnimeListEntry entry, _LibraryFlag flag) {
   return switch (flag) {
     _LibraryFlag.airingSoon =>
@@ -2878,6 +3553,53 @@ class _BarIcon extends StatelessWidget {
   }
 }
 
+class _FilterTriStateChips<T> extends StatelessWidget {
+  const _FilterTriStateChips({
+    required this.options,
+    required this.included,
+    required this.excluded,
+    required this.onChanged,
+  });
+
+  final List<({T value, String label})> options;
+  final Set<T> included;
+  final Set<T> excluded;
+  final void Function(Set<T> included, Set<T> excluded) onChanged;
+
+  void _update(T value, IncludeExcludeState state) {
+    final Set<T> nextIncluded = Set<T>.from(included);
+    final Set<T> nextExcluded = Set<T>.from(excluded);
+    setIncludeExcludeSelection<T>(
+      included: nextIncluded,
+      excluded: nextExcluded,
+      value: value,
+      state: state,
+    );
+    onChanged(nextIncluded, nextExcluded);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: AppSpacing.sm,
+      runSpacing: AppSpacing.sm,
+      children: options
+          .map(
+            (({T value, String label}) option) => IncludeExcludeFilterChip(
+              label: option.label,
+              state: includeExcludeStateOf<T>(option.value, included, excluded),
+              onInclude: () =>
+                  _update(option.value, IncludeExcludeState.included),
+              onExclude: () =>
+                  _update(option.value, IncludeExcludeState.excluded),
+              onClear: () => _update(option.value, IncludeExcludeState.neutral),
+            ),
+          )
+          .toList(),
+    );
+  }
+}
+
 // ─── Local library view ───────────────────────────────────────────────────────
 
 const List<LibraryStatus> _kLocalStatuses = <LibraryStatus>[
@@ -2902,6 +3624,15 @@ class _LocalLibraryViewState extends ConsumerState<_LocalLibraryView> {
   final TextEditingController _search = TextEditingController();
   _Sort _sort = _Sort.addedNewest;
   LibraryStatus? _selectedStatus;
+  final Set<LibraryStatus> _statusFilters = <LibraryStatus>{};
+  final Set<LibraryStatus> _statusExcludes = <LibraryStatus>{};
+  final Set<String> _typeFilters = <String>{};
+  final Set<String> _typeExcludes = <String>{};
+  final Set<String> _providerFilters = <String>{};
+  final Set<String> _providerExcludes = <String>{};
+  final Set<String> _genreFilters = <String>{};
+  final Set<String> _genreExcludes = <String>{};
+  double _minRating = 0;
   bool _showDownloads = false;
   bool _isGrid = false;
 
@@ -2925,10 +3656,64 @@ class _LocalLibraryViewState extends ConsumerState<_LocalLibraryView> {
       orElse: () => _sort,
     );
     final bool savedGrid = prefs.getBool('$_preferencesPrefix.grid') ?? false;
+    final List<String> savedStatuses =
+        prefs.getStringList('$_preferencesPrefix.statuses') ?? const <String>[];
+    final List<String> savedStatusExcludes =
+        prefs.getStringList('$_preferencesPrefix.statuses.excluded') ??
+        const <String>[];
+    final List<String> savedTypes =
+        prefs.getStringList('$_preferencesPrefix.types') ?? const <String>[];
+    final List<String> savedTypeExcludes =
+        prefs.getStringList('$_preferencesPrefix.types.excluded') ??
+        const <String>[];
+    final List<String> savedProviders =
+        prefs.getStringList('$_preferencesPrefix.providers') ??
+        const <String>[];
+    final List<String> savedProviderExcludes =
+        prefs.getStringList('$_preferencesPrefix.providers.excluded') ??
+        const <String>[];
+    final List<String> savedGenres =
+        prefs.getStringList('$_preferencesPrefix.genres') ?? const <String>[];
+    final List<String> savedGenreExcludes =
+        prefs.getStringList('$_preferencesPrefix.genres.excluded') ??
+        const <String>[];
+    final double savedMinRating =
+        prefs.getDouble('$_preferencesPrefix.minRating') ?? 0;
     if (!mounted) return;
     setState(() {
       _sort = savedSort;
       _isGrid = savedGrid;
+      _statusFilters
+        ..clear()
+        ..addAll(
+          savedStatuses.map(_libraryStatusFromName).whereType<LibraryStatus>(),
+        );
+      _statusExcludes
+        ..clear()
+        ..addAll(
+          savedStatusExcludes
+              .map(_libraryStatusFromName)
+              .whereType<LibraryStatus>(),
+        );
+      _typeFilters
+        ..clear()
+        ..addAll(savedTypes);
+      _typeExcludes
+        ..clear()
+        ..addAll(savedTypeExcludes);
+      _providerFilters
+        ..clear()
+        ..addAll(savedProviders);
+      _providerExcludes
+        ..clear()
+        ..addAll(savedProviderExcludes);
+      _genreFilters
+        ..clear()
+        ..addAll(savedGenres);
+      _genreExcludes
+        ..clear()
+        ..addAll(savedGenreExcludes);
+      _minRating = savedMinRating.clamp(0, 10).toDouble();
     });
   }
 
@@ -2936,6 +3721,41 @@ class _LocalLibraryViewState extends ConsumerState<_LocalLibraryView> {
     final SharedPreferences prefs = await SharedPreferences.getInstance();
     await prefs.setString('$_preferencesPrefix.sort', _sort.name);
     await prefs.setBool('$_preferencesPrefix.grid', _isGrid);
+    await prefs.setStringList(
+      '$_preferencesPrefix.statuses',
+      _statusFilters.map((LibraryStatus status) => status.name).toList()
+        ..sort(),
+    );
+    await prefs.setStringList(
+      '$_preferencesPrefix.statuses.excluded',
+      _statusExcludes.map((LibraryStatus status) => status.name).toList()
+        ..sort(),
+    );
+    await prefs.setStringList(
+      '$_preferencesPrefix.types',
+      _typeFilters.toList()..sort(),
+    );
+    await prefs.setStringList(
+      '$_preferencesPrefix.types.excluded',
+      _typeExcludes.toList()..sort(),
+    );
+    await prefs.setStringList(
+      '$_preferencesPrefix.providers',
+      _providerFilters.toList()..sort(),
+    );
+    await prefs.setStringList(
+      '$_preferencesPrefix.providers.excluded',
+      _providerExcludes.toList()..sort(),
+    );
+    await prefs.setStringList(
+      '$_preferencesPrefix.genres',
+      _genreFilters.toList()..sort(),
+    );
+    await prefs.setStringList(
+      '$_preferencesPrefix.genres.excluded',
+      _genreExcludes.toList()..sort(),
+    );
+    await prefs.setDouble('$_preferencesPrefix.minRating', _minRating);
   }
 
   List<LibraryStatus> get _presentStatuses {
@@ -2966,8 +3786,72 @@ class _LocalLibraryViewState extends ConsumerState<_LocalLibraryView> {
                 i.mediaItem.originalTitle.toLowerCase().contains(q) ||
                 i.mediaItem.genres.any(
                   (String g) => g.toLowerCase().contains(q),
-                ),
+                ) ||
+                _mediaTypeFilterValue(i.mediaItem).toLowerCase().contains(q) ||
+                i.mediaItem.sourceProvider.toLowerCase().contains(q),
           )
+          .toList(growable: false);
+    }
+
+    if (_statusFilters.isNotEmpty) {
+      list = list
+          .where((LibraryItem i) => _statusFilters.contains(i.status))
+          .toList(growable: false);
+    }
+    if (_statusExcludes.isNotEmpty) {
+      list = list
+          .where((LibraryItem i) => !_statusExcludes.contains(i.status))
+          .toList(growable: false);
+    }
+    if (_typeFilters.isNotEmpty) {
+      list = list
+          .where(
+            (LibraryItem i) =>
+                _typeFilters.contains(_mediaTypeFilterValue(i.mediaItem)),
+          )
+          .toList(growable: false);
+    }
+    if (_typeExcludes.isNotEmpty) {
+      list = list
+          .where(
+            (LibraryItem i) =>
+                !_typeExcludes.contains(_mediaTypeFilterValue(i.mediaItem)),
+          )
+          .toList(growable: false);
+    }
+    if (_providerFilters.isNotEmpty) {
+      list = list
+          .where(
+            (LibraryItem i) =>
+                _providerFilters.contains(_providerFilterValue(i.mediaItem)),
+          )
+          .toList(growable: false);
+    }
+    if (_providerExcludes.isNotEmpty) {
+      list = list
+          .where(
+            (LibraryItem i) =>
+                !_providerExcludes.contains(_providerFilterValue(i.mediaItem)),
+          )
+          .toList(growable: false);
+    }
+    if (_genreFilters.isNotEmpty) {
+      list = list
+          .where(
+            (LibraryItem i) => _genreFilters.any(i.mediaItem.genres.contains),
+          )
+          .toList(growable: false);
+    }
+    if (_genreExcludes.isNotEmpty) {
+      list = list
+          .where(
+            (LibraryItem i) => !_genreExcludes.any(i.mediaItem.genres.contains),
+          )
+          .toList(growable: false);
+    }
+    if (_minRating > 0) {
+      list = list
+          .where((LibraryItem i) => i.mediaItem.rating >= _minRating)
           .toList(growable: false);
     }
 
@@ -2997,6 +3881,20 @@ class _LocalLibraryViewState extends ConsumerState<_LocalLibraryView> {
         break;
     }
     return list;
+  }
+
+  int get _activeFilterCount {
+    int count =
+        _statusFilters.length +
+        _statusExcludes.length +
+        _typeFilters.length +
+        _typeExcludes.length +
+        _providerFilters.length +
+        _providerExcludes.length +
+        _genreFilters.length +
+        _genreExcludes.length;
+    if (_minRating > 0) count += 1;
+    return count;
   }
 
   void _openSort() {
@@ -3044,6 +3942,298 @@ class _LocalLibraryViewState extends ConsumerState<_LocalLibraryView> {
     );
   }
 
+  void _openFilter() {
+    final List<LibraryStatus> allStatuses = _presentStatuses;
+    final List<String> allTypes = ({
+      for (final LibraryItem item in widget.items)
+        _mediaTypeFilterValue(item.mediaItem),
+    }.toList()..sort());
+    final List<String> allProviders =
+        ({
+          for (final LibraryItem item in widget.items)
+            if (_providerFilterValue(item.mediaItem).isNotEmpty)
+              _providerFilterValue(item.mediaItem),
+        }.toList()..sort(
+          (String a, String b) => a.toLowerCase().compareTo(b.toLowerCase()),
+        ));
+    final List<String> allGenres =
+        ({
+          for (final LibraryItem item in widget.items) ...item.mediaItem.genres,
+        }.toList()..sort(
+          (String a, String b) => a.toLowerCase().compareTo(b.toLowerCase()),
+        ));
+
+    final Set<LibraryStatus> tmpStatuses = Set<LibraryStatus>.from(
+      _statusFilters,
+    );
+    final Set<LibraryStatus> tmpStatusExcludes = Set<LibraryStatus>.from(
+      _statusExcludes,
+    );
+    final Set<String> tmpTypes = Set<String>.from(_typeFilters);
+    final Set<String> tmpTypeExcludes = Set<String>.from(_typeExcludes);
+    final Set<String> tmpProviders = Set<String>.from(_providerFilters);
+    final Set<String> tmpProviderExcludes = Set<String>.from(_providerExcludes);
+    final Set<String> tmpGenres = Set<String>.from(_genreFilters);
+    final Set<String> tmpGenreExcludes = Set<String>.from(_genreExcludes);
+    double tmpMinRating = _minRating;
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.62),
+      builder: (BuildContext ctx) => StatefulBuilder(
+        builder: (BuildContext ctx, StateSetter setLocal) =>
+            AniListSheetSurface(
+              child: DraggableScrollableSheet(
+                expand: false,
+                initialChildSize: 0.75,
+                minChildSize: 0.3,
+                maxChildSize: 0.95,
+                builder: (BuildContext ctx, ScrollController ctrl) => Column(
+                  children: <Widget>[
+                    const SizedBox(height: AppSpacing.sm),
+                    Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: AppThemeExtension.of(context).textMutedColor,
+                        borderRadius: AppRadius.all(2),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(
+                        AppSpacing.lg,
+                        AppSpacing.md,
+                        AppSpacing.sm,
+                        AppSpacing.xs,
+                      ),
+                      child: Row(
+                        children: <Widget>[
+                          Text(
+                            context.t('Filters'),
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                          const Spacer(),
+                          TextButton(
+                            onPressed: () => setLocal(() {
+                              tmpStatuses.clear();
+                              tmpStatusExcludes.clear();
+                              tmpTypes.clear();
+                              tmpTypeExcludes.clear();
+                              tmpProviders.clear();
+                              tmpProviderExcludes.clear();
+                              tmpGenres.clear();
+                              tmpGenreExcludes.clear();
+                              tmpMinRating = 0;
+                            }),
+                            child: Text(context.t('Clear all')),
+                          ),
+                          FilledButton(
+                            onPressed: () {
+                              setState(() {
+                                _statusFilters
+                                  ..clear()
+                                  ..addAll(tmpStatuses);
+                                _statusExcludes
+                                  ..clear()
+                                  ..addAll(tmpStatusExcludes);
+                                _typeFilters
+                                  ..clear()
+                                  ..addAll(tmpTypes);
+                                _typeExcludes
+                                  ..clear()
+                                  ..addAll(tmpTypeExcludes);
+                                _providerFilters
+                                  ..clear()
+                                  ..addAll(tmpProviders);
+                                _providerExcludes
+                                  ..clear()
+                                  ..addAll(tmpProviderExcludes);
+                                _genreFilters
+                                  ..clear()
+                                  ..addAll(tmpGenres);
+                                _genreExcludes
+                                  ..clear()
+                                  ..addAll(tmpGenreExcludes);
+                                _minRating = tmpMinRating;
+                              });
+                              unawaited(_savePreferences());
+                              Navigator.pop(ctx);
+                            },
+                            child: Text(context.t('Apply')),
+                          ),
+                          const SizedBox(width: AppSpacing.sm),
+                        ],
+                      ),
+                    ),
+                    Expanded(
+                      child: ListView(
+                        controller: ctrl,
+                        padding: const EdgeInsets.fromLTRB(
+                          AppSpacing.lg,
+                          AppSpacing.sm,
+                          AppSpacing.lg,
+                          AppSpacing.xl,
+                        ),
+                        children: <Widget>[
+                          if (allStatuses.isNotEmpty) ...<Widget>[
+                            Text(
+                              context.t('Status'),
+                              style: Theme.of(context).textTheme.labelLarge,
+                            ),
+                            const SizedBox(height: AppSpacing.xs),
+                            _FilterTriStateChips<LibraryStatus>(
+                              options: allStatuses
+                                  .map(
+                                    (LibraryStatus status) =>
+                                        (value: status, label: status.label),
+                                  )
+                                  .toList(),
+                              included: tmpStatuses,
+                              excluded: tmpStatusExcludes,
+                              onChanged:
+                                  (
+                                    Set<LibraryStatus> included,
+                                    Set<LibraryStatus> excluded,
+                                  ) => setLocal(() {
+                                    tmpStatuses
+                                      ..clear()
+                                      ..addAll(included);
+                                    tmpStatusExcludes
+                                      ..clear()
+                                      ..addAll(excluded);
+                                  }),
+                            ),
+                            const SizedBox(height: AppSpacing.md),
+                          ],
+                          if (allTypes.isNotEmpty) ...<Widget>[
+                            Text(
+                              context.t('Type'),
+                              style: Theme.of(context).textTheme.labelLarge,
+                            ),
+                            const SizedBox(height: AppSpacing.xs),
+                            _FilterTriStateChips<String>(
+                              options: allTypes
+                                  .map(
+                                    (String type) => (value: type, label: type),
+                                  )
+                                  .toList(),
+                              included: tmpTypes,
+                              excluded: tmpTypeExcludes,
+                              onChanged:
+                                  (
+                                    Set<String> included,
+                                    Set<String> excluded,
+                                  ) => setLocal(() {
+                                    tmpTypes
+                                      ..clear()
+                                      ..addAll(included);
+                                    tmpTypeExcludes
+                                      ..clear()
+                                      ..addAll(excluded);
+                                  }),
+                            ),
+                            const SizedBox(height: AppSpacing.md),
+                          ],
+                          if (allProviders.isNotEmpty) ...<Widget>[
+                            Text(
+                              context.t('Source'),
+                              style: Theme.of(context).textTheme.labelLarge,
+                            ),
+                            const SizedBox(height: AppSpacing.xs),
+                            _FilterTriStateChips<String>(
+                              options: allProviders
+                                  .map(
+                                    (String provider) =>
+                                        (value: provider, label: provider),
+                                  )
+                                  .toList(),
+                              included: tmpProviders,
+                              excluded: tmpProviderExcludes,
+                              onChanged:
+                                  (
+                                    Set<String> included,
+                                    Set<String> excluded,
+                                  ) => setLocal(() {
+                                    tmpProviders
+                                      ..clear()
+                                      ..addAll(included);
+                                    tmpProviderExcludes
+                                      ..clear()
+                                      ..addAll(excluded);
+                                  }),
+                            ),
+                            const SizedBox(height: AppSpacing.md),
+                          ],
+                          Row(
+                            children: <Widget>[
+                              Expanded(
+                                child: Text(
+                                  context.t('Minimum rating'),
+                                  style: Theme.of(context).textTheme.labelLarge,
+                                ),
+                              ),
+                              Text(
+                                tmpMinRating <= 0
+                                    ? context.t('Any')
+                                    : tmpMinRating.toStringAsFixed(1),
+                                style: Theme.of(context).textTheme.labelLarge,
+                              ),
+                            ],
+                          ),
+                          Slider(
+                            value: tmpMinRating,
+                            min: 0,
+                            max: 10,
+                            divisions: 20,
+                            label: tmpMinRating <= 0
+                                ? context.t('Any')
+                                : tmpMinRating.toStringAsFixed(1),
+                            onChanged: (double value) =>
+                                setLocal(() => tmpMinRating = value),
+                          ),
+                          if (allGenres.isNotEmpty) ...<Widget>[
+                            const SizedBox(height: AppSpacing.sm),
+                            Text(
+                              context.t('Genre'),
+                              style: Theme.of(context).textTheme.labelLarge,
+                            ),
+                            const SizedBox(height: AppSpacing.xs),
+                            _FilterTriStateChips<String>(
+                              options: allGenres
+                                  .map(
+                                    (String genre) =>
+                                        (value: genre, label: genre),
+                                  )
+                                  .toList(),
+                              included: tmpGenres,
+                              excluded: tmpGenreExcludes,
+                              onChanged:
+                                  (
+                                    Set<String> included,
+                                    Set<String> excluded,
+                                  ) => setLocal(() {
+                                    tmpGenres
+                                      ..clear()
+                                      ..addAll(included);
+                                    tmpGenreExcludes
+                                      ..clear()
+                                      ..addAll(excluded);
+                                  }),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final AppThemeExtension palette = AppThemeExtension.of(context);
@@ -3066,6 +4256,7 @@ class _LocalLibraryViewState extends ConsumerState<_LocalLibraryView> {
     }
 
     final List<LibraryStatus> presentStatuses = _presentStatuses;
+    final int activeFilterCount = _activeFilterCount;
     // With no local items but existing downloads, default to the downloads view.
     final bool showDownloads = _showDownloads || widget.items.isEmpty;
     final List<LibraryItem> items = _filtered;
@@ -3133,6 +4324,18 @@ class _LocalLibraryViewState extends ConsumerState<_LocalLibraryView> {
                   icon: Icons.sort_rounded,
                   tooltip: 'Sort',
                   onTap: _openSort,
+                ),
+                const SizedBox(width: AppSpacing.xs),
+                Badge(
+                  isLabelVisible: activeFilterCount > 0,
+                  label: Text(activeFilterCount.toString()),
+                  backgroundColor: Theme.of(context).colorScheme.primary,
+                  child: _BarIcon(
+                    icon: Icons.filter_list_rounded,
+                    tooltip: 'Filter',
+                    active: activeFilterCount > 0,
+                    onTap: _openFilter,
+                  ),
                 ),
               ],
             ),

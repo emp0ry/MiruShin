@@ -12,6 +12,7 @@ import '../../../app/theme/app_spacing.dart';
 import '../../../app/theme/app_theme_extension.dart';
 import '../../../core/widgets/adaptive_page.dart';
 import '../../../core/widgets/glass_card.dart';
+import '../../../core/widgets/include_exclude_filter_chip.dart';
 import '../../../core/widgets/metadata_chip.dart';
 import '../../../core/widgets/neutral_placeholder.dart';
 import '../../../core/widgets/page_back_button.dart';
@@ -180,61 +181,61 @@ class _SourceCard extends ConsumerWidget {
             Container(
               width: 44,
               height: 44,
-            decoration: BoxDecoration(
-              color: Theme.of(
-                context,
-              ).colorScheme.primary.withValues(alpha: 0.14),
-              borderRadius: AppRadius.all(AppRadius.md),
+              decoration: BoxDecoration(
+                color: Theme.of(
+                  context,
+                ).colorScheme.primary.withValues(alpha: 0.14),
+                borderRadius: AppRadius.all(AppRadius.md),
+              ),
+              child: const Icon(Icons.travel_explore_rounded),
             ),
-            child: const Icon(Icons.travel_explore_rounded),
-          ),
-          const SizedBox(width: AppSpacing.md),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(
-                  source.displayName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: AppSpacing.xs),
-                Text(
-                  source.url,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                const SizedBox(height: AppSpacing.sm),
-                catalog.when(
-                  data: (List<AddonCatalogEntry> entries) => Text(
-                    context.tf('{count} modules', <String, Object?>{
-                      'count': entries.length,
-                    }),
-                    style: Theme.of(context).textTheme.labelMedium,
+            const SizedBox(width: AppSpacing.md),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    source.displayName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleMedium,
                   ),
-                  loading: () => Text(
-                    context.t('Loading...'),
-                    style: Theme.of(context).textTheme.labelMedium,
+                  const SizedBox(height: AppSpacing.xs),
+                  Text(
+                    source.url,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall,
                   ),
-                  error: (Object error, _) => Text(
-                    context.t('Could not load catalog'),
-                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                      color: AppColors.danger,
+                  const SizedBox(height: AppSpacing.sm),
+                  catalog.when(
+                    data: (List<AddonCatalogEntry> entries) => Text(
+                      context.tf('{count} modules', <String, Object?>{
+                        'count': entries.length,
+                      }),
+                      style: Theme.of(context).textTheme.labelMedium,
+                    ),
+                    loading: () => Text(
+                      context.t('Loading...'),
+                      style: Theme.of(context).textTheme.labelMedium,
+                    ),
+                    error: (Object error, _) => Text(
+                      context.t('Could not load catalog'),
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        color: AppColors.danger,
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-          Builder(
-            builder: (BuildContext menuContext) => IconButton(
-              tooltip: context.t('Source actions'),
-              icon: const Icon(Icons.more_vert_rounded),
-              onPressed: () => _showSourceMenu(menuContext, ref, source),
+            Builder(
+              builder: (BuildContext menuContext) => IconButton(
+                tooltip: context.t('Source actions'),
+                icon: const Icon(Icons.more_vert_rounded),
+                onPressed: () => _showSourceMenu(menuContext, ref, source),
+              ),
             ),
-          ),
           ],
         ),
       ),
@@ -311,8 +312,10 @@ Future<bool> _confirmRemoveSource(
     builder: (BuildContext context) => AlertDialog(
       title: Text(context.t('Remove Source')),
       content: Text(
-        context.tf('Remove {name}? Installed addons stay in your library.',
-            <String, Object?>{'name': source.displayName}),
+        context.tf(
+          'Remove {name}? Installed addons stay in your library.',
+          <String, Object?>{'name': source.displayName},
+        ),
       ),
       actions: <Widget>[
         TextButton(
@@ -512,8 +515,10 @@ class _SourceModulesPageState extends ConsumerState<SourceModulesPage> {
   // Multi-select: empty set means "all". An entry matches a category when the
   // set is empty or contains the entry's value.
   final Set<String> _languageFilters = <String>{};
+  final Set<String> _languageExcludes = <String>{};
   final Set<String> _typeFilters = <String>{};
-  bool _downloadableOnly = false;
+  final Set<String> _typeExcludes = <String>{};
+  bool? _downloadSupportFilter;
   final Set<String> _installing = <String>{};
 
   @override
@@ -524,31 +529,44 @@ class _SourceModulesPageState extends ConsumerState<SourceModulesPage> {
 
   int get _activeFilterCount =>
       _languageFilters.length +
+      _languageExcludes.length +
       _typeFilters.length +
-      (_downloadableOnly ? 1 : 0);
+      _typeExcludes.length +
+      (_downloadSupportFilter == null ? 0 : 1);
 
   List<AddonCatalogEntry> _filter(List<AddonCatalogEntry> entries) {
     final String query = _query.trim().toLowerCase();
-    return entries.where((AddonCatalogEntry entry) {
-      if (query.isNotEmpty &&
-          !entry.sourceName.toLowerCase().contains(query) &&
-          !entry.language.toLowerCase().contains(query) &&
-          !entry.type.toLowerCase().contains(query) &&
-          !entry.author.name.toLowerCase().contains(query)) {
-        return false;
-      }
-      if (_languageFilters.isNotEmpty &&
-          !_languageFilters.contains(entry.language)) {
-        return false;
-      }
-      if (_typeFilters.isNotEmpty && !_typeFilters.contains(entry.type)) {
-        return false;
-      }
-      if (_downloadableOnly && !entry.downloadSupport) {
-        return false;
-      }
-      return true;
-    }).toList(growable: false);
+    return entries
+        .where((AddonCatalogEntry entry) {
+          if (query.isNotEmpty &&
+              !entry.sourceName.toLowerCase().contains(query) &&
+              !entry.language.toLowerCase().contains(query) &&
+              !entry.type.toLowerCase().contains(query) &&
+              !entry.author.name.toLowerCase().contains(query)) {
+            return false;
+          }
+          if (_languageFilters.isNotEmpty &&
+              !_languageFilters.contains(entry.language)) {
+            return false;
+          }
+          if (_languageExcludes.contains(entry.language)) {
+            return false;
+          }
+          if (_typeFilters.isNotEmpty && !_typeFilters.contains(entry.type)) {
+            return false;
+          }
+          if (_typeExcludes.contains(entry.type)) {
+            return false;
+          }
+          if (_downloadSupportFilter == true && !entry.downloadSupport) {
+            return false;
+          }
+          if (_downloadSupportFilter == false && entry.downloadSupport) {
+            return false;
+          }
+          return true;
+        })
+        .toList(growable: false);
   }
 
   Future<void> _install(AddonCatalogEntry entry) async {
@@ -582,8 +600,10 @@ class _SourceModulesPageState extends ConsumerState<SourceModulesPage> {
       entries.map((AddonCatalogEntry e) => e.type),
     );
     final Set<String> tmpLanguageFilters = Set<String>.from(_languageFilters);
+    final Set<String> tmpLanguageExcludes = Set<String>.from(_languageExcludes);
     final Set<String> tmpTypeFilters = Set<String>.from(_typeFilters);
-    bool tmpDownloadableOnly = _downloadableOnly;
+    final Set<String> tmpTypeExcludes = Set<String>.from(_typeExcludes);
+    bool? tmpDownloadSupportFilter = _downloadSupportFilter;
 
     await showModalBottomSheet<void>(
       context: context,
@@ -620,8 +640,10 @@ class _SourceModulesPageState extends ConsumerState<SourceModulesPage> {
                         TextButton(
                           onPressed: () => updateSheet(() {
                             tmpLanguageFilters.clear();
+                            tmpLanguageExcludes.clear();
                             tmpTypeFilters.clear();
-                            tmpDownloadableOnly = false;
+                            tmpTypeExcludes.clear();
+                            tmpDownloadSupportFilter = null;
                           }),
                           child: Text(context.t('Clear all')),
                         ),
@@ -632,10 +654,16 @@ class _SourceModulesPageState extends ConsumerState<SourceModulesPage> {
                               _languageFilters
                                 ..clear()
                                 ..addAll(tmpLanguageFilters);
+                              _languageExcludes
+                                ..clear()
+                                ..addAll(tmpLanguageExcludes);
                               _typeFilters
                                 ..clear()
                                 ..addAll(tmpTypeFilters);
-                              _downloadableOnly = tmpDownloadableOnly;
+                              _typeExcludes
+                                ..clear()
+                                ..addAll(tmpTypeExcludes);
+                              _downloadSupportFilter = tmpDownloadSupportFilter;
                             });
                             Navigator.pop(sheetContext);
                           },
@@ -656,20 +684,45 @@ class _SourceModulesPageState extends ConsumerState<SourceModulesPage> {
                         children: <Widget>[
                           FilterChip(
                             label: Text(context.t('All languages')),
-                            selected: tmpLanguageFilters.isEmpty,
-                            onSelected: (_) =>
-                                updateSheet(tmpLanguageFilters.clear),
+                            selected:
+                                tmpLanguageFilters.isEmpty &&
+                                tmpLanguageExcludes.isEmpty,
+                            onSelected: (_) => updateSheet(() {
+                              tmpLanguageFilters.clear();
+                              tmpLanguageExcludes.clear();
+                            }),
                           ),
                           for (final String language in languages)
-                            FilterChip(
-                              label: Text(language),
-                              selected: tmpLanguageFilters.contains(language),
-                              onSelected: (bool selected) => updateSheet(() {
-                                if (selected) {
-                                  tmpLanguageFilters.add(language);
-                                } else {
-                                  tmpLanguageFilters.remove(language);
-                                }
+                            IncludeExcludeFilterChip(
+                              label: language,
+                              state: includeExcludeStateOf<String>(
+                                language,
+                                tmpLanguageFilters,
+                                tmpLanguageExcludes,
+                              ),
+                              onInclude: () => updateSheet(() {
+                                setIncludeExcludeSelection<String>(
+                                  included: tmpLanguageFilters,
+                                  excluded: tmpLanguageExcludes,
+                                  value: language,
+                                  state: IncludeExcludeState.included,
+                                );
+                              }),
+                              onExclude: () => updateSheet(() {
+                                setIncludeExcludeSelection<String>(
+                                  included: tmpLanguageFilters,
+                                  excluded: tmpLanguageExcludes,
+                                  value: language,
+                                  state: IncludeExcludeState.excluded,
+                                );
+                              }),
+                              onClear: () => updateSheet(() {
+                                setIncludeExcludeSelection<String>(
+                                  included: tmpLanguageFilters,
+                                  excluded: tmpLanguageExcludes,
+                                  value: language,
+                                  state: IncludeExcludeState.neutral,
+                                );
                               }),
                             ),
                         ],
@@ -688,32 +741,73 @@ class _SourceModulesPageState extends ConsumerState<SourceModulesPage> {
                         children: <Widget>[
                           FilterChip(
                             label: Text(context.t('All types')),
-                            selected: tmpTypeFilters.isEmpty,
-                            onSelected: (_) =>
-                                updateSheet(tmpTypeFilters.clear),
+                            selected:
+                                tmpTypeFilters.isEmpty &&
+                                tmpTypeExcludes.isEmpty,
+                            onSelected: (_) => updateSheet(() {
+                              tmpTypeFilters.clear();
+                              tmpTypeExcludes.clear();
+                            }),
                           ),
                           for (final String type in types)
-                            FilterChip(
-                              label: Text(type),
-                              selected: tmpTypeFilters.contains(type),
-                              onSelected: (bool selected) => updateSheet(() {
-                                if (selected) {
-                                  tmpTypeFilters.add(type);
-                                } else {
-                                  tmpTypeFilters.remove(type);
-                                }
+                            IncludeExcludeFilterChip(
+                              label: type,
+                              state: includeExcludeStateOf<String>(
+                                type,
+                                tmpTypeFilters,
+                                tmpTypeExcludes,
+                              ),
+                              onInclude: () => updateSheet(() {
+                                setIncludeExcludeSelection<String>(
+                                  included: tmpTypeFilters,
+                                  excluded: tmpTypeExcludes,
+                                  value: type,
+                                  state: IncludeExcludeState.included,
+                                );
+                              }),
+                              onExclude: () => updateSheet(() {
+                                setIncludeExcludeSelection<String>(
+                                  included: tmpTypeFilters,
+                                  excluded: tmpTypeExcludes,
+                                  value: type,
+                                  state: IncludeExcludeState.excluded,
+                                );
+                              }),
+                              onClear: () => updateSheet(() {
+                                setIncludeExcludeSelection<String>(
+                                  included: tmpTypeFilters,
+                                  excluded: tmpTypeExcludes,
+                                  value: type,
+                                  state: IncludeExcludeState.neutral,
+                                );
                               }),
                             ),
                         ],
                       ),
                     ],
                     const SizedBox(height: AppSpacing.sm),
-                    SwitchListTile.adaptive(
-                      contentPadding: EdgeInsets.zero,
-                      title: Text(context.t('Downloadable only')),
-                      value: tmpDownloadableOnly,
-                      onChanged: (bool value) =>
-                          updateSheet(() => tmpDownloadableOnly = value),
+                    Wrap(
+                      spacing: AppSpacing.sm,
+                      runSpacing: AppSpacing.sm,
+                      children: <Widget>[
+                        IncludeExcludeFilterChip(
+                          label: context.t('Download support'),
+                          state: switch (tmpDownloadSupportFilter) {
+                            true => IncludeExcludeState.included,
+                            false => IncludeExcludeState.excluded,
+                            null => IncludeExcludeState.neutral,
+                          },
+                          onInclude: () => updateSheet(
+                            () => tmpDownloadSupportFilter = true,
+                          ),
+                          onExclude: () => updateSheet(
+                            () => tmpDownloadSupportFilter = false,
+                          ),
+                          onClear: () => updateSheet(
+                            () => tmpDownloadSupportFilter = null,
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -735,7 +829,9 @@ class _SourceModulesPageState extends ConsumerState<SourceModulesPage> {
       }
       result.add(trimmed);
     }
-    result.sort((String a, String b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    result.sort(
+      (String a, String b) => a.toLowerCase().compareTo(b.toLowerCase()),
+    );
     return result;
   }
 
@@ -747,7 +843,9 @@ class _SourceModulesPageState extends ConsumerState<SourceModulesPage> {
     final Set<String> installedUrls = ref
         .watch(soraAddonsProvider)
         .installed
-        .map((SoraInstalledAddon addon) => addon.manifestUrl.trim().toLowerCase())
+        .map(
+          (SoraInstalledAddon addon) => addon.manifestUrl.trim().toLowerCase(),
+        )
         .toSet();
     final List<AddonCatalogEntry> allEntries =
         catalog.asData?.value ?? const <AddonCatalogEntry>[];
@@ -878,7 +976,10 @@ class _FilterButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final Widget icon = activeCount > 0
-        ? Badge(label: Text('$activeCount'), child: const Icon(Icons.tune_rounded))
+        ? Badge(
+            label: Text('$activeCount'),
+            child: const Icon(Icons.tune_rounded),
+          )
         : const Icon(Icons.tune_rounded);
     return IconButton.filledTonal(
       tooltip: context.t('Filters'),

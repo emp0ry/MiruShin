@@ -168,10 +168,12 @@ class TmdbMetadataProvider implements PagedDiscoveryProvider {
     required MediaType? type,
     required int page,
     List<int>? genreIds,
+    List<int>? withoutGenreIds,
     int? yearFrom,
     int? yearTo,
     double? minRating,
     String? originalLanguage,
+    bool? includeAdult,
   }) async {
     _assertConfigured();
     if (type == null) {
@@ -182,20 +184,24 @@ class TmdbMetadataProvider implements PagedDiscoveryProvider {
               type: MediaType.movie,
               page: page,
               genreIds: genreIds,
+              withoutGenreIds: withoutGenreIds,
               yearFrom: yearFrom,
               yearTo: yearTo,
               minRating: minRating,
               originalLanguage: originalLanguage,
+              includeAdult: includeAdult,
             ),
             discoverPageAdvanced(
               filter: filter,
               type: MediaType.series,
               page: page,
               genreIds: genreIds,
+              withoutGenreIds: withoutGenreIds,
               yearFrom: yearFrom,
               yearTo: yearTo,
               minRating: minRating,
               originalLanguage: originalLanguage,
+              includeAdult: includeAdult,
             ),
           ]);
       final Map<String, MediaItem> byId = <String, MediaItem>{};
@@ -213,6 +219,7 @@ class TmdbMetadataProvider implements PagedDiscoveryProvider {
       'sort_by': sortBy,
       if (minRating != null && minRating > 0) 'vote_average.gte': minRating,
       if (filter == 'Top Rated') 'vote_count.gte': 50,
+      'include_adult': ?includeAdult,
     };
 
     if (type == MediaType.anime) {
@@ -229,6 +236,9 @@ class TmdbMetadataProvider implements PagedDiscoveryProvider {
       if (originalLanguage != null) {
         params['with_original_language'] = originalLanguage;
       }
+    }
+    if (withoutGenreIds != null && withoutGenreIds.isNotEmpty) {
+      params['without_genres'] = withoutGenreIds.join(',');
     }
 
     final DateTime now = DateTime.now();
