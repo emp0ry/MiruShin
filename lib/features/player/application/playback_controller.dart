@@ -1,13 +1,11 @@
 // ignore_for_file: avoid_print
 import 'dart:async';
 import 'dart:collection';
-import 'dart:io';
 
-import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../data/subtitle_parser.dart';
+import '../data/subtitle_loader.dart';
 
 import '../../../shared/models/anilist_models.dart';
 import '../../../shared/models/media_item.dart';
@@ -2674,58 +2672,30 @@ class PlaybackController extends Notifier<PlaybackState> {
   Future<void> _autoSelectSubtitle(MediaServer server) async {
     final PlayerSettings settings =
         ref.read(playerSettingsProvider).value ?? const PlayerSettings();
-    if (!settings.subtitlesEnabled ||
-        settings.preferredSubtitleLanguage.isEmpty) {
-      return;
-    }
+    if (!settings.subtitlesEnabled) return;
     final List<SubtitleTrack> tracks = server.subtitles;
     if (tracks.isEmpty) return;
+    final String preferred = settings.preferredSubtitleLanguage.trim();
+    final bool hasLocalTracks = tracks.any(isLocalSubtitleTrack);
+    if (preferred.isEmpty && !hasLocalTracks) return;
 
     SubtitleTrack? best;
-    for (final SubtitleTrack t in tracks) {
-      if (t.language == settings.preferredSubtitleLanguage ||
-          t.label == settings.preferredSubtitleLanguage) {
-        best = t;
-        break;
+    if (preferred.isNotEmpty) {
+      for (final SubtitleTrack t in tracks) {
+        if (t.language == preferred || t.label == preferred) {
+          best = t;
+          break;
+        }
       }
     }
     best ??= tracks.first;
 
-    final List<SubtitleCue> cues = await _loadSubtitleCues(best);
+    final List<SubtitleCue> cues = await loadSubtitleCues(best);
     if (state.subtitle == null) {
       state = state.copyWith(subtitle: best, subtitleCues: cues);
     } else {
       return;
     }
-  }
-
-  Future<List<SubtitleCue>> _loadSubtitleCues(SubtitleTrack track) async {
-    try {
-      return const SubtitleParser().parse(await _readSubtitleSource(track));
-    } on Object {
-      return const <SubtitleCue>[];
-    }
-  }
-
-  /// Reads a subtitle from the network, or from disk when it is a downloaded
-  /// (offline) track — its url is then a `file://` URI or an absolute path.
-  Future<String> _readSubtitleSource(SubtitleTrack track) async {
-    final Uri? uri = Uri.tryParse(track.url);
-    final bool isHttp =
-        uri != null && (uri.scheme == 'http' || uri.scheme == 'https');
-    if (!isHttp) {
-      final String path = uri != null && uri.scheme == 'file'
-          ? uri.toFilePath()
-          : track.url;
-      return File(path).readAsString();
-    }
-    final Response<String> response = await Dio().get<String>(
-      track.url,
-      options: track.headers.isNotEmpty
-          ? Options(headers: track.headers)
-          : null,
-    );
-    return response.data ?? '';
   }
 
   Future<void> retry() async {

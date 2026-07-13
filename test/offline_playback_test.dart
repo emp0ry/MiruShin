@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mirushin/features/downloads/application/offline_playback.dart';
 import 'package:mirushin/features/downloads/domain/download_models.dart';
+import 'package:mirushin/features/player/domain/player_models.dart';
 import 'package:mirushin/shared/models/media_item.dart';
 
 void main() {
@@ -96,6 +97,31 @@ void main() {
         Uri.file('/downloads/${episode.relDir}/episode.jpg').toString(),
       );
     });
+
+    test('uses local file URIs for downloaded subtitles', () {
+      final DownloadedEpisode episode = _episode(
+        3,
+        subtitles: const <DownloadedSubtitle>[
+          DownloadedSubtitle(
+            language: 'en',
+            label: 'English',
+            fileName: 'sub_en.ass',
+          ),
+        ],
+      );
+
+      final item = buildOfflinePlaybackItem(
+        episode: episode,
+        rootPath: '/downloads',
+      );
+      final SubtitleTrack subtitle = item.servers.single.subtitles.single;
+
+      expect(
+        subtitle.url,
+        Uri.file('/downloads/${episode.relDir}/sub_en.ass').toString(),
+      );
+      expect(subtitle.format, SubtitleFormat.ass);
+    });
   });
 }
 
@@ -123,6 +149,7 @@ DownloadedEpisode _episode(
   String mediaPosterFileName = '',
   String mediaBackdropFileName = '',
   String episodeImageFileName = '',
+  List<DownloadedSubtitle> subtitles = const <DownloadedSubtitle>[],
 }) {
   final DateTime now = DateTime(2026);
   return DownloadedEpisode(
@@ -143,6 +170,7 @@ DownloadedEpisode _episode(
     mediaPosterFileName: mediaPosterFileName,
     mediaBackdropFileName: mediaBackdropFileName,
     episodeImageFileName: episodeImageFileName,
+    subtitles: subtitles,
     status: status,
     createdAt: now,
     updatedAt: now,

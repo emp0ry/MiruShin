@@ -29,7 +29,7 @@ MediaPlaybackItem buildOfflinePlaybackItem({
       SubtitleTrack(
         id: s.fileName,
         label: s.label.isNotEmpty ? s.label : s.language,
-        url: p.join(rootPath, episode.relDir, s.fileName),
+        url: Uri.file(p.join(rootPath, episode.relDir, s.fileName)).toString(),
         language: s.language,
         format: _subtitleFormat(s.fileName),
       ),

@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -20,7 +19,7 @@ import '../data/cast_controller.dart';
 import '../data/discord_rpc_service.dart';
 import '../data/native_player_service.dart';
 import '../data/pip_controller.dart';
-import '../data/subtitle_parser.dart';
+import '../data/subtitle_loader.dart';
 import '../domain/auto_skip.dart';
 import '../domain/player_models.dart';
 import '../engine/player_engine.dart';
@@ -3833,6 +3832,12 @@ Future<void> _showQualityMenu(BuildContext context, WidgetRef ref) async {
 Future<void> _showSubtitleMenu(BuildContext context, WidgetRef ref) async {
   final NavigatorState navigator = Navigator.of(context);
   final PlaybackState state = ref.read(playbackControllerProvider);
+  final PlaybackController playbackController = ref.read(
+    playbackControllerProvider.notifier,
+  );
+  final PlayerSettingsController settingsController = ref.read(
+    playerSettingsProvider.notifier,
+  );
   final List<SubtitleTrack> tracks =
       state.server?.subtitles ?? const <SubtitleTrack>[];
   await _showMenuSheet(context, 'Subtitles', <Widget>[
@@ -3843,9 +3848,7 @@ Future<void> _showSubtitleMenu(BuildContext context, WidgetRef ref) async {
       title: Text(context.t('Off')),
       onTap: () {
         navigator.pop();
-        ref
-            .read(playbackControllerProvider.notifier)
-            .selectSubtitle(null, const <SubtitleCue>[]);
+        playbackController.selectSubtitle(null, const <SubtitleCue>[]);
       },
     ),
     for (final SubtitleTrack track in tracks)
@@ -3856,31 +3859,14 @@ Future<void> _showSubtitleMenu(BuildContext context, WidgetRef ref) async {
         subtitle: track.language.isNotEmpty ? Text(track.language) : null,
         onTap: () async {
           navigator.pop();
-          unawaited(
-            ref.read(playerSettingsProvider.notifier).setSubtitlesEnabled(true),
-          );
-          final List<SubtitleCue> cues = await _loadSubtitleCues(track);
-          ref
-              .read(playbackControllerProvider.notifier)
-              .selectSubtitle(track, cues);
+          unawaited(settingsController.setSubtitlesEnabled(true));
+          final List<SubtitleCue> cues = await loadSubtitleCues(track);
+          if (!context.mounted) return;
+          playbackController.selectSubtitle(track, cues);
         },
       ),
     const _SubtitleAppearanceTiles(),
   ]);
-}
-
-Future<List<SubtitleCue>> _loadSubtitleCues(SubtitleTrack track) async {
-  try {
-    final Response<String> response = await Dio().get<String>(
-      track.url,
-      options: track.headers.isNotEmpty
-          ? Options(headers: track.headers)
-          : null,
-    );
-    return const SubtitleParser().parse(response.data ?? '');
-  } on Object {
-    return const <SubtitleCue>[];
-  }
 }
 
 Future<void> _showSpeedMenu(BuildContext context, WidgetRef ref) async {
