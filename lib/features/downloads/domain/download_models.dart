@@ -118,6 +118,9 @@ class DownloadedEpisode {
     required this.kind,
     required this.relDir,
     required this.videoFileName,
+    this.mediaPosterFileName = '',
+    this.mediaBackdropFileName = '',
+    this.episodeImageFileName = '',
     this.streamPreference = DownloadStreamPreference.empty,
     this.episodeData = const <String, dynamic>{},
     this.subtitles = const <DownloadedSubtitle>[],
@@ -151,6 +154,12 @@ class DownloadedEpisode {
   /// Episode directory relative to the downloads root.
   final String relDir;
   final String videoFileName;
+
+  /// Artwork cached inside [relDir]. These are file names, not absolute paths,
+  /// so downloads survive application sandbox path changes between launches.
+  final String mediaPosterFileName;
+  final String mediaBackdropFileName;
+  final String episodeImageFileName;
   final DownloadStreamPreference streamPreference;
 
   /// Serialized `SoraEpisode` (raw fields) so the stream can be re-resolved
@@ -197,9 +206,15 @@ class DownloadedEpisode {
   }
 
   DownloadedEpisode copyWith({
+    MediaItem? media,
+    String? episodeTitle,
+    String? episodeImage,
     DownloadKind? kind,
     String? qualityLabel,
     String? videoFileName,
+    String? mediaPosterFileName,
+    String? mediaBackdropFileName,
+    String? episodeImageFileName,
     DownloadStreamPreference? streamPreference,
     List<DownloadedSubtitle>? subtitles,
     int? totalBytes,
@@ -214,18 +229,22 @@ class DownloadedEpisode {
     return DownloadedEpisode(
       id: id,
       mediaId: mediaId,
-      media: media,
+      media: media ?? this.media,
       addonId: addonId,
       addonName: addonName,
       episodeHref: episodeHref,
       episodeNumber: episodeNumber,
       seasonNumber: seasonNumber,
-      episodeTitle: episodeTitle,
-      episodeImage: episodeImage,
+      episodeTitle: episodeTitle ?? this.episodeTitle,
+      episodeImage: episodeImage ?? this.episodeImage,
       qualityLabel: qualityLabel ?? this.qualityLabel,
       kind: kind ?? this.kind,
       relDir: relDir,
       videoFileName: videoFileName ?? this.videoFileName,
+      mediaPosterFileName: mediaPosterFileName ?? this.mediaPosterFileName,
+      mediaBackdropFileName:
+          mediaBackdropFileName ?? this.mediaBackdropFileName,
+      episodeImageFileName: episodeImageFileName ?? this.episodeImageFileName,
       streamPreference: streamPreference ?? this.streamPreference,
       episodeData: episodeData,
       subtitles: subtitles ?? this.subtitles,
@@ -266,6 +285,9 @@ class DownloadedEpisode {
       ),
       relDir: json['relDir'] as String? ?? '',
       videoFileName: json['videoFileName'] as String? ?? 'video.mp4',
+      mediaPosterFileName: json['mediaPosterFileName'] as String? ?? '',
+      mediaBackdropFileName: json['mediaBackdropFileName'] as String? ?? '',
+      episodeImageFileName: json['episodeImageFileName'] as String? ?? '',
       streamPreference: json['streamPreference'] is Map
           ? DownloadStreamPreference.fromJson(
               (json['streamPreference'] as Map).cast<String, dynamic>(),
@@ -315,6 +337,12 @@ class DownloadedEpisode {
     'kind': kind.name,
     'relDir': relDir,
     'videoFileName': videoFileName,
+    if (mediaPosterFileName.isNotEmpty)
+      'mediaPosterFileName': mediaPosterFileName,
+    if (mediaBackdropFileName.isNotEmpty)
+      'mediaBackdropFileName': mediaBackdropFileName,
+    if (episodeImageFileName.isNotEmpty)
+      'episodeImageFileName': episodeImageFileName,
     if (!streamPreference.isEmpty)
       'streamPreference': streamPreference.toJson(),
     if (episodeData.isNotEmpty) 'episodeData': episodeData,

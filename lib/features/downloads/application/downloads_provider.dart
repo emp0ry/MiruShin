@@ -73,6 +73,7 @@ class DownloadController extends Notifier<List<DownloadedEpisode>> {
               : e,
         )
         .toList(growable: false);
+    unawaited(_cacheMissingArtworkForCompletedDownloads());
     unawaited(_pump());
   }
 
@@ -395,6 +396,18 @@ class DownloadController extends Notifier<List<DownloadedEpisode>> {
       }
       if (token.isCancelled) throw const DownloadCancelledException();
 
+      final DownloadedEpisode artworkSource = _byId(item.id) ?? current;
+      final DownloadedEpisode artworkUpdated = await _cacheArtwork(
+        artworkSource,
+        dirPath: dir.path,
+        headers: pick.headers,
+        cancelToken: token,
+      );
+      if (_artworkChanged(artworkSource, artworkUpdated)) {
+        _updateById(item.id, (_) => artworkUpdated);
+        _schedulePersist();
+      }
+
       final List<DownloadedSubtitle> subs = <DownloadedSubtitle>[];
       for (final NormalizedSubtitle s in bundle.subtitles) {
         if (token.isCancelled) break;
@@ -439,6 +452,139 @@ class DownloadController extends Notifier<List<DownloadedEpisode>> {
   }
 
   // ---- Helpers -------------------------------------------------------------
+
+  Future<void> _cacheMissingArtworkForCompletedDownloads() async {
+    final String rootPath = _rootPath ??= await _store.rootPath();
+    bool changed = false;
+    for (final DownloadedEpisode snapshot in List<DownloadedEpisode>.from(
+      state,
+    )) {
+      final DownloadedEpisode? current = _byId(snapshot.id);
+      if (current == null ||
+          !current.isComplete ||
+          !_needsArtworkCache(current)) {
+        continue;
+      }
+
+      final CancelToken token = CancelToken();
+      final dir = await _store.ensureEpisodeDir(rootPath, current);
+      final DownloadedEpisode updated = await _cacheArtwork(
+        current,
+        dirPath: dir.path,
+        headers: const <String, String>{},
+        cancelToken: token,
+      );
+      if (!_artworkChanged(current, updated)) continue;
+      _updateById(current.id, (_) => updated);
+      changed = true;
+    }
+    if (changed) {
+      await _persist();
+    }
+  }
+
+  Future<DownloadedEpisode> _cacheArtwork(
+    DownloadedEpisode episode, {
+    required String dirPath,
+    required Map<String, String> headers,
+    required CancelToken cancelToken,
+  }) async {
+    String mediaPosterFileName = episode.mediaPosterFileName;
+    String mediaBackdropFileName = episode.mediaBackdropFileName;
+    String episodeImageFileName = episode.episodeImageFileName;
+
+    if (mediaPosterFileName.isEmpty) {
+      mediaPosterFileName =
+          await _downloadFirstArtwork(
+            urls: <String>[episode.media.posterUrl],
+            fileNamePrefix: 'poster',
+            headers: headers,
+            dirPath: dirPath,
+            cancelToken: cancelToken,
+          ) ??
+          '';
+    }
+
+    if (mediaBackdropFileName.isEmpty) {
+      mediaBackdropFileName =
+          await _downloadFirstArtwork(
+            urls: <String>[episode.media.backdropUrl],
+            fileNamePrefix: 'backdrop',
+            headers: headers,
+            dirPath: dirPath,
+            cancelToken: cancelToken,
+          ) ??
+          '';
+    }
+
+    if (episodeImageFileName.isEmpty) {
+      episodeImageFileName =
+          await _downloadFirstArtwork(
+            urls: _episodeArtworkSources(episode),
+            fileNamePrefix: 'episode',
+            headers: headers,
+            dirPath: dirPath,
+            cancelToken: cancelToken,
+          ) ??
+          '';
+    }
+
+    return episode.copyWith(
+      mediaPosterFileName: mediaPosterFileName,
+      mediaBackdropFileName: mediaBackdropFileName,
+      episodeImageFileName: episodeImageFileName,
+    );
+  }
+
+  Future<String?> _downloadFirstArtwork({
+    required List<String> urls,
+    required String fileNamePrefix,
+    required Map<String, String> headers,
+    required String dirPath,
+    required CancelToken cancelToken,
+  }) async {
+    for (final String url in urls) {
+      if (!_isHttpUrl(url)) continue;
+      final String? fileName = await _engine.downloadImage(
+        url: url,
+        fileNamePrefix: fileNamePrefix,
+        headers: headers,
+        dirPath: dirPath,
+        cancelToken: cancelToken,
+      );
+      if (fileName != null && fileName.isNotEmpty) return fileName;
+    }
+    return null;
+  }
+
+  List<String> _episodeArtworkSources(DownloadedEpisode episode) {
+    return <String>[
+      _episodeDataString(episode, 'metadataImage'),
+      episode.episodeImage,
+      episode.media.backdropUrl,
+      episode.media.posterUrl,
+    ];
+  }
+
+  bool _needsArtworkCache(DownloadedEpisode episode) {
+    return (episode.mediaPosterFileName.isEmpty &&
+            _isHttpUrl(episode.media.posterUrl)) ||
+        (episode.mediaBackdropFileName.isEmpty &&
+            _isHttpUrl(episode.media.backdropUrl)) ||
+        (episode.episodeImageFileName.isEmpty &&
+            _episodeArtworkSources(episode).any(_isHttpUrl));
+  }
+
+  bool _artworkChanged(DownloadedEpisode before, DownloadedEpisode after) {
+    return before.mediaPosterFileName != after.mediaPosterFileName ||
+        before.mediaBackdropFileName != after.mediaBackdropFileName ||
+        before.episodeImageFileName != after.episodeImageFileName;
+  }
+
+  String _episodeDataString(DownloadedEpisode episode, String key) {
+    final Object? value = episode.episodeData[key];
+    return value is String ? value.trim() : '';
+  }
 
   void _updateById(
     String id,

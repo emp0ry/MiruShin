@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:ui';
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -26,6 +25,7 @@ import '../application/download_episode_display.dart';
 import '../application/downloads_provider.dart';
 import '../application/offline_playback.dart';
 import '../domain/download_models.dart';
+import 'downloaded_artwork_image.dart';
 
 /// Offline detail page for a downloaded title: pick a module, then play its
 /// downloaded episodes (non-downloaded episodes are shown disabled).
@@ -87,7 +87,11 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
       );
     }
 
-    final MediaItem media = episodes.first.media;
+    final String? rootPath = controller.rootPath;
+    final MediaItem media = downloadedMediaWithLocalArtwork(
+      episodes.first,
+      rootPath: rootPath,
+    );
 
     // Distinct modules with downloads for this title.
     final Map<String, String> modules = <String, String>{};
@@ -522,7 +526,11 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
         number: ep.episodeNumber,
         header: numberLabel,
         displayTitle: displayTitle,
-        imageUrl: downloadedEpisodeImageUrl(ep, media: media),
+        imageUrl: downloadedEpisodeImageUrl(
+          ep,
+          media: media,
+          rootPath: controller.rootPath,
+        ),
         statusLabel: status,
         downloadProgress: complete ? 0 : ep.progressFraction,
         localProgress: localProgress,
@@ -842,11 +850,12 @@ class _OfflineEpisodeTile extends StatelessWidget {
                   children: <Widget>[
                     imageUrl.isEmpty
                         ? _OfflineEpisodeThumbFallback(number: number)
-                        : CachedNetworkImage(
+                        : DownloadedArtworkImage(
                             imageUrl: imageUrl,
                             fit: BoxFit.cover,
-                            errorWidget: (context, url, error) =>
-                                _OfflineEpisodeThumbFallback(number: number),
+                            fallback: _OfflineEpisodeThumbFallback(
+                              number: number,
+                            ),
                           ),
                     if (number != 0 && (isWatched || isContinue))
                       _OfflineWatchedBadge(isContinue: isContinue),
@@ -1004,15 +1013,14 @@ class _OfflineHero extends StatelessWidget {
                 ),
               )
             else
-              CachedNetworkImage(
+              DownloadedArtworkImage(
                 imageUrl: image,
                 fit: BoxFit.cover,
-                errorWidget: (BuildContext context, String url, Object error) =>
-                    DecoratedBox(
-                      decoration: BoxDecoration(
-                        gradient: palette.posterFallbackGradient,
-                      ),
-                    ),
+                fallback: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: palette.posterFallbackGradient,
+                  ),
+                ),
               ),
             const DecoratedBox(
               decoration: BoxDecoration(color: Colors.black54),
@@ -1042,9 +1050,14 @@ class _OfflineHero extends StatelessWidget {
                                 gradient: palette.posterFallbackGradient,
                               ),
                             )
-                          : CachedNetworkImage(
+                          : DownloadedArtworkImage(
                               imageUrl: media.posterUrl,
                               fit: BoxFit.cover,
+                              fallback: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  gradient: palette.posterFallbackGradient,
+                                ),
+                              ),
                             ),
                     ),
                   ),

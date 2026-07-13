@@ -44,7 +44,10 @@ MediaPlaybackItem buildOfflinePlaybackItem({
     subtitles: subtitles,
   );
 
-  final MediaItem media = episode.media;
+  final MediaItem media = downloadedMediaWithLocalArtwork(
+    episode,
+    rootPath: rootPath,
+  );
   final String episodeTitle = downloadedEpisodeDisplayTitle(episode);
 
   return MediaPlaybackItem(
@@ -65,7 +68,7 @@ MediaPlaybackItem buildOfflinePlaybackItem({
       'sora_episode_href': episode.episodeHref,
     },
     servers: <MediaServer>[server],
-    seasons: _buildSeasons(moduleEpisodes),
+    seasons: _buildSeasons(moduleEpisodes, rootPath: rootPath),
     currentEpisodeId: '${episode.seasonNumber}_${episode.episodeNumber}',
     skipMarkers: _skipMarkers(episode),
     seasonNumber: episode.seasonNumber,
@@ -138,7 +141,10 @@ List<DownloadedEpisode> _sortedCompleted(List<DownloadedEpisode> episodes) {
   return list;
 }
 
-List<Season> _buildSeasons(List<DownloadedEpisode> moduleEpisodes) {
+List<Season> _buildSeasons(
+  List<DownloadedEpisode> moduleEpisodes, {
+  required String rootPath,
+}) {
   if (moduleEpisodes.isEmpty) return const <Season>[];
   final Map<int, List<DownloadedEpisode>> bySeason =
       <int, List<DownloadedEpisode>>{};
@@ -154,19 +160,19 @@ List<Season> _buildSeasons(List<DownloadedEpisode> moduleEpisodes) {
         title: multi ? 'Season $season' : 'Episodes',
         episodes: <Episode>[
           for (final DownloadedEpisode e in bySeason[season]!)
-            _playerEpisode(e),
+            _playerEpisode(e, rootPath: rootPath),
         ],
       ),
   ];
 }
 
-Episode _playerEpisode(DownloadedEpisode e) {
+Episode _playerEpisode(DownloadedEpisode e, {required String rootPath}) {
   final String title = downloadedEpisodeDisplayTitle(e);
   return Episode(
     id: e.episodeHref,
     number: e.episodeNumber.round(),
     title: title.isNotEmpty ? title : 'Episode ${e.displayNumber}',
-    thumbnailUrl: downloadedEpisodeImageUrl(e),
+    thumbnailUrl: downloadedEpisodeImageUrl(e, rootPath: rootPath),
   );
 }
 

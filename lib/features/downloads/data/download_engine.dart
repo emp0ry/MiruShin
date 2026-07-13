@@ -418,11 +418,56 @@ class DownloadEngine {
     }
   }
 
+  Future<String?> downloadImage({
+    required String url,
+    required String fileNamePrefix,
+    required Map<String, String> headers,
+    required String dirPath,
+    required CancelToken cancelToken,
+  }) async {
+    final Uri? uri = Uri.tryParse(url.trim());
+    if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) {
+      return null;
+    }
+
+    final String safePrefix = sanitizeForPath(fileNamePrefix);
+    final String fileName = '$safePrefix${_imageExtension(uri)}';
+    final File file = File(p.join(dirPath, fileName));
+    if (file.existsSync() && file.lengthSync() > 0) {
+      return fileName;
+    }
+
+    try {
+      final Uint8List bytes = await _fetchBytes(uri, headers, cancelToken);
+      if (bytes.isEmpty) return null;
+      await file.writeAsBytes(bytes, flush: true);
+      return fileName;
+    } catch (error) {
+      if (cancelToken.isCancelled) throw const DownloadCancelledException();
+      debugPrint('Artwork download failed ($url): $error');
+      return null;
+    }
+  }
+
   String _subtitleExtension(Uri uri) {
     final String path = uri.path.toLowerCase();
     if (path.endsWith('.ass') || path.endsWith('.ssa')) return '.ass';
     if (path.endsWith('.srt')) return '.srt';
     return '.vtt';
+  }
+
+  String _imageExtension(Uri uri) {
+    final String path = uri.path.toLowerCase();
+    for (final String ext in const <String>[
+      '.jpg',
+      '.jpeg',
+      '.png',
+      '.webp',
+      '.gif',
+    ]) {
+      if (path.endsWith(ext)) return ext == '.jpeg' ? '.jpg' : ext;
+    }
+    return '.jpg';
   }
 
   // --------------------------------------------------------------------------

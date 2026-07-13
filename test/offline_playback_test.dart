@@ -67,6 +67,36 @@ void main() {
       expect(result, isNull);
     });
   });
+
+  group('buildOfflinePlaybackItem', () {
+    test('uses cached local artwork for offline player metadata', () {
+      final DownloadedEpisode episode = _episode(
+        3,
+        mediaPosterFileName: 'poster.jpg',
+        mediaBackdropFileName: 'backdrop.jpg',
+        episodeImageFileName: 'episode.jpg',
+      );
+
+      final item = buildOfflinePlaybackItem(
+        episode: episode,
+        rootPath: '/downloads',
+        moduleEpisodes: <DownloadedEpisode>[episode],
+      );
+
+      expect(
+        item.posterUrl,
+        Uri.file('/downloads/${episode.relDir}/poster.jpg').toString(),
+      );
+      expect(
+        item.backdropUrl,
+        Uri.file('/downloads/${episode.relDir}/backdrop.jpg').toString(),
+      );
+      expect(
+        item.seasons.single.episodes.single.thumbnailUrl,
+        Uri.file('/downloads/${episode.relDir}/episode.jpg').toString(),
+      );
+    });
+  });
 }
 
 const MediaItem _media = MediaItem(
@@ -90,6 +120,9 @@ DownloadedEpisode _episode(
   int number, {
   int season = 1,
   DownloadStatus status = DownloadStatus.completed,
+  String mediaPosterFileName = '',
+  String mediaBackdropFileName = '',
+  String episodeImageFileName = '',
 }) {
   final DateTime now = DateTime(2026);
   return DownloadedEpisode(
@@ -107,6 +140,9 @@ DownloadedEpisode _episode(
     kind: DownloadKind.mp4,
     relDir: 'anilist-1/addon/S${season}E$number',
     videoFileName: 'video.mp4',
+    mediaPosterFileName: mediaPosterFileName,
+    mediaBackdropFileName: mediaBackdropFileName,
+    episodeImageFileName: episodeImageFileName,
     status: status,
     createdAt: now,
     updatedAt: now,

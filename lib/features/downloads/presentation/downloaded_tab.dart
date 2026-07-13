@@ -1,4 +1,3 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -10,8 +9,10 @@ import '../../../app/theme/app_spacing.dart';
 import '../../../app/theme/app_theme_extension.dart';
 import '../../../core/widgets/neutral_placeholder.dart';
 import '../../catalog/application/catalog_mode.dart';
+import '../application/download_episode_display.dart';
 import '../application/downloads_provider.dart';
 import '../domain/download_models.dart';
+import 'downloaded_artwork_image.dart';
 
 /// Grid of downloaded titles for one catalog, rendered as the Library
 /// "Downloaded" tab. Tapping a title opens the offline title page.
@@ -26,6 +27,7 @@ class DownloadedTab extends ConsumerWidget {
     final List<DownloadedTitle> titles = ref
         .read(downloadsProvider.notifier)
         .titlesForCatalog(catalog);
+    final String? rootPath = ref.read(downloadsProvider.notifier).rootPath;
 
     if (titles.isEmpty) {
       return NeutralPlaceholder(
@@ -53,21 +55,29 @@ class DownloadedTab extends ConsumerWidget {
       ),
       itemCount: titles.length,
       itemBuilder: (BuildContext context, int index) =>
-          _DownloadedTitleCell(title: titles[index]),
+          _DownloadedTitleCell(title: titles[index], rootPath: rootPath),
     );
   }
 }
 
 class _DownloadedTitleCell extends StatelessWidget {
-  const _DownloadedTitleCell({required this.title});
+  const _DownloadedTitleCell({required this.title, required this.rootPath});
 
   final DownloadedTitle title;
+  final String? rootPath;
 
   @override
   Widget build(BuildContext context) {
     final AppThemeExtension palette = AppThemeExtension.of(context);
     final ColorScheme scheme = Theme.of(context).colorScheme;
-    final String poster = title.media.posterUrl;
+    final DownloadedEpisode artworkEpisode = title.episodes.firstWhere(
+      (DownloadedEpisode episode) => episode.isComplete,
+      orElse: () => title.episodes.first,
+    );
+    final String poster = downloadedMediaWithLocalArtwork(
+      artworkEpisode,
+      rootPath: rootPath,
+    ).posterUrl;
     final int completed = title.completedCount;
     final bool active = title.hasActive;
 
@@ -85,15 +95,14 @@ class _DownloadedTitleCell extends StatelessWidget {
                 ),
               )
             else
-              CachedNetworkImage(
+              DownloadedArtworkImage(
                 imageUrl: poster,
                 fit: BoxFit.cover,
-                errorWidget: (BuildContext context, String url, Object error) =>
-                    DecoratedBox(
-                      decoration: BoxDecoration(
-                        gradient: palette.posterFallbackGradient,
-                      ),
-                    ),
+                fallback: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: palette.posterFallbackGradient,
+                  ),
+                ),
               ),
             const DecoratedBox(
               decoration: BoxDecoration(
