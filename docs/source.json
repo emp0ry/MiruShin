@@ -2,7 +2,7 @@
   "name": "MiruShin",
   "identifier": "com.emp0ry.mirushin.source",
   "subtitle": "New way to watch and discover media.",
-  "description": "Official AltStore / SideStore / Feather / LiveContainer source for MiruShin - a cross-platform anime streaming and player app with Watch with Friends sync.",
+  "description": "Official AltStore / SideStore / Feather / LiveContainer source for MiruShin - a cross-platform anime streaming and player app.",
   "iconURL": "https://raw.githubusercontent.com/emp0ry/MiruShin/main/assets/icons/logo.png",
   "website": "https://mirushin.emp0ry.com/",
   "tintColor": "8b5cf6",
@@ -15,7 +15,7 @@
       "bundleIdentifier": "com.emp0ry.mirushin",
       "developerName": "emp0ry",
       "subtitle": "New way to watch and discover media.",
-      "localizedDescription": "MiruShin takes the familiar feel of AnimeShin and pushes it further with a cleaner Flutter architecture, real Sora module support, cross-platform playback, Watch with Friends peer sync, and deeper AniList profile flows. It can switch between TMDB-driven discovery and AniList-driven catalog views, then carry that context into your library, watch flow, and player.\n\nMiruShin is a media player and interface layer. It does not host or provide any content, and ships no built-in Sora modules.",
+      "localizedDescription": "MiruShin takes the familiar feel of AnimeShin and pushes it further with a cleaner Flutter architecture, real Sora module support, cross-platform playback, and deeper AniList profile flows. It can switch between TMDB-driven discovery and AniList-driven catalog views, then carry that context into your library, watch flow, and player.\n\nMiruShin is a media player and interface layer. It does not host or provide any content, and ships no built-in Sora modules.",
       "iconURL": "https://raw.githubusercontent.com/emp0ry/MiruShin/main/assets/icons/logo.png",
       "tintColor": "8b5cf6",
       "category": "entertainment",
@@ -30,6 +30,22 @@
         "https://raw.githubusercontent.com/emp0ry/MiruShin/main/docs/assets/imgs/mobile_player.png"
       ],
       "versions": [
+        {
+          "version": "2.3.0",
+          "date": "2026-07-13",
+          "localizedDescription": "- Added much better filters in Discovery, Library, and Source Modules.\n- Filters now support include and exclude actions for things like genres, tags, format, status, source, language, type, and download support.\n- Added AniList source/origin filters, adult content filter, licensing filter, and improved tag browsing/search.\n- Improved Library filters with sorting/grouped tags and extra metadata filters.\n- Cached downloaded anime artwork, including posters, backdrops, and episode images, so downloaded titles look better offline.\n- Fixed offline subtitles for downloaded episodes, including local subtitle file loading.\n- Added ASS/SSA subtitle parsing support.\n- Improved player stability when streams fail to load or internet is weak.\n- Made seeking more reliable so the player position and progress UI stay in sync.\n- Fixed player controls sometimes not hiding properly on mobile/iOS.\n- Improved keyboard shortcut handling in the player.\n- Improved Skip OP/ED button visibility so it follows the player UI correctly.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.3.0/MiruShin-ios-v2.3.0.ipa",
+          "size": 28005655,
+          "minOSVersion": "13.0"
+        },
+        {
+          "version": "2.2.0",
+          "date": "2026-06-30",
+          "localizedDescription": "- Known issue: Cloudflare verification is not working on Windows and could not be fixed yet.\n- Watch with Friend: watch any episode in sync with a friend over a peer-to-peer connection.\n- Create a room, share the 6-character code or QR, and playback stays locked together automatically.\n- Host playback actions like play, pause, seek, and speed changes are instantly mirrored to the guest with drift correction.\n- The host can optionally allow the guest to control playback, seek, or change speed.\n- The guest resolves the stream source locally, so video is not routed through a server and quality is unaffected.\n- Auto-reconnect after brief network drops, so the party can resume without rejoining.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.2.0/MiruShin-ios-v2.2.0.ipa",
+          "size": 28046876,
+          "minOSVersion": "13.0"
+        },
         {
           "version": "2.1.0",
           "date": "2026-06-28",
@@ -343,11 +359,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.1.0",
-      "versionDate": "2026-06-28",
-      "versionDescription": "- Added offline downloading for episodes.\n- You can save episodes from the watch page and access them later in the Downloaded library tab.\n- Downloaded episodes can be played offline without resolving streams again.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.1.0/MiruShin-ios-v2.1.0.ipa",
-      "size": 22142851,
+      "version": "2.3.0",
+      "versionDate": "2026-07-13",
+      "versionDescription": "- Added much better filters in Discovery, Library, and Source Modules.\n- Filters now support include and exclude actions for things like genres, tags, format, status, source, language, type, and download support.\n- Added AniList source/origin filters, adult content filter, licensing filter, and improved tag browsing/search.\n- Improved Library filters with sorting/grouped tags and extra metadata filters.\n- Cached downloaded anime artwork, including posters, backdrops, and episode images, so downloaded titles look better offline.\n- Fixed offline subtitles for downloaded episodes, including local subtitle file loading.\n- Added ASS/SSA subtitle parsing support.\n- Improved player stability when streams fail to load or internet is weak.\n- Made seeking more reliable so the player position and progress UI stay in sync.\n- Fixed player controls sometimes not hiding properly on mobile/iOS.\n- Improved keyboard shortcut handling in the player.\n- Improved Skip OP/ED button visibility so it follows the player UI correctly.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.3.0/MiruShin-ios-v2.3.0.ipa",
+      "size": 28005655,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
