@@ -75,6 +75,7 @@ class FvpPlayerEngine extends PlayerEngine {
   bool _currentAutoplay = true;
   int _openGeneration = 0;
   int _speedApplyGeneration = 0;
+  bool _disposed = false;
   int _startupRetryCount = 0;
   bool _preserveStartupRetryCount = false;
   bool _requireVideoSurfaceDuringStartup = false;
@@ -115,6 +116,7 @@ class FvpPlayerEngine extends PlayerEngine {
     Duration? startAt,
     bool autoplay = true,
   }) async {
+    if (_disposed) return;
     final bool preserveRetryCount = _preserveStartupRetryCount;
     _preserveStartupRetryCount = false;
     if (!preserveRetryCount) {
@@ -125,10 +127,12 @@ class FvpPlayerEngine extends PlayerEngine {
     try {
       _ensureTextureRuntimeCompatible();
     } on Object catch (error) {
-      _state.value = _state.value.copyWith(
-        isBuffering: false,
-        hasError: true,
-        errorDescription: error.toString(),
+      _setState(
+        _state.value.copyWith(
+          isBuffering: false,
+          hasError: true,
+          errorDescription: error.toString(),
+        ),
       );
       rethrow;
     }
@@ -156,11 +160,13 @@ class FvpPlayerEngine extends PlayerEngine {
     try {
       _opening = true;
       _hasMedia = true;
-      _state.value = _state.value.copyWith(
-        isBuffering: true,
-        isInitialized: false,
-        hasError: false,
-        clearError: true,
+      _setState(
+        _state.value.copyWith(
+          isBuffering: true,
+          isInitialized: false,
+          hasError: false,
+          clearError: true,
+        ),
       );
 
       final double targetPlaybackSpeed = _playbackSpeed;
@@ -269,9 +275,11 @@ class FvpPlayerEngine extends PlayerEngine {
 
       _syncState();
     } on Object catch (error) {
-      _state.value = _state.value.copyWith(
-        hasError: true,
-        errorDescription: error.toString(),
+      _setState(
+        _state.value.copyWith(
+          hasError: true,
+          errorDescription: error.toString(),
+        ),
       );
       rethrow;
     }
@@ -492,6 +500,7 @@ class FvpPlayerEngine extends PlayerEngine {
 
   @override
   Future<void> play() async {
+    if (_disposed) return;
     final mdk.Player? player = _player;
     if (player == null) return;
 
@@ -499,16 +508,17 @@ class FvpPlayerEngine extends PlayerEngine {
     // can reset MDK to 0 if the delayed seek is ignored or stream metadata is
     // not ready. Resume must only continue the existing player instance.
     player.state = mdk.PlaybackState.playing;
-    _state.value = _state.value.copyWith(isPlaying: true);
+    _setState(_state.value.copyWith(isPlaying: true));
     _syncState();
   }
 
   @override
   Future<void> pause() async {
+    if (_disposed) return;
     final mdk.Player? player = _player;
     if (player == null) return;
     player.state = mdk.PlaybackState.paused;
-    _state.value = _state.value.copyWith(isPlaying: false, isBuffering: false);
+    _setState(_state.value.copyWith(isPlaying: false, isBuffering: false));
     _syncState();
   }
 
@@ -662,12 +672,14 @@ class FvpPlayerEngine extends PlayerEngine {
 
       final int beforeMs = active.position.clamp(0, 1 << 62).toInt();
       final PlayerEngineState current = _state.value;
-      _state.value = current.copyWith(
-        position: target,
-        isBuffering:
-            _isPositionBuffered(current.buffered, target, current.duration)
-            ? false
-            : current.isBuffering,
+      _setState(
+        current.copyWith(
+          position: target,
+          isBuffering:
+              _isPositionBuffered(current.buffered, target, current.duration)
+              ? false
+              : current.isBuffering,
+        ),
       );
 
       await active.seek(position: targetMs, flags: flag);
@@ -711,6 +723,7 @@ class FvpPlayerEngine extends PlayerEngine {
 
   @override
   Future<void> setPlaybackSpeed(double speed) async {
+    if (_disposed) return;
     final double safeSpeed = speed.clamp(0.25, 3.0).toDouble();
     final int speedGeneration = ++_speedApplyGeneration;
     _playbackSpeed = safeSpeed;
@@ -771,6 +784,7 @@ class FvpPlayerEngine extends PlayerEngine {
 
   @override
   Future<void> setVolume(double volume) async {
+    if (_disposed) return;
     _volume = volume.clamp(0.0, 1.0).toDouble();
     final mdk.Player? player = _player;
     if (player != null) {
@@ -781,6 +795,8 @@ class FvpPlayerEngine extends PlayerEngine {
 
   @override
   Future<void> dispose() async {
+    if (_disposed) return;
+    _disposed = true;
     await _disposePlayerOnly();
     _state.value = const PlayerEngineState();
     _state.dispose();
@@ -1024,21 +1040,25 @@ class FvpPlayerEngine extends PlayerEngine {
   void _startOpenTimeout() {
     _openTimeoutTimer?.cancel();
     _openTimeoutTimer = Timer(const Duration(seconds: 90), () {
+      if (_disposed) return;
       if (!_opening) return;
       final PlayerEngineState current = _state.value;
       if (current.hasError) return;
       _lastError =
           'The stream did not start within 90 seconds. '
           'The source may be unavailable or require different headers.';
-      _state.value = current.copyWith(
-        isBuffering: false,
-        hasError: true,
-        errorDescription: _lastError,
+      _setState(
+        current.copyWith(
+          isBuffering: false,
+          hasError: true,
+          errorDescription: _lastError,
+        ),
       );
     });
   }
 
   void _syncState() {
+    if (_disposed) return;
     final mdk.Player? player = _player;
     if (player == null) return;
 
@@ -1134,24 +1154,26 @@ class FvpPlayerEngine extends PlayerEngine {
       duration,
     );
 
-    _state.value = PlayerEngineState(
-      position: position,
-      duration: duration,
-      volume: _volume,
-      playbackSpeed: _playbackSpeed,
-      aspectRatio: aspectRatio,
-      videoSize: videoSize,
-      buffered: bufferedRanges,
-      isInitialized: initialized,
-      isPlaying: isPlaying,
-      isBuffering:
-          !initialized ||
-          (status.test(mdk.MediaStatus.seeking) && !seekIsBuffered) ||
-          (isPlaying && nativeBuffering),
-      isCompleted: nativeEnded && initialized,
-      hasVideoSurface: hasTexture,
-      hasError: hasError,
-      errorDescription: _lastError ?? (invalid ? status.toString() : null),
+    _setState(
+      PlayerEngineState(
+        position: position,
+        duration: duration,
+        volume: _volume,
+        playbackSpeed: _playbackSpeed,
+        aspectRatio: aspectRatio,
+        videoSize: videoSize,
+        buffered: bufferedRanges,
+        isInitialized: initialized,
+        isPlaying: isPlaying,
+        isBuffering:
+            !initialized ||
+            (status.test(mdk.MediaStatus.seeking) && !seekIsBuffered) ||
+            (isPlaying && nativeBuffering),
+        isCompleted: nativeEnded && initialized,
+        hasVideoSurface: hasTexture,
+        hasError: hasError,
+        errorDescription: _lastError ?? (invalid ? status.toString() : null),
+      ),
     );
   }
 
@@ -1182,6 +1204,11 @@ class FvpPlayerEngine extends PlayerEngine {
     }
     if (value < 1.2 || value > 2.4) return null;
     return value;
+  }
+
+  void _setState(PlayerEngineState value) {
+    if (_disposed) return;
+    _state.value = value;
   }
 
   Size _videoSize(mdk.MediaInfo info) {

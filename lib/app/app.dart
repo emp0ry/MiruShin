@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' show AppExitResponse;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
@@ -13,6 +14,7 @@ import '../core/platform/tv_platform.dart';
 import '../features/addons/application/cloudflare_challenge_service.dart';
 import '../features/addons/application/sora_addons_provider.dart';
 import '../features/addons/presentation/cloudflare_challenge_page.dart';
+import '../features/player/application/playback_controller.dart';
 import 'app_routes.dart';
 import '../features/profile/application/anilist_user_settings_provider.dart';
 import '../features/settings/presentation/settings_state.dart';
@@ -31,12 +33,23 @@ class MiruShinApp extends ConsumerStatefulWidget {
 }
 
 class _MiruShinAppState extends ConsumerState<MiruShinApp> {
+  static const Duration _exitPlaybackCleanupTimeout = Duration(seconds: 2);
+
   late final GoRouter _router;
+  late final AppLifecycleListener _lifecycleListener;
+  Future<void>? _exitPlaybackCleanup;
 
   @override
   void initState() {
     super.initState();
     _router = buildAppRouter(widget.initialRoute);
+    _lifecycleListener = AppLifecycleListener(
+      onDetach: () => unawaited(_cleanupPlaybackForExit()),
+      onExitRequested: () async {
+        await _cleanupPlaybackForExit();
+        return AppExitResponse.exit;
+      },
+    );
     if (_cloudflareWebViewSupported) {
       CloudflareChallengeService.instance.registerSolver(
         _solveCloudflareChallenge,
@@ -46,8 +59,23 @@ class _MiruShinAppState extends ConsumerState<MiruShinApp> {
 
   @override
   void dispose() {
+    _lifecycleListener.dispose();
+    unawaited(_cleanupPlaybackForExit());
     CloudflareChallengeService.instance.registerSolver(null);
     super.dispose();
+  }
+
+  Future<void> _cleanupPlaybackForExit() {
+    final Future<void>? cleanup = _exitPlaybackCleanup;
+    if (cleanup != null) return cleanup;
+
+    return _exitPlaybackCleanup = ref
+        .read(playbackControllerProvider.notifier)
+        .stop()
+        .timeout(_exitPlaybackCleanupTimeout)
+        .catchError((_) {
+          // During process teardown the native player may already be half gone.
+        });
   }
 
   @override
@@ -150,10 +178,7 @@ Future<CloudflareSolveResult?> _solveCloudflareChallenge({
   }
 
   entry = OverlayEntry(
-    builder: (_) => CloudflareChallengePage(
-      url: url,
-      onResult: close,
-    ),
+    builder: (_) => CloudflareChallengePage(url: url, onResult: close),
   );
   overlay.insert(entry);
   return completer.future;

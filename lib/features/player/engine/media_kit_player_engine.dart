@@ -140,6 +140,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
   DateTime? _proxyStallStartedAt;
   DateTime? _proxyNoVideoStartedAt;
   int _openGeneration = 0;
+  bool _disposed = false;
   Size _lastVideoSize = Size.zero;
   Duration _lastReliableDuration = Duration.zero;
   List<PlayerBufferedRange> _lastBufferedRanges = const <PlayerBufferedRange>[];
@@ -187,7 +188,9 @@ class MediaKitPlayerEngine extends PlayerEngine {
     Duration? startAt,
     bool autoplay = true,
   }) async {
+    if (_disposed) return;
     await _disposePlayerOnly();
+    if (_disposed) return;
     final int openGeneration = ++_openGeneration;
 
     _currentSource = source;
@@ -223,11 +226,13 @@ class MediaKitPlayerEngine extends PlayerEngine {
     try {
       _opening = true;
       _hasMedia = true;
-      _state.value = _state.value.copyWith(
-        isBuffering: true,
-        isInitialized: false,
-        hasError: false,
-        clearError: true,
+      _setState(
+        _state.value.copyWith(
+          isBuffering: true,
+          isInitialized: false,
+          hasError: false,
+          clearError: true,
+        ),
       );
 
       final double targetPlaybackSpeed = _playbackSpeed;
@@ -345,10 +350,12 @@ class MediaKitPlayerEngine extends PlayerEngine {
       _syncState();
     } on Object catch (error) {
       _lastError = error.toString();
-      _state.value = _state.value.copyWith(
-        isBuffering: false,
-        hasError: true,
-        errorDescription: _lastError,
+      _setState(
+        _state.value.copyWith(
+          isBuffering: false,
+          hasError: true,
+          errorDescription: _lastError,
+        ),
       );
       rethrow;
     }
@@ -636,6 +643,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
     required String reason,
     bool requireVideoSurface = false,
   }) async {
+    if (_disposed) return;
     if (!_canRetryDirectAfterProxy(player)) return;
 
     final String directUrl = _directPlaybackUrl!;
@@ -658,23 +666,28 @@ class MediaKitPlayerEngine extends PlayerEngine {
     _lastError = null;
     _opening = true;
     _hasMedia = true;
-    _state.value = _state.value.copyWith(
-      isBuffering: true,
-      isInitialized: false,
-      hasError: false,
-      clearError: true,
+    _setState(
+      _state.value.copyWith(
+        isBuffering: true,
+        isInitialized: false,
+        hasError: false,
+        clearError: true,
+      ),
     );
     _startOpenTimeout();
 
     try {
       await _proxy.stop();
+      if (!_isActivePlayer(player, generation) || _disposed) return;
       _nativePlaybackUrl = directUrl;
       _nativePlaybackHeaders = headers;
       await player.setRate(1.0);
+      if (!_isActivePlayer(player, generation) || _disposed) return;
       await player.open(
         mk.Media(directUrl, httpHeaders: headers),
         play: shouldPlay,
       );
+      if (!_isActivePlayer(player, generation) || _disposed) return;
       _directFallbackInProgress = false;
 
       unawaited(
@@ -865,6 +878,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
 
   @override
   Future<void> play() async {
+    if (_disposed) return;
     final mk.Player? player = _player;
     if (player == null) return;
     await player.play();
@@ -873,6 +887,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
 
   @override
   Future<void> pause() async {
+    if (_disposed) return;
     final mk.Player? player = _player;
     if (player == null) return;
     await player.pause();
@@ -902,7 +917,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
       if (active == null || active != player || !_hasMedia) return false;
 
       final Duration before = active.state.position;
-      _state.value = _state.value.copyWith(position: target, isBuffering: true);
+      _setState(_state.value.copyWith(position: target, isBuffering: true));
       await active.seek(target);
       await Future<void>.delayed(_seekVerificationDelay);
 
@@ -945,6 +960,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
 
   @override
   Future<void> setPlaybackSpeed(double speed) async {
+    if (_disposed) return;
     _playbackSpeed = speed.clamp(0.25, 3.0).toDouble();
     _currentTargetPlaybackSpeed = _playbackSpeed;
     final mk.Player? player = _player;
@@ -962,6 +978,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
 
   @override
   Future<void> setVolume(double volume) async {
+    if (_disposed) return;
     _volume = volume.clamp(0.0, 1.0).toDouble();
     final mk.Player? player = _player;
     if (player != null) {
@@ -972,6 +989,8 @@ class MediaKitPlayerEngine extends PlayerEngine {
 
   @override
   Future<void> dispose() async {
+    if (_disposed) return;
+    _disposed = true;
     await _disposePlayerOnly();
     await _proxy.stop();
     _state.value = const PlayerEngineState();
@@ -986,6 +1005,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
   void _startOpenTimeout() {
     _openTimeoutTimer?.cancel();
     _openTimeoutTimer = Timer(_openTimeout, () {
+      if (_disposed) return;
       if (!_opening) return;
       final PlayerEngineState current = _state.value;
       if (current.hasError) return;
@@ -998,15 +1018,18 @@ class MediaKitPlayerEngine extends PlayerEngine {
       }
       _lastError =
           'The stream did not start within 90 seconds. The source may be unavailable or require different headers.';
-      _state.value = current.copyWith(
-        isBuffering: false,
-        hasError: true,
-        errorDescription: _lastError,
+      _setState(
+        current.copyWith(
+          isBuffering: false,
+          hasError: true,
+          errorDescription: _lastError,
+        ),
       );
     });
   }
 
   void _syncState() {
+    if (_disposed) return;
     final mk.Player? player = _player;
     if (player == null) return;
 
@@ -1052,21 +1075,23 @@ class MediaKitPlayerEngine extends PlayerEngine {
     final bool hasError = _lastError != null;
     final double aspectRatio = _effectiveAspectRatio(_lastVideoSize);
 
-    _state.value = PlayerEngineState(
-      position: position,
-      duration: duration,
-      volume: _volume,
-      playbackSpeed: _playbackSpeed,
-      aspectRatio: aspectRatio,
-      videoSize: _lastVideoSize,
-      buffered: buffered.isNotEmpty ? buffered : _lastBufferedRanges,
-      isInitialized: initialized,
-      isPlaying: native.playing,
-      isBuffering: !initialized || native.buffering,
-      isCompleted: native.completed && initialized,
-      hasVideoSurface: hasVideoSize,
-      hasError: hasError,
-      errorDescription: _lastError,
+    _setState(
+      PlayerEngineState(
+        position: position,
+        duration: duration,
+        volume: _volume,
+        playbackSpeed: _playbackSpeed,
+        aspectRatio: aspectRatio,
+        videoSize: _lastVideoSize,
+        buffered: buffered.isNotEmpty ? buffered : _lastBufferedRanges,
+        isInitialized: initialized,
+        isPlaying: native.playing,
+        isBuffering: !initialized || native.buffering,
+        isCompleted: native.completed && initialized,
+        hasVideoSurface: hasVideoSize,
+        hasError: hasError,
+        errorDescription: _lastError,
+      ),
     );
 
     _watchProxyStall(
@@ -1182,6 +1207,11 @@ class MediaKitPlayerEngine extends PlayerEngine {
     }
     if (value < 1.2 || value > 2.4) return null;
     return value;
+  }
+
+  void _setState(PlayerEngineState value) {
+    if (_disposed) return;
+    _state.value = value;
   }
 
   Future<void> _disposePlayerOnly() async {

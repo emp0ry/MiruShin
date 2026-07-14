@@ -37,6 +37,26 @@ ButtonStyle _overlayActionButtonStyle() {
   );
 }
 
+Future<void> _setWakelockSafely(bool enabled) async {
+  try {
+    if (enabled) {
+      await WakelockPlus.enable();
+    } else {
+      await WakelockPlus.disable();
+    }
+  } on Object {
+    // The platform channel may already be detached during app shutdown.
+  }
+}
+
+Future<void> _setSystemUiModeSafely(SystemUiMode mode) async {
+  try {
+    await SystemChrome.setEnabledSystemUIMode(mode);
+  } on Object {
+    // Ignore shutdown-time platform channel failures.
+  }
+}
+
 class PlayerPage extends ConsumerStatefulWidget {
   const PlayerPage({
     required this.item,
@@ -114,12 +134,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   void initState() {
     super.initState();
     FocusManager.instance.addEarlyKeyEventHandler(_handlePlayerShortcutEvent);
-    unawaited(WakelockPlus.enable());
+    unawaited(_setWakelockSafely(true));
     // Re-assert the wakelock every 60 s – guards against any platform-level
     // release that the one-shot enable() might not survive (e.g. system sleep
     // assertion expiry on macOS or focus-change edge cases on Android).
     _wakelockTimer = Timer.periodic(const Duration(seconds: 60), (_) {
-      if (mounted) unawaited(WakelockPlus.enable());
+      if (mounted) unawaited(_setWakelockSafely(true));
     });
     _isMobile =
         !kIsWeb &&
@@ -331,7 +351,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     _trailerCommandSub?.cancel();
     _pipSub?.cancel();
     _wakelockTimer?.cancel();
-    unawaited(WakelockPlus.disable());
+    unawaited(_setWakelockSafely(false));
     _hideTimer?.cancel();
     _autoNextTimer?.cancel();
     _cancelSpaceHold(restoreSpeed: true);
@@ -339,10 +359,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     unawaited(_stopPlayback());
     _playerFocusNode.dispose();
     _tvChromeSeedFocus.dispose();
-    SystemChrome.setEnabledSystemUIMode(
-      _preserveFullscreenForNextRoute
-          ? SystemUiMode.immersiveSticky
-          : SystemUiMode.edgeToEdge,
+    unawaited(
+      _setSystemUiModeSafely(
+        _preserveFullscreenForNextRoute
+            ? SystemUiMode.immersiveSticky
+            : SystemUiMode.edgeToEdge,
+      ),
     );
     super.dispose();
   }
@@ -1850,7 +1872,7 @@ class _AutoSkipWorkerState extends ConsumerState<_AutoSkipWorker> {
   @override
   void initState() {
     super.initState();
-    unawaited(WakelockPlus.enable());
+    unawaited(_setWakelockSafely(true));
     _syncItemKey();
     _attachController(widget.state.engine);
     WidgetsBinding.instance.addPostFrameCallback((_) => _evaluate());
@@ -2449,7 +2471,7 @@ class _PositionLabelState extends ConsumerState<_PositionLabel> {
   @override
   void initState() {
     super.initState();
-    unawaited(WakelockPlus.enable());
+    unawaited(_setWakelockSafely(true));
     widget.controller?.addListener(_tick);
   }
 
@@ -2570,7 +2592,7 @@ class _PlayPauseButtonState extends ConsumerState<_PlayPauseButton> {
   @override
   void initState() {
     super.initState();
-    unawaited(WakelockPlus.enable());
+    unawaited(_setWakelockSafely(true));
     widget.controller?.addListener(_tick);
   }
 
@@ -2724,7 +2746,7 @@ class _PositionBarState extends ConsumerState<_PositionBar> {
   @override
   void initState() {
     super.initState();
-    unawaited(WakelockPlus.enable());
+    unawaited(_setWakelockSafely(true));
     widget.controller.addListener(_tick);
   }
 
@@ -3289,7 +3311,7 @@ class _SubtitleOverlayState extends State<_SubtitleOverlay> {
   @override
   void initState() {
     super.initState();
-    unawaited(WakelockPlus.enable());
+    unawaited(_setWakelockSafely(true));
     widget.state.engine?.addListener(_tick);
   }
 

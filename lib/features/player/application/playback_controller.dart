@@ -46,6 +46,14 @@ abstract interface class PlaybackSyncSink {
 final playbackControllerProvider =
     NotifierProvider<PlaybackController, PlaybackState>(PlaybackController.new);
 
+Future<void> _ignorePlaybackTeardownErrors(Future<void> future) async {
+  try {
+    await future;
+  } on Object {
+    // Native/player resources can already be gone while the app is exiting.
+  }
+}
+
 class PlaybackState {
   const PlaybackState({
     this.item,
@@ -463,11 +471,15 @@ class PlaybackController extends Notifier<PlaybackState> {
       _seekPreviewTimer?.cancel();
       _seekPreviewWarmupTimer?.cancel();
       _seekSettleTimer?.cancel();
-      unawaited(DiscordRpcService.dispose());
-      unawaited(_disposeSeekPreviewEngine(clearState: false));
+      unawaited(_ignorePlaybackTeardownErrors(DiscordRpcService.dispose()));
+      unawaited(
+        _ignorePlaybackTeardownErrors(
+          _disposeSeekPreviewEngine(clearState: false),
+        ),
+      );
       final PlayerEngine? engine = state.engine;
       if (engine != null) {
-        unawaited(engine.dispose());
+        unawaited(_ignorePlaybackTeardownErrors(engine.dispose()));
       }
     });
     return const PlaybackState();
@@ -482,7 +494,9 @@ class PlaybackController extends Notifier<PlaybackState> {
     final PlayerEngine? engine = state.engine;
     if (item == null || engine == null || !engine.state.value.isInitialized) {
       unawaited(MediaSessionService.clearNowPlaying());
-      unawaited(DiscordRpcService.clearActivity());
+      unawaited(
+        _ignorePlaybackTeardownErrors(DiscordRpcService.clearActivity()),
+      );
       return;
     }
     final PlayerEngineState es = engine.state.value;
@@ -1469,14 +1483,18 @@ class PlaybackController extends Notifier<PlaybackState> {
 
   Future<void> stop() async {
     unawaited(MediaSessionService.clearNowPlaying());
-    unawaited(DiscordRpcService.clearActivity());
+    unawaited(_ignorePlaybackTeardownErrors(DiscordRpcService.clearActivity()));
     _playbackGeneration++;
     _temporarySpeedHolds = 0;
     _progressTimer?.cancel();
     _undoTimer?.cancel();
     _autoNextOverlayTimer?.cancel();
     _clearInteractiveSeek();
-    await _disposeSeekPreviewEngine(clearState: false);
+    try {
+      await _disposeSeekPreviewEngine(clearState: false);
+    } catch (_) {
+      // Preview teardown must not prevent the main player from being released.
+    }
 
     final MediaPlaybackItem? item = state.item;
     final PlayerEngine? engine = state.engine;
@@ -1484,7 +1502,11 @@ class PlaybackController extends Notifier<PlaybackState> {
     if (engine == null) return;
 
     if (item != null && !item.ignoreProgress) {
-      await _saveProgress(item, engine);
+      try {
+        await _saveProgress(item, engine);
+      } catch (_) {
+        // Exiting should still release the native player if persistence is busy.
+      }
     }
     _resumeGuardPosition = Duration.zero;
     _resumeGuardUntil = null;

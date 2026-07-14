@@ -87,18 +87,20 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
     Duration? startAt,
     bool autoplay = true,
   }) async {
+    if (_disposed) return;
     final String videoId = _youtubeVideoId(source.url);
     if (videoId.isEmpty) {
       throw const FormatException('Invalid YouTube trailer URL.');
     }
 
-    _disposed = false;
-    _state.value = _state.value.copyWith(
-      isBuffering: true,
-      isInitialized: false,
-      hasVideoSurface: false,
-      hasError: false,
-      clearError: true,
+    _setState(
+      _state.value.copyWith(
+        isBuffering: true,
+        isInitialized: false,
+        hasVideoSurface: false,
+        hasError: false,
+        clearError: true,
+      ),
     );
 
     final WebViewController controller = await _createController();
@@ -129,12 +131,14 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
     }
 
     if (_disposed) return;
-    _state.value = _state.value.copyWith(
-      isInitialized: true,
-      hasVideoSurface: true,
-      isBuffering: false,
-      isPlaying: autoplay,
-      aspectRatio: 16 / 9,
+    _setState(
+      _state.value.copyWith(
+        isInitialized: true,
+        hasVideoSurface: true,
+        isBuffering: false,
+        isPlaying: autoplay,
+        aspectRatio: 16 / 9,
+      ),
     );
   }
 
@@ -285,13 +289,15 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
   void _handleYoutubeState(String raw) {
     if (_disposed) return;
     final int state = int.tryParse(raw.trim()) ?? -1;
-    _state.value = _state.value.copyWith(
-      isInitialized: true,
-      hasVideoSurface: true,
-      isPlaying: state == 1,
-      isBuffering: state == 3,
-      hasError: false,
-      clearError: true,
+    _setState(
+      _state.value.copyWith(
+        isInitialized: true,
+        hasVideoSurface: true,
+        isPlaying: state == 1,
+        isBuffering: state == 3,
+        hasError: false,
+        clearError: true,
+      ),
     );
   }
 
@@ -299,11 +305,13 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
     if (_disposed) return;
     final String code = raw.trim();
     debugPrint('YouTube embedded player error: $code');
-    _state.value = _state.value.copyWith(
-      isBuffering: false,
-      isPlaying: false,
-      hasError: true,
-      errorDescription: 'YouTube embedded player error: $code',
+    _setState(
+      _state.value.copyWith(
+        isBuffering: false,
+        isPlaying: false,
+        hasError: true,
+        errorDescription: 'YouTube embedded player error: $code',
+      ),
     );
   }
 
@@ -327,25 +335,29 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
 
   @override
   Future<void> play() async {
-    _state.value = _state.value.copyWith(isPlaying: true);
+    if (_disposed) return;
+    _setState(_state.value.copyWith(isPlaying: true));
     await _runPlayerCommand('playVideo()');
   }
 
   @override
   Future<void> pause() async {
-    _state.value = _state.value.copyWith(isPlaying: false);
+    if (_disposed) return;
+    _setState(_state.value.copyWith(isPlaying: false));
     await _runPlayerCommand('pauseVideo()');
   }
 
   @override
   Future<void> seekTo(Duration position) async {
+    if (_disposed) return;
     await _runPlayerCommand('seekTo(${position.inSeconds}, true)');
   }
 
   @override
   Future<void> setPlaybackSpeed(double speed) async {
+    if (_disposed) return;
     _playbackSpeed = speed;
-    _state.value = _state.value.copyWith(playbackSpeed: speed);
+    _setState(_state.value.copyWith(playbackSpeed: speed));
     await _runJavaScript('''
       window.mirushinPlaybackRate = $speed;
       if (window.player && window.player.setPlaybackRate) {
@@ -356,8 +368,9 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
 
   @override
   Future<void> setVolume(double volume) async {
+    if (_disposed) return;
     _volume = volume.clamp(0.0, 1.0).toDouble();
-    _state.value = _state.value.copyWith(volume: _volume);
+    _setState(_state.value.copyWith(volume: _volume));
     final int playerVolume = (_volume * 100).round();
     await _runJavaScript('''
       window.mirushinVolume = $playerVolume;
@@ -403,6 +416,11 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
     }
     await _uiCommands.close();
     _state.dispose();
+  }
+
+  void _setState(PlayerEngineState value) {
+    if (_disposed) return;
+    _state.value = value;
   }
 
   static String _youtubeVideoId(String url) {

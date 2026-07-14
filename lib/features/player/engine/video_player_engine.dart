@@ -20,6 +20,7 @@ class VideoPlayerEngine extends PlayerEngine {
   VoidCallback? _controllerListener;
   double _volume = 1;
   double _playbackSpeed = 1;
+  bool _disposed = false;
 
   @override
   ValueListenable<PlayerEngineState> get state => _state;
@@ -45,14 +46,18 @@ class VideoPlayerEngine extends PlayerEngine {
     Duration? startAt,
     bool autoplay = true,
   }) async {
+    if (_disposed) return;
     await _disposeControllerOnly();
+    if (_disposed) return;
 
     _volume = _state.value.volume;
     _playbackSpeed = _state.value.playbackSpeed;
-    _state.value = _state.value.copyWith(
-      isBuffering: true,
-      isInitialized: false,
-      clearError: true,
+    _setState(
+      _state.value.copyWith(
+        isBuffering: true,
+        isInitialized: false,
+        clearError: true,
+      ),
     );
 
     final Uri uri = Uri.parse(source.url);
@@ -81,10 +86,12 @@ class VideoPlayerEngine extends PlayerEngine {
       }
       _syncState();
     } on Object catch (error) {
-      _state.value = _state.value.copyWith(
-        isBuffering: false,
-        hasError: true,
-        errorDescription: _friendlyOpenError(error, source),
+      _setState(
+        _state.value.copyWith(
+          isBuffering: false,
+          hasError: true,
+          errorDescription: _friendlyOpenError(error, source),
+        ),
       );
       rethrow;
     }
@@ -92,6 +99,7 @@ class VideoPlayerEngine extends PlayerEngine {
 
   @override
   Future<void> play() async {
+    if (_disposed) return;
     final VideoPlayerController? controller = _controller;
     if (controller == null) return;
     await controller.play();
@@ -100,6 +108,7 @@ class VideoPlayerEngine extends PlayerEngine {
 
   @override
   Future<void> pause() async {
+    if (_disposed) return;
     final VideoPlayerController? controller = _controller;
     if (controller == null) return;
     await controller.pause();
@@ -108,15 +117,17 @@ class VideoPlayerEngine extends PlayerEngine {
 
   @override
   Future<void> seekTo(Duration position) async {
+    if (_disposed) return;
     final VideoPlayerController? controller = _controller;
     if (controller == null) return;
-    _state.value = _state.value.copyWith(position: position);
+    _setState(_state.value.copyWith(position: position));
     await controller.seekTo(position);
     _syncState();
   }
 
   @override
   Future<void> setPlaybackSpeed(double speed) async {
+    if (_disposed) return;
     _playbackSpeed = speed;
     final VideoPlayerController? controller = _controller;
     if (controller != null && controller.value.isInitialized) {
@@ -127,6 +138,7 @@ class VideoPlayerEngine extends PlayerEngine {
 
   @override
   Future<void> setVolume(double volume) async {
+    if (_disposed) return;
     _volume = volume.clamp(0.0, 1.0).toDouble();
     final VideoPlayerController? controller = _controller;
     if (controller != null && controller.value.isInitialized) {
@@ -137,12 +149,15 @@ class VideoPlayerEngine extends PlayerEngine {
 
   @override
   Future<void> dispose() async {
+    if (_disposed) return;
+    _disposed = true;
     await _disposeControllerOnly();
     _state.value = const PlayerEngineState();
     _state.dispose();
   }
 
   void _syncState() {
+    if (_disposed) return;
     final VideoPlayerController? controller = _controller;
     if (controller == null) return;
     final VideoPlayerValue value = controller.value;
@@ -155,21 +170,28 @@ class VideoPlayerEngine extends PlayerEngine {
         )
         .toList(growable: false);
 
-    _state.value = PlayerEngineState(
-      position: value.position,
-      duration: value.duration,
-      volume: _volume,
-      playbackSpeed: _playbackSpeed,
-      aspectRatio: aspectRatio,
-      videoSize: videoSize,
-      buffered: buffered,
-      isInitialized: value.isInitialized,
-      isPlaying: value.isPlaying,
-      isBuffering: value.isBuffering,
-      hasVideoSurface: value.isInitialized,
-      hasError: value.hasError,
-      errorDescription: value.errorDescription,
+    _setState(
+      PlayerEngineState(
+        position: value.position,
+        duration: value.duration,
+        volume: _volume,
+        playbackSpeed: _playbackSpeed,
+        aspectRatio: aspectRatio,
+        videoSize: videoSize,
+        buffered: buffered,
+        isInitialized: value.isInitialized,
+        isPlaying: value.isPlaying,
+        isBuffering: value.isBuffering,
+        hasVideoSurface: value.isInitialized,
+        hasError: value.hasError,
+        errorDescription: value.errorDescription,
+      ),
     );
+  }
+
+  void _setState(PlayerEngineState value) {
+    if (_disposed) return;
+    _state.value = value;
   }
 
   Future<void> _disposeControllerOnly() async {
