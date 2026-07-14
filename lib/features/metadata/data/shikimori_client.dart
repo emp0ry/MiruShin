@@ -1,5 +1,11 @@
 import 'package:dio/dio.dart';
 
+typedef ShikimoriRussianDetails = ({
+  String title,
+  String description,
+  String youtubeTrailerUrl,
+});
+
 class ShikimoriSearchHit {
   const ShikimoriSearchHit({
     this.id = 0,
@@ -27,9 +33,9 @@ class ShikiMoriClient {
   final Dio _dio;
   final Map<String, _CacheEntry> _cache = <String, _CacheEntry>{};
 
-  static const String _restUrl = 'https://shikimori.one/api/animes';
-  static const String _mangasUrl = 'https://shikimori.one/api/mangas';
-  static const String _graphqlUrl = 'https://shikimori.one/api/graphql';
+  static const String _restUrl = 'https://shikimori.io/api/animes';
+  static const String _mangasUrl = 'https://shikimori.io/api/mangas';
+  static const String _graphqlUrl = 'https://shikimori.io/api/graphql';
   static const Duration _cacheTtl = Duration(hours: 12);
   static const int _maxCacheSize = 300;
 
@@ -148,7 +154,7 @@ class ShikiMoriClient {
       for (final Object? item in data) {
         if (item is! Map) continue;
         final int? shikimoriId = _parseInt(item['id']);
-        final int? malId = _parseInt(item['id_mal']);
+        final int? malId = _malIdFromJson(item);
         if ((shikimoriId == null || shikimoriId <= 0) &&
             (malId == null || malId <= 0)) {
           continue;
@@ -229,7 +235,7 @@ class ShikiMoriClient {
       for (final Object? item in data) {
         if (item is! Map) continue;
         // id_mal is the MAL ID; Shikimori's own `id` may differ.
-        final int? malId = _parseInt(item['id_mal'] ?? item['id']);
+        final int? malId = _malIdFromJson(item) ?? _parseInt(item['id']);
         if (malId == null || malId <= 0) continue;
         final String? russian = item['russian']?.toString().trim();
         if (russian != null && russian.isNotEmpty) {
@@ -248,8 +254,8 @@ class ShikiMoriClient {
     }
   }
 
-  // Fetch full details from Shikimori REST for Russian description.
-  Future<({String title, String description})?> getRussianDetails(
+  // Fetch full details from Shikimori REST for Russian text and trailer data.
+  Future<ShikimoriRussianDetails?> getRussianDetails(
     int id, {
     int? expectedMalId,
     bool isManga = false,
@@ -267,7 +273,7 @@ class ShikiMoriClient {
       final Object? data = response.data;
       if (data is! Map) return null;
       if (expectedMalId != null && expectedMalId > 0) {
-        final int? actualMalId = _parseInt(data['id_mal']);
+        final int? actualMalId = _malIdFromJson(data);
         // Shikimori's REST detail endpoint omits `id_mal`, so only reject when
         // it is actually present AND disagrees. Rejecting on a missing id_mal
         // (the common case) discarded every valid response, which is why the
@@ -278,25 +284,33 @@ class ShikiMoriClient {
       final String description = _stripMarkup(
         data['description']?.toString().trim() ?? '',
       );
-      if (russian.isEmpty && description.isEmpty) return null;
-      return (title: russian, description: description);
+      final String youtubeTrailerUrl = isManga
+          ? ''
+          : _russianYoutubeTrailerUrl(data['videos']);
+      if (russian.isEmpty && description.isEmpty && youtubeTrailerUrl.isEmpty) {
+        return null;
+      }
+      return (
+        title: russian,
+        description: description,
+        youtubeTrailerUrl: youtubeTrailerUrl,
+      );
     } catch (_) {
       return null;
     }
   }
 
-  Future<({String title, String description})?> getRussianDetailsForMedia({
+  Future<ShikimoriRussianDetails?> getRussianDetailsForMedia({
     int? malId,
     Iterable<String> queries = const <String>[],
     bool isManga = false,
   }) async {
     if (malId != null && malId > 0) {
-      final ({String title, String description})? direct =
-          await getRussianDetails(
-            malId,
-            expectedMalId: malId,
-            isManga: isManga,
-          );
+      final ShikimoriRussianDetails? direct = await getRussianDetails(
+        malId,
+        expectedMalId: malId,
+        isManga: isManga,
+      );
       if (_hasDetails(direct)) return direct;
     }
 
@@ -314,15 +328,14 @@ class ShikiMoriClient {
       final bool exactMalMatch =
           malId == null || malId <= 0 || hit.malId == malId;
       final int detailId = hit.id > 0 ? hit.id : hit.malId;
-      final ({String title, String description})? details =
-          await getRussianDetails(
-            detailId,
-            expectedMalId: malId != null && malId > 0 ? malId : null,
-            isManga: isManga,
-          );
+      final ShikimoriRussianDetails? details = await getRussianDetails(
+        detailId,
+        expectedMalId: malId != null && malId > 0 ? malId : null,
+        isManga: isManga,
+      );
       if (_hasDetails(details)) return details;
       if (exactMalMatch && hit.russian.isNotEmpty) {
-        return (title: hit.russian, description: '');
+        return (title: hit.russian, description: '', youtubeTrailerUrl: '');
       }
     }
 
@@ -340,10 +353,148 @@ class ShikiMoriClient {
     return hits.first;
   }
 
-  static bool _hasDetails(({String title, String description})? details) {
+  static bool _hasDetails(ShikimoriRussianDetails? details) {
     return details != null &&
         (details.title.trim().isNotEmpty ||
-            details.description.trim().isNotEmpty);
+            details.description.trim().isNotEmpty ||
+            details.youtubeTrailerUrl.trim().isNotEmpty);
+  }
+
+  static String _russianYoutubeTrailerUrl(Object? videos) {
+    if (videos is! List<dynamic>) return '';
+    final List<({String url, int localizationRank, int score, int order})>
+    candidates = <({String url, int localizationRank, int score, int order})>[];
+    var order = 0;
+    for (final Object? entry in videos) {
+      if (entry is! Map) continue;
+      final int currentOrder = order++;
+      final String url = _bestVideoUrl(entry);
+      if (url.isEmpty) continue;
+      final String hosting = entry['hosting']?.toString().trim() ?? '';
+      if (!_isYoutubeHosting(hosting) || !_isYoutubeUrl(url)) continue;
+      final String kind = entry['kind']?.toString().trim().toLowerCase() ?? '';
+      final String videoText = _videoText(entry);
+      if (!_hasRussianLocalizationMarker(videoText)) continue;
+      if (!_isTrailerVideo(kind, videoText)) continue;
+      candidates.add((
+        url: url,
+        localizationRank: _russianTrailerLocalizationRank(videoText),
+        score: _trailerVideoScore(kind, videoText),
+        order: currentOrder,
+      ));
+    }
+    if (candidates.isEmpty) return '';
+    candidates.sort((a, b) {
+      final int localization = a.localizationRank.compareTo(b.localizationRank);
+      if (localization != 0) return localization;
+      final int score = b.score.compareTo(a.score);
+      if (score != 0) return score;
+      return a.order.compareTo(b.order);
+    });
+    return candidates.first.url;
+  }
+
+  static bool _isYoutubeHosting(String hosting) {
+    final String normalized = hosting.toLowerCase();
+    return normalized == 'youtube' ||
+        normalized == 'youtu.be' ||
+        normalized == 'youtube.com' ||
+        normalized == 'www.youtube.com';
+  }
+
+  static bool _isYoutubeUrl(String url) {
+    final Uri? uri = Uri.tryParse(url);
+    if (uri == null) return false;
+    final String host = uri.host.toLowerCase();
+    return host == 'youtu.be' || host.endsWith('youtube.com');
+  }
+
+  static String _bestVideoUrl(Map<dynamic, dynamic> entry) {
+    for (final String key in const <String>['url', 'player_url']) {
+      final String url = _normalizeYoutubeUrl(
+        entry[key]?.toString().trim() ?? '',
+      );
+      if (url.isNotEmpty && _isYoutubeUrl(url)) return url;
+    }
+    return '';
+  }
+
+  static String _videoText(Map<dynamic, dynamic> entry) {
+    return <String>[
+      entry['name']?.toString().trim() ?? '',
+      entry['description']?.toString().trim() ?? '',
+    ].where((String value) => value.isNotEmpty).join(' ');
+  }
+
+  static bool _isTrailerVideo(String kind, String name) {
+    final String normalizedName = name.toLowerCase();
+    return kind == 'pv' ||
+        kind == 'trailer' ||
+        kind == 'promo' ||
+        normalizedName.contains('trailer') ||
+        normalizedName.contains('трейлер') ||
+        normalizedName.contains('тизер') ||
+        normalizedName.contains('анонс') ||
+        RegExp(r'\bpv\b').hasMatch(normalizedName);
+  }
+
+  static bool _hasRussianLocalizationMarker(String name) {
+    return _russianTrailerLocalizationRank(name) < 2;
+  }
+
+  static int _russianTrailerLocalizationRank(String name) {
+    final String normalizedName = name.toLowerCase();
+    if (normalizedName.contains('озвучк')) return 0;
+    if (normalizedName.contains('субтитр') ||
+        normalizedName.contains('субтритр')) {
+      return 1;
+    }
+    return 2;
+  }
+
+  static int _trailerVideoScore(String kind, String name) {
+    final String normalizedName = name.toLowerCase();
+    int score = 0;
+    if (_hasCyrillic(name) ||
+        normalizedName.contains('рус') ||
+        normalizedName.contains('russian')) {
+      score += 100;
+    }
+    if (normalizedName.contains('трейлер') ||
+        normalizedName.contains('trailer')) {
+      score += 40;
+    }
+    if (kind == 'pv' || RegExp(r'\bpv\b').hasMatch(normalizedName)) {
+      score += 20;
+    }
+    if (normalizedName.contains('тизер') || normalizedName.contains('анонс')) {
+      score += 10;
+    }
+    return score;
+  }
+
+  static bool _hasCyrillic(String value) {
+    return RegExp(r'[а-яёА-ЯЁ]').hasMatch(value);
+  }
+
+  static int? _malIdFromJson(Map<dynamic, dynamic> data) {
+    return _parseInt(data['id_mal'] ?? data['myanimelist_id']);
+  }
+
+  static String _normalizeYoutubeUrl(String url) {
+    final String trimmed = url.trim();
+    if (trimmed.isEmpty) return '';
+    if (trimmed.startsWith('//')) return 'https:$trimmed';
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      return trimmed;
+    }
+    final String lower = trimmed.toLowerCase();
+    if (lower.startsWith('www.youtube.com') ||
+        lower.startsWith('youtube.com') ||
+        lower.startsWith('youtu.be')) {
+      return 'https://$trimmed';
+    }
+    return trimmed;
   }
 
   static String _stripMarkup(String text) {

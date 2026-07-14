@@ -16,11 +16,13 @@ PlayerEngine createPlayerEngine({
   bool previewMode = false,
   PlayerBackend backend = PlayerBackend.auto,
   bool youtubeEmbed = false,
+  String trailerBackLabel = 'Back',
 }) {
   if (youtubeEmbed) {
     return YoutubeEmbedPlayerEngine(
       initialAspectRatio: initialAspectRatio,
       renderControlsInHtml: Platform.isWindows || Platform.isLinux,
+      trailerBackLabel: trailerBackLabel,
     );
   }
   switch (resolvePlayerEngineBackend(backend)) {

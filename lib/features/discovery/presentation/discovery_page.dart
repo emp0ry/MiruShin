@@ -952,15 +952,68 @@ bool _aniListSourceFilterHasNoMatches(_AniListDiscoveryFilter filter) {
   return _effectiveAniListSourceIn(filter).isEmpty;
 }
 
+const Set<String> _aniListTagCategoryPrefixes = <String>{
+  'Cast',
+  'Demographic',
+  'Setting',
+  'Sexual Content',
+  'Technical',
+  'Theme',
+};
+
+const List<String> _aniListTagCategoryLeaves = <String>[
+  'Card & Board Game',
+  'Sexual Content',
+  'Slice of Life',
+  'Main Cast',
+  'Organisations',
+  'Organizations',
+  'Technical',
+  'Demographic',
+  'Universe',
+  'Vehicle',
+  'Fantasy',
+  'Romance',
+  'Comedy',
+  'Action',
+  'Drama',
+  'Scene',
+  'Traits',
+  'Sci-Fi',
+  'Mecha',
+  'Other',
+  'Sport',
+  'Music',
+  'Arts',
+  'Game',
+  'Time',
+  'Cast',
+  'Theme',
+];
+
+int _compareDisplayTagCategories(String a, String b) {
+  final String displayA = _displayTagCategory(a);
+  final String displayB = _displayTagCategory(b);
+  final bool otherA = displayA.toLowerCase() == 'other';
+  final bool otherB = displayB.toLowerCase() == 'other';
+  if (otherA != otherB) return otherA ? 1 : -1;
+  return displayA.toLowerCase().compareTo(displayB.toLowerCase());
+}
+
 String _displayTagCategory(String raw) {
   final String trimmed = raw.trim();
   if (trimmed.isEmpty) return 'Other';
-  final List<String> parts = trimmed
-      .split('-')
-      .map((String part) => part.trim())
-      .where((String part) => part.isNotEmpty)
-      .toList(growable: false);
-  return parts.isEmpty ? trimmed : parts.last;
+  for (final String leaf in _aniListTagCategoryLeaves) {
+    if (trimmed == leaf || trimmed.endsWith('-$leaf')) return leaf;
+  }
+  final int dash = trimmed.indexOf('-');
+  if (dash <= 0) return trimmed;
+  final String prefix = trimmed.substring(0, dash).trim();
+  final String suffix = trimmed.substring(dash + 1).trim();
+  if (_aniListTagCategoryPrefixes.contains(prefix) && suffix.isNotEmpty) {
+    return suffix;
+  }
+  return trimmed;
 }
 
 class _DiscoveryFooter extends StatelessWidget {
@@ -1268,9 +1321,7 @@ class _DiscoveryAdvancedFilterSheetState
         (
           MapEntry<String, List<AniListMediaTagInfo>> a,
           MapEntry<String, List<AniListMediaTagInfo>> b,
-        ) => _displayTagCategory(
-          a.key,
-        ).toLowerCase().compareTo(_displayTagCategory(b.key).toLowerCase()),
+        ) => _compareDisplayTagCategories(a.key, b.key),
       ),
     );
   }
@@ -1540,16 +1591,13 @@ class _DiscoveryAdvancedFilterSheetState
                       Align(
                         alignment: Alignment.centerLeft,
                         child: _IncludeExcludeChips<String>(
-                          options: entry.value
-                              .map(
-                                (AniListMediaTagInfo tag) => (
-                                  value: tag.name,
-                                  label: tag.isAdult
-                                      ? '${tag.name}  18+'
-                                      : tag.name,
-                                ),
-                              )
-                              .toList(),
+                          options: entry.value.map((AniListMediaTagInfo tag) {
+                            final String label = context.t(tag.name);
+                            return (
+                              value: tag.name,
+                              label: tag.isAdult ? '$label  18+' : label,
+                            );
+                          }).toList(),
                           included: _draft.tagIn.toSet(),
                           excluded: _draft.tagNotIn.toSet(),
                           onChanged:
@@ -1646,7 +1694,7 @@ class _IncludeExcludeChips<T> extends StatelessWidget {
       children: options
           .map(
             (({T value, String label}) opt) => IncludeExcludeFilterChip(
-              label: opt.label,
+              label: context.t(opt.label),
               state: includeExcludeStateOf<T>(opt.value, included, excluded),
               onInclude: () => _update(opt.value, IncludeExcludeState.included),
               onExclude: () => _update(opt.value, IncludeExcludeState.excluded),
@@ -1677,7 +1725,7 @@ class _SingleSelectChips extends StatelessWidget {
       children: options
           .map(
             (({String value, String label}) opt) => ChoiceChip(
-              label: Text(opt.label),
+              label: Text(context.t(opt.label)),
               selected: selected == opt.value,
               onSelected: (bool on) => onChanged(on ? opt.value : null),
             ),
@@ -1871,7 +1919,7 @@ class _TmdbDiscoveryFilterSheetState extends State<_TmdbDiscoveryFilterSheet> {
               children: _ratingOptions
                   .map(
                     (({double? value, String label}) opt) => ChoiceChip(
-                      label: Text(opt.label),
+                      label: Text(context.t(opt.label)),
                       selected: _draft.minRating == opt.value,
                       onSelected: (bool on) => setState(
                         () => _draft = _draft.copyWith(
@@ -1954,7 +2002,7 @@ class _TmdbDiscoveryFilterSheetState extends State<_TmdbDiscoveryFilterSheet> {
                 children: _languages
                     .map(
                       (({String value, String label}) lang) => ChoiceChip(
-                        label: Text(lang.label),
+                        label: Text(context.t(lang.label)),
                         selected: _draft.originalLanguage == lang.value,
                         onSelected: (bool on) => setState(
                           () => _draft = _draft.copyWith(

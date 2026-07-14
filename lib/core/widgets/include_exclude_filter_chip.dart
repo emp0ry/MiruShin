@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../app/localization/app_localizations.dart';
+
 enum IncludeExcludeState { neutral, included, excluded }
 
 IncludeExcludeState includeExcludeStateOf<T>(
@@ -82,7 +84,9 @@ class IncludeExcludeFilterChip extends StatelessWidget {
         : null;
 
     return Tooltip(
-      message: tooltip ?? 'Tap to include. Hold or right-click to exclude.',
+      message:
+          tooltip ??
+          context.t('Tap to include. Hold or right-click to exclude.'),
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onLongPress: _toggleExclude,

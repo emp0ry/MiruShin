@@ -385,12 +385,17 @@ class AniListApiClient {
     MediaItem item = _mediaFromJson(media);
     final String upperType = type.toUpperCase();
     if (_wantsRussian && (upperType == 'ANIME' || upperType == 'MANGA')) {
-      final ({String title, String description})? details =
-          await _russianDetailsForItem(item);
+      final ShikimoriRussianDetails? details = await _russianDetailsForItem(
+        item,
+      );
       if (details != null) {
+        final MediaTrailer? russianTrailer = _russianTrailerFromDetails(
+          details,
+        );
         item = item.copyWith(
           title: details.title.isNotEmpty ? details.title : null,
           overview: details.description.isNotEmpty ? details.description : null,
+          trailer: russianTrailer,
         );
       }
       if (item.seasons.isNotEmpty) {
@@ -510,9 +515,7 @@ class AniListApiClient {
         item.id.toLowerCase().startsWith('anilist:manga:');
   }
 
-  Future<({String title, String description})?> _russianDetailsForItem(
-    MediaItem item,
-  ) {
+  Future<ShikimoriRussianDetails?> _russianDetailsForItem(MediaItem item) {
     return shikimori!.getRussianDetailsForMedia(
       malId: _malIdForItem(item),
       queries: _russianQueriesForItem(item),
@@ -521,10 +524,15 @@ class AniListApiClient {
   }
 
   Future<String?> _russianTitleForItem(MediaItem item) async {
-    final ({String title, String description})? details =
-        await _russianDetailsForItem(item);
+    final ShikimoriRussianDetails? details = await _russianDetailsForItem(item);
     final String title = details?.title.trim() ?? '';
     return title.isEmpty ? null : title;
+  }
+
+  MediaTrailer? _russianTrailerFromDetails(ShikimoriRussianDetails details) {
+    final String url = details.youtubeTrailerUrl.trim();
+    if (url.isEmpty) return null;
+    return MediaTrailer(id: url, site: 'YouTube', title: 'Russian trailer');
   }
 
   int? _malIdForItem(MediaItem item) {
@@ -1660,12 +1668,17 @@ class AniListApiClient {
     }
 
     if (_wantsRussian) {
-      final ({String title, String description})? details =
-          await _russianDetailsForItem(result);
+      final ShikimoriRussianDetails? details = await _russianDetailsForItem(
+        result,
+      );
       if (details != null) {
+        final MediaTrailer? russianTrailer = _russianTrailerFromDetails(
+          details,
+        );
         result = result.copyWith(
           title: details.title.isNotEmpty ? details.title : null,
           overview: details.description.isNotEmpty ? details.description : null,
+          trailer: russianTrailer,
         );
       }
     }

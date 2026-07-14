@@ -182,20 +182,20 @@ Future<AniListEntryEditDraft?> showAniListEntryEditor(
                         const SizedBox(height: AppSpacing.md),
                         DropdownButtonFormField<String>(
                           initialValue: draftStatusKey,
-                          decoration: const InputDecoration(
-                            labelText: 'Status',
-                            border: OutlineInputBorder(),
+                          decoration: InputDecoration(
+                            labelText: sheetContext.t('Status'),
+                            border: const OutlineInputBorder(),
                           ),
                           items: <DropdownMenuItem<String>>[
-                            const DropdownMenuItem<String>(
+                            DropdownMenuItem<String>(
                               value: _aniListStatusNoneKey,
-                              child: Text('Not chosen'),
+                              child: Text(sheetContext.t('Not chosen')),
                             ),
                             ...AniListListStatus.values.map(
                               (AniListListStatus value) =>
                                   DropdownMenuItem<String>(
                                     value: value.graphQlValue,
-                                    child: Text(value.label),
+                                    child: Text(sheetContext.t(value.label)),
                                   ),
                             ),
                           ],
@@ -213,8 +213,11 @@ Future<AniListEntryEditDraft?> showAniListEntryEditor(
                                 child: TextField(
                                   controller: progressController,
                                   decoration: InputDecoration(
-                                    labelText: 'Progress',
-                                    helperText: 'of $progressLimit',
+                                    labelText: sheetContext.t('Progress'),
+                                    helperText: sheetContext.tf(
+                                      'of {total}',
+                                      <String, Object?>{'total': progressLimit},
+                                    ),
                                     border: const OutlineInputBorder(),
                                   ),
                                   keyboardType: TextInputType.number,
@@ -258,9 +261,9 @@ Future<AniListEntryEditDraft?> showAniListEntryEditor(
                               child: TvTextFieldFocus(
                                 child: TextField(
                                   controller: repeatController,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Repeat count',
-                                    border: OutlineInputBorder(),
+                                  decoration: InputDecoration(
+                                    labelText: sheetContext.t('Repeat count'),
+                                    border: const OutlineInputBorder(),
                                   ),
                                   keyboardType: TextInputType.number,
                                   inputFormatters: <TextInputFormatter>[
@@ -682,14 +685,14 @@ class AniListStepperButtons extends StatelessWidget {
       children: <Widget>[
         IconButton(
           style: stepStyle,
-          tooltip: 'Decrease',
+          tooltip: context.t('Decrease'),
           onPressed: onMinus,
           icon: const Icon(Icons.remove_rounded),
         ),
         const SizedBox(width: AppSpacing.xs),
         IconButton(
           style: stepStyle,
-          tooltip: 'Increase',
+          tooltip: context.t('Increase'),
           onPressed: onPlus,
           icon: const Icon(Icons.add_rounded),
         ),
@@ -713,7 +716,7 @@ class AniListScoreEditor extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final String label = score <= 0
-        ? 'No score'
+        ? context.t('No score')
         : formatAniListScore(score, format);
     return switch (format) {
       'SMILEY' ||
@@ -721,7 +724,9 @@ class AniListScoreEditor extends StatelessWidget {
       'POINT_5' => AniListStarPicker(score: score, onChanged: onChanged),
       'POINT_100' => AniListSliderScore(
         score: score,
-        displayValue: score <= 0 ? 'No score' : '${(score * 10).round()}',
+        displayValue: score <= 0
+            ? context.t('No score')
+            : '${(score * 10).round()}',
         min: 0,
         max: 10,
         divisions: 100,
@@ -778,7 +783,7 @@ class AniListSliderScore extends StatelessWidget {
           children: <Widget>[
             Expanded(
               child: Text(
-                'Score',
+                context.t('Score'),
                 style: Theme.of(context).textTheme.labelLarge,
               ),
             ),
@@ -827,10 +832,10 @@ class AniListSmileyPicker extends StatelessWidget {
   Widget build(BuildContext context) {
     final ColorScheme colors = Theme.of(context).colorScheme;
     return InputDecorator(
-      decoration: const InputDecoration(
-        labelText: 'Score',
-        border: OutlineInputBorder(),
-        contentPadding: EdgeInsets.symmetric(
+      decoration: InputDecoration(
+        labelText: context.t('Score'),
+        border: const OutlineInputBorder(),
+        contentPadding: const EdgeInsets.symmetric(
           horizontal: AppSpacing.sm,
           vertical: AppSpacing.xs,
         ),
@@ -841,7 +846,7 @@ class AniListSmileyPicker extends StatelessWidget {
             .map((({IconData icon, String tooltip, double value}) opt) {
               final bool selected = (score - opt.value).abs() < 0.1;
               return IconButton(
-                tooltip: selected ? 'Unscore' : opt.tooltip,
+                tooltip: context.t(selected ? 'Unscore' : opt.tooltip),
                 iconSize: 30,
                 icon: Icon(opt.icon),
                 color: selected

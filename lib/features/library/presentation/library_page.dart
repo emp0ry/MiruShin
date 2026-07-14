@@ -207,9 +207,9 @@ class _LibraryPageState extends ConsumerState<LibraryPage>
           ),
           child: TabBar(
             controller: _mainTab,
-            tabs: const <Widget>[
-              Tab(text: 'Anime'),
-              Tab(text: 'Manga'),
+            tabs: <Widget>[
+              Tab(text: context.t('Anime')),
+              Tab(text: context.t('Manga')),
             ],
           ),
         ),
@@ -1018,12 +1018,14 @@ class _FolderViewState extends ConsumerState<_FolderView>
 
   String _emptyEntriesMessage(bool filterActive) {
     if (widget.folder.entries.isEmpty) {
-      return 'No entries in $_folderDisplayName yet.';
+      return context.tf('No entries in {folder} yet.', <String, Object?>{
+        'folder': context.t(_folderDisplayName),
+      });
     }
     if (filterActive || _search.text.trim().isNotEmpty) {
-      return 'No matching entries.';
+      return context.t('No matching entries.');
     }
-    return 'No entries here yet.';
+    return context.t('No entries here yet.');
   }
 
   String _preferencesPrefixFor(
@@ -1488,8 +1490,8 @@ class _FolderViewState extends ConsumerState<_FolderView>
               shrinkWrap: true,
               children: _Sort.values
                   .map(
-                    (s) => ListTile(
-                      title: Text(s.label),
+                    (_Sort s) => ListTile(
+                      title: Text(context.t(s.label)),
                       trailing: _sort == s
                           ? Icon(
                               Icons.check_rounded,
@@ -1632,7 +1634,7 @@ class _FolderViewState extends ConsumerState<_FolderView>
                   child: Row(
                     children: <Widget>[
                       Text(
-                        'Filters',
+                        context.t('Filters'),
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
                       const Spacer(),
@@ -1728,7 +1730,7 @@ class _FolderViewState extends ConsumerState<_FolderView>
                     children: <Widget>[
                       if (allStatuses.length > 1) ...<Widget>[
                         Text(
-                          'List status',
+                          context.t('List status'),
                           style: Theme.of(context).textTheme.labelLarge,
                         ),
                         const SizedBox(height: AppSpacing.xs),
@@ -1764,7 +1766,7 @@ class _FolderViewState extends ConsumerState<_FolderView>
                       ],
                       if (allMediaStatuses.isNotEmpty) ...<Widget>[
                         Text(
-                          'Media status',
+                          context.t('Media status'),
                           style: Theme.of(context).textTheme.labelLarge,
                         ),
                         const SizedBox(height: AppSpacing.xs),
@@ -1800,7 +1802,7 @@ class _FolderViewState extends ConsumerState<_FolderView>
                       ],
                       if (allFormats.isNotEmpty) ...<Widget>[
                         Text(
-                          'Format',
+                          context.t('Format'),
                           style: Theme.of(context).textTheme.labelLarge,
                         ),
                         const SizedBox(height: AppSpacing.xs),
@@ -1810,7 +1812,12 @@ class _FolderViewState extends ConsumerState<_FolderView>
                           children: <Widget>[
                             _FilterTriStateChips<String>(
                               options: allFormats
-                                  .map((String f) => (value: f, label: f))
+                                  .map(
+                                    (String f) => (
+                                      value: f,
+                                      label: _humanizeAniListFormat(f),
+                                    ),
+                                  )
                                   .toList(),
                               included: tmpFormats,
                               excluded: tmpFormatExcludes,
@@ -1833,7 +1840,7 @@ class _FolderViewState extends ConsumerState<_FolderView>
                       ],
                       if (allSources.isNotEmpty) ...<Widget>[
                         Text(
-                          'Source',
+                          context.t('Source'),
                           style: Theme.of(context).textTheme.labelLarge,
                         ),
                         const SizedBox(height: AppSpacing.xs),
@@ -1862,7 +1869,7 @@ class _FolderViewState extends ConsumerState<_FolderView>
                         const SizedBox(height: AppSpacing.md),
                       ],
                       Text(
-                        'Progress and metadata',
+                        context.t('Progress and metadata'),
                         style: Theme.of(context).textTheme.labelLarge,
                       ),
                       const SizedBox(height: AppSpacing.xs),
@@ -1873,8 +1880,10 @@ class _FolderViewState extends ConsumerState<_FolderView>
                           _FilterTriStateChips<_LibraryFlag>(
                             options: _LibraryFlag.values
                                 .map(
-                                  (_LibraryFlag flag) =>
-                                      (value: flag, label: flag.label),
+                                  (_LibraryFlag flag) => (
+                                    value: flag,
+                                    label: context.t(flag.label),
+                                  ),
                                 )
                                 .toList(),
                             included: tmpFlags,
@@ -1896,7 +1905,7 @@ class _FolderViewState extends ConsumerState<_FolderView>
                       ),
                       const SizedBox(height: AppSpacing.md),
                       Text(
-                        'Age and licensing',
+                        context.t('Age and licensing'),
                         style: Theme.of(context).textTheme.labelLarge,
                       ),
                       const SizedBox(height: AppSpacing.xs),
@@ -1905,7 +1914,7 @@ class _FolderViewState extends ConsumerState<_FolderView>
                         runSpacing: AppSpacing.sm,
                         children: <Widget>[
                           IncludeExcludeFilterChip(
-                            label: 'Adult',
+                            label: context.t('Adult'),
                             state: _boolIncludeExcludeState(tmpAdultFilter),
                             onInclude: () =>
                                 setLocal(() => tmpAdultFilter = true),
@@ -1915,7 +1924,7 @@ class _FolderViewState extends ConsumerState<_FolderView>
                                 setLocal(() => tmpAdultFilter = null),
                           ),
                           IncludeExcludeFilterChip(
-                            label: 'Licensed',
+                            label: context.t('Licensed'),
                             state: _boolIncludeExcludeState(tmpLicensedFilter),
                             onInclude: () =>
                                 setLocal(() => tmpLicensedFilter = true),
@@ -1931,13 +1940,13 @@ class _FolderViewState extends ConsumerState<_FolderView>
                         children: <Widget>[
                           Expanded(
                             child: Text(
-                              'Minimum score',
+                              context.t('Minimum score'),
                               style: Theme.of(context).textTheme.labelLarge,
                             ),
                           ),
                           Text(
                             tmpMinScore <= 0
-                                ? 'Any'
+                                ? context.t('Any')
                                 : tmpMinScore.toStringAsFixed(1),
                             style: Theme.of(context).textTheme.labelLarge,
                           ),
@@ -1949,7 +1958,7 @@ class _FolderViewState extends ConsumerState<_FolderView>
                         max: 10,
                         divisions: 20,
                         label: tmpMinScore <= 0
-                            ? 'Any'
+                            ? context.t('Any')
                             : tmpMinScore.toStringAsFixed(1),
                         onChanged: (double value) {
                           setLocal(() => tmpMinScore = value);
@@ -2032,17 +2041,14 @@ class _FolderViewState extends ConsumerState<_FolderView>
                                 Align(
                                   alignment: Alignment.centerLeft,
                                   child: _FilterTriStateChips<String>(
-                                    options: entry.value
-                                        .map(
-                                          (
-                                            ({String category, String name})
-                                            tag,
-                                          ) => (
-                                            value: tag.name,
-                                            label: tag.name,
-                                          ),
-                                        )
-                                        .toList(),
+                                    options: entry.value.map((
+                                      ({String category, String name}) tag,
+                                    ) {
+                                      return (
+                                        value: tag.name,
+                                        label: context.t(tag.name),
+                                      );
+                                    }).toList(),
                                     included: tmpTags,
                                     excluded: tmpTagExcludes,
                                     onChanged:
@@ -2138,8 +2144,11 @@ class _FolderViewState extends ConsumerState<_FolderView>
                 onChanged: (_) => setState(() {}),
                 textInputAction: TextInputAction.search,
                 decoration: InputDecoration(
-                  hintText:
-                      'Search ${widget.folder.status?.label ?? widget.folder.name}…',
+                  hintText: context.tf('Search {folder}…', <String, Object?>{
+                    'folder': context.t(
+                      widget.folder.status?.label ?? widget.folder.name,
+                    ),
+                  }),
                   prefixIcon: const Icon(Icons.search_rounded, size: 20),
                   suffixIcon: _search.text.isNotEmpty
                       ? IconButton(
@@ -2168,7 +2177,7 @@ class _FolderViewState extends ConsumerState<_FolderView>
           const SizedBox(width: AppSpacing.sm),
           _BarIcon(
             icon: _isGrid ? Icons.view_list_rounded : Icons.grid_view_rounded,
-            tooltip: _isGrid ? 'List view' : 'Grid view',
+            tooltip: _isGrid ? context.t('List view') : context.t('Grid view'),
             onTap: () {
               setState(() => _isGrid = !_isGrid);
               unawaited(_savePreferences());
@@ -2177,7 +2186,7 @@ class _FolderViewState extends ConsumerState<_FolderView>
           const SizedBox(width: AppSpacing.xs),
           _BarIcon(
             icon: Icons.sort_rounded,
-            tooltip: 'Sort',
+            tooltip: context.t('Sort'),
             onTap: _openSortSheet,
           ),
           const SizedBox(width: AppSpacing.xs),
@@ -2187,7 +2196,7 @@ class _FolderViewState extends ConsumerState<_FolderView>
             backgroundColor: Theme.of(context).colorScheme.primary,
             child: _BarIcon(
               icon: Icons.filter_list_rounded,
-              tooltip: 'Filter',
+              tooltip: context.t('Filter'),
               active: filterActive,
               onTap: _openFilterSheet,
             ),
@@ -2632,6 +2641,7 @@ class _CollectionTileState extends ConsumerState<_CollectionTile> {
   Widget build(BuildContext context) {
     final media = widget.entry.mediaItem;
     const bool canWatch = true;
+    final String actionLabel = _isAniListMangaItem(media) ? 'Read' : 'Watch';
     final int? total = _total;
     final double? score = _score;
 
@@ -2787,12 +2797,15 @@ class _CollectionTileState extends ConsumerState<_CollectionTile> {
                                   AppRoutes.watchPath(media.id),
                                   extra: media,
                                 ),
-                                child: const Row(
+                                child: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: <Widget>[
-                                    Icon(Icons.play_arrow_rounded, size: 16),
-                                    SizedBox(width: 2),
-                                    Text('Watch'),
+                                    const Icon(
+                                      Icons.play_arrow_rounded,
+                                      size: 16,
+                                    ),
+                                    const SizedBox(width: 2),
+                                    Text(context.t(actionLabel)),
                                   ],
                                 ),
                               ),
@@ -3016,6 +3029,28 @@ String _anilistSourceValue(MediaItem item) {
   return item.externalIds['anilist_source']?.trim() ?? '';
 }
 
+String _humanizeAniListFormat(String raw) {
+  final String normalized = raw.trim().toUpperCase();
+  return switch (normalized) {
+    'TV' => 'TV',
+    'TV_SHORT' => 'TV Short',
+    'MOVIE' => 'Movie',
+    'OVA' => 'OVA',
+    'ONA' => 'ONA',
+    'SPECIAL' => 'Special',
+    'MUSIC' => 'Music',
+    'MANGA' => 'Manga',
+    'ONE_SHOT' => 'One Shot',
+    'NOVEL' => 'Novel',
+    _ =>
+      normalized
+          .split('_')
+          .where((String part) => part.isNotEmpty)
+          .map((String part) => '${part[0]}${part.substring(1).toLowerCase()}')
+          .join(' '),
+  };
+}
+
 String _humanizeAniListSource(String raw) {
   final String normalized = raw.trim().toUpperCase();
   return switch (normalized) {
@@ -3108,9 +3143,7 @@ Map<String, List<({String category, String name})>> _groupAniListTags(
       (
         MapEntry<String, List<({String category, String name})>> a,
         MapEntry<String, List<({String category, String name})>> b,
-      ) => _displayAniListTagCategory(a.key).toLowerCase().compareTo(
-        _displayAniListTagCategory(b.key).toLowerCase(),
-      ),
+      ) => _compareAniListTagCategories(a.key, b.key),
     ),
   );
 }
@@ -3119,22 +3152,78 @@ int _compareAniListTags(
   ({String category, String name}) a,
   ({String category, String name}) b,
 ) {
-  final int category = _displayAniListTagCategory(a.category)
-      .toLowerCase()
-      .compareTo(_displayAniListTagCategory(b.category).toLowerCase());
+  final int category = _compareAniListTagCategories(a.category, b.category);
   if (category != 0) return category;
   return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+}
+
+const Set<String> _aniListTagCategoryPrefixes = <String>{
+  'Cast',
+  'Demographic',
+  'Setting',
+  'Sexual Content',
+  'Technical',
+  'Theme',
+};
+
+const List<String> _aniListTagCategoryLeaves = <String>[
+  'Card & Board Game',
+  'Sexual Content',
+  'Slice of Life',
+  'Main Cast',
+  'Organisations',
+  'Organizations',
+  'Technical',
+  'Demographic',
+  'Universe',
+  'Vehicle',
+  'Fantasy',
+  'Romance',
+  'Comedy',
+  'Action',
+  'Drama',
+  'Scene',
+  'Traits',
+  'Sci-Fi',
+  'Mecha',
+  'Other',
+  'Sport',
+  'Music',
+  'Arts',
+  'Game',
+  'Time',
+  'Cast',
+  'Theme',
+];
+
+int _compareAniListTagCategories(String a, String b) {
+  final String displayA = _displayAniListTagCategory(a);
+  final String displayB = _displayAniListTagCategory(b);
+  final bool otherA = displayA.toLowerCase() == 'other';
+  final bool otherB = displayB.toLowerCase() == 'other';
+  if (otherA != otherB) return otherA ? 1 : -1;
+  return displayA.toLowerCase().compareTo(displayB.toLowerCase());
 }
 
 String _displayAniListTagCategory(String raw) {
   final String trimmed = raw.trim();
   if (trimmed.isEmpty) return 'Other';
-  final List<String> parts = trimmed
-      .split('-')
-      .map((String part) => part.trim())
-      .where((String part) => part.isNotEmpty)
-      .toList(growable: false);
-  return parts.isEmpty ? trimmed : parts.last;
+  for (final String leaf in _aniListTagCategoryLeaves) {
+    if (trimmed == leaf || trimmed.endsWith('-$leaf')) return leaf;
+  }
+  final int dash = trimmed.indexOf('-');
+  if (dash <= 0) return trimmed;
+  final String prefix = trimmed.substring(0, dash).trim();
+  final String suffix = trimmed.substring(dash + 1).trim();
+  if (_aniListTagCategoryPrefixes.contains(prefix) && suffix.isNotEmpty) {
+    return suffix;
+  }
+  return trimmed;
+}
+
+bool _isAniListMangaItem(MediaItem item) {
+  return item.externalIds['anilist_type'] == 'MANGA' ||
+      item.externalIds['anilist_media_type'] == 'MANGA';
 }
 
 bool? _anilistBoolMetadata(MediaItem item, String key) {
@@ -3586,7 +3675,7 @@ class _FilterTriStateChips<T> extends StatelessWidget {
       children: options
           .map(
             (({T value, String label}) option) => IncludeExcludeFilterChip(
-              label: option.label,
+              label: context.t(option.label),
               state: includeExcludeStateOf<T>(option.value, included, excluded),
               onInclude: () =>
                   _update(option.value, IncludeExcludeState.included),
@@ -3921,7 +4010,7 @@ class _LocalLibraryViewState extends ConsumerState<_LocalLibraryView> {
             children: opts
                 .map(
                   (_Sort s) => ListTile(
-                    title: Text(s.label),
+                    title: Text(context.t(s.label)),
                     trailing: _sort == s
                         ? Icon(
                             Icons.check_rounded,
@@ -4322,7 +4411,7 @@ class _LocalLibraryViewState extends ConsumerState<_LocalLibraryView> {
                 const SizedBox(width: AppSpacing.xs),
                 _BarIcon(
                   icon: Icons.sort_rounded,
-                  tooltip: 'Sort',
+                  tooltip: context.t('Sort'),
                   onTap: _openSort,
                 ),
                 const SizedBox(width: AppSpacing.xs),
@@ -4332,7 +4421,7 @@ class _LocalLibraryViewState extends ConsumerState<_LocalLibraryView> {
                   backgroundColor: Theme.of(context).colorScheme.primary,
                   child: _BarIcon(
                     icon: Icons.filter_list_rounded,
-                    tooltip: 'Filter',
+                    tooltip: context.t('Filter'),
                     active: activeFilterCount > 0,
                     onTap: _openFilter,
                   ),
@@ -4362,7 +4451,7 @@ class _LocalLibraryViewState extends ConsumerState<_LocalLibraryView> {
                     (LibraryStatus s) => Padding(
                       padding: const EdgeInsets.only(left: AppSpacing.sm),
                       child: ChoiceChip(
-                        label: Text(s.label),
+                        label: Text(context.t(s.label)),
                         selected: !showDownloads && _selectedStatus == s,
                         onSelected: (_) => setState(() {
                           _selectedStatus = s;
@@ -4582,12 +4671,15 @@ class _LocalTileState extends ConsumerState<_LocalTile> {
                                 AppRoutes.watchPath(media.id),
                                 extra: media,
                               ),
-                              child: const Row(
+                              child: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: <Widget>[
-                                  Icon(Icons.play_arrow_rounded, size: 16),
-                                  SizedBox(width: 2),
-                                  Text('Watch'),
+                                  const Icon(
+                                    Icons.play_arrow_rounded,
+                                    size: 16,
+                                  ),
+                                  const SizedBox(width: 2),
+                                  Text(context.t('Watch')),
                                 ],
                               ),
                             ),
@@ -4619,7 +4711,7 @@ class _LocalTileState extends ConsumerState<_LocalTile> {
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: <Widget>[
                             Text(
-                              widget.item.status.label,
+                              context.t(widget.item.status.label),
                               style: tt.labelSmall?.copyWith(
                                 color: palette.textMutedColor,
                               ),
@@ -4743,7 +4835,7 @@ class _LocalGridCell extends ConsumerWidget {
                       ),
                     const SizedBox(height: 2),
                     Text(
-                      item.status.label,
+                      context.t(item.status.label),
                       style: Theme.of(context).textTheme.labelSmall?.copyWith(
                         color: Colors.white70,
                         fontSize: 10,

@@ -67,7 +67,7 @@ class AppLogo extends StatelessWidget {
     );
     if (onPressed == null) return logo;
     return Tooltip(
-      message: 'Switch catalog mode',
+      message: context.t('Switch catalog mode'),
       child: InkWell(
         borderRadius: AppRadius.all(AppRadius.md),
         onTap: onPressed,

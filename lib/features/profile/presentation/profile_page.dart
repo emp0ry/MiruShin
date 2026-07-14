@@ -1237,8 +1237,6 @@ class _ProfileAniListSettingsPageState
   AniListUserSettings? _draft;
   Timer? _saveDebounce;
   bool _hydrated = false;
-  bool _saving = false;
-  Object? _lastSaveError;
   bool _autoTrackProgress = false;
   AniListLibraryDefaultPage _defaultPage = AniListLibraryDefaultPage.all;
 
@@ -1489,7 +1487,10 @@ class _ProfileAniListSettingsPageState
                               child: TextField(
                                 controller: _advancedScoreControllers[index],
                                 decoration: InputDecoration(
-                                  labelText: 'Label ${index + 1}',
+                                  labelText: context.tf(
+                                    'Label {number}',
+                                    <String, Object?>{'number': index + 1},
+                                  ),
                                 ),
                                 onChanged: (_) =>
                                     _syncAdvancedScoresFromFields(save: true),
@@ -1588,42 +1589,6 @@ class _ProfileAniListSettingsPageState
                   ),
                 ],
               ),
-              const SizedBox(height: AppSpacing.xl),
-              Align(
-                alignment: Alignment.centerRight,
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 180),
-                  child: _saving
-                      ? Row(
-                          key: ValueKey<String>('saving'),
-                          mainAxisSize: MainAxisSize.min,
-                          children: <Widget>[
-                            const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            ),
-                            const SizedBox(width: AppSpacing.sm),
-                            Text(context.t('Saving automatically...')),
-                          ],
-                        )
-                      : _lastSaveError == null
-                      ? Text(
-                          context.t('Changes save automatically'),
-                          key: const ValueKey<String>('autosave'),
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(color: AppColors.textMuted),
-                        )
-                      : Text(
-                          context.t('Autosave failed'),
-                          key: const ValueKey<String>('error'),
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(
-                                color: Theme.of(context).colorScheme.error,
-                              ),
-                        ),
-                ),
-              ),
             ],
           );
         },
@@ -1676,10 +1641,7 @@ class _ProfileAniListSettingsPageState
   }
 
   void _updateDraft(AniListUserSettings next) {
-    setState(() {
-      _draft = next;
-      _lastSaveError = null;
-    });
+    setState(() => _draft = next);
     _scheduleSave();
   }
 
@@ -1698,14 +1660,12 @@ class _ProfileAniListSettingsPageState
         .toList(growable: false);
     _draft = _draft!.copyWith(advancedScores: labels);
     if (save) {
-      setState(() => _lastSaveError = null);
       _scheduleSave();
     }
   }
 
   Future<void> _save() async {
     if (_draft == null) return;
-    setState(() => _saving = true);
     _syncAdvancedScoresFromFields();
     try {
       final AniListUserSettings saved = await ref
@@ -1713,13 +1673,8 @@ class _ProfileAniListSettingsPageState
           .save(_draft!);
       _draft = saved;
       await _invalidateAniListScope(ref);
-    } catch (error) {
-      if (!mounted) return;
-      setState(() => _lastSaveError = error);
-    } finally {
-      if (mounted) {
-        setState(() => _saving = false);
-      }
+    } catch (_) {
+      // The settings remain editable; the next change schedules another save.
     }
   }
 }
@@ -1996,8 +1951,8 @@ class _ProfileActionCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
             Container(
-              width: 48,
-              height: 48,
+              width: 44,
+              height: 44,
               decoration: BoxDecoration(
                 color: Theme.of(
                   context,
@@ -2006,21 +1961,25 @@ class _ProfileActionCard extends StatelessWidget {
               ),
               child: Icon(icon, color: Theme.of(context).colorScheme.primary),
             ),
-            const Spacer(),
+            const SizedBox(height: AppSpacing.sm),
             Text(
               context.t(title),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: Theme.of(
                 context,
               ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: AppSpacing.xs),
-            Text(
-              context.t(subtitle),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(
-                context,
-              ).textTheme.bodyMedium?.copyWith(color: AppColors.textMuted),
+            Flexible(
+              child: Text(
+                context.t(subtitle),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(
+                  context,
+                ).textTheme.bodyMedium?.copyWith(color: AppColors.textMuted),
+              ),
             ),
           ],
         ),

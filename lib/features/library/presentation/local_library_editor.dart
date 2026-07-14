@@ -38,20 +38,14 @@ class _LocalEditorSheet extends StatefulWidget {
 class _LocalEditorSheetState extends State<_LocalEditorSheet> {
   late LibraryStatus _status;
 
-  static const List<({LibraryStatus status, IconData icon})> _options =
-      <({LibraryStatus status, IconData icon})>[
-        (status: LibraryStatus.planned, icon: Icons.bookmark_outline_rounded),
-        (
-          status: LibraryStatus.watching,
-          icon: Icons.play_circle_outline_rounded,
-        ),
-        (
-          status: LibraryStatus.completed,
-          icon: Icons.check_circle_outline_rounded,
-        ),
-        (status: LibraryStatus.dropped, icon: Icons.cancel_outlined),
-        (status: LibraryStatus.favorite, icon: Icons.favorite_outline_rounded),
-      ];
+  static const List<({LibraryStatus status, IconData icon})>
+  _options = <({LibraryStatus status, IconData icon})>[
+    (status: LibraryStatus.planned, icon: Icons.bookmark_outline_rounded),
+    (status: LibraryStatus.watching, icon: Icons.play_circle_outline_rounded),
+    (status: LibraryStatus.completed, icon: Icons.check_circle_outline_rounded),
+    (status: LibraryStatus.dropped, icon: Icons.cancel_outlined),
+    (status: LibraryStatus.favorite, icon: Icons.favorite_outline_rounded),
+  ];
 
   @override
   void initState() {
@@ -78,9 +72,9 @@ class _LocalEditorSheetState extends State<_LocalEditorSheet> {
           children: <Widget>[
             Text(
               widget.item.title,
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w700,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
@@ -98,7 +92,7 @@ class _LocalEditorSheetState extends State<_LocalEditorSheet> {
                     (({LibraryStatus status, IconData icon}) entry) =>
                         ChoiceChip(
                           avatar: Icon(entry.icon, size: 16),
-                          label: Text(entry.status.label),
+                          label: Text(context.t(entry.status.label)),
                           selected: _status == entry.status,
                           onSelected: (_) =>
                               setState(() => _status = entry.status),
@@ -131,9 +125,9 @@ class _LocalEditorSheetState extends State<_LocalEditorSheet> {
                   const Spacer(flex: 1),
                 Expanded(
                   child: FilledButton(
-                    onPressed: () => Navigator.of(context).pop(
-                      LocalLibraryEditResult(status: _status),
-                    ),
+                    onPressed: () => Navigator.of(
+                      context,
+                    ).pop(LocalLibraryEditResult(status: _status)),
                     child: Text(context.t('Save')),
                   ),
                 ),

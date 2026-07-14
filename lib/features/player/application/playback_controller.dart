@@ -1,10 +1,12 @@
 // ignore_for_file: avoid_print
 import 'dart:async';
 import 'dart:collection';
+import 'dart:ui' show Locale, PlatformDispatcher;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../app/localization/app_localizations.dart';
 import '../data/subtitle_loader.dart';
 
 import '../../../shared/models/anilist_models.dart';
@@ -430,6 +432,17 @@ class PlaybackController extends Notifier<PlaybackState> {
     unawaited(state.engine?.setPlaybackSpeed(settings.playbackSpeed));
     state = state.copyWith(temporarySpeedActive: false);
     _updateMediaSession();
+  }
+
+  Future<String> _localizedText(String key) async {
+    try {
+      final SettingsState settings = ref.read(settingsProvider);
+      final Locale locale =
+          settings.appLocale ?? PlatformDispatcher.instance.locale;
+      return (await AppLocalizations.load(locale)).t(key);
+    } on Object {
+      return key;
+    }
   }
 
   @override
@@ -908,10 +921,14 @@ class PlaybackController extends Notifier<PlaybackState> {
         ? PlayerBackend.auto
         : backendOverride ?? settings.playerBackend;
     final PlayerBackend engineBackend = resolvePlayerEngineBackend(backend);
+    final String trailerBackLabel = youtubeEmbed
+        ? await _localizedText('Back')
+        : 'Back';
     final PlayerEngine engine = createPlayerEngine(
       initialAspectRatio: _safeAspectRatio(preserveAspectRatio),
       backend: engineBackend,
       youtubeEmbed: youtubeEmbed,
+      trailerBackLabel: trailerBackLabel,
     );
 
     try {

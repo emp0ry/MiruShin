@@ -1,0 +1,2127 @@
+[
+  {
+    "name": "4-koma",
+    "category": "Technical",
+    "isAdult": false
+  },
+  {
+    "name": "Achromatic",
+    "category": "Technical",
+    "isAdult": false
+  },
+  {
+    "name": "Achronological Order",
+    "category": "Setting-Time",
+    "isAdult": false
+  },
+  {
+    "name": "Acrobatics",
+    "category": "Theme-Game-Sport",
+    "isAdult": false
+  },
+  {
+    "name": "Acting",
+    "category": "Theme-Arts",
+    "isAdult": false
+  },
+  {
+    "name": "Adoption",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Advertisement",
+    "category": "Technical",
+    "isAdult": false
+  },
+  {
+    "name": "Afterlife",
+    "category": "Setting-Universe",
+    "isAdult": false
+  },
+  {
+    "name": "Age Gap",
+    "category": "Theme-Romance",
+    "isAdult": false
+  },
+  {
+    "name": "Age Regression",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Agender",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Agriculture",
+    "category": "Theme-Slice of Life",
+    "isAdult": false
+  },
+  {
+    "name": "Ahegao",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Airsoft",
+    "category": "Theme-Game-Sport",
+    "isAdult": false
+  },
+  {
+    "name": "Alchemy",
+    "category": "Theme-Fantasy",
+    "isAdult": false
+  },
+  {
+    "name": "Aliens",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Alternate Universe",
+    "category": "Setting-Universe",
+    "isAdult": false
+  },
+  {
+    "name": "American Football",
+    "category": "Theme-Game-Sport",
+    "isAdult": false
+  },
+  {
+    "name": "Amnesia",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Amputation",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Anachronism",
+    "category": "Setting-Time",
+    "isAdult": false
+  },
+  {
+    "name": "Anal Sex",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Ancient China",
+    "category": "Setting-Time",
+    "isAdult": false
+  },
+  {
+    "name": "Angels",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Animals",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Anthology",
+    "category": "Technical",
+    "isAdult": false
+  },
+  {
+    "name": "Anthropomorphism",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Anti-Hero",
+    "category": "Cast-Main Cast",
+    "isAdult": false
+  },
+  {
+    "name": "Archery",
+    "category": "Theme-Action",
+    "isAdult": false
+  },
+  {
+    "name": "Armpits",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Aromantic",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Arranged Marriage",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Artificial Intelligence",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Asexual",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Ashikoki",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Asphyxiation",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Assassins",
+    "category": "Theme-Other-Organisations",
+    "isAdult": false
+  },
+  {
+    "name": "Astronomy",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Athletics",
+    "category": "Theme-Game-Sport",
+    "isAdult": false
+  },
+  {
+    "name": "Augmented Reality",
+    "category": "Setting-Universe",
+    "isAdult": false
+  },
+  {
+    "name": "Autobiographical",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Aviation",
+    "category": "Theme-Other-Vehicle",
+    "isAdult": false
+  },
+  {
+    "name": "Badminton",
+    "category": "Theme-Game-Sport",
+    "isAdult": false
+  },
+  {
+    "name": "Ballet",
+    "category": "Theme-Arts",
+    "isAdult": false
+  },
+  {
+    "name": "Band",
+    "category": "Theme-Arts-Music",
+    "isAdult": false
+  },
+  {
+    "name": "Bar",
+    "category": "Setting-Scene",
+    "isAdult": false
+  },
+  {
+    "name": "Baseball",
+    "category": "Theme-Game-Sport",
+    "isAdult": false
+  },
+  {
+    "name": "Basketball",
+    "category": "Theme-Game-Sport",
+    "isAdult": false
+  },
+  {
+    "name": "Battle Royale",
+    "category": "Theme-Action",
+    "isAdult": false
+  },
+  {
+    "name": "Biographical",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Bisexual",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Blackmail",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Board Game",
+    "category": "Theme-Game",
+    "isAdult": false
+  },
+  {
+    "name": "Boarding School",
+    "category": "Setting-Scene",
+    "isAdult": false
+  },
+  {
+    "name": "Body Horror",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Body Image",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Body Swapping",
+    "category": "Theme-Fantasy",
+    "isAdult": false
+  },
+  {
+    "name": "Bondage",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Boobjob",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Bowling",
+    "category": "Theme-Game-Sport",
+    "isAdult": false
+  },
+  {
+    "name": "Boxing",
+    "category": "Theme-Game-Sport",
+    "isAdult": false
+  },
+  {
+    "name": "Boys' Love",
+    "category": "Theme-Romance",
+    "isAdult": false
+  },
+  {
+    "name": "Brainwashing",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Bullying",
+    "category": "Theme-Drama",
+    "isAdult": false
+  },
+  {
+    "name": "Butler",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Calligraphy",
+    "category": "Theme-Arts",
+    "isAdult": false
+  },
+  {
+    "name": "Camping",
+    "category": "Setting-Scene",
+    "isAdult": false
+  },
+  {
+    "name": "Cannibalism",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Card Battle",
+    "category": "Theme-Game-Card & Board Game",
+    "isAdult": false
+  },
+  {
+    "name": "Cars",
+    "category": "Theme-Other-Vehicle",
+    "isAdult": false
+  },
+  {
+    "name": "Centaur",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Cervix Penetration",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "CGI",
+    "category": "Technical",
+    "isAdult": false
+  },
+  {
+    "name": "Cheating",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Cheerleading",
+    "category": "Theme-Game-Sport",
+    "isAdult": false
+  },
+  {
+    "name": "Chibi",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Chimera",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Chuunibyou",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Circus",
+    "category": "Setting-Scene",
+    "isAdult": false
+  },
+  {
+    "name": "Class Struggle",
+    "category": "Theme-Drama",
+    "isAdult": false
+  },
+  {
+    "name": "Classic Literature",
+    "category": "Theme-Arts",
+    "isAdult": false
+  },
+  {
+    "name": "Classical Music",
+    "category": "Theme-Arts-Music",
+    "isAdult": false
+  },
+  {
+    "name": "Clone",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Coastal",
+    "category": "Setting-Scene",
+    "isAdult": false
+  },
+  {
+    "name": "Cohabitation",
+    "category": "Theme-Romance",
+    "isAdult": false
+  },
+  {
+    "name": "College",
+    "category": "Setting-Scene",
+    "isAdult": false
+  },
+  {
+    "name": "Coming of Age",
+    "category": "Theme-Drama",
+    "isAdult": false
+  },
+  {
+    "name": "Conspiracy",
+    "category": "Theme-Drama",
+    "isAdult": false
+  },
+  {
+    "name": "Cosmic Horror",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Cosplay",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Cowboys",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Creature Taming",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Crime",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Criminal Organization",
+    "category": "Theme-Other-Organisations",
+    "isAdult": false
+  },
+  {
+    "name": "Crossdressing",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Crossover",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Cult",
+    "category": "Theme-Other-Organisations",
+    "isAdult": false
+  },
+  {
+    "name": "Cultivation",
+    "category": "Theme-Fantasy",
+    "isAdult": false
+  },
+  {
+    "name": "Cumflation",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Cunnilingus",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Curses",
+    "category": "Theme-Fantasy",
+    "isAdult": false
+  },
+  {
+    "name": "Cute Boys Doing Cute Things",
+    "category": "Theme-Slice of Life",
+    "isAdult": false
+  },
+  {
+    "name": "Cute Girls Doing Cute Things",
+    "category": "Theme-Slice of Life",
+    "isAdult": false
+  },
+  {
+    "name": "Cyberpunk",
+    "category": "Theme-Sci-Fi",
+    "isAdult": false
+  },
+  {
+    "name": "Cyborg",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Cycling",
+    "category": "Theme-Game-Sport",
+    "isAdult": false
+  },
+  {
+    "name": "Dancing",
+    "category": "Theme-Arts-Music",
+    "isAdult": false
+  },
+  {
+    "name": "Death Game",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Deepthroat",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Defloration",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Delinquents",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Demons",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Denpa",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Desert",
+    "category": "Setting-Scene",
+    "isAdult": false
+  },
+  {
+    "name": "Detective",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "DILF",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Dinosaurs",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Disability",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Dissociative Identities",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Double Penetration",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Dragons",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Drawing",
+    "category": "Theme-Arts",
+    "isAdult": false
+  },
+  {
+    "name": "Drugs",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Dullahan",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Dungeon",
+    "category": "Setting-Scene",
+    "isAdult": false
+  },
+  {
+    "name": "Dystopian",
+    "category": "Setting-Time",
+    "isAdult": false
+  },
+  {
+    "name": "E-Sports",
+    "category": "Theme-Game",
+    "isAdult": false
+  },
+  {
+    "name": "Eco-Horror",
+    "category": "Theme-Drama",
+    "isAdult": false
+  },
+  {
+    "name": "Economics",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Educational",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Elderly Protagonist",
+    "category": "Cast-Main Cast",
+    "isAdult": false
+  },
+  {
+    "name": "Elf",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Ensemble Cast",
+    "category": "Cast-Main Cast",
+    "isAdult": false
+  },
+  {
+    "name": "Environmental",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Episodic",
+    "category": "Technical",
+    "isAdult": false
+  },
+  {
+    "name": "Ero Guro",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Erotic Piercings",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Espionage",
+    "category": "Theme-Action",
+    "isAdult": false
+  },
+  {
+    "name": "Estranged Family",
+    "category": "Cast-Main Cast",
+    "isAdult": false
+  },
+  {
+    "name": "Exhibitionism",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Exorcism",
+    "category": "Theme-Fantasy",
+    "isAdult": false
+  },
+  {
+    "name": "Facial",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Fairy",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Fairy Tale",
+    "category": "Theme-Fantasy",
+    "isAdult": false
+  },
+  {
+    "name": "Fake Relationship",
+    "category": "Theme-Drama",
+    "isAdult": false
+  },
+  {
+    "name": "Family Life",
+    "category": "Theme-Slice of Life",
+    "isAdult": false
+  },
+  {
+    "name": "Fashion",
+    "category": "Theme-Arts",
+    "isAdult": false
+  },
+  {
+    "name": "Feet",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Fellatio",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Female Harem",
+    "category": "Theme-Romance",
+    "isAdult": false
+  },
+  {
+    "name": "Female Protagonist",
+    "category": "Cast-Main Cast",
+    "isAdult": false
+  },
+  {
+    "name": "Femboy",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Femdom",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Fencing",
+    "category": "Theme-Game-Sport",
+    "isAdult": false
+  },
+  {
+    "name": "Filmmaking",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Fingering",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Firefighters",
+    "category": "Theme-Other-Organisations",
+    "isAdult": false
+  },
+  {
+    "name": "Fishing",
+    "category": "Theme-Game-Sport",
+    "isAdult": false
+  },
+  {
+    "name": "Fisting",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Fitness",
+    "category": "Theme-Game-Sport",
+    "isAdult": false
+  },
+  {
+    "name": "Flash",
+    "category": "Technical",
+    "isAdult": false
+  },
+  {
+    "name": "Flat Chest",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Food",
+    "category": "Theme-Arts",
+    "isAdult": false
+  },
+  {
+    "name": "Football",
+    "category": "Theme-Game-Sport",
+    "isAdult": false
+  },
+  {
+    "name": "Foreign",
+    "category": "Setting-Scene",
+    "isAdult": false
+  },
+  {
+    "name": "Found Family",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Fugitive",
+    "category": "Theme-Action",
+    "isAdult": false
+  },
+  {
+    "name": "Full CGI",
+    "category": "Technical",
+    "isAdult": false
+  },
+  {
+    "name": "Full Color",
+    "category": "Technical",
+    "isAdult": false
+  },
+  {
+    "name": "Futanari",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Gambling",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Gangs",
+    "category": "Theme-Other-Organisations",
+    "isAdult": false
+  },
+  {
+    "name": "Gekiga",
+    "category": "Technical",
+    "isAdult": false
+  },
+  {
+    "name": "Gender Bending",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Ghost",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Go",
+    "category": "Theme-Game-Card & Board Game",
+    "isAdult": false
+  },
+  {
+    "name": "Goblin",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Gods",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Golf",
+    "category": "Theme-Game-Sport",
+    "isAdult": false
+  },
+  {
+    "name": "Gore",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Graduation Project",
+    "category": "Technical",
+    "isAdult": false
+  },
+  {
+    "name": "Group Sex",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Guns",
+    "category": "Theme-Action",
+    "isAdult": false
+  },
+  {
+    "name": "Gyaru",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Hair Pulling",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Handball",
+    "category": "Theme-Game-Sport",
+    "isAdult": false
+  },
+  {
+    "name": "Handjob",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Henshin",
+    "category": "Theme-Fantasy",
+    "isAdult": false
+  },
+  {
+    "name": "Heterosexual",
+    "category": "Theme-Romance",
+    "isAdult": false
+  },
+  {
+    "name": "Hikikomori",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Hip-hop Music",
+    "category": "Theme-Arts-Music",
+    "isAdult": false
+  },
+  {
+    "name": "Historical",
+    "category": "Setting-Time",
+    "isAdult": false
+  },
+  {
+    "name": "Homeless",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Horticulture",
+    "category": "Theme-Slice of Life",
+    "isAdult": false
+  },
+  {
+    "name": "Human Experimentation",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Human Pet",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Hypersexuality",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Ice Skating",
+    "category": "Theme-Game-Sport",
+    "isAdult": false
+  },
+  {
+    "name": "Idol",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Incest",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Indigenous Cultures",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Inn",
+    "category": "Setting-Scene",
+    "isAdult": false
+  },
+  {
+    "name": "Inseki",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Interspecies",
+    "category": "Theme-Romance",
+    "isAdult": false
+  },
+  {
+    "name": "Irrumatio",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Isekai",
+    "category": "Theme-Fantasy",
+    "isAdult": false
+  },
+  {
+    "name": "Iyashikei",
+    "category": "Theme-Slice of Life",
+    "isAdult": false
+  },
+  {
+    "name": "Jazz Music",
+    "category": "Theme-Arts-Music",
+    "isAdult": false
+  },
+  {
+    "name": "Josei",
+    "category": "Demographic",
+    "isAdult": false
+  },
+  {
+    "name": "Judo",
+    "category": "Theme-Game-Sport",
+    "isAdult": false
+  },
+  {
+    "name": "Kabuki",
+    "category": "Theme-Arts",
+    "isAdult": false
+  },
+  {
+    "name": "Kaiju",
+    "category": "Theme-Fantasy",
+    "isAdult": false
+  },
+  {
+    "name": "Karuta",
+    "category": "Theme-Game-Card & Board Game",
+    "isAdult": false
+  },
+  {
+    "name": "Kemonomimi",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Kids",
+    "category": "Demographic",
+    "isAdult": false
+  },
+  {
+    "name": "Kingdom Management",
+    "category": "Theme-Drama",
+    "isAdult": false
+  },
+  {
+    "name": "Konbini",
+    "category": "Setting-Scene",
+    "isAdult": false
+  },
+  {
+    "name": "Kuudere",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Lacrosse",
+    "category": "Theme-Game-Sport",
+    "isAdult": false
+  },
+  {
+    "name": "Lactation",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Language Barrier",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Large Breasts",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "LGBTQ+ Themes",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Long Strip",
+    "category": "Technical",
+    "isAdult": false
+  },
+  {
+    "name": "Lost Civilization",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Love Triangle",
+    "category": "Theme-Romance",
+    "isAdult": false
+  },
+  {
+    "name": "Mafia",
+    "category": "Theme-Other-Organisations",
+    "isAdult": false
+  },
+  {
+    "name": "Magic",
+    "category": "Theme-Fantasy",
+    "isAdult": false
+  },
+  {
+    "name": "Mahjong",
+    "category": "Theme-Game-Card & Board Game",
+    "isAdult": false
+  },
+  {
+    "name": "Maids",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Makeup",
+    "category": "Theme-Arts",
+    "isAdult": false
+  },
+  {
+    "name": "Male Harem",
+    "category": "Theme-Romance",
+    "isAdult": false
+  },
+  {
+    "name": "Male Pregnancy",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Male Protagonist",
+    "category": "Cast-Main Cast",
+    "isAdult": false
+  },
+  {
+    "name": "Manzai",
+    "category": "Theme-Arts",
+    "isAdult": false
+  },
+  {
+    "name": "Marriage",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Martial Arts",
+    "category": "Theme-Action",
+    "isAdult": false
+  },
+  {
+    "name": "Masochism",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Masturbation",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Matchmaking",
+    "category": "Theme-Romance",
+    "isAdult": false
+  },
+  {
+    "name": "Mating Press",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Matriarchy",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Medicine",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Medieval",
+    "category": "Setting-Time",
+    "isAdult": false
+  },
+  {
+    "name": "Memory Manipulation",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Mermaid",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Meta",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Metal Music",
+    "category": "Theme-Arts-Music",
+    "isAdult": false
+  },
+  {
+    "name": "MILF",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Military",
+    "category": "Theme-Other-Organisations",
+    "isAdult": false
+  },
+  {
+    "name": "Mixed Gender Harem",
+    "category": "Theme-Romance",
+    "isAdult": false
+  },
+  {
+    "name": "Mixed Media",
+    "category": "Technical",
+    "isAdult": false
+  },
+  {
+    "name": "Modeling",
+    "category": "Theme-Arts",
+    "isAdult": false
+  },
+  {
+    "name": "Monster Boy",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Monster Girl",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Mopeds",
+    "category": "Theme-Other-Vehicle",
+    "isAdult": false
+  },
+  {
+    "name": "Motorcycles",
+    "category": "Theme-Other-Vehicle",
+    "isAdult": false
+  },
+  {
+    "name": "Mountaineering",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Musical Theater",
+    "category": "Theme-Arts-Music",
+    "isAdult": false
+  },
+  {
+    "name": "Mythology",
+    "category": "Theme-Fantasy",
+    "isAdult": false
+  },
+  {
+    "name": "Nakadashi",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Natural Disaster",
+    "category": "Setting-Scene",
+    "isAdult": false
+  },
+  {
+    "name": "Necromancy",
+    "category": "Theme-Fantasy",
+    "isAdult": false
+  },
+  {
+    "name": "Nekomimi",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Netorare",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Netorase",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Netori",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Ninja",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "No Dialogue",
+    "category": "Technical",
+    "isAdult": false
+  },
+  {
+    "name": "Noir",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Non-fiction",
+    "category": "Technical",
+    "isAdult": false
+  },
+  {
+    "name": "Nudity",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Nun",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Office",
+    "category": "Setting-Scene",
+    "isAdult": false
+  },
+  {
+    "name": "Office Lady",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Oiran",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Ojou-sama",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Omegaverse",
+    "category": "Setting-Universe",
+    "isAdult": true
+  },
+  {
+    "name": "Orphan",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Otaku Culture",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Outdoor Activities",
+    "category": "Setting-Scene",
+    "isAdult": false
+  },
+  {
+    "name": "Oyakodon",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Pandemic",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Parenthood",
+    "category": "Theme-Slice of Life",
+    "isAdult": false
+  },
+  {
+    "name": "Parkour",
+    "category": "Theme-Game-Sport",
+    "isAdult": false
+  },
+  {
+    "name": "Parody",
+    "category": "Theme-Comedy",
+    "isAdult": false
+  },
+  {
+    "name": "Pet Play",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Philosophy",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Photography",
+    "category": "Theme-Arts",
+    "isAdult": false
+  },
+  {
+    "name": "Pirates",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Poker",
+    "category": "Theme-Game-Card & Board Game",
+    "isAdult": false
+  },
+  {
+    "name": "Police",
+    "category": "Theme-Other-Organisations",
+    "isAdult": false
+  },
+  {
+    "name": "Politics",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Polyamorous",
+    "category": "Theme-Romance",
+    "isAdult": false
+  },
+  {
+    "name": "Post-Apocalyptic",
+    "category": "Setting-Universe",
+    "isAdult": false
+  },
+  {
+    "name": "POV",
+    "category": "Technical",
+    "isAdult": false
+  },
+  {
+    "name": "Pregnancy",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Primarily Adult Cast",
+    "category": "Cast-Main Cast",
+    "isAdult": false
+  },
+  {
+    "name": "Primarily Animal Cast",
+    "category": "Cast-Main Cast",
+    "isAdult": false
+  },
+  {
+    "name": "Primarily Child Cast",
+    "category": "Cast-Main Cast",
+    "isAdult": false
+  },
+  {
+    "name": "Primarily Female Cast",
+    "category": "Cast-Main Cast",
+    "isAdult": false
+  },
+  {
+    "name": "Primarily Male Cast",
+    "category": "Cast-Main Cast",
+    "isAdult": false
+  },
+  {
+    "name": "Primarily Teen Cast",
+    "category": "Cast-Main Cast",
+    "isAdult": false
+  },
+  {
+    "name": "Prison",
+    "category": "Setting-Scene",
+    "isAdult": false
+  },
+  {
+    "name": "Prophecy",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Prostitution",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Proxy Battle",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Psychosexual",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Public Sex",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Puppetry",
+    "category": "Technical",
+    "isAdult": false
+  },
+  {
+    "name": "Rakugo",
+    "category": "Theme-Arts",
+    "isAdult": false
+  },
+  {
+    "name": "Rape",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Real Robot",
+    "category": "Theme-Sci-Fi-Mecha",
+    "isAdult": false
+  },
+  {
+    "name": "Rehabilitation",
+    "category": "Theme-Drama",
+    "isAdult": false
+  },
+  {
+    "name": "Reincarnation",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Religion",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Rescue",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Restaurant",
+    "category": "Setting-Scene",
+    "isAdult": false
+  },
+  {
+    "name": "Revenge",
+    "category": "Theme-Drama",
+    "isAdult": false
+  },
+  {
+    "name": "Reverse Isekai",
+    "category": "Theme-Fantasy",
+    "isAdult": false
+  },
+  {
+    "name": "Rimjob",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Robots",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Rock Music",
+    "category": "Theme-Arts-Music",
+    "isAdult": false
+  },
+  {
+    "name": "Rotoscoping",
+    "category": "Technical",
+    "isAdult": false
+  },
+  {
+    "name": "Royal Affairs",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Rugby",
+    "category": "Theme-Game-Sport",
+    "isAdult": false
+  },
+  {
+    "name": "Rural",
+    "category": "Setting-Scene",
+    "isAdult": false
+  },
+  {
+    "name": "Sadism",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Samurai",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Satire",
+    "category": "Theme-Comedy",
+    "isAdult": false
+  },
+  {
+    "name": "Scat",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "School",
+    "category": "Setting-Scene",
+    "isAdult": false
+  },
+  {
+    "name": "School Club",
+    "category": "Setting-Scene",
+    "isAdult": false
+  },
+  {
+    "name": "Scissoring",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Scuba Diving",
+    "category": "Theme-Game-Sport",
+    "isAdult": false
+  },
+  {
+    "name": "Seinen",
+    "category": "Demographic",
+    "isAdult": false
+  },
+  {
+    "name": "Sex Toys",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Shapeshifting",
+    "category": "Theme-Fantasy",
+    "isAdult": false
+  },
+  {
+    "name": "Shimaidon",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Ships",
+    "category": "Theme-Other-Vehicle",
+    "isAdult": false
+  },
+  {
+    "name": "Shogi",
+    "category": "Theme-Game-Card & Board Game",
+    "isAdult": false
+  },
+  {
+    "name": "Short-Form Chapter",
+    "category": "Technical",
+    "isAdult": false
+  },
+  {
+    "name": "Shoujo",
+    "category": "Demographic",
+    "isAdult": false
+  },
+  {
+    "name": "Shounen",
+    "category": "Demographic",
+    "isAdult": false
+  },
+  {
+    "name": "Shrine Maiden",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Sixty-nine",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Skateboarding",
+    "category": "Theme-Game-Sport",
+    "isAdult": false
+  },
+  {
+    "name": "Skeleton",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Slapstick",
+    "category": "Theme-Comedy",
+    "isAdult": false
+  },
+  {
+    "name": "Slavery",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Snowscape",
+    "category": "Setting-Scene",
+    "isAdult": false
+  },
+  {
+    "name": "Software Development",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Space",
+    "category": "Setting-Universe",
+    "isAdult": false
+  },
+  {
+    "name": "Space Opera",
+    "category": "Theme-Sci-Fi",
+    "isAdult": false
+  },
+  {
+    "name": "Spearplay",
+    "category": "Theme-Action",
+    "isAdult": false
+  },
+  {
+    "name": "Squirting",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Steampunk",
+    "category": "Theme-Fantasy",
+    "isAdult": false
+  },
+  {
+    "name": "Stop Motion",
+    "category": "Technical",
+    "isAdult": false
+  },
+  {
+    "name": "Succubus",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Suicide",
+    "category": "Theme-Drama",
+    "isAdult": false
+  },
+  {
+    "name": "Sumata",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Sumo",
+    "category": "Theme-Game-Sport",
+    "isAdult": false
+  },
+  {
+    "name": "Super Power",
+    "category": "Theme-Fantasy",
+    "isAdult": false
+  },
+  {
+    "name": "Super Robot",
+    "category": "Theme-Sci-Fi-Mecha",
+    "isAdult": false
+  },
+  {
+    "name": "Superhero",
+    "category": "Theme-Fantasy",
+    "isAdult": false
+  },
+  {
+    "name": "Surfing",
+    "category": "Theme-Game-Sport",
+    "isAdult": false
+  },
+  {
+    "name": "Surreal Comedy",
+    "category": "Theme-Comedy",
+    "isAdult": false
+  },
+  {
+    "name": "Survival",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Swapping",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Sweat",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Swimming",
+    "category": "Theme-Game-Sport",
+    "isAdult": false
+  },
+  {
+    "name": "Swordplay",
+    "category": "Theme-Action",
+    "isAdult": false
+  },
+  {
+    "name": "Table Tennis",
+    "category": "Theme-Game-Sport",
+    "isAdult": false
+  },
+  {
+    "name": "Tanks",
+    "category": "Theme-Other-Vehicle",
+    "isAdult": false
+  },
+  {
+    "name": "Tanned Skin",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Teacher",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Teens' Love",
+    "category": "Theme-Romance",
+    "isAdult": false
+  },
+  {
+    "name": "Tennis",
+    "category": "Theme-Game-Sport",
+    "isAdult": false
+  },
+  {
+    "name": "Tentacles",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Terrorism",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Threesome",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Time Loop",
+    "category": "Theme-Sci-Fi",
+    "isAdult": false
+  },
+  {
+    "name": "Time Manipulation",
+    "category": "Theme-Sci-Fi",
+    "isAdult": false
+  },
+  {
+    "name": "Time Skip",
+    "category": "Setting-Time",
+    "isAdult": false
+  },
+  {
+    "name": "Tokusatsu",
+    "category": "Theme-Sci-Fi",
+    "isAdult": false
+  },
+  {
+    "name": "Tomboy",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Torture",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Tragedy",
+    "category": "Theme-Drama",
+    "isAdult": false
+  },
+  {
+    "name": "Trains",
+    "category": "Theme-Other-Vehicle",
+    "isAdult": false
+  },
+  {
+    "name": "Transgender",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Travel",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Triads",
+    "category": "Theme-Other-Organisations",
+    "isAdult": false
+  },
+  {
+    "name": "Tsundere",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Twins",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Unrequited Love",
+    "category": "Theme-Romance",
+    "isAdult": false
+  },
+  {
+    "name": "Urban",
+    "category": "Setting-Scene",
+    "isAdult": false
+  },
+  {
+    "name": "Urban Fantasy",
+    "category": "Setting-Universe",
+    "isAdult": false
+  },
+  {
+    "name": "Vampire",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Vertical Video",
+    "category": "Technical",
+    "isAdult": false
+  },
+  {
+    "name": "Veterinarian",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Video Games",
+    "category": "Theme-Game",
+    "isAdult": false
+  },
+  {
+    "name": "Vikings",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Villainess",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Virginity",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Virtual World",
+    "category": "Setting-Universe",
+    "isAdult": false
+  },
+  {
+    "name": "Vocal Synth",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Volleyball",
+    "category": "Theme-Game-Sport",
+    "isAdult": false
+  },
+  {
+    "name": "Vore",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Voyeur",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "VTuber",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "War",
+    "category": "Theme-Other",
+    "isAdult": false
+  },
+  {
+    "name": "Watersports",
+    "category": "Sexual Content",
+    "isAdult": true
+  },
+  {
+    "name": "Werewolf",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Wilderness",
+    "category": "Setting-Scene",
+    "isAdult": false
+  },
+  {
+    "name": "Witch",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Work",
+    "category": "Setting-Scene",
+    "isAdult": false
+  },
+  {
+    "name": "Wrestling",
+    "category": "Theme-Game-Sport",
+    "isAdult": false
+  },
+  {
+    "name": "Writing",
+    "category": "Theme-Arts",
+    "isAdult": false
+  },
+  {
+    "name": "Wuxia",
+    "category": "Theme-Fantasy",
+    "isAdult": false
+  },
+  {
+    "name": "Yakuza",
+    "category": "Theme-Other-Organisations",
+    "isAdult": false
+  },
+  {
+    "name": "Yandere",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Youkai",
+    "category": "Theme-Fantasy",
+    "isAdult": false
+  },
+  {
+    "name": "Yuri",
+    "category": "Theme-Romance",
+    "isAdult": false
+  },
+  {
+    "name": "Zombie",
+    "category": "Cast-Traits",
+    "isAdult": false
+  },
+  {
+    "name": "Zoophilia",
+    "category": "Sexual Content",
+    "isAdult": true
+  }
+]

@@ -680,7 +680,7 @@ class _TrackerConnectionsSection extends ConsumerWidget {
               for (final TrackerSource source in TrackerSource.values)
                 DropdownMenuItem<TrackerSource>(
                   value: source,
-                  child: Text(source.label),
+                  child: Text(context.t(source.label)),
                 ),
             ],
           ),
@@ -948,7 +948,7 @@ class _AppearanceSection extends StatelessWidget {
                 .map(
                   (AppStartupPage page) => DropdownMenuItem<AppStartupPage>(
                     value: page,
-                    child: Text(page.label),
+                    child: Text(context.t(page.label)),
                   ),
                 )
                 .toList(),

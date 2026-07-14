@@ -21,7 +21,9 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
   YoutubeEmbedPlayerEngine({
     double? initialAspectRatio,
     bool renderControlsInHtml = false,
+    String trailerBackLabel = 'Back',
   }) : _renderControlsInHtml = renderControlsInHtml,
+       _trailerBackLabel = trailerBackLabel,
        _state = ValueNotifier<PlayerEngineState>(
          PlayerEngineState(
            aspectRatio: _usableAspectRatio(initialAspectRatio) ?? 16 / 9,
@@ -29,6 +31,7 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
        );
 
   final bool _renderControlsInHtml;
+  final String _trailerBackLabel;
 
   @override
   bool get rendersOwnTrailerControls => _renderControlsInHtml;
@@ -448,6 +451,7 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
   }) {
     final int start = startAt.inSeconds;
     final int autoplayFlag = autoplay ? 1 : 0;
+    final String trailerBackLabel = _htmlAttribute(_trailerBackLabel);
     final String embedUrl = _htmlAttribute(
       Uri.https('www.youtube.com', '/embed/$videoId', <String, String>{
         'autoplay': '$autoplayFlag',
@@ -529,9 +533,9 @@ class YoutubeEmbedPlayerEngine extends PlayerEngine {
         : '';
     final String trailerControlsHtml = _renderControlsInHtml
         ? '''
-  <div id="mirushinWakeLayer" aria-hidden="true"></div>
-  <button id="mirushinBackButton" class="mirushin-trailer-button" aria-label="Back" type="button">
-    <svg viewBox="0 0 24 24" aria-hidden="true">
+	  <div id="mirushinWakeLayer" aria-hidden="true"></div>
+	  <button id="mirushinBackButton" class="mirushin-trailer-button" aria-label="$trailerBackLabel" title="$trailerBackLabel" type="button">
+	    <svg viewBox="0 0 24 24" aria-hidden="true">
       <path d="M20 11H7.8l5.6-5.6L12 4 4 12l8 8 1.4-1.4L7.8 13H20v-2z"></path>
     </svg>
   </button>

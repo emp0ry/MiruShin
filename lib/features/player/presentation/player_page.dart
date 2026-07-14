@@ -57,6 +57,14 @@ Future<void> _setSystemUiModeSafely(SystemUiMode mode) async {
   }
 }
 
+Future<void> _ignorePlayerTeardownErrors(Future<void> future) async {
+  try {
+    await future;
+  } on Object {
+    // Native/player resources can already be gone while the app is exiting.
+  }
+}
+
 class PlayerPage extends ConsumerStatefulWidget {
   const PlayerPage({
     required this.item,
@@ -71,7 +79,8 @@ class PlayerPage extends ConsumerStatefulWidget {
   ConsumerState<PlayerPage> createState() => _PlayerPageState();
 }
 
-class _PlayerPageState extends ConsumerState<PlayerPage> {
+class _PlayerPageState extends ConsumerState<PlayerPage>
+    with WidgetsBindingObserver {
   static const MethodChannel _windowChannel = MethodChannel('mirushin/window');
   static const Duration _spaceHoldSpeedDelay = Duration(milliseconds: 260);
   static const Duration _exitCleanupTimeout = Duration(seconds: 2);
@@ -133,6 +142,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     FocusManager.instance.addEarlyKeyEventHandler(_handlePlayerShortcutEvent);
     unawaited(_setWakelockSafely(true));
     // Re-assert the wakelock every 60 s – guards against any platform-level
@@ -194,6 +204,16 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
             : _controlsHideDelay,
       );
     });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.detached) {
+      _hideTimer?.cancel();
+      _autoNextTimer?.cancel();
+      _cancelSpaceHold(restoreSpeed: false);
+      unawaited(_stopPlayback());
+    }
   }
 
   void _handleNativePlayerEvent(NativePlayerEvent event) {
@@ -343,6 +363,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     FocusManager.instance.removeEarlyKeyEventHandler(
       _handlePlayerShortcutEvent,
     );
@@ -789,7 +810,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     final bool wasTemporarySpeed = _spaceTemporarySpeedActive;
     _spaceTemporarySpeedActive = false;
     if (restoreSpeed && wasTemporarySpeed) {
-      unawaited(_playbackNotifier.endTemporarySpeed());
+      unawaited(
+        _ignorePlayerTeardownErrors(_playbackNotifier.endTemporarySpeed()),
+      );
     }
   }
 
@@ -1387,6 +1410,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                           _showTrailerControls();
                           _toggleFullscreen();
                         },
+                        backTooltip: context.t('Back'),
+                        fullscreenTooltip: context.t(
+                          _isFullscreen ? 'Exit fullscreen' : 'Fullscreen',
+                        ),
                         fullscreenButtonRight: 29,
                         fullscreenButtonBottom: 85,
                       )
@@ -1628,6 +1655,8 @@ class _YoutubeTrailerSurface extends StatelessWidget {
     required this.onActivity,
     required this.onExit,
     required this.onToggleFullscreen,
+    required this.backTooltip,
+    required this.fullscreenTooltip,
     this.fullscreenButtonRight = 29,
     this.fullscreenButtonBottom = 85,
   });
@@ -1641,6 +1670,8 @@ class _YoutubeTrailerSurface extends StatelessWidget {
   final VoidCallback onActivity;
   final VoidCallback onExit;
   final VoidCallback onToggleFullscreen;
+  final String backTooltip;
+  final String fullscreenTooltip;
   final double fullscreenButtonRight;
   final double fullscreenButtonBottom;
 
@@ -1683,7 +1714,7 @@ class _YoutubeTrailerSurface extends StatelessWidget {
                         top: padding.top + 16,
                         left: padding.left + 30,
                         child: _TrailerCircleButton(
-                          tooltip: 'Back',
+                          tooltip: backTooltip,
                           icon: Icons.arrow_back_rounded,
                           onPressed: onExit,
                         ),
@@ -1693,9 +1724,7 @@ class _YoutubeTrailerSurface extends StatelessWidget {
                           right: padding.right + fullscreenButtonRight,
                           bottom: padding.bottom + fullscreenButtonBottom,
                           child: _TrailerCircleButton(
-                            tooltip: isFullscreen
-                                ? 'Exit fullscreen'
-                                : 'Fullscreen',
+                            tooltip: fullscreenTooltip,
                             icon: isFullscreen
                                 ? Icons.fullscreen_exit_rounded
                                 : Icons.fullscreen_rounded,
@@ -2372,7 +2401,7 @@ class _PlayerChrome extends ConsumerWidget {
                                             ),
                                             _ChromeButton(
                                               icon: Icons.high_quality_rounded,
-                                              label: 'Quality',
+                                              label: context.t('Quality'),
                                               showLabel: !compactQuality,
                                               onTap: () => _showQualityMenu(
                                                 context,
@@ -2385,9 +2414,11 @@ class _PlayerChrome extends ConsumerWidget {
                                                     ? Icons
                                                           .fullscreen_exit_rounded
                                                     : Icons.fullscreen_rounded,
-                                                tooltip: isFullscreen
-                                                    ? 'Exit fullscreen'
-                                                    : 'Fullscreen',
+                                                tooltip: context.t(
+                                                  isFullscreen
+                                                      ? 'Exit fullscreen'
+                                                      : 'Fullscreen',
+                                                ),
                                                 onTap: onToggleFullscreen,
                                               ),
                                           ],

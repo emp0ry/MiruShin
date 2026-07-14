@@ -366,7 +366,7 @@ class _OverviewPanel extends ConsumerWidget {
               runSpacing: AppSpacing.sm,
               children: <Widget>[
                 for (final String genre in item.genres.take(12))
-                  MetadataChip(label: genre),
+                  MetadataChip(label: context.t(genre)),
               ],
             ),
           ],
@@ -471,7 +471,7 @@ class _AniListInfoPanelState extends State<_AniListInfoPanel> {
               icon: Icons.wb_sunny_outlined,
               label: 'Season',
               value: [
-                _fmtSeason(_ext['anilist_season']!),
+                context.t(_fmtSeason(_ext['anilist_season']!)),
                 if (_ext['anilist_season_year'] != null)
                   _ext['anilist_season_year']!,
               ].join(' '),
@@ -614,7 +614,7 @@ class _AniListInfoPanelState extends State<_AniListInfoPanel> {
                     ),
                     Expanded(
                       child: Text(
-                        row.value,
+                        context.t(row.value),
                         style: tt.bodyMedium?.copyWith(
                           fontWeight: FontWeight.w600,
                         ),
@@ -639,7 +639,7 @@ class _AniListInfoPanelState extends State<_AniListInfoPanel> {
               children: <Widget>[
                 for (final String genre in widget.item.genres.take(12))
                   Chip(
-                    label: Text(genre),
+                    label: Text(context.t(genre)),
                     visualDensity: VisualDensity.compact,
                   ),
               ],
@@ -657,7 +657,7 @@ class _AniListInfoPanelState extends State<_AniListInfoPanel> {
               children: <Widget>[
                 ...visibleTags.map(
                   (t) => Chip(
-                    label: Text('${t.rank}% ${t.name}'),
+                    label: Text('${t.rank}% ${context.t(t.name)}'),
                     visualDensity: VisualDensity.compact,
                   ),
                 ),
@@ -665,7 +665,7 @@ class _AniListInfoPanelState extends State<_AniListInfoPanel> {
                   ..._spoilersRevealed
                       ? spoilerTags.map(
                           (t) => Chip(
-                            label: Text('${t.rank}% ${t.name}'),
+                            label: Text('${t.rank}% ${context.t(t.name)}'),
                             visualDensity: VisualDensity.compact,
                             labelStyle: TextStyle(color: spoilerTextColor),
                           ),
@@ -946,9 +946,12 @@ class _HeroCopy extends ConsumerWidget {
                   onImage: true,
                 ),
               if (mode == CatalogMode.anilist && formatLabel.isNotEmpty)
-                MetadataChip(label: formatLabel, onImage: true),
+                MetadataChip(label: context.t(formatLabel), onImage: true),
               if (personalStatusLabel.isNotEmpty)
-                MetadataChip(label: personalStatusLabel, onImage: true),
+                MetadataChip(
+                  label: context.t(personalStatusLabel),
+                  onImage: true,
+                ),
               if (mode != CatalogMode.anilist)
                 MetadataChip(label: item.durationLabel, onImage: true),
               if (mode != CatalogMode.anilist)
@@ -1117,7 +1120,7 @@ class _ActionPanel extends ConsumerWidget {
           onPressed: () =>
               context.push(AppRoutes.watchPath(item.id), extra: item),
           icon: const Icon(Icons.play_arrow_rounded),
-          label: Text(context.t('Watch')),
+          label: Text(context.t(_isAniListManga(item) ? 'Read' : 'Watch')),
         ),
       if (canPlayTrailer)
         FilledButton.icon(
@@ -1336,7 +1339,7 @@ final _shikimoriRussianDescriptionProvider = FutureProvider.autoDispose
           .where((String q) => q.isNotEmpty)
           .toList(growable: false);
       if (key.malId <= 0 && queries.isEmpty) return null;
-      final ({String title, String description})? details = await ref
+      final ShikimoriRussianDetails? details = await ref
           .watch(_shikimoriForDetailsProvider)
           .getRussianDetailsForMedia(
             malId: key.malId > 0 ? key.malId : null,
@@ -1642,13 +1645,15 @@ class _SeasonTile extends ConsumerWidget {
     final String displayTitle = russianTitle?.isNotEmpty == true
         ? russianTitle!
         : season.name;
-    final String typeLabel = _seasonTypeLabel(season);
+    final String typeLabel = context.t(_seasonTypeLabel(season));
     final String yearLabel = season.year > 0 ? '${season.year}' : '';
     final String ratingLabel = season.rating > 0
         ? season.rating.toStringAsFixed(1)
         : '';
     final String epLabel = season.episodeCount > 0
-        ? '${season.episodeCount} ep.'
+        ? context.tf('{count} ep.', <String, Object?>{
+            'count': season.episodeCount,
+          })
         : '';
 
     final List<String> subtitleParts = <String>[
