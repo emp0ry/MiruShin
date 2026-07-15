@@ -31,6 +31,22 @@
       ],
       "versions": [
         {
+          "version": "2.4.1",
+          "date": "2026-07-15",
+          "localizedDescription": "- PiP now works better with downloaded videos, especially on macOS and iOS.\n- Added anime opening and ending themes to anime detail pages.\n- Fixed playback time jumping backward after seeking or skipping an opening or ending.\n- Fixed Skip and Undo buttons appearing at the same time while buffering.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.4.1/MiruShin-ios-v2.4.1.ipa",
+          "size": 27998753,
+          "minOSVersion": "13.0"
+        },
+        {
+          "version": "2.4.0",
+          "date": "2026-07-14",
+          "localizedDescription": "- Expanded Russian and Japanese translations across filters, settings, profiles, libraries, and media details.\n- Localized player and trailer controls, along with AniList entry labels.\n- When **Russian (Shikimori)** is selected, Shikimori YouTube trailers now prioritize **Озвучка**, followed by **Субтитры**.\n- Fixed player teardown crashes and profile card overflow issues.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.4.0/MiruShin-ios-v2.4.0.ipa",
+          "size": 27982864,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.3.0",
           "date": "2026-07-13",
           "localizedDescription": "- Added much better filters in Discovery, Library, and Source Modules.\n- Filters now support include and exclude actions for things like genres, tags, format, status, source, language, type, and download support.\n- Added AniList source/origin filters, adult content filter, licensing filter, and improved tag browsing/search.\n- Improved Library filters with sorting/grouped tags and extra metadata filters.\n- Cached downloaded anime artwork, including posters, backdrops, and episode images, so downloaded titles look better offline.\n- Fixed offline subtitles for downloaded episodes, including local subtitle file loading.\n- Added ASS/SSA subtitle parsing support.\n- Improved player stability when streams fail to load or internet is weak.\n- Made seeking more reliable so the player position and progress UI stay in sync.\n- Fixed player controls sometimes not hiding properly on mobile/iOS.\n- Improved keyboard shortcut handling in the player.\n- Improved Skip OP/ED button visibility so it follows the player UI correctly.",
@@ -359,11 +375,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.3.0",
-      "versionDate": "2026-07-13",
-      "versionDescription": "- Added much better filters in Discovery, Library, and Source Modules.\n- Filters now support include and exclude actions for things like genres, tags, format, status, source, language, type, and download support.\n- Added AniList source/origin filters, adult content filter, licensing filter, and improved tag browsing/search.\n- Improved Library filters with sorting/grouped tags and extra metadata filters.\n- Cached downloaded anime artwork, including posters, backdrops, and episode images, so downloaded titles look better offline.\n- Fixed offline subtitles for downloaded episodes, including local subtitle file loading.\n- Added ASS/SSA subtitle parsing support.\n- Improved player stability when streams fail to load or internet is weak.\n- Made seeking more reliable so the player position and progress UI stay in sync.\n- Fixed player controls sometimes not hiding properly on mobile/iOS.\n- Improved keyboard shortcut handling in the player.\n- Improved Skip OP/ED button visibility so it follows the player UI correctly.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.3.0/MiruShin-ios-v2.3.0.ipa",
-      "size": 28005655,
+      "version": "2.4.1",
+      "versionDate": "2026-07-15",
+      "versionDescription": "- PiP now works better with downloaded videos, especially on macOS and iOS.\n- Added anime opening and ending themes to anime detail pages.\n- Fixed playback time jumping backward after seeking or skipping an opening or ending.\n- Fixed Skip and Undo buttons appearing at the same time while buffering.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.4.1/MiruShin-ios-v2.4.1.ipa",
+      "size": 27998753,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
