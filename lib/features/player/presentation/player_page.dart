@@ -1519,7 +1519,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
                                     controlsVisible:
                                         state.controlsVisible && !state.locked,
                                   ),
-                                if (state.error == null && !state.locked)
+                                if (state.error == null &&
+                                    !state.locked &&
+                                    state.seekPreviewPosition == null &&
+                                    state.lastSkippedFrom == null)
                                   _SkipButtons(
                                     item: state.item ?? widget.item,
                                     controlsVisible: state.controlsVisible,

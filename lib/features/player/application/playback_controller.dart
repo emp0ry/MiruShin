@@ -23,6 +23,7 @@ import '../../watch/domain/normalized_models.dart';
 import '../data/discord_rpc_service.dart';
 import '../data/media_session_service.dart';
 import '../domain/player_models.dart';
+import '../domain/seek_settle.dart';
 import '../engine/local_hls_proxy.dart';
 import '../engine/player_engine.dart';
 import '../engine/player_engine_factory.dart';
@@ -187,6 +188,9 @@ class PlaybackController extends Notifier<PlaybackState> {
   static const Duration _seekSettleTimeout = Duration(seconds: 12);
   static const Duration _seekSettleRetryInterval = Duration(milliseconds: 700);
   static const Duration _seekSettleTolerance = Duration(milliseconds: 1200);
+  static const Duration _seekSettleForwardTolerance = Duration(
+    milliseconds: 2500,
+  );
   static const int _seekSettleRetryLimit = 10;
   static const Duration _engineSeekTimeout = Duration(seconds: 4);
   static const Duration _resumeSeekRetryInterval = Duration(milliseconds: 650);
@@ -264,6 +268,7 @@ class PlaybackController extends Notifier<PlaybackState> {
   DateTime _nextSeekPreviewWarmupAt = DateTime.fromMillisecondsSinceEpoch(0);
   PlayerEngine? _settlingSeekEngine;
   Duration? _settlingSeekTarget;
+  Duration? _settlingSeekFrom;
   DateTime? _settlingSeekUntil;
   DateTime? _settlingSeekEarliestClear;
   DateTime? _settlingSeekNextRetryAt;
@@ -2349,6 +2354,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     _interactiveSeekTimer = null;
     _queuedSeekTarget = null;
     _seekInFlight = true;
+    final Duration from = engine.state.value.position;
 
     try {
       await _seekEngineTo(engine, target, reason: 'Interactive seek');
@@ -2361,18 +2367,23 @@ class PlaybackController extends Notifier<PlaybackState> {
         unawaited(_flushInteractiveSeek());
       } else if (state.engine == engine) {
         _queuedSeekEngine = null;
-        _beginSeekSettle(engine, target);
+        _beginSeekSettle(engine, target, from: from);
       } else if (_queuedSeekEngine == engine) {
         _clearInteractiveSeek();
       }
     }
   }
 
-  void _beginSeekSettle(PlayerEngine engine, Duration target) {
+  void _beginSeekSettle(
+    PlayerEngine engine,
+    Duration target, {
+    required Duration from,
+  }) {
     _cancelSeekSettle(clearPreview: false);
     if (state.engine != engine) return;
     _settlingSeekEngine = engine;
     _settlingSeekTarget = target;
+    _settlingSeekFrom = from;
     final DateTime now = DateTime.now();
     _settlingSeekUntil = now.add(_seekSettleTimeout);
     _settlingSeekEarliestClear = now.add(_seekSettleMinHold);
@@ -2390,6 +2401,7 @@ class PlaybackController extends Notifier<PlaybackState> {
   void _settleSeekPreview() {
     final PlayerEngine? engine = _settlingSeekEngine;
     final Duration? target = _settlingSeekTarget;
+    final Duration? from = _settlingSeekFrom;
     final DateTime? until = _settlingSeekUntil;
     final DateTime? earliestClear = _settlingSeekEarliestClear;
     if (engine == null || target == null || until == null) {
@@ -2406,7 +2418,7 @@ class PlaybackController extends Notifier<PlaybackState> {
 
     final DateTime now = DateTime.now();
     final Duration position = engine.state.value.position;
-    final bool settled = _isSeekSettled(position, target);
+    final bool settled = _isSeekSettled(position, target, from: from);
     final bool timedOut = now.isAfter(until);
     final bool heldLongEnough =
         earliestClear == null || !now.isBefore(earliestClear);
@@ -2490,9 +2502,18 @@ class PlaybackController extends Notifier<PlaybackState> {
     }
   }
 
-  bool _isSeekSettled(Duration position, Duration target) {
-    final int diffMs = (position.inMilliseconds - target.inMilliseconds).abs();
-    return diffMs <= _seekSettleTolerance.inMilliseconds;
+  bool _isSeekSettled(
+    Duration position,
+    Duration target, {
+    required Duration? from,
+  }) {
+    return seekHasSettled(
+      position: position,
+      target: target,
+      from: from,
+      tolerance: _seekSettleTolerance,
+      forwardTolerance: _seekSettleForwardTolerance,
+    );
   }
 
   void _cancelSeekSettle({required bool clearPreview}) {
@@ -2500,6 +2521,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     _seekSettleTimer = null;
     _settlingSeekEngine = null;
     _settlingSeekTarget = null;
+    _settlingSeekFrom = null;
     _settlingSeekUntil = null;
     _settlingSeekEarliestClear = null;
     _settlingSeekNextRetryAt = null;
@@ -2799,7 +2821,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       // Native backends may reject stale skip targets during stream changes.
     }
     if (state.engine == engine) {
-      _beginSeekSettle(engine, clampedTarget);
+      _beginSeekSettle(engine, clampedTarget, from: from);
     }
     state = state.copyWith(lastSkippedFrom: from);
     _undoTimer?.cancel();
@@ -2816,6 +2838,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     if (from == null) return;
     final PlayerEngine? engine = state.engine;
     if (engine == null) return;
+    final Duration fromPosition = _currentPositionFor(engine);
     final Duration target = _clampSeekPosition(
       from,
       engine.state.value.duration,
@@ -2830,7 +2853,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       // Ignore stale undo seeks while the player is being replaced.
     }
     if (state.engine == engine) {
-      _beginSeekSettle(engine, target);
+      _beginSeekSettle(engine, target, from: fromPosition);
     }
     state = state.copyWith(clearLastSkippedFrom: true);
     _broadcastSeek(target);

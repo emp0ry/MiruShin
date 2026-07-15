@@ -11,6 +11,7 @@ import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_radius.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../app/theme/app_theme_extension.dart';
+import '../../../core/platform/url_opener.dart';
 import '../../../core/responsive/app_breakpoints.dart';
 import '../../../core/widgets/adaptive_page.dart';
 import '../../../core/widgets/glass_card.dart';
@@ -26,6 +27,7 @@ import '../../../shared/utils/media_status_formatter.dart';
 import '../../catalog/application/catalog_mode.dart';
 import '../../catalog/presentation/catalog_offline_banner.dart';
 import '../../library/application/local_library_provider.dart';
+import '../data/anime_themes_client.dart';
 import '../../library/presentation/local_library_editor.dart';
 import '../../metadata/application/metadata_providers.dart';
 import '../../metadata/data/shikimori_client.dart';
@@ -152,6 +154,10 @@ class _DetailsBody extends ConsumerWidget {
         if (hasAniListInfo) ...<Widget>[
           const SizedBox(height: AppSpacing.xxl),
           _AniListInfoPanel(item: item),
+        ],
+        if (item.type == MediaType.anime) ...<Widget>[
+          const SizedBox(height: AppSpacing.xxl),
+          _AnimeThemesPanel(item: item),
         ],
         if (item.seasons.isNotEmpty) ...<Widget>[
           const SizedBox(height: AppSpacing.xxl),
@@ -1377,6 +1383,289 @@ String _localizedOverview(WidgetRef ref, MediaItem item) {
       )
       .maybeWhen(data: (String? value) => value, orElse: () => null);
   return (russian != null && russian.isNotEmpty) ? russian : item.overview;
+}
+
+class _AnimeThemesPanel extends ConsumerStatefulWidget {
+  const _AnimeThemesPanel({required this.item});
+
+  final MediaItem item;
+
+  @override
+  ConsumerState<_AnimeThemesPanel> createState() => _AnimeThemesPanelState();
+}
+
+class _AnimeThemesPanelState extends ConsumerState<_AnimeThemesPanel> {
+  late Future<AnimeThemesAnime?> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant _AnimeThemesPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.item.id != widget.item.id ||
+        oldWidget.item.title != widget.item.title) {
+      _future = _load();
+    }
+  }
+
+  Future<AnimeThemesAnime?> _load() {
+    return ref.read(animeThemesClientProvider).findForMediaItem(widget.item);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          SectionHeader(title: 'Anime Themes'),
+          FutureBuilder<AnimeThemesAnime?>(
+            future: _future,
+            builder:
+                (
+                  BuildContext context,
+                  AsyncSnapshot<AnimeThemesAnime?> snapshot,
+                ) {
+                  if (snapshot.connectionState != ConnectionState.done) {
+                    return const _AnimeThemesStatusRow(
+                      icon: Icons.music_note_rounded,
+                      label: 'Loading themes...',
+                      showProgress: true,
+                    );
+                  }
+                  if (snapshot.hasError) {
+                    return const _AnimeThemesStatusRow(
+                      icon: Icons.cloud_off_rounded,
+                      label: 'Anime Themes unavailable',
+                    );
+                  }
+
+                  final AnimeThemesAnime? anime = snapshot.data;
+                  if (anime == null || anime.themes.isEmpty) {
+                    return const _AnimeThemesStatusRow(
+                      icon: Icons.music_off_rounded,
+                      label: 'No themes found',
+                    );
+                  }
+
+                  return Column(
+                    children: <Widget>[
+                      for (final AnimeThemeInfo theme in anime.themes)
+                        _AnimeThemeDetailTile(
+                          theme: theme,
+                          fallbackImageUrl: anime.imageUrl,
+                        ),
+                    ],
+                  );
+                },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AnimeThemeDetailTile extends StatelessWidget {
+  const _AnimeThemeDetailTile({
+    required this.theme,
+    required this.fallbackImageUrl,
+  });
+
+  final AnimeThemeInfo theme;
+  final String fallbackImageUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    final TextTheme tt = Theme.of(context).textTheme;
+    final String imageUrl = theme.imageUrl.isNotEmpty
+        ? theme.imageUrl
+        : fallbackImageUrl;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+      child: InkWell(
+        onTap: () => _openAnimeTheme(context, theme),
+        borderRadius: AppRadius.all(AppRadius.sm),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: <Widget>[
+            _AnimeThemePoster(
+              imageUrl: imageUrl,
+              label: theme.label,
+              title: theme.songTitle,
+            ),
+            const SizedBox(width: AppSpacing.md),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    theme.songTitle,
+                    style: tt.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  Text(
+                    _animeThemeSubtitle(theme),
+                    style: tt.labelSmall?.copyWith(color: AppColors.textMuted),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: AppSpacing.sm),
+            FilledButton(
+              onPressed: () => _openAnimeTheme(context, theme),
+              style: FilledButton.styleFrom(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                minimumSize: const Size(56, 32),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                textStyle: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              child: const Icon(Icons.play_arrow_rounded, size: 16),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openAnimeTheme(
+    BuildContext context,
+    AnimeThemeInfo theme,
+  ) async {
+    final bool opened = await openExternalUrl(theme.openUrl);
+    if (!opened && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.t('Could not open Anime Themes'))),
+      );
+    }
+  }
+}
+
+class _AnimeThemePoster extends StatelessWidget {
+  const _AnimeThemePoster({
+    required this.imageUrl,
+    required this.label,
+    required this.title,
+  });
+
+  final String imageUrl;
+  final String label;
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 48,
+      height: 68,
+      child: Stack(
+        fit: StackFit.expand,
+        children: <Widget>[
+          if (imageUrl.isNotEmpty)
+            ClipRRect(
+              borderRadius: AppRadius.all(AppRadius.sm),
+              child: CachedNetworkImage(
+                imageUrl: imageUrl,
+                fit: BoxFit.cover,
+                errorWidget: (_, _, _) => _PosterFallback(title),
+              ),
+            )
+          else
+            _PosterFallback(title),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: .72),
+                borderRadius: const BorderRadius.vertical(
+                  bottom: Radius.circular(AppRadius.sm),
+                ),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+                child: Text(
+                  label,
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w900,
+                    height: 1,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AnimeThemesStatusRow extends StatelessWidget {
+  const _AnimeThemesStatusRow({
+    required this.icon,
+    required this.label,
+    this.showProgress = false,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool showProgress;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: <Widget>[
+        SizedBox(
+          width: 48,
+          height: 68,
+          child: Center(
+            child: showProgress
+                ? const SizedBox.square(
+                    dimension: 22,
+                    child: CircularProgressIndicator.adaptive(strokeWidth: 2),
+                  )
+                : Icon(icon, color: AppColors.textMuted),
+          ),
+        ),
+        const SizedBox(width: AppSpacing.md),
+        Expanded(
+          child: Text(
+            context.t(label),
+            style: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.copyWith(color: AppColors.textMuted),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+String _animeThemeSubtitle(AnimeThemeInfo theme) {
+  final List<String> parts = <String>[theme.label];
+  if (theme.episodes.isNotEmpty) parts.add('Episodes ${theme.episodes}');
+  if (theme.versionCount > 1) parts.add('${theme.versionCount} versions');
+  if (theme.spoiler) parts.add('Spoiler');
+  if (theme.nsfw) parts.add('NSFW');
+  return parts.join(' · ');
 }
 
 /// Interleaves side-content (OVA/Special/Movie/SideStory/SpinOff) near the
