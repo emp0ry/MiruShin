@@ -617,7 +617,7 @@ class DownloadController extends Notifier<List<DownloadedEpisode>> {
   }
 
   /// Picks the best directly-downloadable (http/https) stream. Embed-aggregator
-  /// modules (e.g. Kodik/CVH iframes) hand back non-http descriptors that mpv
+  /// modules hand back non-http descriptors that mpv
   /// can't open and we can't download — those return null so the caller fails
   /// cleanly instead of crashing on `Uri.parse`.
   _StreamPick? _pickHighest(NormalizedStreamBundle bundle) {
