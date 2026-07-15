@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mirushin/features/player/engine/local_hls_proxy.dart';
@@ -181,4 +182,82 @@ void main() {
       }
     },
   );
+
+  test('serves local downloaded HLS playlists and ranged segments', () async {
+    final Directory dir = await Directory.systemTemp.createTemp(
+      'mirushin_local_hls_proxy_test_',
+    );
+    final File playlist = File('${dir.path}/index.m3u8');
+    final File key = File('${dir.path}/key.bin');
+    final File segment = File('${dir.path}/seg_00001.ts');
+
+    await key.writeAsBytes(<int>[1, 2, 3, 4], flush: true);
+    await segment.writeAsString('segment-bytes', flush: true);
+    await playlist.writeAsString(
+      '#EXTM3U\n'
+      '#EXT-X-TARGETDURATION:4\n'
+      '#EXT-X-KEY:METHOD=AES-128,URI="key.bin"\n'
+      '#EXTINF:4,\n'
+      'seg_00001.ts\n'
+      '#EXT-X-ENDLIST\n',
+      flush: true,
+    );
+
+    final LocalHlsProxy proxy = LocalHlsProxy();
+    final HttpClient client = HttpClient();
+
+    Future<HttpClientResponse> request(
+      Uri uri, {
+      Map<String, String> headers = const <String, String>{},
+    }) async {
+      final HttpClientRequest request = await client.getUrl(uri);
+      headers.forEach(request.headers.set);
+      return request.close();
+    }
+
+    Future<Uint8List> readBytes(HttpClientResponse response) async {
+      final BytesBuilder body = BytesBuilder(copy: false);
+      await for (final List<int> chunk in response) {
+        body.add(chunk);
+      }
+      return body.takeBytes();
+    }
+
+    try {
+      await proxy.start();
+      final String rewritten = utf8.decode(
+        await readBytes(
+          await request(Uri.parse(proxy.playlistUrl(playlist.uri))),
+        ),
+      );
+
+      final Uri proxiedKey = Uri.parse(
+        RegExp(r'URI="([^"]+)"').firstMatch(rewritten)!.group(1)!,
+      );
+      final Uri proxiedSegment = Uri.parse(
+        const LineSplitter()
+            .convert(rewritten)
+            .firstWhere((String line) => line.startsWith('http://127.0.0.1')),
+      );
+
+      final HttpClientResponse keyResponse = await request(proxiedKey);
+      expect(keyResponse.statusCode, HttpStatus.ok);
+      expect(await readBytes(keyResponse), <int>[1, 2, 3, 4]);
+
+      final HttpClientResponse segmentResponse = await request(
+        proxiedSegment,
+        headers: const <String, String>{'Range': 'bytes=0-6'},
+      );
+      expect(segmentResponse.statusCode, HttpStatus.partialContent);
+      expect(
+        segmentResponse.headers.value(HttpHeaders.contentRangeHeader),
+        'bytes 0-6/13',
+      );
+      expect(utf8.decode(await readBytes(segmentResponse)), 'segment');
+    } finally {
+      client.close(force: true);
+      await proxy.stop();
+      await dir.delete(recursive: true);
+    }
+  });
 }

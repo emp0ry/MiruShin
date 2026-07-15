@@ -71,6 +71,8 @@ class FvpPlayerEngine extends PlayerEngine {
   double _volume = 1;
   double _playbackSpeed = 1;
   PlayerSource? _currentSource;
+  String? _nativePlaybackUrl;
+  Map<String, String> _nativePlaybackHeaders = const <String, String>{};
   Duration _currentStartAt = Duration.zero;
   bool _currentAutoplay = true;
   int _openGeneration = 0;
@@ -86,6 +88,12 @@ class FvpPlayerEngine extends PlayerEngine {
 
   @override
   ValueListenable<PlayerEngineState> get state => _state;
+
+  @override
+  String? get nativePlaybackUrl => _nativePlaybackUrl;
+
+  @override
+  Map<String, String> get nativePlaybackHeaders => _nativePlaybackHeaders;
 
   @override
   void addListener(VoidCallback listener) => _state.addListener(listener);
@@ -189,8 +197,11 @@ class FvpPlayerEngine extends PlayerEngine {
           : Uri.parse(source.url);
       final bool isNetwork = _isNetworkUrl(source.url);
       final bool isHls = _isHlsLikeSource(source);
+      final bool isLocalHls = remoteUri.scheme == 'file' && isHls;
       final bool useProxy =
-          !source.disableProxy && !_previewMode && (isNetwork || isInlineDash);
+          !source.disableProxy &&
+          !_previewMode &&
+          (isNetwork || isInlineDash || isLocalHls);
       _requireVideoSurfaceDuringStartup = !_previewMode && isNetwork;
       String playbackUrl = remoteUri.toString();
       if (useProxy && isInlineDash) {
@@ -216,6 +227,8 @@ class FvpPlayerEngine extends PlayerEngine {
               : 'FVP open direct MDK URL: $playbackUrl',
         );
       }
+      _nativePlaybackUrl = isLocalHls && useProxy ? playbackUrl : null;
+      _nativePlaybackHeaders = const <String, String>{};
       _applyDirectMdkHeaders(
         player,
         isInlineDash ? Uri.parse(playbackUrl) : remoteUri,
@@ -1289,6 +1302,8 @@ class FvpPlayerEngine extends PlayerEngine {
     _hasMedia = false;
     _lastError = null;
     _currentSource = null;
+    _nativePlaybackUrl = null;
+    _nativePlaybackHeaders = const <String, String>{};
     _lastBufferedRanges = const <PlayerBufferedRange>[];
     _invalidSince = null;
     _reportedInvalid = false;

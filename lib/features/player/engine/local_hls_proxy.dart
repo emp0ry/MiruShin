@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as p;
 
 // Per-request timeout — short enough that failures are detected, but long
 // enough for slow HLS CDNs that only send a chunk every few seconds.
@@ -64,6 +66,7 @@ class LocalHlsProxy {
   HttpClient? _httpClient;
   DateTime? _lastRequestAt;
   Map<String, String> _forwardHeaders = <String, String>{};
+  final Set<String> _localRoots = <String>{};
   final Map<String, String> _inlineDashManifests = <String, String>{};
   final Map<String, Map<String, String>> _inlineDashHeaders =
       <String, Map<String, String>>{};
@@ -97,6 +100,7 @@ class LocalHlsProxy {
     _server = null;
     _port = null;
     _forwardHeaders = <String, String>{};
+    _localRoots.clear();
     _inlineDashManifests.clear();
     _inlineDashHeaders.clear();
     _lastRequestAt = null;
@@ -118,6 +122,9 @@ class LocalHlsProxy {
     Uri remoteUrl, {
     Map<String, String> headers = const <String, String>{},
   }) {
+    if (remoteUrl.scheme == 'file') {
+      _allowLocalRootFor(remoteUrl);
+    }
     final String u = Uri.encodeQueryComponent(remoteUrl.toString());
     if (headers.isEmpty) {
       return '$_base/m3u8?u=$u';
@@ -252,6 +259,10 @@ class LocalHlsProxy {
     _absorbInboundHeaders(req.headers);
 
     final Uri src = Uri.parse(rawUrl);
+    if (src.scheme == 'file' && !_isLocalFileAllowed(src)) {
+      req.response.statusCode = HttpStatus.forbidden;
+      return req.response.close();
+    }
     debugPrint('HlsProxy playlist ← $src');
 
     try {
@@ -300,6 +311,10 @@ class LocalHlsProxy {
   }
 
   Future<String> _fetchPlaylist(Uri url) async {
+    if (url.scheme == 'file') {
+      return File.fromUri(url).readAsString();
+    }
+
     for (int attempt = 1; attempt <= _kPlaylistRetries; attempt++) {
       try {
         _resetIfIdle();
@@ -348,6 +363,19 @@ class LocalHlsProxy {
     _absorbInboundHeaders(req.headers);
     final Uri uri = Uri.parse(rawUrl);
     final String? range = req.headers.value(HttpHeaders.rangeHeader);
+
+    if (uri.scheme == 'file') {
+      if (!_isLocalFileAllowed(uri)) {
+        req.response.statusCode = HttpStatus.forbidden;
+        return req.response.close();
+      }
+      return _serveLocalFileSegment(
+        req,
+        uri,
+        range,
+        preserveContentType: preserveContentType,
+      );
+    }
 
     if (req.method != 'HEAD') {
       return _serveBufferedSegment(
@@ -408,6 +436,109 @@ class LocalHlsProxy {
       req.response.write('segment error: $e');
       return req.response.close();
     }
+  }
+
+  Future<void> _serveLocalFileSegment(
+    HttpRequest req,
+    Uri uri,
+    String? range, {
+    required bool preserveContentType,
+  }) async {
+    final File file = File.fromUri(uri);
+    if (!file.existsSync()) {
+      req.response.statusCode = HttpStatus.notFound;
+      return req.response.close();
+    }
+
+    final int length = await file.length();
+    final ({int start, int end})? selectedRange =
+        range == null || range.trim().isEmpty
+        ? null
+        : _parseByteRange(range, length);
+    if (range != null && range.trim().isNotEmpty && selectedRange == null) {
+      req.response
+        ..statusCode = HttpStatus.requestedRangeNotSatisfiable
+        ..headers.set(HttpHeaders.contentRangeHeader, 'bytes */$length');
+      return req.response.close();
+    }
+
+    final int start = selectedRange?.start ?? 0;
+    final int end = selectedRange?.end ?? math.max(0, length - 1);
+    final int contentLength = length == 0 ? 0 : end - start + 1;
+
+    req.response
+      ..statusCode = selectedRange == null
+          ? HttpStatus.ok
+          : HttpStatus.partialContent
+      ..bufferOutput = false
+      ..contentLength = contentLength
+      ..headers.set(HttpHeaders.acceptRangesHeader, 'bytes')
+      ..headers.set(
+        HttpHeaders.contentTypeHeader,
+        _localContentType(uri, preserveContentType: preserveContentType),
+      );
+    if (selectedRange != null) {
+      req.response.headers.set(
+        HttpHeaders.contentRangeHeader,
+        'bytes $start-$end/$length',
+      );
+    }
+
+    if (req.method == 'HEAD' || contentLength == 0) {
+      return req.response.close();
+    }
+
+    await req.response.addStream(file.openRead(start, end + 1));
+    return req.response.close();
+  }
+
+  ({int start, int end})? _parseByteRange(String range, int length) {
+    if (length <= 0) return null;
+    final RegExpMatch? match = RegExp(
+      r'^bytes=(\d*)-(\d*)$',
+      caseSensitive: false,
+    ).firstMatch(range.trim());
+    if (match == null) return null;
+
+    final String startText = match.group(1) ?? '';
+    final String endText = match.group(2) ?? '';
+    if (startText.isEmpty && endText.isEmpty) return null;
+
+    int start;
+    int end;
+    if (startText.isEmpty) {
+      final int? suffixLength = int.tryParse(endText);
+      if (suffixLength == null || suffixLength <= 0) return null;
+      start = math.max(0, length - suffixLength);
+      end = length - 1;
+    } else {
+      final int? parsedStart = int.tryParse(startText);
+      if (parsedStart == null) return null;
+      start = parsedStart;
+      final int? parsedEnd = endText.isEmpty ? null : int.tryParse(endText);
+      if (endText.isNotEmpty && parsedEnd == null) return null;
+      end = parsedEnd ?? length - 1;
+    }
+
+    if (start < 0 || start >= length || end < start) return null;
+    end = math.min(end, length - 1);
+    return (start: start, end: end);
+  }
+
+  String _localContentType(Uri uri, {required bool preserveContentType}) {
+    if (!preserveContentType) return 'application/octet-stream';
+    final String path = uri.path.toLowerCase();
+    if (path.endsWith('.ts')) return 'video/mp2t';
+    if (path.endsWith('.m4s') ||
+        path.endsWith('.mp4') ||
+        path.endsWith('.m4v') ||
+        path.endsWith('.mov')) {
+      return 'video/mp4';
+    }
+    if (path.endsWith('.aac')) return 'audio/aac';
+    if (path.endsWith('.vtt')) return 'text/vtt; charset=utf-8';
+    if (path.endsWith('.m3u8')) return 'application/vnd.apple.mpegurl';
+    return 'application/octet-stream';
   }
 
   Future<({Uint8List body, HttpHeaders headers, int statusCode})>
@@ -670,7 +801,27 @@ class LocalHlsProxy {
   bool _mediaUriAttrIsPlaylist(String line) =>
       line.startsWith('#EXT-X-RENDITION-REPORT');
 
-  bool _canProxy(Uri uri) => uri.scheme == 'http' || uri.scheme == 'https';
+  bool _canProxy(Uri uri) =>
+      uri.scheme == 'http' ||
+      uri.scheme == 'https' ||
+      (uri.scheme == 'file' && _isLocalFileAllowed(uri));
+
+  void _allowLocalRootFor(Uri playlistUri) {
+    if (playlistUri.scheme != 'file') return;
+    final File file = File.fromUri(playlistUri);
+    _localRoots.add(_normalizeLocalPath(file.parent.path));
+  }
+
+  bool _isLocalFileAllowed(Uri uri) {
+    if (uri.scheme != 'file' || _localRoots.isEmpty) return false;
+    final String filePath = _normalizeLocalPath(File.fromUri(uri).path);
+    for (final String root in _localRoots) {
+      if (filePath == root || p.isWithin(root, filePath)) return true;
+    }
+    return false;
+  }
+
+  String _normalizeLocalPath(String path) => p.normalize(p.absolute(path));
 
   Stream<List<int>> _activeStream(Stream<List<int>> upstream) async* {
     try {

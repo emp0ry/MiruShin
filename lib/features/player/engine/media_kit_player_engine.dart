@@ -281,8 +281,11 @@ class MediaKitPlayerEngine extends PlayerEngine {
       // HLS playlist rewrites. Preview mode skips it to keep decoders cheap.
       final bool isNetwork = _isNetworkUrl(source.url);
       final bool isHls = _isHlsLikeSource(source);
+      final bool isLocalHls = remoteUri.scheme == 'file' && isHls;
       final bool useProxy =
-          !source.disableProxy && !_previewMode && (isNetwork || isInlineDash);
+          !source.disableProxy &&
+          !_previewMode &&
+          (isNetwork || isInlineDash || isLocalHls);
       if (source.disableProxy && !_previewMode && isNetwork) {
         _requireVideoSurfaceDuringStartup = true;
       }
