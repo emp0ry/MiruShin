@@ -39,8 +39,7 @@ MiruShin lets you browse trending titles, build your library, keep your progress
 
 </div>
 
-<details>
-<summary><h3>Mobile version</h3></summary>
+<details><summary><h3>Mobile version</h3></summary>
 
 <div align="center">
 
