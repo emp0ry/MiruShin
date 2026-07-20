@@ -6,12 +6,18 @@ import 'app/app.dart';
 import 'bootstrap/mirushin_fvp_bootstrap.dart';
 import 'bootstrap/mirushin_media_kit_bootstrap.dart';
 import 'core/constants/app_constants.dart';
+import 'core/platform/single_instance_guard.dart';
 import 'core/platform/tv_platform.dart';
 import 'core/utils/settings_preferences.dart';
 import 'features/settings/presentation/settings_state.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  final bool isPrimaryInstance = await acquireMiruShinSingleInstanceLock();
+  if (!isPrimaryInstance) {
+    debugPrint('MiruShin is already running; exiting duplicate instance.');
+    return;
+  }
   await AppConstants.init();
   await TvPlatform.ensureInitialized();
   final SharedPreferences prefs = await SharedPreferences.getInstance();
