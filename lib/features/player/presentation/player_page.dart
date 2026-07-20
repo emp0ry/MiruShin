@@ -950,7 +950,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
         return KeyEventResult.handled;
       }
       final bool controlsVisible = state.controlsVisible && !state.locked;
-      final bool isPlaying = state.engine?.state.value.isPlaying ?? false;
+      final bool isPlaying =
+          state.desiredPlaying ||
+          (state.engine?.state.value.isPlaying ?? false);
       final bool pausedChromeNavigation = controlsVisible && !isPlaying;
       // On Android TV, Up/Down are navigation, not volume. When the chrome is
       // visible, use them to move through controls; Left/Right keep seeking
@@ -1583,7 +1585,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
                               if (_inPipMode && _windowPipSupported)
                                 _WindowPipOverlay(
                                   isPlaying:
-                                      state.engine?.value.isPlaying ?? false,
+                                      state.desiredPlaying ||
+                                      (state.engine?.value.isPlaying ?? false),
                                   controlsVisible: state.controlsVisible,
                                   aspectRatio:
                                       state.engine?.value.aspectRatio ?? 16 / 9,
@@ -2287,10 +2290,15 @@ class _PlayerChrome extends ConsumerWidget {
                               state.loading &&
                               !engineState.isInitialized &&
                               !engineState.isPlaying;
+                          final bool resuming =
+                              state.desiredPlaying && state.resumeStabilizing;
                           final bool showLoading =
                               opening ||
                               !engineState.isInitialized ||
-                              (engineState.isBuffering && !seekPreviewBuffered);
+                              resuming ||
+                              (state.desiredPlaying &&
+                                  engineState.isBuffering &&
+                                  !seekPreviewBuffered);
                           if (showLoading) {
                             return const _PlayerLoadingIndicator();
                           }
@@ -2567,8 +2575,11 @@ class _CenterPlayPauseButton extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final PlaybackState playback = ref.watch(playbackControllerProvider);
     final bool enabled = controller?.value.isInitialized == true;
-    final bool playing = controller?.value.isPlaying == true;
+    final bool playing = playback.engine == controller
+        ? playback.desiredPlaying || (controller?.value.isPlaying == true)
+        : controller?.value.isPlaying == true;
     return IconButton(
       tooltip: playing ? 'Pause' : 'Play',
       iconSize: 56,
@@ -2652,8 +2663,11 @@ class _PlayPauseButtonState extends ConsumerState<_PlayPauseButton> {
   @override
   Widget build(BuildContext context) {
     final PlayerEngine? controller = widget.controller;
+    final PlaybackState playback = ref.watch(playbackControllerProvider);
     final bool enabled = controller?.value.isInitialized == true;
-    final bool playing = controller?.value.isPlaying == true;
+    final bool playing = playback.engine == controller
+        ? playback.desiredPlaying || (controller?.value.isPlaying == true)
+        : controller?.value.isPlaying == true;
     return IconButton(
       tooltip: playing ? 'Pause' : 'Play',
       iconSize: 24,

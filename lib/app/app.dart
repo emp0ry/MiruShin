@@ -37,11 +37,13 @@ class _MiruShinAppState extends ConsumerState<MiruShinApp> {
 
   late final GoRouter _router;
   late final AppLifecycleListener _lifecycleListener;
+  late final PlaybackController _playbackController;
   Future<void>? _exitPlaybackCleanup;
 
   @override
   void initState() {
     super.initState();
+    _playbackController = ref.read(playbackControllerProvider.notifier);
     _router = buildAppRouter(widget.initialRoute);
     _lifecycleListener = AppLifecycleListener(
       onDetach: () => unawaited(_cleanupPlaybackForExit()),
@@ -69,8 +71,7 @@ class _MiruShinAppState extends ConsumerState<MiruShinApp> {
     final Future<void>? cleanup = _exitPlaybackCleanup;
     if (cleanup != null) return cleanup;
 
-    return _exitPlaybackCleanup = ref
-        .read(playbackControllerProvider.notifier)
+    return _exitPlaybackCleanup = _playbackController
         .stop()
         .timeout(_exitPlaybackCleanupTimeout)
         .catchError((_) {

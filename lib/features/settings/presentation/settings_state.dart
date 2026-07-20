@@ -602,6 +602,7 @@ class SettingsController extends Notifier<SettingsState> {
       metadataLocale: metadataLocale,
       fallback: preferences.readTmdbLanguage(),
     );
+    if (!ref.mounted) return;
 
     state = state.copyWith(
       themeMode: _themeModeFromName(themeModeName),

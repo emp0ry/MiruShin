@@ -28,6 +28,7 @@ import '../engine/local_hls_proxy.dart';
 import '../engine/player_engine.dart';
 import '../engine/player_engine_factory.dart';
 import 'player_settings.dart';
+import 'resume_stability.dart';
 
 /// Hook the watch-party host uses to broadcast its global playback changes to
 /// guests. Implemented by the watch-party controller and registered via
@@ -77,6 +78,9 @@ class PlaybackState {
     this.seekPreviewEngine,
     this.seekPreviewReady = false,
     this.temporarySpeedActive = false,
+    this.desiredPlaying = false,
+    this.playPauseOperationInFlight = false,
+    this.resumeStabilizing = false,
   });
 
   final MediaPlaybackItem? item;
@@ -97,6 +101,9 @@ class PlaybackState {
   final PlayerEngine? seekPreviewEngine;
   final bool seekPreviewReady;
   final bool temporarySpeedActive;
+  final bool desiredPlaying;
+  final bool playPauseOperationInFlight;
+  final bool resumeStabilizing;
 
   PlaybackState copyWith({
     MediaPlaybackItem? item,
@@ -123,6 +130,9 @@ class PlaybackState {
     bool clearSeekPreviewBufferedEnd = false,
     bool clearSeekPreviewEngine = false,
     bool? temporarySpeedActive,
+    bool? desiredPlaying,
+    bool? playPauseOperationInFlight,
+    bool? resumeStabilizing,
   }) {
     return PlaybackState(
       item: item ?? this.item,
@@ -154,6 +164,10 @@ class PlaybackState {
           ? false
           : seekPreviewReady ?? this.seekPreviewReady,
       temporarySpeedActive: temporarySpeedActive ?? this.temporarySpeedActive,
+      desiredPlaying: desiredPlaying ?? this.desiredPlaying,
+      playPauseOperationInFlight:
+          playPauseOperationInFlight ?? this.playPauseOperationInFlight,
+      resumeStabilizing: resumeStabilizing ?? this.resumeStabilizing,
     );
   }
 }
@@ -195,6 +209,10 @@ class PlaybackController extends Notifier<PlaybackState> {
   static const Duration _engineSeekTimeout = Duration(seconds: 4);
   static const Duration _resumeSeekRetryInterval = Duration(milliseconds: 650);
   static const Duration _resumeSeekRetryTimeout = Duration(seconds: 75);
+  static const Duration _resumeStabilityTick = Duration(milliseconds: 260);
+  static const Duration _resumeRecoverySettleTimeout = Duration(
+    milliseconds: 3200,
+  );
   static const Duration _engineOpenTimeout = Duration(seconds: 45);
   static const List<Duration> _startupSpeedReapplyDelays = <Duration>[
     Duration(milliseconds: 500),
@@ -265,6 +283,14 @@ class PlaybackController extends Notifier<PlaybackState> {
   Duration? _lastSeekPreviewTarget;
   bool _seekPreviewInFlight = false;
   bool _seekPreviewScrubbing = false;
+  bool _playPauseOperationActive = false;
+  bool? _pendingDesiredPlaying;
+  Completer<void>? _playPauseDrainCompleter;
+  int _playPauseIntentEpoch = 0;
+  int _resumeStabilizeEpoch = 0;
+  Duration _lastStablePausePosition = Duration.zero;
+  PlayerEngine? _engineForDispose;
+  Future<void>? _finalProgressSaveBarrier;
   DateTime _nextSeekPreviewWarmupAt = DateTime.fromMillisecondsSinceEpoch(0);
   PlayerEngine? _settlingSeekEngine;
   Duration? _settlingSeekTarget;
@@ -330,7 +356,8 @@ class PlaybackController extends Notifier<PlaybackState> {
 
   /// Current engine position, for the host heartbeat and guest drift checks.
   Duration get currentEnginePosition => _currentPositionFor(state.engine);
-  bool get isEnginePlaying => state.engine?.state.value.isPlaying ?? false;
+  bool get isEnginePlaying =>
+      state.desiredPlaying || (state.engine?.state.value.isPlaying ?? false);
   double get currentPlaybackSpeed {
     final PlayerSettings settings =
         ref.read(playerSettingsProvider).value ?? const PlayerSettings();
@@ -377,26 +404,18 @@ class PlaybackController extends Notifier<PlaybackState> {
 
   /// Apply a host play/pause without re-broadcasting (guest side).
   Future<void> applyRemotePlay() async {
-    final PlayerEngine? engine = state.engine;
-    if (engine == null || engine.state.value.isPlaying) return;
     _applyingRemote = true;
     try {
-      await engine.play();
-      state = state.copyWith();
-      _updateMediaSession();
+      await _setDesiredPlaying(true);
     } finally {
       _applyingRemote = false;
     }
   }
 
   Future<void> applyRemotePause() async {
-    final PlayerEngine? engine = state.engine;
-    if (engine == null || !engine.state.value.isPlaying) return;
     _applyingRemote = true;
     try {
-      await engine.pause();
-      state = state.copyWith();
-      _updateMediaSession();
+      await _setDesiredPlaying(false);
     } finally {
       _applyingRemote = false;
     }
@@ -455,13 +474,13 @@ class PlaybackController extends Notifier<PlaybackState> {
     MediaSessionService.init(
       onPlay: () {
         final PlayerEngine? e = state.engine;
-        if (e != null && !e.state.value.isPlaying) {
-          unawaited(togglePlay());
+        if (e != null && !state.desiredPlaying) {
+          unawaited(_setDesiredPlaying(true));
         }
       },
       onPause: () {
         final PlayerEngine? e = state.engine;
-        if (e != null && e.state.value.isPlaying) {
+        if (e != null && (state.desiredPlaying || e.state.value.isPlaying)) {
           unawaited(pause());
         }
       },
@@ -482,6 +501,8 @@ class PlaybackController extends Notifier<PlaybackState> {
     });
     ref.onDispose(() {
       _playbackGeneration++;
+      _playPauseIntentEpoch++;
+      _resumeStabilizeEpoch++;
       _progressTimer?.cancel();
       _undoTimer?.cancel();
       _autoNextOverlayTimer?.cancel();
@@ -495,7 +516,7 @@ class PlaybackController extends Notifier<PlaybackState> {
           _disposeSeekPreviewEngine(clearState: false),
         ),
       );
-      final PlayerEngine? engine = state.engine;
+      final PlayerEngine? engine = _engineForDispose;
       if (engine != null) {
         unawaited(_ignorePlaybackTeardownErrors(engine.dispose()));
       }
@@ -505,6 +526,17 @@ class PlaybackController extends Notifier<PlaybackState> {
 
   void setNextEpisodeHandler(void Function()? handler) {
     _nextEpisodeHandler = handler;
+  }
+
+  @visibleForTesting
+  void debugSetPlaybackState(PlaybackState value) {
+    _engineForDispose = value.engine;
+    state = value;
+  }
+
+  @visibleForTesting
+  void debugSetMaxObservedPosition(Duration value) {
+    _maxObservedPosition = value;
   }
 
   void _updateMediaSession() {
@@ -518,6 +550,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       return;
     }
     final PlayerEngineState es = engine.state.value;
+    final bool externallyPlaying = state.desiredPlaying || es.isPlaying;
     final String sub = item.subtitle.isNotEmpty
         ? item.subtitle
         : (item.episodeNumber > 0
@@ -530,18 +563,19 @@ class PlaybackController extends Notifier<PlaybackState> {
         artworkUrl: item.posterUrl,
         position: es.position,
         duration: es.duration,
-        isPlaying: es.isPlaying,
+        isPlaying: externallyPlaying,
         playbackRate: es.playbackSpeed,
         hasNext: _nextEpisodeHandler != null,
       ),
     );
-    unawaited(_updateDiscordRpc(item, es));
+    unawaited(_updateDiscordRpc(item, es, isPlaying: externallyPlaying));
   }
 
   Future<void> _updateDiscordRpc(
     MediaPlaybackItem item,
-    PlayerEngineState engineState,
-  ) async {
+    PlayerEngineState engineState, {
+    required bool isPlaying,
+  }) async {
     final SettingsState settings = ref.read(settingsProvider);
     final PlayerSettings playerSettings =
         ref.read(playerSettingsProvider).value ?? const PlayerSettings();
@@ -562,7 +596,7 @@ class PlaybackController extends Notifier<PlaybackState> {
         seasonNumber: item.seasonNumber,
         episodeNumber: item.episodeNumber,
         episodeCount: item.episodeCount,
-        isPlaying: engineState.isPlaying,
+        isPlaying: isPlaying,
       ),
     );
   }
@@ -696,6 +730,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     print(
       '[DEBUG] load: S${item.seasonNumber}E${item.episodeNumber} ignoreProgress=${item.ignoreProgress}',
     );
+    await _waitForFinalProgressSaveBarrier();
     _progressTimer?.cancel();
     _undoTimer?.cancel();
     _autoNextOverlayTimer?.cancel();
@@ -703,6 +738,10 @@ class PlaybackController extends Notifier<PlaybackState> {
     _maxObservedPosition = Duration.zero;
     _autoProgressMarked = false;
     _autoNextDismissed = false;
+    _playPauseIntentEpoch++;
+    _resumeStabilizeEpoch++;
+    _pendingDesiredPlaying = null;
+    _lastStablePausePosition = Duration.zero;
     _clearInteractiveSeek();
     if (state.autoNextVisible ||
         state.lastSkippedFrom != null ||
@@ -713,9 +752,13 @@ class PlaybackController extends Notifier<PlaybackState> {
         clearLastSkippedFrom: true,
         clearSeekPreviewPosition: true,
         clearSeekPreviewEngine: true,
+        desiredPlaying: false,
+        playPauseOperationInFlight: false,
+        resumeStabilizing: false,
       );
     }
     if (item.servers.isEmpty) {
+      _engineForDispose = null;
       state = PlaybackState(
         item: item,
         error: const PlayerError(
@@ -744,6 +787,16 @@ class PlaybackController extends Notifier<PlaybackState> {
     // Host: a freshly loaded episode is a global source/episode change. (Guests
     // have no sink registered, so this is a no-op on the receiving side.)
     _broadcastSourceChanged();
+  }
+
+  Future<void> _waitForFinalProgressSaveBarrier() async {
+    final Future<void>? pending = _finalProgressSaveBarrier;
+    if (pending == null) return;
+    try {
+      await pending;
+    } catch (_) {
+      // The barrier is best-effort; failed persistence should not block opening.
+    }
   }
 
   Future<EpisodeProgress?> _loadProgressForItem(MediaPlaybackItem item) async {
@@ -874,11 +927,14 @@ class PlaybackController extends Notifier<PlaybackState> {
     PlayerBackend? backendOverride,
     bool allowSourceFallback = true,
     bool disableProxy = false,
+    bool respectDesiredPlaying = false,
   }) async {
     if (!isAutoFallback) {
       _autoFallbackTriedServers.clear();
       _autoFallbackTriedQualities.clear();
     }
+    _playPauseIntentEpoch++;
+    _resumeStabilizeEpoch++;
     _progressTimer?.cancel();
     _undoTimer?.cancel();
     _autoNextOverlayTimer?.cancel();
@@ -906,6 +962,9 @@ class PlaybackController extends Notifier<PlaybackState> {
       clearSeekPreviewPosition: true,
       clearSeekPreviewEngine: true,
       temporarySpeedActive: false,
+      desiredPlaying: autoplay,
+      playPauseOperationInFlight: false,
+      resumeStabilizing: false,
     );
     if (subtitle == null) unawaited(_autoSelectSubtitle(server));
 
@@ -958,14 +1017,24 @@ class PlaybackController extends Notifier<PlaybackState> {
       final double targetPlaybackSpeed = _effectivePlaybackSpeed(settings);
       await engine.setPlaybackSpeed(targetPlaybackSpeed);
       await engine.setVolume(settings.volume);
-      if (autoplay) await engine.play();
+      final bool effectiveAutoplay =
+          autoplay && (!respectDesiredPlaying || state.desiredPlaying);
+      if (effectiveAutoplay) await engine.play();
       if (generation != _playbackGeneration) {
         await engine.pause();
         await engine.dispose();
         return;
       }
       await previous?.dispose();
-      state = state.copyWith(engine: engine, loading: false, clearError: true);
+      _engineForDispose = engine;
+      state = state.copyWith(
+        engine: engine,
+        loading: false,
+        clearError: true,
+        desiredPlaying: effectiveAutoplay,
+        playPauseOperationInFlight: false,
+        resumeStabilizing: false,
+      );
       _retryCount = 0;
       _updateMediaSession();
       _startProgressSaver();
@@ -988,7 +1057,9 @@ class PlaybackController extends Notifier<PlaybackState> {
         engine,
         requestedPosition: position,
       );
-      final bool fallbackAutoplay = autoplay || engine.state.value.isPlaying;
+      final bool fallbackAutoplay =
+          (autoplay && (!respectDesiredPlaying || state.desiredPlaying)) ||
+          engine.state.value.isPlaying;
       final double? fallbackAspectRatio = _safeAspectRatio(
         engine.state.value.aspectRatio,
       );
@@ -996,6 +1067,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       if (generation != _playbackGeneration) return;
       if (youtubeEmbed) {
         debugPrint('YouTube trailer WebView open failed: $error');
+        _engineForDispose = previous;
         state = state.copyWith(
           engine: previous,
           loading: false,
@@ -1044,6 +1116,7 @@ class PlaybackController extends Notifier<PlaybackState> {
         loading: false,
         error: PlayerError(title: 'Stream failed', message: error.toString()),
       );
+      _engineForDispose = previous;
     }
   }
 
@@ -1459,7 +1532,7 @@ class PlaybackController extends Notifier<PlaybackState> {
               failedBackend: engineBackend,
               proxyDisabled: proxyDisabled,
               position: _fallbackPositionFor(engine),
-              autoplay: engine.state.value.isPlaying,
+              autoplay: state.desiredPlaying || engine.state.value.isPlaying,
               preserveAspectRatio: engine.state.value.aspectRatio,
               allowSourceFallback: allowSourceFallback,
             )) {
@@ -1468,7 +1541,7 @@ class PlaybackController extends Notifier<PlaybackState> {
         if (_tryAutoBackendFallback(
           failedBackend: engineBackend,
           position: _fallbackPositionFor(engine),
-          autoplay: engine.state.value.isPlaying,
+          autoplay: state.desiredPlaying || engine.state.value.isPlaying,
           preserveAspectRatio: engine.state.value.aspectRatio,
           allowSourceFallback: allowSourceFallback,
         )) {
@@ -1476,7 +1549,7 @@ class PlaybackController extends Notifier<PlaybackState> {
         }
         if (_tryAutoFallbackQuality(
           position: _fallbackPositionFor(engine),
-          autoplay: engine.state.value.isPlaying,
+          autoplay: state.desiredPlaying || engine.state.value.isPlaying,
           preserveAspectRatio: engine.state.value.aspectRatio,
           backendOverride: engineBackend,
           allowSourceFallback: allowSourceFallback,
@@ -1506,30 +1579,43 @@ class PlaybackController extends Notifier<PlaybackState> {
   Future<void> stop() async {
     unawaited(MediaSessionService.clearNowPlaying());
     unawaited(_ignorePlaybackTeardownErrors(DiscordRpcService.clearActivity()));
+    final MediaPlaybackItem? item = state.item;
+    final PlayerEngine? engine = state.engine;
+    Future<void>? finalProgressSave;
+    if (item != null && engine != null && !item.ignoreProgress) {
+      late final Future<void> barrier;
+      barrier = _saveProgress(item, engine)
+          .catchError((Object _) {
+            // Exiting should still release the native player if persistence is busy.
+          })
+          .whenComplete(() {
+            if (identical(_finalProgressSaveBarrier, barrier)) {
+              _finalProgressSaveBarrier = null;
+            }
+          });
+      _finalProgressSaveBarrier = barrier;
+      finalProgressSave = barrier;
+    }
     _playbackGeneration++;
+    _playPauseIntentEpoch++;
+    _resumeStabilizeEpoch++;
+    _pendingDesiredPlaying = null;
     _temporarySpeedHolds = 0;
     _progressTimer?.cancel();
     _undoTimer?.cancel();
     _autoNextOverlayTimer?.cancel();
     _clearInteractiveSeek();
+    _engineForDispose = null;
+    state = const PlaybackState();
     try {
       await _disposeSeekPreviewEngine(clearState: false);
     } catch (_) {
       // Preview teardown must not prevent the main player from being released.
     }
 
-    final MediaPlaybackItem? item = state.item;
-    final PlayerEngine? engine = state.engine;
-    state = const PlaybackState();
     if (engine == null) return;
 
-    if (item != null && !item.ignoreProgress) {
-      try {
-        await _saveProgress(item, engine);
-      } catch (_) {
-        // Exiting should still release the native player if persistence is busy.
-      }
-    }
+    await finalProgressSave;
     _resumeGuardPosition = Duration.zero;
     _resumeGuardUntil = null;
     await Future<void>.delayed(const Duration(milliseconds: 50));
@@ -1580,12 +1666,296 @@ class PlaybackController extends Notifier<PlaybackState> {
 
   Future<void> pause() async {
     if (_suppressPlaybackControl) return;
+    await _setDesiredPlaying(false);
+  }
+
+  Future<void> _setDesiredPlaying(bool desiredPlaying) async {
     final PlayerEngine? engine = state.engine;
-    if (engine == null || !engine.state.value.isPlaying) return;
-    await engine.pause();
-    state = state.copyWith();
+    if (engine == null) {
+      state = state.copyWith(
+        desiredPlaying: desiredPlaying,
+        playPauseOperationInFlight: false,
+        resumeStabilizing: false,
+      );
+      return;
+    }
+
+    final bool alreadyDesired = state.desiredPlaying == desiredPlaying;
+    final bool nativeMatches = desiredPlaying
+        ? engine.state.value.isPlaying || state.resumeStabilizing
+        : !engine.state.value.isPlaying && !state.resumeStabilizing;
+    if (alreadyDesired && nativeMatches && !_playPauseOperationActive) {
+      return;
+    }
+
+    _pendingDesiredPlaying = desiredPlaying;
+    state = state.copyWith(
+      desiredPlaying: desiredPlaying,
+      playPauseOperationInFlight: true,
+      resumeStabilizing: desiredPlaying ? state.resumeStabilizing : false,
+    );
+
+    final Completer<void> completer = _playPauseDrainCompleter ??=
+        Completer<void>();
+    if (!_playPauseOperationActive) {
+      unawaited(_drainPlayPauseIntents());
+    }
+    return completer.future;
+  }
+
+  Future<void> _drainPlayPauseIntents() async {
+    if (_playPauseOperationActive) return;
+    _playPauseOperationActive = true;
+    Object? failure;
+    StackTrace? failureStack;
+
+    try {
+      while (_pendingDesiredPlaying != null) {
+        final bool desiredPlaying = _pendingDesiredPlaying!;
+        _pendingDesiredPlaying = null;
+        final int epoch = ++_playPauseIntentEpoch;
+        await _applyDesiredPlaying(desiredPlaying, epoch);
+      }
+    } on Object catch (error, stackTrace) {
+      failure = error;
+      failureStack = stackTrace;
+      if (kDebugMode) {
+        debugPrint('Play/pause intent failed: $error');
+        debugPrintStack(stackTrace: stackTrace);
+      }
+    } finally {
+      _playPauseOperationActive = false;
+      state = state.copyWith(playPauseOperationInFlight: false);
+      final Completer<void>? completer = _playPauseDrainCompleter;
+      _playPauseDrainCompleter = null;
+      if (completer != null && !completer.isCompleted) {
+        if (failure == null) {
+          completer.complete();
+        } else {
+          completer.completeError(failure, failureStack);
+        }
+      }
+      if (_pendingDesiredPlaying != null) {
+        unawaited(_drainPlayPauseIntents());
+      }
+    }
+  }
+
+  Future<void> _applyDesiredPlaying(bool desiredPlaying, int epoch) async {
+    final PlayerEngine? engine = state.engine;
+    if (engine == null) return;
+    if (desiredPlaying) {
+      await _applyPlayIntent(engine, epoch);
+    } else {
+      await _applyPauseIntent(engine, epoch);
+    }
+  }
+
+  Future<void> _applyPauseIntent(PlayerEngine engine, int epoch) async {
+    _resumeStabilizeEpoch++;
+    final Duration pausePosition = _currentPositionFor(engine);
+    _lastStablePausePosition = pausePosition;
+    state = state.copyWith(desiredPlaying: false, resumeStabilizing: false);
+
+    if (state.engine != engine || epoch != _playPauseIntentEpoch) return;
+    if (engine.state.value.isPlaying || engine.state.value.isBuffering) {
+      await engine.pause();
+    }
+    if (state.engine != engine || epoch != _playPauseIntentEpoch) return;
+
+    _lastStablePausePosition = _currentPositionFor(engine);
+    state = state.copyWith(desiredPlaying: false, resumeStabilizing: false);
     _updateMediaSession();
     _broadcastPlayState();
+  }
+
+  Future<void> _applyPlayIntent(PlayerEngine engine, int epoch) async {
+    final Duration resumePosition = _resumePositionFor(engine);
+    state = state.copyWith(desiredPlaying: true, resumeStabilizing: true);
+
+    final PlayerEngineState before = engine.state.value;
+    if (resumePositionNeedsCorrection(
+      position: before.position,
+      resumeFrom: resumePosition,
+    )) {
+      try {
+        await _seekEngineTo(
+          engine,
+          resumePosition,
+          reason: 'Resume correction seek',
+        );
+      } on Object catch (error) {
+        if (kDebugMode) {
+          debugPrint('Resume correction seek ignored: $error');
+        }
+      }
+    }
+
+    if (state.engine != engine ||
+        epoch != _playPauseIntentEpoch ||
+        !state.desiredPlaying) {
+      return;
+    }
+    if (!engine.state.value.isPlaying) {
+      await engine.play();
+    }
+    if (state.engine != engine ||
+        epoch != _playPauseIntentEpoch ||
+        !state.desiredPlaying) {
+      return;
+    }
+
+    state = state.copyWith(desiredPlaying: true, resumeStabilizing: true);
+    _updateMediaSession();
+    _broadcastPlayState();
+    _startResumeStabilityWatch(engine, resumePosition);
+  }
+
+  Duration _resumePositionFor(PlayerEngine engine) {
+    final Duration current = _currentPositionFor(engine);
+    final Duration paused = _lastStablePausePosition;
+    if (paused <= Duration.zero) return current;
+    if (resumePositionNeedsCorrection(position: current, resumeFrom: paused)) {
+      return paused;
+    }
+    return current > paused ? current : paused;
+  }
+
+  void _startResumeStabilityWatch(
+    PlayerEngine engine,
+    Duration resumePosition,
+  ) {
+    final int token = ++_resumeStabilizeEpoch;
+    unawaited(_verifyResumeStability(engine, resumePosition, token));
+  }
+
+  bool _isActiveResumeWatch(PlayerEngine engine, int token) {
+    return token == _resumeStabilizeEpoch &&
+        state.engine == engine &&
+        state.desiredPlaying;
+  }
+
+  Future<void> _verifyResumeStability(
+    PlayerEngine engine,
+    Duration resumePosition,
+    int token,
+  ) async {
+    final bool stable = await _waitForResumeStability(
+      engine,
+      resumePosition,
+      token,
+    );
+    if (stable) return;
+    if (!_isActiveResumeWatch(engine, token)) return;
+
+    try {
+      await _seekEngineTo(
+        engine,
+        resumePosition,
+        reason: 'Resume recovery seek',
+      );
+      if (_isActiveResumeWatch(engine, token) &&
+          !engine.state.value.isPlaying) {
+        await engine.play();
+      }
+    } on Object catch (error) {
+      if (kDebugMode) {
+        debugPrint('Resume recovery seek ignored: $error');
+      }
+    }
+
+    final bool recovered = await _waitForResumeStability(
+      engine,
+      resumePosition,
+      token,
+      recoveryTimeout: _resumeRecoverySettleTimeout,
+    );
+    if (recovered) return;
+    if (!_isActiveResumeWatch(engine, token)) return;
+
+    await _reopenForResumeRecovery(engine, resumePosition, token);
+  }
+
+  Future<bool> _waitForResumeStability(
+    PlayerEngine engine,
+    Duration resumePosition,
+    int token, {
+    Duration? recoveryTimeout,
+  }) async {
+    final DateTime startedAt = DateTime.now();
+    while (_isActiveResumeWatch(engine, token)) {
+      await Future<void>.delayed(_resumeStabilityTick);
+      if (!_isActiveResumeWatch(engine, token)) return false;
+
+      final PlayerEngineState value = engine.state.value;
+      final Duration elapsed = DateTime.now().difference(startedAt);
+      final Duration bufferedAhead = bufferedAheadForPosition(
+        value.buffered,
+        value.position,
+      );
+      final ResumeStabilityDecision decision = resumeStabilityDecision(
+        desiredPlaying: state.desiredPlaying,
+        isInitialized: value.isInitialized,
+        isBuffering: value.isBuffering,
+        hasError: value.hasError,
+        position: value.position,
+        resumeFrom: resumePosition,
+        bufferedAhead: bufferedAhead,
+        elapsed: elapsed,
+        normalTimeout: recoveryTimeout ?? const Duration(milliseconds: 2600),
+        bufferedTimeout: recoveryTimeout ?? const Duration(milliseconds: 5200),
+      );
+
+      switch (decision) {
+        case ResumeStabilityDecision.stable:
+          if (_isActiveResumeWatch(engine, token)) {
+            state = state.copyWith(resumeStabilizing: false);
+            _updateMediaSession();
+          }
+          return true;
+        case ResumeStabilityDecision.waiting:
+          continue;
+        case ResumeStabilityDecision.recover:
+        case ResumeStabilityDecision.canceled:
+          return false;
+      }
+    }
+    return false;
+  }
+
+  Future<void> _reopenForResumeRecovery(
+    PlayerEngine engine,
+    Duration resumePosition,
+    int token,
+  ) async {
+    if (!_isActiveResumeWatch(engine, token)) return;
+    final MediaPlaybackItem? item = state.item;
+    final MediaServer? server = state.server;
+    final StreamQuality? quality = state.quality;
+    if (item == null || server == null || quality == null) {
+      state = state.copyWith(resumeStabilizing: false);
+      return;
+    }
+
+    final Duration position = _clampSeekPosition(
+      resumePosition,
+      engine.state.value.duration,
+    );
+    final double? aspectRatio = _safeAspectRatio(
+      engine.state.value.aspectRatio,
+    );
+    await _open(
+      item: item,
+      server: server,
+      quality: quality,
+      position: position,
+      autoplay: true,
+      voiceover: state.voiceover,
+      subtitle: state.subtitle,
+      preserveAspectRatio: aspectRatio,
+      allowSourceFallback: true,
+      respectDesiredPlaying: true,
+    );
   }
 
   // Save progress from the native player (position is known, engine is paused).
@@ -1663,10 +2033,11 @@ class PlaybackController extends Notifier<PlaybackState> {
     if (_queuedSeekEngine == engine && _queuedSeekTarget != null) {
       unawaited(_flushInteractiveSeek());
     }
-    engine.state.value.isPlaying ? await engine.pause() : await engine.play();
-    state = state.copyWith();
-    _updateMediaSession();
-    _broadcastPlayState();
+    final bool effectivePlaying =
+        state.playPauseOperationInFlight || state.resumeStabilizing
+        ? state.desiredPlaying
+        : engine.state.value.isPlaying;
+    await _setDesiredPlaying(!effectivePlaying);
   }
 
   Future<void> seekBy(Duration offset, {Duration? flushDelay}) async {
@@ -1680,6 +2051,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     );
     _clearResumeGuard();
     _noteManualSeekTarget(target, duration);
+    _notePausedResumeTarget(engine, target);
     _queueInteractiveSeek(
       engine,
       target,
@@ -1696,8 +2068,14 @@ class PlaybackController extends Notifier<PlaybackState> {
     final Duration target = _clampSeekPosition(position, duration);
     _clearResumeGuard();
     _noteManualSeekTarget(target, duration);
+    _notePausedResumeTarget(engine, target);
     _queueInteractiveSeek(engine, target, delay: Duration.zero);
     _broadcastSeek(target);
+  }
+
+  void _notePausedResumeTarget(PlayerEngine engine, Duration target) {
+    if (state.desiredPlaying || engine.state.value.isPlaying) return;
+    _lastStablePausePosition = target;
   }
 
   // Treat a seek to the last few seconds of a reliable stream as completion:
@@ -2637,6 +3015,10 @@ class PlaybackController extends Notifier<PlaybackState> {
     state = state.copyWith();
   }
 
+  bool _autoplayForSourceChange(PlayerEngine? current) {
+    return state.desiredPlaying || (current?.state.value.isPlaying ?? true);
+  }
+
   Future<void> switchServer(MediaServer server) async {
     if (_suppressGuestGlobalControl) return;
     final MediaPlaybackItem? item = state.item;
@@ -2647,7 +3029,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       server: server,
       quality: _initialQuality(server),
       position: _currentPositionFor(current),
-      autoplay: current?.state.value.isPlaying ?? true,
+      autoplay: _autoplayForSourceChange(current),
     );
     _broadcastSourceChanged();
   }
@@ -2663,7 +3045,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       server: server,
       quality: quality,
       position: _currentPositionFor(current),
-      autoplay: current?.state.value.isPlaying ?? true,
+      autoplay: _autoplayForSourceChange(current),
       voiceover: state.voiceover,
       subtitle: state.subtitle,
       preserveAspectRatio: current?.state.value.aspectRatio,
@@ -2687,7 +3069,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       server: server,
       quality: quality,
       position: _currentPositionFor(current),
-      autoplay: current?.state.value.isPlaying ?? true,
+      autoplay: _autoplayForSourceChange(current),
       voiceover: state.voiceover,
       subtitle: state.subtitle,
       preserveAspectRatio: current?.state.value.aspectRatio,
@@ -2734,7 +3116,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       server: voiceServer,
       quality: _initialQuality(voiceServer),
       position: _currentPositionFor(current),
-      autoplay: current?.state.value.isPlaying ?? true,
+      autoplay: _autoplayForSourceChange(current),
       voiceover: voiceover,
       subtitle: state.subtitle,
     );
@@ -2814,6 +3196,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     // feed completion detection like slider/gesture seeks do — otherwise jumping
     // past the end leaves the episode unwatched and never triggers auto-next.
     _noteManualSeekTarget(clampedTarget, duration);
+    _notePausedResumeTarget(engine, clampedTarget);
     _setSeekPreview(engine, clampedTarget);
     try {
       await _seekEngineTo(engine, clampedTarget, reason: 'Skip seek');
@@ -2846,6 +3229,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     _manualSeekEpoch++;
     _clearResumeGuard();
     _clearInteractiveSeek();
+    _notePausedResumeTarget(engine, target);
     _setSeekPreview(engine, target);
     try {
       await _seekEngineTo(engine, target, reason: 'Undo seek');
@@ -3091,9 +3475,24 @@ class PlaybackController extends Notifier<PlaybackState> {
     PlayerEngine engine,
   ) async {
     if (item.ignoreProgress) return;
-    if (!engine.state.value.isInitialized) return;
 
-    final Duration position = engine.state.value.position;
+    final PlayerEngineState engineState = engine.state.value;
+    final bool hasPendingSeekTarget =
+        (_queuedSeekEngine == engine && _queuedSeekTarget != null) ||
+        (_settlingSeekEngine == engine && _settlingSeekTarget != null);
+    Duration position = _currentPositionFor(engine);
+    if (!hasPendingSeekTarget &&
+        position <= const Duration(seconds: 1) &&
+        _maxObservedPosition > position) {
+      position = _maxObservedPosition;
+    }
+    if (!engineState.isInitialized &&
+        position <= const Duration(seconds: 1) &&
+        !_reachedNearEnd &&
+        !_autoProgressMarked) {
+      return;
+    }
+
     // Treat a latched seek-to-end the same as a backend-reported completion so
     // the episode is still marked watched even when the position snapped to 0.
     // The raw completion flag is validated against real progress so a premature
@@ -3116,8 +3515,8 @@ class PlaybackController extends Notifier<PlaybackState> {
       return;
     }
 
-    final int? durationSeconds = engine.state.value.duration.inSeconds > 0
-        ? engine.state.value.duration.inSeconds
+    final int? durationSeconds = engineState.duration.inSeconds > 0
+        ? engineState.duration.inSeconds
         : null;
 
     // Never treat very short reported durations as completion. Fragile HLS
