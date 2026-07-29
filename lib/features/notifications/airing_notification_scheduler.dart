@@ -10,6 +10,7 @@ import 'package:timezone/timezone.dart' as tz;
 
 import '../../app/app_routes.dart';
 import '../../shared/models/anilist_models.dart';
+import 'airing_notification_scope.dart';
 
 class AiringNotificationScheduler {
   AiringNotificationScheduler._();
@@ -30,6 +31,7 @@ class AiringNotificationScheduler {
   static Future<void> syncAnimeList(
     List<AniListAnimeListFolder> folders, {
     required bool enabled,
+    AiringNotificationScope scope = AiringNotificationScope.all,
     String titleLanguage = 'ENGLISH',
   }) async {
     if (!isSupported) return;
@@ -44,7 +46,7 @@ class AiringNotificationScheduler {
     final DateTime now = DateTime.now();
     for (final AniListAnimeListFolder folder in folders) {
       for (final AniListAnimeListEntry entry in folder.entries) {
-        if (!_shouldSchedule(entry, now)) continue;
+        if (!_shouldSchedule(entry, now, scope: scope)) continue;
         await _scheduleEntry(entry, titleLanguage: titleLanguage);
       }
     }
@@ -56,14 +58,16 @@ class AiringNotificationScheduler {
     await _plugin.cancelAll();
   }
 
-  static bool _shouldSchedule(AniListAnimeListEntry entry, DateTime now) {
+  static bool _shouldSchedule(
+    AniListAnimeListEntry entry,
+    DateTime now, {
+    required AiringNotificationScope scope,
+  }) {
     final DateTime? airingAt = entry.airingAt;
     final int? nextEpisode = entry.nextEpisode;
     if (airingAt == null || nextEpisode == null) return false;
     if (!airingAt.isAfter(now.add(const Duration(minutes: 1)))) return false;
-    return entry.status == AniListListStatus.current ||
-        entry.status == AniListListStatus.planning ||
-        entry.status == AniListListStatus.repeating;
+    return scope.includesStatus(entry.status);
   }
 
   static Future<void> _scheduleEntry(

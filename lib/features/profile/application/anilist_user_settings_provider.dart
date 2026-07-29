@@ -76,13 +76,12 @@ class AniListUserSettingsController extends AsyncNotifier<AniListUserSettings> {
       final AniListUserSettings remote = await _client(
         settings,
       ).fetchUserSettings();
-      final AniListUserSettings local = _withLocalTitleOverride(
+      final AniListUserSettings local = _withLocalOverrides(
         remote,
         settings,
+        localPreferences: cached ?? fallback,
       );
-      await prefs.saveAniListUserSettingsCache(
-        jsonEncode(local.toCacheJson()),
-      );
+      await prefs.saveAniListUserSettingsCache(jsonEncode(local.toCacheJson()));
       return local;
     } catch (_) {
       return cached ?? fallback;
@@ -95,10 +94,11 @@ class AniListUserSettingsController extends AsyncNotifier<AniListUserSettings> {
     final SettingsPreferences prefs = SettingsPreferences(
       await SharedPreferences.getInstance(),
     );
+    final AniListUserSettings? cached = _decodeCache(
+      prefs.readAniListUserSettingsCache(),
+    );
     if (!settings.hasAniListSession) {
-      state = AsyncData<AniListUserSettings>(
-        _decodeCache(prefs.readAniListUserSettingsCache()) ?? fallback,
-      );
+      state = AsyncData<AniListUserSettings>(cached ?? fallback);
       return;
     }
 
@@ -106,13 +106,12 @@ class AniListUserSettingsController extends AsyncNotifier<AniListUserSettings> {
       final AniListUserSettings remote = await _client(
         settings,
       ).fetchUserSettings();
-      final AniListUserSettings local = _withLocalTitleOverride(
+      final AniListUserSettings local = _withLocalOverrides(
         remote,
         settings,
+        localPreferences: cached ?? fallback,
       );
-      await prefs.saveAniListUserSettingsCache(
-        jsonEncode(local.toCacheJson()),
-      );
+      await prefs.saveAniListUserSettingsCache(jsonEncode(local.toCacheJson()));
       return local;
     });
   }
@@ -125,32 +124,44 @@ class AniListUserSettingsController extends AsyncNotifier<AniListUserSettings> {
     final SettingsPreferences prefs = SettingsPreferences(
       await SharedPreferences.getInstance(),
     );
+    final AniListUserSettings? previous = state.hasValue
+        ? state.requireValue
+        : null;
     if (!settings.hasAniListSession) {
       await prefs.saveAniListUserSettingsCache(jsonEncode(draft.toCacheJson()));
       settingsController.setAniListTitleLanguage(draft.titleLanguage);
       settingsController.setAniListShowAdultContent(draft.displayAdultContent);
       settingsController.setAniListScoreFormat(draft.scoreFormat);
-      if (!draft.airingNotifications) {
+      if (_shouldResetAiringNotifications(previous, draft)) {
         await AiringNotificationScheduler.cancelAll();
       }
       state = AsyncData<AniListUserSettings>(draft);
       return draft;
     }
 
+    final AniListUserSettings localPreferences =
+        (_decodeCache(prefs.readAniListUserSettingsCache()) ??
+                previous ??
+                draft)
+            .copyWith(airingNotificationScope: draft.airingNotificationScope);
+    await prefs.saveAniListUserSettingsCache(
+      jsonEncode(localPreferences.toCacheJson()),
+    );
     state = AsyncData<AniListUserSettings>(draft);
+    if (_shouldResetAiringNotifications(previous, draft)) {
+      await AiringNotificationScheduler.cancelAll();
+    }
     final AniListUserSettings updated = await _client(
       settings,
     ).updateUserSettings(draft);
-    final AniListUserSettings local = draft.titleLanguage == 'RUSSIAN'
-        ? updated.copyWith(titleLanguage: 'RUSSIAN')
-        : updated;
+    final AniListUserSettings local = updated.copyWith(
+      titleLanguage: draft.titleLanguage == 'RUSSIAN' ? 'RUSSIAN' : null,
+      airingNotificationScope: draft.airingNotificationScope,
+    );
     await prefs.saveAniListUserSettingsCache(jsonEncode(local.toCacheJson()));
     settingsController.setAniListTitleLanguage(local.titleLanguage);
     settingsController.setAniListShowAdultContent(local.displayAdultContent);
     settingsController.setAniListScoreFormat(local.scoreFormat);
-    if (!local.airingNotifications) {
-      await AiringNotificationScheduler.cancelAll();
-    }
     state = AsyncData<AniListUserSettings>(local);
     return local;
   }
@@ -179,13 +190,26 @@ class AniListUserSettingsController extends AsyncNotifier<AniListUserSettings> {
     );
   }
 
-  AniListUserSettings _withLocalTitleOverride(
+  AniListUserSettings _withLocalOverrides(
     AniListUserSettings remote,
-    SettingsState settings,
+    SettingsState settings, {
+    required AniListUserSettings localPreferences,
+  }) {
+    return remote.copyWith(
+      titleLanguage: settings.anilistTitleLanguage == 'RUSSIAN'
+          ? 'RUSSIAN'
+          : null,
+      airingNotificationScope: localPreferences.airingNotificationScope,
+    );
+  }
+
+  bool _shouldResetAiringNotifications(
+    AniListUserSettings? previous,
+    AniListUserSettings next,
   ) {
-    if (settings.anilistTitleLanguage == 'RUSSIAN') {
-      return remote.copyWith(titleLanguage: 'RUSSIAN');
-    }
-    return remote;
+    if (!next.airingNotifications) return true;
+    if (previous == null) return false;
+    return previous.airingNotifications != next.airingNotifications ||
+        previous.airingNotificationScope != next.airingNotificationScope;
   }
 }

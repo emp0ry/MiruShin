@@ -1,4 +1,5 @@
 import '../../../shared/models/media_item.dart';
+import '../../notifications/airing_notification_scope.dart';
 
 class AniListUserSettings {
   const AniListUserSettings({
@@ -7,6 +8,7 @@ class AniListUserSettings {
     this.activityMergeTime = 720,
     this.displayAdultContent = false,
     this.airingNotifications = true,
+    this.airingNotificationScope = AiringNotificationScope.all,
     this.scoreFormat = 'POINT_10_DECIMAL',
     this.rowOrder = 'title',
     this.splitCompletedAnime = false,
@@ -25,6 +27,7 @@ class AniListUserSettings {
   final int activityMergeTime;
   final bool displayAdultContent;
   final bool airingNotifications;
+  final AiringNotificationScope airingNotificationScope;
   final String scoreFormat;
   final String rowOrder;
   final bool splitCompletedAnime;
@@ -65,6 +68,7 @@ class AniListUserSettings {
       activityMergeTime: _int(optionsMap['activityMergeTime'], fallback: 720),
       displayAdultContent: optionsMap['displayAdultContent'] == true,
       airingNotifications: optionsMap['airingNotifications'] != false,
+      airingNotificationScope: AiringNotificationScope.all,
       scoreFormat: _string(
         mediaListMap['scoreFormat'],
         fallback: 'POINT_10_DECIMAL',
@@ -95,6 +99,9 @@ class AniListUserSettings {
       activityMergeTime: _int(json['activityMergeTime'], fallback: 720),
       displayAdultContent: json['displayAdultContent'] == true,
       airingNotifications: json['airingNotifications'] != false,
+      airingNotificationScope: AiringNotificationScope.fromCacheValue(
+        json['airingNotificationScope'],
+      ),
       scoreFormat: _string(json['scoreFormat'], fallback: 'POINT_10_DECIMAL'),
       rowOrder: _string(json['rowOrder'], fallback: 'title'),
       splitCompletedAnime: json['splitCompletedAnime'] == true,
@@ -115,6 +122,7 @@ class AniListUserSettings {
     int? activityMergeTime,
     bool? displayAdultContent,
     bool? airingNotifications,
+    AiringNotificationScope? airingNotificationScope,
     String? scoreFormat,
     String? rowOrder,
     bool? splitCompletedAnime,
@@ -133,6 +141,8 @@ class AniListUserSettings {
       activityMergeTime: activityMergeTime ?? this.activityMergeTime,
       displayAdultContent: displayAdultContent ?? this.displayAdultContent,
       airingNotifications: airingNotifications ?? this.airingNotifications,
+      airingNotificationScope:
+          airingNotificationScope ?? this.airingNotificationScope,
       scoreFormat: scoreFormat ?? this.scoreFormat,
       rowOrder: rowOrder ?? this.rowOrder,
       splitCompletedAnime: splitCompletedAnime ?? this.splitCompletedAnime,
@@ -156,6 +166,7 @@ class AniListUserSettings {
       'activityMergeTime': activityMergeTime,
       'displayAdultContent': displayAdultContent,
       'airingNotifications': airingNotifications,
+      'airingNotificationScope': airingNotificationScope.cacheValue,
       'scoreFormat': scoreFormat,
       'rowOrder': rowOrder,
       'splitCompletedAnime': splitCompletedAnime,

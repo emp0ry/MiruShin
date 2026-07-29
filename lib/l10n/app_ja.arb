@@ -815,6 +815,8 @@
   "Controls AniList media title display throughout the app.": "アプリ全体で表示するAniList作品タイトルを制御します。",
   "18+ Content": "18+ コンテンツ",
   "Airing Anime Notifications": "放送中アニメの通知",
+  "Airing Notification Scope": "通知対象",
+  "Watching/Rewatching": "視聴中/再視聴中",
   "Scoring System": "スコア方式",
   "Default Site List Sort": "サイトの既定リスト並び替え",
   "Split Completed Anime": "完了したアニメを分割",

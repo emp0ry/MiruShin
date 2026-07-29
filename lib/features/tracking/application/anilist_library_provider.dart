@@ -13,6 +13,7 @@ import '../../settings/presentation/settings_state.dart';
 import '../data/anilist_api_client.dart';
 import '../../metadata/data/shikimori_client.dart';
 import '../../notifications/airing_notification_scheduler.dart';
+import '../../notifications/airing_notification_scope.dart';
 
 final anilistEditQueueProvider = Provider<AniListEditQueue>(
   (Ref ref) => const AniListEditQueue(),
@@ -841,16 +842,16 @@ Future<List<AniListAnimeListFolder>> _maybeEnrichAnimeFoldersWithRussian(
         await _enrichFoldersWithRussian(folders, client);
     await cache.write(cacheKey, _encode(enriched));
     if (statuses == null && mediaType == 'ANIME') {
-      final bool airingEnabled = ref
+      final AniListUserSettings? userSettings = ref
           .read(aniListUserSettingsProvider)
-          .maybeWhen(
-            data: (AniListUserSettings s) => s.airingNotifications,
-            orElse: () => true,
-          );
+          .maybeWhen(data: (AniListUserSettings s) => s, orElse: () => null);
       unawaited(
         AiringNotificationScheduler.syncAnimeList(
           enriched,
-          enabled: airingEnabled,
+          enabled: userSettings?.airingNotifications ?? true,
+          scope:
+              userSettings?.airingNotificationScope ??
+              AiringNotificationScope.all,
           titleLanguage: 'RUSSIAN',
         ),
       );
@@ -878,12 +879,16 @@ Future<List<AniListAnimeListFolder>> _fetchCollection(
     mediaType,
     requestedTitleLanguage,
   );
-  final bool airingNotificationsEnabled = ref
+  final AniListUserSettings? userSettings = ref
       .watch(aniListUserSettingsProvider)
       .maybeWhen(
-        data: (AniListUserSettings settings) => settings.airingNotifications,
-        orElse: () => true,
+        data: (AniListUserSettings settings) => settings,
+        orElse: () => null,
       );
+  final bool airingNotificationsEnabled =
+      userSettings?.airingNotifications ?? true;
+  final AiringNotificationScope airingNotificationScope =
+      userSettings?.airingNotificationScope ?? AiringNotificationScope.all;
   if (mediaType == 'ANIME' && statuses == null && !airingNotificationsEnabled) {
     unawaited(AiringNotificationScheduler.cancelAll());
   }
@@ -951,6 +956,7 @@ Future<List<AniListAnimeListFolder>> _fetchCollection(
       AiringNotificationScheduler.syncAnimeList(
         fetchedFolders!,
         enabled: airingNotificationsEnabled,
+        scope: airingNotificationScope,
         titleLanguage: requestedTitleLanguage,
       ),
     );

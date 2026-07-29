@@ -844,6 +844,8 @@
   "Controls AniList media title display throughout the app.": "Управляет отображением названий AniList во всём приложении.",
   "18+ Content": "Контент 18+",
   "Airing Anime Notifications": "Уведомления о выходящих аниме",
+  "Airing Notification Scope": "Область уведомлений",
+  "Watching/Rewatching": "Смотрю/пересматриваю",
   "Scoring System": "Система оценок",
   "Default Site List Sort": "Сортировка списков на сайте",
   "Split Completed Anime": "Разделять завершённые аниме",

@@ -25,6 +25,7 @@ import '../../../shared/models/media_item.dart';
 import '../../../shared/utils/media_status_formatter.dart';
 import '../../catalog/application/catalog_mode.dart';
 import '../../metadata/application/metadata_providers.dart';
+import '../../notifications/airing_notification_scope.dart';
 import '../../player/application/player_settings.dart';
 import '../../player/domain/player_models.dart';
 import '../../settings/presentation/settings_state.dart';
@@ -1390,6 +1391,43 @@ class _ProfileAniListSettingsPageState
                       },
                     ),
                   ),
+                  SettingsRow(
+                    title: 'Airing Notification Scope',
+                    fullWidthTrailing: true,
+                    trailing: Align(
+                      alignment: Alignment.centerLeft,
+                      child: SegmentedButton<AiringNotificationScope>(
+                        showSelectedIcon: false,
+                        segments: AiringNotificationScope.values
+                            .map(
+                              (AiringNotificationScope scope) =>
+                                  ButtonSegment<AiringNotificationScope>(
+                                    value: scope,
+                                    icon: Icon(switch (scope) {
+                                      AiringNotificationScope.all =>
+                                        Icons.select_all_rounded,
+                                      AiringNotificationScope
+                                          .watchingAndRewatching =>
+                                        Icons.play_circle_outline_rounded,
+                                    }),
+                                    label: Text(context.t(scope.labelKey)),
+                                  ),
+                            )
+                            .toList(growable: false),
+                        selected: <AiringNotificationScope>{
+                          draft.airingNotificationScope,
+                        },
+                        onSelectionChanged:
+                            (Set<AiringNotificationScope> values) {
+                              final AiringNotificationScope value =
+                                  values.first;
+                              _updateDraft(
+                                draft.copyWith(airingNotificationScope: value),
+                              );
+                            },
+                      ),
+                    ),
+                  ),
                 ],
               ),
               const SizedBox(height: AppSpacing.xl),
@@ -1667,15 +1705,55 @@ class _ProfileAniListSettingsPageState
   Future<void> _save() async {
     if (_draft == null) return;
     _syncAdvancedScoresFromFields();
+    final AniListUserSettings draft = _draft!;
+    final AniListUserSettings? previous = ref
+        .read(aniListUserSettingsProvider)
+        .maybeWhen(
+          data: (AniListUserSettings value) => value,
+          orElse: () => null,
+        );
+    final bool notificationScheduleChanged = _airingNotificationScheduleChanged(
+      previous,
+      draft,
+    );
     try {
       final AniListUserSettings saved = await ref
           .read(aniListUserSettingsProvider.notifier)
-          .save(_draft!);
+          .save(draft);
       _draft = saved;
       await _invalidateAniListScope(ref);
+      if (notificationScheduleChanged) {
+        await _resyncAiringNotifications(saved);
+      }
     } catch (_) {
-      // The settings remain editable; the next change schedules another save.
+      if (notificationScheduleChanged) {
+        invalidateAniListLibraryProviders(ref.invalidate);
+        try {
+          await _resyncAiringNotifications(draft);
+        } catch (_) {
+          // The next library refresh will retry notification scheduling.
+        }
+      }
     }
+  }
+
+  bool _airingNotificationScheduleChanged(
+    AniListUserSettings? previous,
+    AniListUserSettings next,
+  ) {
+    if (previous == null) return next.airingNotifications;
+    return previous.airingNotifications != next.airingNotifications ||
+        previous.airingNotificationScope != next.airingNotificationScope ||
+        previous.titleLanguage != next.titleLanguage;
+  }
+
+  Future<void> _resyncAiringNotifications(AniListUserSettings settings) async {
+    if (!settings.airingNotifications) return;
+    if (settings.titleLanguage == 'RUSSIAN') {
+      await ref.read(anilistAnimeRussianListProvider.future);
+      return;
+    }
+    await ref.read(anilistAnimeListProvider.future);
   }
 }
 
