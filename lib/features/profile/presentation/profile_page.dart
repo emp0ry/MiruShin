@@ -440,8 +440,10 @@ class ProfileFeedPage extends ConsumerStatefulWidget {
 class _ProfileFeedPageState extends ConsumerState<ProfileFeedPage> {
   final List<AniListActivity> _items = <AniListActivity>[];
   int _currentPage = 0;
+  int _loadEpoch = 0;
   bool _loading = false;
   bool _hasMore = true;
+  bool _followingOnly = false;
   Object? _error;
 
   @override
@@ -454,6 +456,9 @@ class _ProfileFeedPageState extends ConsumerState<ProfileFeedPage> {
 
   Future<void> _loadPage(int page, {bool reset = false}) async {
     if (!mounted) return;
+    final int epoch = reset ? ++_loadEpoch : _loadEpoch;
+    final bool followingOnly = _followingOnly;
+    final int? viewerId = ref.read(aniListViewerIdProvider);
     setState(() {
       _loading = true;
       _error = null;
@@ -467,24 +472,37 @@ class _ProfileFeedPageState extends ConsumerState<ProfileFeedPage> {
       final AniListPagedChunk<AniListActivity> chunk = await ref
           .read(aniListProfileClientProvider)
           .fetchActivities(
-            isFollowing: true,
+            userIdNot: viewerId,
+            isFollowing: followingOnly,
+            hasRepliesOrText: followingOnly ? null : true,
             typeIn: const <String>['TEXT', 'ANIME_LIST', 'MANGA_LIST'],
             page: page,
           );
-      if (!mounted) return;
+      if (!mounted || epoch != _loadEpoch) return;
       setState(() {
-        _items.addAll(chunk.items);
+        final Set<int> ids = _items
+            .map((AniListActivity item) => item.id)
+            .toSet();
+        _items.addAll(
+          chunk.items.where((AniListActivity item) => ids.add(item.id)),
+        );
         _currentPage = page;
         _hasMore = chunk.hasNextPage;
         _loading = false;
       });
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || epoch != _loadEpoch) return;
       setState(() {
         _error = error;
         _loading = false;
       });
     }
+  }
+
+  void _setFollowingOnly(bool value) {
+    if (_followingOnly == value) return;
+    setState(() => _followingOnly = value);
+    _loadPage(1, reset: true);
   }
 
   @override
@@ -494,21 +512,46 @@ class _ProfileFeedPageState extends ConsumerState<ProfileFeedPage> {
     }
     return _ProfileSubpage(
       title: 'Feed',
-      subtitle: 'Activity from people you follow on AniList.',
+      subtitle: 'The AniList activity feed.',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          Align(
-            alignment: Alignment.centerRight,
-            child: FilledButton.icon(
-              onPressed: () => _showStatusComposer(
-                context,
-                ref,
-                const AniListActivitiesQuery(isFollowing: true),
+          Wrap(
+            spacing: AppSpacing.md,
+            runSpacing: AppSpacing.sm,
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: <Widget>[
+              SegmentedButton<bool>(
+                showSelectedIcon: false,
+                segments: <ButtonSegment<bool>>[
+                  ButtonSegment<bool>(
+                    value: false,
+                    icon: const Icon(Icons.public_rounded),
+                    label: Text(context.t('Global')),
+                  ),
+                  ButtonSegment<bool>(
+                    value: true,
+                    icon: const Icon(Icons.people_outline_rounded),
+                    label: Text(context.t('Following')),
+                  ),
+                ],
+                selected: <bool>{_followingOnly},
+                onSelectionChanged: (Set<bool> values) {
+                  _setFollowingOnly(values.first);
+                },
               ),
-              icon: const Icon(Icons.edit_outlined),
-              label: Text(context.t('New Post')),
-            ),
+              FilledButton.icon(
+                onPressed: () async {
+                  await _showStatusComposer(context, ref);
+                  if (mounted) {
+                    await _loadPage(1, reset: true);
+                  }
+                },
+                icon: const Icon(Icons.edit_outlined),
+                label: Text(context.t('New Post')),
+              ),
+            ],
           ),
           const SizedBox(height: AppSpacing.lg),
           _PaginatedActivitiesView(
@@ -3422,11 +3465,7 @@ String _formatShortDate(DateTime value) {
   return '${value.year}-${value.month.toString().padLeft(2, '0')}-${value.day.toString().padLeft(2, '0')}';
 }
 
-Future<void> _showStatusComposer(
-  BuildContext context,
-  WidgetRef ref,
-  AniListActivitiesQuery query,
-) async {
+Future<void> _showStatusComposer(BuildContext context, WidgetRef ref) async {
   final TextEditingController controller = TextEditingController();
   final String? text = await showDialog<String>(
     context: context,
@@ -3462,7 +3501,6 @@ Future<void> _showStatusComposer(
     await ref
         .read(aniListProfileClientProvider)
         .saveTextActivity(text: trimmed);
-    ref.invalidate(aniListActivitiesProvider(query));
   } catch (error) {
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(

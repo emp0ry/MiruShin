@@ -1398,7 +1398,6 @@ class AniListApiClient {
               media {
                 $_collectionMediaFields
                 format
-                nextAiringEpisode { episode airingAt }
               }
             }
           }
@@ -1446,7 +1445,6 @@ class AniListApiClient {
           media {
             $_mediaFields
             format
-            nextAiringEpisode { episode airingAt }
           }
         }
       }
@@ -2322,6 +2320,12 @@ class AniListApiClient {
         ? json['isLicensed'] as bool
         : null;
     final MediaTrailer? trailer = _trailerFromJson(json['trailer']);
+    final Object? nextAiringRaw = json['nextAiringEpisode'];
+    final Map<String, dynamic>? nextAiring = nextAiringRaw is Map
+        ? nextAiringRaw.cast<String, dynamic>()
+        : null;
+    final int nextAiringEpisode = _int(nextAiring?['episode']);
+    final int nextAiringAt = _int(nextAiring?['airingAt']);
 
     // Build full start/end date strings
     final Map<String, dynamic>? startDateMap =
@@ -2418,6 +2422,9 @@ class AniListApiClient {
           'anilist_is_favourite': (json['isFavourite'] == true).toString(),
         if (popularity > 0) 'anilist_popularity': popularity.toString(),
         if (favourites > 0) 'anilist_favourites': favourites.toString(),
+        if (nextAiringEpisode > 0)
+          anilistNextAiringEpisodeKey: nextAiringEpisode.toString(),
+        if (nextAiringAt > 0) anilistNextAiringAtKey: nextAiringAt.toString(),
         if (startDate.isNotEmpty) 'anilist_start_date': startDate,
         if (endDate.isNotEmpty) 'anilist_end_date': endDate,
         if (studioBuf.isNotEmpty) 'anilist_studios': studioBuf.toString(),
@@ -2892,6 +2899,7 @@ class AniListApiClient {
     isLicensed
     startDate { year }
     siteUrl
+    nextAiringEpisode { episode airingAt }
   ''';
 
   // Leaner field set for library collection queries — omits heavy per-entry fields
@@ -2917,6 +2925,7 @@ class AniListApiClient {
     tags { name rank isGeneralSpoiler isMediaSpoiler category }
     startDate { year }
     siteUrl
+    nextAiringEpisode { episode airingAt }
   ''';
 
   static const String _mediaDetailsFields = '''
@@ -2948,6 +2957,7 @@ class AniListApiClient {
     startDate { year month day }
     endDate { year month day }
     siteUrl
+    nextAiringEpisode { episode airingAt }
     studios { nodes { id name isAnimationStudio } }
     tags { name rank isGeneralSpoiler isMediaSpoiler category }
     relations {

@@ -38,6 +38,7 @@ import '../../addons/domain/sora_parsers.dart';
 import '../../catalog/application/catalog_repository.dart';
 import '../../catalog/application/catalog_mode.dart';
 import '../../downloads/application/downloads_provider.dart';
+import '../../downloads/application/download_episode_availability.dart';
 import '../../downloads/domain/download_models.dart';
 import '../../metadata/application/metadata_providers.dart';
 import '../../metadata/domain/anime_episode_metadata.dart';
@@ -2894,11 +2895,17 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
 
               final List<SoraEpisode> rawEpisodes =
                   snapshot.data ?? const <SoraEpisode>[];
-              final List<SoraEpisode> episodes = _sourceSeasonEpisodes(
+              final List<SoraEpisode> sourceEpisodes = _sourceSeasonEpisodes(
                 rawEpisodes,
                 widget.seasonNumber,
                 widget.useSourceSeasonGroups,
               );
+              final int? airedEpisodeLimit = _downloadMode
+                  ? anilistAiredEpisodeLimit(widget.item)
+                  : null;
+              final List<SoraEpisode> episodes = _downloadMode
+                  ? airedDownloadEpisodes(sourceEpisodes, widget.item)
+                  : sourceEpisodes;
               final String episodeMetadataLanguage = _episodeMetadataLanguage(
                 settings,
               );
@@ -2920,6 +2927,19 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
                     item: widget.item,
                     seasonNumber: widget.seasonNumber,
                   );
+
+              if (episodes.isEmpty &&
+                  sourceEpisodes.isNotEmpty &&
+                  airedEpisodeLimit != null) {
+                return NeutralPlaceholder(
+                  title: context.t('No aired episodes'),
+                  message: context.t(
+                    'Episodes will become downloadable after they air.',
+                  ),
+                  icon: Icons.schedule_rounded,
+                  height: 180,
+                );
+              }
 
               if (episodes.isEmpty) {
                 final SoraEpisode episode = SoraEpisode(

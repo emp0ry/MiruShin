@@ -5,8 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:wakelock_plus/wakelock_plus.dart';
 import '../../../app/app_routes.dart';
+import '../../../core/utils/app_wakelock.dart';
 import '../../../app/localization/app_localizations.dart';
 import '../../watch_party/application/watch_party_controller.dart';
 import '../../watch_party/domain/watch_party_models.dart';
@@ -35,18 +35,6 @@ ButtonStyle _overlayActionButtonStyle() {
     side: const BorderSide(color: Colors.white24),
     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
   );
-}
-
-Future<void> _setWakelockSafely(bool enabled) async {
-  try {
-    if (enabled) {
-      await WakelockPlus.enable();
-    } else {
-      await WakelockPlus.disable();
-    }
-  } on Object {
-    // The platform channel may already be detached during app shutdown.
-  }
 }
 
 Future<void> _setSystemUiModeSafely(SystemUiMode mode) async {
@@ -144,12 +132,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     FocusManager.instance.addEarlyKeyEventHandler(_handlePlayerShortcutEvent);
-    unawaited(_setWakelockSafely(true));
+    unawaited(AppWakelock.acquire(this));
     // Re-assert the wakelock every 60 s – guards against any platform-level
     // release that the one-shot enable() might not survive (e.g. system sleep
     // assertion expiry on macOS or focus-change edge cases on Android).
     _wakelockTimer = Timer.periodic(const Duration(seconds: 60), (_) {
-      if (mounted) unawaited(_setWakelockSafely(true));
+      if (mounted) unawaited(AppWakelock.reassert());
     });
     _isMobile =
         !kIsWeb &&
@@ -372,7 +360,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     _trailerCommandSub?.cancel();
     _pipSub?.cancel();
     _wakelockTimer?.cancel();
-    unawaited(_setWakelockSafely(false));
+    unawaited(AppWakelock.release(this));
     _hideTimer?.cancel();
     _autoNextTimer?.cancel();
     _cancelSpaceHold(restoreSpeed: true);
@@ -1907,7 +1895,7 @@ class _AutoSkipWorkerState extends ConsumerState<_AutoSkipWorker> {
   @override
   void initState() {
     super.initState();
-    unawaited(_setWakelockSafely(true));
+    unawaited(AppWakelock.reassert());
     _syncItemKey();
     _attachController(widget.state.engine);
     WidgetsBinding.instance.addPostFrameCallback((_) => _evaluate());
@@ -2513,7 +2501,7 @@ class _PositionLabelState extends ConsumerState<_PositionLabel> {
   @override
   void initState() {
     super.initState();
-    unawaited(_setWakelockSafely(true));
+    unawaited(AppWakelock.reassert());
     widget.controller?.addListener(_tick);
   }
 
@@ -2637,7 +2625,7 @@ class _PlayPauseButtonState extends ConsumerState<_PlayPauseButton> {
   @override
   void initState() {
     super.initState();
-    unawaited(_setWakelockSafely(true));
+    unawaited(AppWakelock.reassert());
     widget.controller?.addListener(_tick);
   }
 
@@ -2794,7 +2782,7 @@ class _PositionBarState extends ConsumerState<_PositionBar> {
   @override
   void initState() {
     super.initState();
-    unawaited(_setWakelockSafely(true));
+    unawaited(AppWakelock.reassert());
     widget.controller.addListener(_tick);
   }
 
@@ -3359,7 +3347,7 @@ class _SubtitleOverlayState extends State<_SubtitleOverlay> {
   @override
   void initState() {
     super.initState();
-    unawaited(_setWakelockSafely(true));
+    unawaited(AppWakelock.reassert());
     widget.state.engine?.addListener(_tick);
   }
 

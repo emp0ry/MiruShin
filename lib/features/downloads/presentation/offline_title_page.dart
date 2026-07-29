@@ -12,6 +12,7 @@ import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_radius.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../app/theme/app_theme_extension.dart';
+import '../../../core/utils/app_wakelock.dart';
 import '../../../core/widgets/adaptive_page.dart';
 import '../../../core/widgets/glass_card.dart';
 import '../../../core/widgets/neutral_placeholder.dart';
@@ -19,8 +20,10 @@ import '../../../core/widgets/page_back_button.dart';
 import '../../../core/widgets/section_header.dart';
 import '../../../shared/models/media_item.dart';
 import '../../library/application/local_library_provider.dart';
+import '../../metadata/application/metadata_providers.dart';
 import '../../player/domain/player_models.dart';
 import '../../watch/domain/normalized_models.dart';
+import '../application/download_episode_availability.dart';
 import '../application/download_episode_display.dart';
 import '../application/downloads_provider.dart';
 import '../application/offline_playback.dart';
@@ -46,6 +49,18 @@ class OfflineTitlePage extends ConsumerStatefulWidget {
 class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
   String? _selectedAddonId;
   final Map<String, int> _selectedSeasonByAddon = <String, int>{};
+  Timer? _wakelockTimer;
+  bool _wakelockHeld = false;
+  bool? _pendingWakelockState;
+
+  @override
+  void dispose() {
+    _wakelockTimer?.cancel();
+    if (_wakelockHeld) {
+      unawaited(AppWakelock.release(this));
+    }
+    super.dispose();
+  }
 
   @override
   void didUpdateWidget(covariant OfflineTitlePage oldWidget) {
@@ -59,7 +74,10 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
 
   @override
   Widget build(BuildContext context) {
-    ref.watch(downloadsProvider);
+    final List<DownloadedEpisode> downloads = ref.watch(downloadsProvider);
+    _scheduleWakelockUpdate(
+      downloads.any((DownloadedEpisode episode) => episode.isActive),
+    );
     ref.watch(localLibraryProvider);
     final DownloadController controller = ref.read(downloadsProvider.notifier);
     final List<DownloadedEpisode> episodes = controller.episodesFor(
@@ -88,10 +106,24 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
     }
 
     final String? rootPath = controller.rootPath;
-    final MediaItem media = downloadedMediaWithLocalArtwork(
+    final MediaItem downloadedMedia = downloadedMediaWithLocalArtwork(
       episodes.first,
       rootPath: rootPath,
     );
+    final MediaItem? currentMedia = ref
+        .watch(mediaDetailsProvider(widget.mediaId))
+        .maybeWhen(data: (MediaItem? value) => value, orElse: () => null);
+    final MediaItem media = currentMedia == null
+        ? downloadedMedia
+        : downloadedMedia.copyWith(
+            episodeCount: currentMedia.episodeCount,
+            seasons: currentMedia.seasons,
+            statusLabel: currentMedia.statusLabel,
+            externalIds: <String, String>{
+              ...downloadedMedia.externalIds,
+              ...currentMedia.externalIds,
+            },
+          );
 
     // Distinct modules with downloads for this title.
     final Map<String, String> modules = <String, String>{};
@@ -226,6 +258,37 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
           ),
       ],
     );
+  }
+
+  void _scheduleWakelockUpdate(bool enabled) {
+    if (_pendingWakelockState == enabled ||
+        (_pendingWakelockState == null && _wakelockHeld == enabled)) {
+      return;
+    }
+    _pendingWakelockState = enabled;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final bool? target = _pendingWakelockState;
+      _pendingWakelockState = null;
+      if (target == null || target == _wakelockHeld) return;
+      _setWakelock(target);
+    });
+  }
+
+  void _setWakelock(bool enabled) {
+    _wakelockHeld = enabled;
+    _wakelockTimer?.cancel();
+    _wakelockTimer = null;
+    if (enabled) {
+      unawaited(AppWakelock.acquire(this));
+      _wakelockTimer = Timer.periodic(const Duration(seconds: 60), (_) {
+        if (mounted && _wakelockHeld) {
+          unawaited(AppWakelock.reassert());
+        }
+      });
+    } else {
+      unawaited(AppWakelock.release(this));
+    }
   }
 
   EpisodeProgress? _localProgress(DownloadedEpisode ep) {
@@ -488,11 +551,11 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
   ) {
     for (final MediaSeason s in media.seasons) {
       if (s.seasonNumber == season && s.episodeCount > 0) {
-        return s.episodeCount;
+        return airedDownloadEpisodeTotal(media, s.episodeCount);
       }
     }
     if (media.seasons.isEmpty && (media.episodeCount ?? 0) > 0 && season <= 1) {
-      return media.episodeCount!;
+      return airedDownloadEpisodeTotal(media, media.episodeCount!);
     }
     // Fall back to the highest downloaded number so nothing is hidden.
     int maxNum = 0;
