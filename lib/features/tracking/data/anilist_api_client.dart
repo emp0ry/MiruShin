@@ -846,6 +846,7 @@ class AniListApiClient {
     bool? hasRepliesOrText,
     List<String>? typeIn,
     int page = 1,
+    bool authenticated = true,
   }) async {
     final Map<String, dynamic> data = await _post(
       '''
@@ -923,7 +924,7 @@ class AniListApiClient {
         'hasRepliesOrText': hasRepliesOrText,
         'typeIn': typeIn,
       },
-      authenticated: true,
+      authenticated: authenticated,
     );
     final Object? pageData = data['Page'];
     if (pageData is! Map<String, dynamic>) {

@@ -112,7 +112,7 @@ class ProfilePage extends ConsumerWidget {
             SectionHeader(
               title: context.t('Profile'),
               subtitle:
-                  'Activities, favourites, feed, social, statistics, reviews, exports, and AniList content settings.',
+                  'Activities, favourites, social, statistics, exports, and AniList content settings.',
             ),
             const SizedBox(height: AppSpacing.lg),
             ResponsiveGrid(
@@ -430,6 +430,8 @@ class _ProfileActivitiesPageState extends ConsumerState<ProfileActivitiesPage> {
   }
 }
 
+const bool _profileFeedEnabled = false;
+
 class ProfileFeedPage extends ConsumerStatefulWidget {
   const ProfileFeedPage({super.key});
 
@@ -439,23 +441,55 @@ class ProfileFeedPage extends ConsumerStatefulWidget {
 
 class _ProfileFeedPageState extends ConsumerState<ProfileFeedPage> {
   final List<AniListActivity> _items = <AniListActivity>[];
+  late final ScrollController _scrollController;
   int _currentPage = 0;
   int _loadEpoch = 0;
   bool _loading = false;
   bool _hasMore = true;
   bool _followingOnly = false;
+  bool _useBroadGlobalFeed = false;
   Object? _error;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback(
-      (_) => _loadPage(1, reset: true),
-    );
+    _scrollController = ScrollController()..addListener(_onScroll);
+    if (_profileFeedEnabled) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _loadPage(1, reset: true),
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    _scrollController
+      ..removeListener(_onScroll)
+      ..dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    if (!_scrollController.hasClients || _loading || !_hasMore) return;
+    final ScrollPosition position = _scrollController.position;
+    if (position.maxScrollExtent - position.pixels < 900) {
+      _loadPage(_currentPage + 1);
+    }
+  }
+
+  void _loadMoreIfNeeded() {
+    if (!mounted || !_scrollController.hasClients || _loading || !_hasMore) {
+      return;
+    }
+    final ScrollPosition position = _scrollController.position;
+    if (position.maxScrollExtent - position.pixels < 900) {
+      _loadPage(_currentPage + 1);
+    }
   }
 
   Future<void> _loadPage(int page, {bool reset = false}) async {
     if (!mounted) return;
+    if (_loading && !reset) return;
     final int epoch = reset ? ++_loadEpoch : _loadEpoch;
     final bool followingOnly = _followingOnly;
     final int? viewerId = ref.read(aniListViewerIdProvider);
@@ -469,27 +503,39 @@ class _ProfileFeedPageState extends ConsumerState<ProfileFeedPage> {
       }
     });
     try {
-      final AniListPagedChunk<AniListActivity> chunk = await ref
-          .read(aniListProfileClientProvider)
-          .fetchActivities(
-            userIdNot: viewerId,
-            isFollowing: followingOnly,
-            hasRepliesOrText: followingOnly ? null : true,
-            typeIn: const <String>['TEXT', 'ANIME_LIST', 'MANGA_LIST'],
-            page: page,
-          );
+      final AniListApiClient client = ref.read(aniListProfileClientProvider);
+      AniListPagedChunk<AniListActivity> chunk;
+      if (!followingOnly && _useBroadGlobalFeed) {
+        chunk = await _fetchBroadGlobalFeed(client, page);
+      } else {
+        chunk = await client.fetchActivities(
+          userIdNot: viewerId,
+          isFollowing: followingOnly,
+          hasRepliesOrText: followingOnly ? null : true,
+          typeIn: const <String>['TEXT', 'ANIME_LIST', 'MANGA_LIST'],
+          page: page,
+        );
+        if (!followingOnly && chunk.items.isEmpty) {
+          _useBroadGlobalFeed = true;
+          chunk = await _fetchBroadGlobalFeed(client, page);
+        }
+      }
       if (!mounted || epoch != _loadEpoch) return;
       setState(() {
         final Set<int> ids = _items
             .map((AniListActivity item) => item.id)
             .toSet();
         _items.addAll(
-          chunk.items.where((AniListActivity item) => ids.add(item.id)),
+          chunk.items.where(
+            (AniListActivity item) =>
+                item.primaryUser.id != viewerId && ids.add(item.id),
+          ),
         );
         _currentPage = page;
         _hasMore = chunk.hasNextPage;
         _loading = false;
       });
+      WidgetsBinding.instance.addPostFrameCallback((_) => _loadMoreIfNeeded());
     } catch (error) {
       if (!mounted || epoch != _loadEpoch) return;
       setState(() {
@@ -499,20 +545,45 @@ class _ProfileFeedPageState extends ConsumerState<ProfileFeedPage> {
     }
   }
 
+  Future<AniListPagedChunk<AniListActivity>> _fetchBroadGlobalFeed(
+    AniListApiClient client,
+    int page,
+  ) {
+    return client.fetchActivities(
+      typeIn: const <String>['TEXT', 'ANIME_LIST', 'MANGA_LIST'],
+      page: page,
+      authenticated: false,
+    );
+  }
+
   void _setFollowingOnly(bool value) {
     if (_followingOnly == value) return;
-    setState(() => _followingOnly = value);
+    setState(() {
+      _followingOnly = value;
+      if (!value) _useBroadGlobalFeed = false;
+    });
     _loadPage(1, reset: true);
   }
 
   @override
   Widget build(BuildContext context) {
+    if (!_profileFeedEnabled) {
+      return AdaptivePage(
+        child: NeutralPlaceholder(
+          title: context.t('Feed'),
+          message: context.t('Disabled'),
+          icon: Icons.rss_feed_rounded,
+          height: 360,
+        ),
+      );
+    }
     if (!ref.watch(aniListSignedInProvider)) {
       return const _SignedOutProfilePage(title: 'Feed');
     }
     return _ProfileSubpage(
       title: 'Feed',
       subtitle: 'The AniList activity feed.',
+      scrollController: _scrollController,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -561,6 +632,7 @@ class _ProfileFeedPageState extends ConsumerState<ProfileFeedPage> {
             error: _error,
             onLoadMore: () => _loadPage(_currentPage + 1),
             onRetry: () => _loadPage(1, reset: true),
+            automaticLoading: true,
           ),
         ],
       ),
@@ -1033,6 +1105,8 @@ class _ProfileStatisticsPageState extends ConsumerState<ProfileStatisticsPage> {
   }
 }
 
+const bool _profileReviewsEnabled = false;
+
 class ProfileReviewsPage extends ConsumerStatefulWidget {
   const ProfileReviewsPage({super.key});
 
@@ -1053,10 +1127,12 @@ class _ProfileReviewsPageState extends ConsumerState<ProfileReviewsPage> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _viewerId = ref.read(aniListViewerIdProvider);
-      if (_viewerId != null) _loadPage(1, reset: true);
-    });
+    if (_profileReviewsEnabled) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _viewerId = ref.read(aniListViewerIdProvider);
+        if (_viewerId != null) _loadPage(1, reset: true);
+      });
+    }
   }
 
   Future<void> _loadPage(int page, {bool reset = false}) async {
@@ -1103,6 +1179,16 @@ class _ProfileReviewsPageState extends ConsumerState<ProfileReviewsPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (!_profileReviewsEnabled) {
+      return AdaptivePage(
+        child: NeutralPlaceholder(
+          title: context.t('Reviews'),
+          message: context.t('Disabled'),
+          icon: Icons.rate_review_outlined,
+          height: 360,
+        ),
+      );
+    }
     final int? viewerId = ref.watch(aniListViewerIdProvider);
     if (viewerId == null) {
       return const _SignedOutProfilePage(title: 'Reviews');
@@ -2155,6 +2241,7 @@ class _PaginatedActivitiesView extends StatelessWidget {
     required this.onLoadMore,
     required this.onRetry,
     this.error,
+    this.automaticLoading = false,
   });
 
   final List<AniListActivity> items;
@@ -2163,6 +2250,7 @@ class _PaginatedActivitiesView extends StatelessWidget {
   final VoidCallback onLoadMore;
   final VoidCallback onRetry;
   final Object? error;
+  final bool automaticLoading;
 
   @override
   Widget build(BuildContext context) {
@@ -2197,11 +2285,13 @@ class _PaginatedActivitiesView extends StatelessWidget {
                   child: CircularProgressIndicator(strokeWidth: 3),
                 )
               : hasMore
-              ? OutlinedButton.icon(
-                  onPressed: onLoadMore,
-                  icon: const Icon(Icons.expand_more_rounded),
-                  label: Text(context.t('Load more')),
-                )
+              ? automaticLoading
+                    ? const SizedBox(height: 28)
+                    : OutlinedButton.icon(
+                        onPressed: onLoadMore,
+                        icon: const Icon(Icons.expand_more_rounded),
+                        label: Text(context.t('Load more')),
+                      )
               : Text(
                   context.t('All caught up'),
                   style: Theme.of(context).textTheme.labelLarge,
@@ -3376,12 +3466,6 @@ const List<_ProfileAction> _profileActions = <_ProfileAction>[
     route: AppRoutes.profileFavourites,
   ),
   _ProfileAction(
-    title: 'Feed',
-    subtitle: 'People you follow on AniList.',
-    icon: Icons.rss_feed_rounded,
-    route: AppRoutes.profileFeed,
-  ),
-  _ProfileAction(
     title: 'Social',
     subtitle: 'Followers and following lists.',
     icon: Icons.groups_rounded,
@@ -3392,12 +3476,6 @@ const List<_ProfileAction> _profileActions = <_ProfileAction>[
     subtitle: 'Anime and manga account totals.',
     icon: Icons.bar_chart_rounded,
     route: AppRoutes.profileStatistics,
-  ),
-  _ProfileAction(
-    title: 'Reviews',
-    subtitle: 'Recent AniList reviews.',
-    icon: Icons.rate_review_outlined,
-    route: AppRoutes.profileReviews,
   ),
   _ProfileAction(
     title: 'AniList Settings',
