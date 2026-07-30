@@ -27,17 +27,17 @@ import '../../../shared/utils/media_status_formatter.dart';
 import '../../catalog/application/catalog_mode.dart';
 import '../../catalog/presentation/catalog_offline_banner.dart';
 import '../../library/application/local_library_provider.dart';
-import '../data/anime_themes_client.dart';
 import '../../library/presentation/local_library_editor.dart';
 import '../../metadata/application/metadata_providers.dart';
 import '../../metadata/data/shikimori_client.dart';
 import '../../player/data/youtube_trailer_resolver.dart';
 import '../../player/domain/player_models.dart';
 import '../../profile/application/anilist_user_settings_provider.dart';
+import '../../settings/application/settings_state.dart';
 import '../../tracking/application/anilist_library_provider.dart';
-import '../../settings/presentation/settings_state.dart';
 import '../../tracking/presentation/anilist_entry_editor.dart';
 import '../../tracking/presentation/anilist_favorite_button.dart';
+import '../data/anime_themes_client.dart';
 
 class MediaDetailsPage extends ConsumerStatefulWidget {
   const MediaDetailsPage({required this.id, this.initialItem, super.key});
@@ -382,7 +382,7 @@ class _OverviewPanel extends ConsumerWidget {
   }
 }
 
-// ─── AniList info panel ───────────────────────────────────────────────────────
+// AniList info panel
 
 class _AniListInfoPanel extends StatefulWidget {
   const _AniListInfoPanel({required this.item});
@@ -743,7 +743,7 @@ class _AniListInfoPanelState extends State<_AniListInfoPanel> {
   }
 }
 
-// ─── Details hero ─────────────────────────────────────────────────────────────
+// Details hero
 
 class _DetailsHero extends ConsumerWidget {
   const _DetailsHero({required this.item});
@@ -1270,7 +1270,7 @@ class _ActionPanel extends ConsumerWidget {
   }
 }
 
-// ─── Seasons panel ────────────────────────────────────────────────────────────
+// Seasons panel
 
 MediaItem _seasonAsItem(MediaItem parent, MediaSeason season) {
   final String? anilistId = season.externalIds['anilist'];
@@ -1320,8 +1320,8 @@ MediaItem _seasonAsItem(MediaItem parent, MediaSeason season) {
   );
 }
 
-final _shikimoriForDetailsProvider = Provider<ShikiMoriClient>(
-  (Ref ref) => ShikiMoriClient(),
+final _shikimoriForDetailsProvider = Provider<ShikimoriClient>(
+  (Ref ref) => ShikimoriClient(),
 );
 
 final _shikimoriRussianTitleProvider = FutureProvider.autoDispose
@@ -1358,8 +1358,8 @@ final _shikimoriRussianDescriptionProvider = FutureProvider.autoDispose
 
 /// The media synopsis localized for the chosen AniList title language: when the
 /// user picked "Russian (Shikimori)", pull the Russian description from
-/// Shikimori — by MAL id with original/romaji/alias title fallbacks, the same
-/// lookup the Russian *title* uses — falling back to the original overview while
+/// Shikimori by MAL ID, with original, Romaji, and alias title fallbacks. This
+/// matches the Russian title lookup and falls back to the original overview while
 /// it loads or when Shikimori has none.
 String _localizedOverview(WidgetRef ref, MediaItem item) {
   final bool wantsRussian =

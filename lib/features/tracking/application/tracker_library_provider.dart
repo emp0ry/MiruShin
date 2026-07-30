@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../shared/models/anilist_models.dart';
-import '../../settings/presentation/settings_state.dart';
+import '../../settings/application/settings_state.dart';
 import '../data/mal_api_client.dart';
 import '../data/shikimori_api_client.dart';
 import '../domain/tracker_models.dart';
@@ -16,8 +16,9 @@ import 'tracker_sync_coordinator.dart';
 ///
 /// Pending edits for connected trackers are flushed opportunistically whenever
 /// this provider runs, mirroring how the AniList library flushes its queue.
-final trackerAnimeListProvider =
-    FutureProvider<List<AniListAnimeListFolder>>((Ref ref) async {
+final trackerAnimeListProvider = FutureProvider<List<AniListAnimeListFolder>>((
+  Ref ref,
+) async {
   final SettingsState settings = ref.watch(settingsProvider);
   final SettingsController controller = ref.read(settingsProvider.notifier);
 

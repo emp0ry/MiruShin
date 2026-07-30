@@ -39,7 +39,7 @@ WatchPartyEventType _eventTypeFromName(String value) {
 }
 
 /// Everything a guest needs to re-resolve the same episode/source *locally*
-/// through its own Sora addon. No stream URL is shared — the guest runs the
+/// through its own Sora addon. No stream URL is shared; the guest runs the
 /// resolver itself so tokenized/expiring URLs stay valid per client.
 class SourceDescriptor {
   const SourceDescriptor({

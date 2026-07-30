@@ -300,7 +300,11 @@ async function shikimoriToken(payload: Record<string, unknown>, env: Env): Promi
 }
 
 export default {
-	async fetch(request: Request, env: Env): Promise<Response> {
+	async fetch(
+		request: Request,
+		env: Env,
+		_context: ExecutionContext,
+	): Promise<Response> {
 		if (request.method === 'OPTIONS') return json({ ok: true });
 
 		const url = new URL(request.url);

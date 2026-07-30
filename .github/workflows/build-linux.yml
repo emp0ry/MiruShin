@@ -11,8 +11,8 @@ env:
   PUBSPEC_APP_NAME: mirushin
   LINUX_APP_ID: com.emp0ry.mirushin
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  # Source libmdk from GitHub *releases* (stable, tested) — the SAME source
-  # the working Windows build uses. By default fvp downloads the SourceForge
+  # Source libmdk from the same stable, tested GitHub releases used by the
+  # working Windows build. By default fvp downloads the SourceForge
   # *nightly* at build time (see fvp cmake/deps.cmake), so the bundled libmdk
   # silently changes day to day; a June 1 nightly regressed and crashes on
   # playback (SIGSEGV at 0x0 in a libmdk FrameReader/MediaIO::createForProtocol
@@ -165,7 +165,7 @@ jobs:
             --plugin gtk
 
           # Phase 2: libmdk dlopens its FFmpeg backend (libffmpeg.so.*) + codec
-          # plugins at RUNTIME — they are NOT in libmdk's DT_NEEDED graph, so
+          # plugins at runtime. They are not in libmdk's DT_NEEDED graph, so
           # linuxdeploy never bundles them and playback SIGSEGVs the instant it
           # starts (MediaIO::create -> NULL FFmpeg I/O vtable). Physically copy
           # the whole mdk runtime into usr/lib (where linuxdeploy put libmdk) so
@@ -216,7 +216,7 @@ jobs:
           DEB_DIR="deb/${PKG}"
 
           # Install the whole bundle under /usr/lib/<app> so the executable's
-          # RPATH ($ORIGIN/lib) finds every bundled lib — including libmdk and
+          # RPATH ($ORIGIN/lib) finds every bundled library, including libmdk and
           # its dlopen'd libffmpeg.so.8, which sit together in lib/. No
           # relocation here, so nothing can get separated (unlike the AppImage).
           rm -rf deb

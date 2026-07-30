@@ -1,10 +1,10 @@
 import 'package:dio/dio.dart';
 
-import '../../profile/domain/anilist_profile_models.dart';
 import '../../../shared/models/anilist_models.dart';
 import '../../../shared/models/calendar_item.dart';
 import '../../../shared/models/media_item.dart';
 import '../../metadata/data/shikimori_client.dart';
+import '../../profile/domain/anilist_profile_models.dart';
 
 int aniListDisplayScoreToRaw(double score) =>
     (score * 10).round().clamp(0, 100).toInt();
@@ -45,7 +45,7 @@ class AniListApiClient {
   final String? _accessToken;
   final String titleLanguage;
   final bool showAdultContent;
-  final ShikiMoriClient? shikimori;
+  final ShikimoriClient? shikimori;
 
   bool get _wantsRussian => titleLanguage == 'RUSSIAN' && shikimori != null;
 
@@ -453,7 +453,7 @@ class AniListApiClient {
     return value is bool ? value : null;
   }
 
-  // ─── Russian / Shikimori helpers ─────────────────────────────────────────────
+  // Russian / Shikimori helpers
 
   static bool _hasCyrillic(String text) => RegExp(r'[а-яёА-ЯЁ]').hasMatch(text);
 
@@ -559,7 +559,7 @@ class AniListApiClient {
       limit: 20,
     );
     if (hits.isEmpty) {
-      // No Shikimori results — fall back to AniList text search unchanged.
+      // Preserve the AniList text-search fallback when Shikimori has no results.
       return _animePage(
         '''
         query SearchAnime(\$search: String, \$page: Int) {
@@ -2903,7 +2903,7 @@ class AniListApiClient {
     nextAiringEpisode { episode airingAt }
   ''';
 
-  // Leaner field set for library collection queries — omits heavy per-entry fields
+  // Library collection queries omit heavy per-entry fields
   // (description, synonyms, bannerImage) that are only needed on detail pages.
   // Keeps response size manageable for users with large libraries (500+ entries).
   static const String _collectionMediaFields = '''

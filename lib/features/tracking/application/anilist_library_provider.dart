@@ -7,13 +7,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/cache/metadata_cache_store.dart';
 import '../../../shared/models/anilist_models.dart';
 import '../../../shared/models/media_item.dart';
-import '../../profile/application/anilist_user_settings_provider.dart';
-import '../../profile/domain/anilist_profile_models.dart';
-import '../../settings/presentation/settings_state.dart';
-import '../data/anilist_api_client.dart';
+import '../../metadata/application/metadata_cache_provider.dart';
 import '../../metadata/data/shikimori_client.dart';
 import '../../notifications/airing_notification_scheduler.dart';
 import '../../notifications/airing_notification_scope.dart';
+import '../../profile/application/anilist_user_settings_provider.dart';
+import '../../profile/domain/anilist_profile_models.dart';
+import '../../settings/application/settings_state.dart';
+import '../data/anilist_api_client.dart';
 
 final anilistEditQueueProvider = Provider<AniListEditQueue>(
   (Ref ref) => const AniListEditQueue(),
@@ -273,7 +274,7 @@ class AniListRussianAliasController extends AsyncNotifier<Map<int, String>> {
     }
     if (pendingIds.isEmpty) return;
 
-    final Map<int, String> fetched = await ShikiMoriClient().batchRussianTitles(
+    final Map<int, String> fetched = await ShikimoriClient().batchRussianTitles(
       pendingIds,
     );
     final Map<int, String> nextTitles = <int, String>{...cached.titlesByMalId};
@@ -440,11 +441,6 @@ void invalidateAniListMangaLibraryProviders(dynamic invalidate) {
   invalidate(anilistMangaListProvider);
   invalidate(anilistMangaPreviewListProvider);
   invalidate(anilistMangaRussianListProvider);
-  invalidate(anilistMangaPreviewRussianListProvider);
-}
-
-void invalidateAniListMangaPreviewLibraryProvider(dynamic invalidate) {
-  invalidate(anilistMangaPreviewListProvider);
   invalidate(anilistMangaPreviewRussianListProvider);
 }
 
@@ -775,7 +771,7 @@ String _collectionScope(List<AniListListStatus>? statuses) {
 
 String _resolvedAniListTitleLanguage(String mediaType, String titleLanguage) {
   // AniList has no "Russian" option, so fetch the base list in English and let
-  // Shikimori supply the Russian titles afterwards — for manga as well as anime.
+  // Shikimori supplies the Russian titles afterward for both manga and anime.
   if ((mediaType == 'ANIME' || mediaType == 'MANGA') &&
       titleLanguage == 'RUSSIAN') {
     return 'ENGLISH';
@@ -835,7 +831,7 @@ Future<List<AniListAnimeListFolder>> _maybeEnrichAnimeFoldersWithRussian(
   final AniListApiClient client = AniListApiClient(
     accessToken: token,
     titleLanguage: titleLanguage,
-    shikimori: ShikiMoriClient(),
+    shikimori: ShikimoriClient(),
   );
   try {
     final List<AniListAnimeListFolder> enriched =

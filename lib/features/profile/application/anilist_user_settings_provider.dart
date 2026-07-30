@@ -5,7 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/utils/settings_preferences.dart';
 import '../../notifications/airing_notification_scheduler.dart';
-import '../../settings/presentation/settings_state.dart';
+import '../../settings/application/settings_state.dart';
 import '../../tracking/data/anilist_api_client.dart';
 import '../domain/anilist_profile_models.dart';
 
@@ -86,34 +86,6 @@ class AniListUserSettingsController extends AsyncNotifier<AniListUserSettings> {
     } catch (_) {
       return cached ?? fallback;
     }
-  }
-
-  Future<void> refresh() async {
-    final SettingsState settings = ref.read(settingsProvider);
-    final AniListUserSettings fallback = _fallbackFromSettings(settings);
-    final SettingsPreferences prefs = SettingsPreferences(
-      await SharedPreferences.getInstance(),
-    );
-    final AniListUserSettings? cached = _decodeCache(
-      prefs.readAniListUserSettingsCache(),
-    );
-    if (!settings.hasAniListSession) {
-      state = AsyncData<AniListUserSettings>(cached ?? fallback);
-      return;
-    }
-
-    state = await AsyncValue.guard(() async {
-      final AniListUserSettings remote = await _client(
-        settings,
-      ).fetchUserSettings();
-      final AniListUserSettings local = _withLocalOverrides(
-        remote,
-        settings,
-        localPreferences: cached ?? fallback,
-      );
-      await prefs.saveAniListUserSettingsCache(jsonEncode(local.toCacheJson()));
-      return local;
-    });
   }
 
   Future<AniListUserSettings> save(AniListUserSettings draft) async {

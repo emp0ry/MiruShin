@@ -114,10 +114,6 @@ class LocalLibraryController extends Notifier<List<LibraryItem>> {
     );
   }
 
-  bool contains(String mediaId) {
-    return state.any((LibraryItem item) => item.mediaItem.id == mediaId);
-  }
-
   LibraryItem? find(String mediaId) {
     for (final LibraryItem item in state) {
       if (item.mediaItem.id == mediaId) {
@@ -157,7 +153,7 @@ class LocalLibraryController extends Notifier<List<LibraryItem>> {
 
   /// Updates a local item's progress to reflect the furthest episode reached
   /// (cumulative episode index across seasons / total episodes). Progress is
-  /// monotonic — jumping back to an earlier episode never lowers it. For movies
+  /// monotonic, so jumping back to an earlier episode never lowers it. For movies
   /// the playback [positionFraction] is used instead. No-op when the media is
   /// not in the local library (we never auto-add items here).
   Future<void> updateWatchProgress({

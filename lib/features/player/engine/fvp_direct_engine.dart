@@ -231,7 +231,7 @@ class FvpDirectEngine extends PlayerEngine {
       _player.setProperty('avformat.extension_picky', '0');
       _player.setProperty('avformat.allowed_segment_extensions', 'ALL');
     } catch (_) {
-      // Not all MDK builds expose avformat properties — safe to ignore.
+      // Ignore missing avformat properties on MDK builds that omit them.
     }
 
     try {
@@ -239,7 +239,7 @@ class FvpDirectEngine extends PlayerEngine {
       _player.setProperty('avio.reconnect_streamed', '1');
       _player.setProperty('avio.reconnect_delay_max', '5');
     } catch (_) {
-      // Older MDK builds may not expose all avio properties — safe to ignore.
+      // Ignore missing avio properties on older MDK builds.
     }
   }
 

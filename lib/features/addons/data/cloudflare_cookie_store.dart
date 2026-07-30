@@ -140,7 +140,8 @@ class _CfEntry {
   final int savedAtMillis;
 
   bool isExpired(Duration ttl) =>
-      DateTime.now().millisecondsSinceEpoch - savedAtMillis > ttl.inMilliseconds;
+      DateTime.now().millisecondsSinceEpoch - savedAtMillis >
+      ttl.inMilliseconds;
 
   Map<String, dynamic> toJson() => <String, dynamic>{
     'cookies': cookies,

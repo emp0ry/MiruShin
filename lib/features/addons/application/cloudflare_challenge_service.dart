@@ -32,9 +32,6 @@ class CloudflareChallengeService {
   final Map<String, Future<CloudflareSolveResult?>> _inFlight =
       <String, Future<CloudflareSolveResult?>>{};
 
-  /// Whether an interactive solver is available on this platform.
-  bool get canSolve => _solver != null;
-
   /// Registered by the UI layer (see app bootstrap). Passing null unregisters.
   void registerSolver(CloudflareSolver? solver) => _solver = solver;
 

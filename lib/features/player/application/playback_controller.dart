@@ -1,4 +1,3 @@
-// ignore_for_file: avoid_print
 import 'dart:async';
 import 'dart:collection';
 import 'dart:ui' show Locale, PlatformDispatcher;
@@ -7,21 +6,20 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/localization/app_localizations.dart';
-import '../data/subtitle_loader.dart';
-
 import '../../../shared/models/anilist_models.dart';
 import '../../../shared/models/media_item.dart';
 import '../../addons/data/anime_titles_service.dart';
 import '../../catalog/application/catalog_mode.dart';
 import '../../library/application/local_library_provider.dart';
 import '../../profile/application/anilist_user_settings_provider.dart';
-import '../../settings/presentation/settings_state.dart';
+import '../../settings/application/settings_state.dart';
 import '../../tracking/application/anilist_library_provider.dart';
 import '../../tracking/application/tracker_sync_coordinator.dart';
 import '../../tracking/data/anilist_api_client.dart';
 import '../../watch/domain/normalized_models.dart';
 import '../data/discord_rpc_service.dart';
 import '../data/media_session_service.dart';
+import '../data/subtitle_loader.dart';
 import '../domain/player_models.dart';
 import '../domain/seek_settle.dart';
 import '../engine/local_hls_proxy.dart';
@@ -603,7 +601,7 @@ class PlaybackController extends Notifier<PlaybackState> {
 
   /// The series/movie title shown on the now-playing surfaces (Control Center,
   /// Android/Windows media session, Discord). Always the AniList/TMDB metadata
-  /// title — never the addon's source title.
+  /// title. The addon's source title is never used.
   ///
   /// AniList anime follow the AniList title-language setting
   /// (ROMAJI/ENGLISH/NATIVE/RUSSIAN) using the per-language titles carried in
@@ -659,7 +657,7 @@ class PlaybackController extends Notifier<PlaybackState> {
         return candidate.trim();
       }
     }
-    // Last resort only — this is the addon source title.
+    // Use the addon source title only as a last resort.
     return item.title;
   }
 
@@ -727,7 +725,7 @@ class PlaybackController extends Notifier<PlaybackState> {
   }
 
   Future<void> load(MediaPlaybackItem item) async {
-    print(
+    debugPrint(
       '[DEBUG] load: S${item.seasonNumber}E${item.episodeNumber} ignoreProgress=${item.ignoreProgress}',
     );
     await _waitForFinalProgressSaveBarrier();
@@ -803,7 +801,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     EpisodeProgress? best;
 
     final List<String> ids = _progressMediaIds(item);
-    print(
+    debugPrint(
       '[DEBUG] _loadProgressForItem: ids=$ids S${item.seasonNumber}E${item.episodeNumber}',
     );
 
@@ -812,7 +810,7 @@ class PlaybackController extends Notifier<PlaybackState> {
           .read(localLibraryProvider.notifier)
           .loadEpisodeProgress(mediaId, item.seasonNumber, item.episodeNumber);
 
-      print(
+      debugPrint(
         '[DEBUG]   mediaId=$mediaId => ${progress == null ? 'null' : 'pos=${progress.positionSeconds}s completed=${progress.completed}'}',
       );
 
@@ -826,7 +824,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       }
     }
 
-    print(
+    debugPrint(
       '[DEBUG] _loadProgressForItem: best=${best == null ? 'null' : 'pos=${best.positionSeconds}s'}',
     );
     return best;
@@ -838,10 +836,10 @@ class PlaybackController extends Notifier<PlaybackState> {
   ) {
     final int savedSeconds = progress?.positionSeconds ?? 0;
     // A finished episode is reset to 0:00 on save, so it restarts fresh. But an
-    // episode marked watched early (at 85%) keeps its real position — reopen in
-    // the final stretch instead of jumping back to the beginning.
+    // episode marked watched early at 85% keeps its real position. Reopen in the
+    // final stretch instead of jumping back to the beginning.
     if (progress?.completed == true && savedSeconds <= 0) {
-      print('[DEBUG] _safeResumePosition: completed=true -> 0');
+      debugPrint('[DEBUG] _safeResumePosition: completed=true -> 0');
       return Duration.zero;
     }
     final Duration saved = savedSeconds > 0
@@ -851,7 +849,7 @@ class PlaybackController extends Notifier<PlaybackState> {
         ? saved
         : item.startPosition;
 
-    print(
+    debugPrint(
       '[DEBUG] _safeResumePosition: savedSeconds=$savedSeconds item.startPosition=${item.startPosition} -> start=$start',
     );
 
@@ -859,7 +857,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     if (durationSeconds != null && durationSeconds > 0) {
       final Duration duration = Duration(seconds: durationSeconds);
       if (start >= duration - const Duration(seconds: 20)) {
-        print('[DEBUG] _safeResumePosition: near end -> 0');
+        debugPrint('[DEBUG] _safeResumePosition: near end -> 0');
         return Duration.zero;
       }
     }
@@ -1983,7 +1981,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     final bool saveCompleted = completed || isNearEnd || reachedWatchedFraction;
 
     // Latch the watched mark so a later FVP save can't clear it. Only latch
-    // end-of-stream when genuinely finished — at 85% there is still ~15% left,
+    // end-of-stream only when genuinely finished. At 85% there is still about 15% left,
     // and _reachedNearEnd would otherwise pop the auto-next overlay on restore.
     if (saveCompleted) _autoProgressMarked = true;
     if (resetToStart) _reachedNearEnd = true;
@@ -3193,7 +3191,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     _clearResumeGuard();
     _clearInteractiveSeek();
     // Skip jumps (notably the auto ED-skip, which lands on the episode end) must
-    // feed completion detection like slider/gesture seeks do — otherwise jumping
+    // feed completion detection like slider and gesture seeks do. Otherwise, jumping
     // past the end leaves the episode unwatched and never triggers auto-next.
     _noteManualSeekTarget(clampedTarget, duration);
     _notePausedResumeTarget(engine, clampedTarget);
@@ -3354,7 +3352,7 @@ class PlaybackController extends Notifier<PlaybackState> {
         !_autoProgressMarked &&
         pos.inMilliseconds >= dur.inMilliseconds * _watchedFraction) {
       _autoProgressMarked = true;
-      print(
+      debugPrint(
         '[DEBUG] auto-progress: 85% reached at ${pos.inSeconds}s/${dur.inSeconds}s -> marking watched',
       );
       unawaited(_saveProgress(item, engine));
@@ -3370,7 +3368,7 @@ class PlaybackController extends Notifier<PlaybackState> {
         (reliableDuration && pos >= dur - const Duration(seconds: 2));
     if (ended && !_reachedNearEnd) {
       _reachedNearEnd = true;
-      print(
+      debugPrint(
         '[DEBUG] auto-next: end latched (isCompleted=${es.isCompleted} '
         'pos=${pos.inSeconds}s max=${_maxObservedPosition.inSeconds}s '
         'dur=${dur.inSeconds}s)',
@@ -3411,14 +3409,14 @@ class PlaybackController extends Notifier<PlaybackState> {
         shouldShow = pos + const Duration(seconds: 1) >= dur;
       }
       if (shouldShow) {
-        print(
+        debugPrint(
           '[DEBUG] auto-next: trigger reached (ended=$ended '
           'pos=${pos.inSeconds}s/${dur.inSeconds}s '
           'autoplay=${settings.autoplayNext})',
         );
         if (settings.autoplayNext) {
           // Auto-play advances on its own 5s timer (no visible overlay), so
-          // there is nothing to ease in — surface the state immediately.
+          // Surface the state immediately because there is nothing to ease in.
           _showAutoNextOverlay();
         } else {
           // Button mode: let the ending breathe, then ease the overlay in.
@@ -3426,7 +3424,7 @@ class PlaybackController extends Notifier<PlaybackState> {
         }
       } else {
         // The end condition no longer holds (e.g. the user sought back before
-        // the delayed overlay appeared) — drop the pending appearance.
+        // the delayed overlay appeared). Drop the pending appearance.
         _autoNextOverlayTimer?.cancel();
         _autoNextOverlayTimer = null;
       }
@@ -3445,7 +3443,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     _autoNextOverlayTimer?.cancel();
     _autoNextOverlayTimer = null;
     if (_autoNextDismissed || state.autoNextVisible) return;
-    print('[DEBUG] auto-next: overlay shown');
+    debugPrint('[DEBUG] auto-next: overlay shown');
     state = state.copyWith(autoNextVisible: true);
   }
 

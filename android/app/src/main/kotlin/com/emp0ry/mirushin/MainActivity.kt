@@ -91,7 +91,7 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        // ── Media session channel ──────────────────────────────────────────
+        // Media session channel
         val mch = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger, "mirushin/media_session"
         )
@@ -111,7 +111,7 @@ class MainActivity : FlutterActivity() {
             }
         }
 
-        // ── PiP channel ────────────────────────────────────────────────────
+        // PiP channel
         val pch = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger, "mirushin/pip"
         )
@@ -150,7 +150,7 @@ class MainActivity : FlutterActivity() {
             }
         }
 
-        // ── Device / form-factor channel ───────────────────────────────────
+        // Device / form-factor channel
         val dch = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger, "mirushin/device"
         )
@@ -185,7 +185,7 @@ class MainActivity : FlutterActivity() {
     private fun showSoftKeyboard(): Boolean {
         // Prefer the WebView: after a synthesised tap on a page input the IME
         // must attach to the WebView's input connection, not whatever Flutter
-        // view happens to hold focus — that is what left the keyboard typing
+        // view currently holds focus. Targeting Flutter left the keyboard typing
         // "outside" the text box on Android TV.
         val target = (currentFocus as? WebView)
             ?: findWebView(window.decorView)
@@ -250,7 +250,7 @@ class MainActivity : FlutterActivity() {
         return null
     }
 
-    // ── PiP enter ─────────────────────────────────────────────────────────
+    // PiP enter
 
     private fun enterPip(ratioW: Int, ratioH: Int, isPlaying: Boolean, hasNext: Boolean) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -302,7 +302,7 @@ class MainActivity : FlutterActivity() {
         return builder.build()
     }
 
-    // ── PiP lifecycle ──────────────────────────────────────────────────────
+    // PiP lifecycle
 
     override fun onPictureInPictureModeChanged(
         isInPictureInPictureMode: Boolean, newConfig: Configuration
@@ -333,7 +333,7 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    // ── Media session / Now Playing ────────────────────────────────────────
+    // Media session / Now Playing
 
     private fun updateNowPlaying(args: Map<String, Any>) {
         val title        = args["title"]       as? String  ?: ""

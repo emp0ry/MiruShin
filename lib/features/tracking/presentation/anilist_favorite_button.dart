@@ -3,7 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/localization/app_localizations.dart';
 import '../../../shared/models/media_item.dart';
-import '../../settings/presentation/settings_state.dart';
+import '../../settings/application/settings_state.dart';
 import '../application/anilist_favorite_provider.dart';
 
 class AniListFavoriteButton extends ConsumerStatefulWidget {

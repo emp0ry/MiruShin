@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:ui' show ImageFilter;
 
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'
     show
         MethodChannel,
@@ -9,7 +10,6 @@ import 'package:flutter/services.dart'
         PlatformException,
         SystemChrome,
         SystemUiMode;
-import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -20,42 +20,40 @@ import '../../../app/router.dart' show PlayerRouteArgs;
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_radius.dart';
 import '../../../app/theme/app_spacing.dart';
-import '../../../core/widgets/tv_focusable.dart';
 import '../../../app/theme/app_theme_extension.dart';
 import '../../../core/widgets/adaptive_page.dart';
 import '../../../core/widgets/glass_card.dart';
 import '../../../core/widgets/metadata_chip.dart';
 import '../../../core/widgets/neutral_placeholder.dart';
-import '../../../core/widgets/tv_text_field_focus.dart';
 import '../../../core/widgets/page_back_button.dart';
 import '../../../core/widgets/section_header.dart';
 import '../../../core/widgets/skeleton_box.dart';
+import '../../../core/widgets/tv_focusable.dart';
+import '../../../core/widgets/tv_text_field_focus.dart';
+import '../../../shared/models/anilist_models.dart';
 import '../../../shared/models/media_item.dart';
 import '../../addons/application/sora_addons_provider.dart';
 import '../../addons/application/sora_source_providers.dart';
 import '../../addons/domain/sora_models.dart';
 import '../../addons/domain/sora_parsers.dart';
-import '../../catalog/application/catalog_repository.dart';
 import '../../catalog/application/catalog_mode.dart';
-import '../../downloads/application/downloads_provider.dart';
+import '../../catalog/application/catalog_repository.dart';
 import '../../downloads/application/download_episode_availability.dart';
+import '../../downloads/application/downloads_provider.dart';
 import '../../downloads/domain/download_models.dart';
+import '../../library/application/local_library_provider.dart';
 import '../../metadata/application/metadata_providers.dart';
 import '../../metadata/domain/anime_episode_metadata.dart';
 import '../../metadata/domain/tmdb_episode_metadata.dart';
-import '../../library/application/local_library_provider.dart';
-import '../../settings/presentation/settings_state.dart';
-import '../../tracking/application/anilist_library_provider.dart';
-import '../../../shared/models/anilist_models.dart';
 import '../../player/domain/player_models.dart';
+import '../../settings/application/settings_state.dart';
+import '../../tracking/application/anilist_library_provider.dart';
 import '../application/watch_session.dart';
 import '../domain/normalized_models.dart';
 
-// ---------------------------------------------------------------------------
 // Title-based fallback provider
 // When a stored item has a stale/wrong TVDB ID (returns 404), this searches
 // by title and loads full details for the best matching result.
-// ---------------------------------------------------------------------------
 
 @immutable
 class _TitleFallbackQuery {
@@ -246,7 +244,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
 
   void _pickSource(SoraSearchResult result) {
     // Synchronously bump the epoch so every in-flight search loop sees a stale
-    // epoch on its next await and breaks out — without restarting providers.
+    // epoch on its next await and exits without restarting providers.
     cancelAllSoraSearches(ref.read(soraJsRuntimeProvider));
     final bool sourceSeasonFlow = _usesSourceSeasonFlow(_lastItem);
     final SoraSourceRequest request = SoraSourceRequest(
@@ -391,7 +389,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
       _streamResolutionState.begin(requestKey, autoNext: isAutoNext);
     }
     // In the TMDB source-season flow, follow the addon's own season for the
-    // picked episode so progress is saved under the right season — important
+    // picked episode so progress is saved under the correct season. This matters
     // when auto-next crosses a season boundary (the next episode belongs to a
     // later season). Other flows (anime/AniList) keep their session season.
     final bool useAddonSeason =
@@ -528,7 +526,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     } on MissingPluginException {
       // Not on desktop.
     } on PlatformException {
-      // Ignore.
+      // The window may already have left fullscreen mode.
     }
   }
 
@@ -568,8 +566,8 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     _preferredVoiceOverLabel = bundle.selectedVoiceOver?.label;
 
     // For auto-next always start from the beginning regardless of saved
-    // progress (startPosition stays zero below). This is enough on its own — we
-    // must NOT mark the episode ignoreProgress, or it would stop saving progress,
+    // progress because startPosition remains zero below. Do not mark the episode
+    // ignoreProgress, or it would stop saving progress,
     // never mark itself watched at 85%, and never chain the next auto-next.
     // For manual opens, look up the saved position so the controller's async
     // lookup doesn't race with the stop() call from the previous episode.
@@ -729,7 +727,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
       );
     }
     if (index < 0 || index + 1 >= episodes.length) {
-      // Last episode — if the player kept the window fullscreen for the smooth
+      // Exit fullscreen after the final episode if the player kept the window
       // transition, exit fullscreen now since there's nothing to play next.
       _clearAutoNextFullscreen();
       return;
@@ -1036,7 +1034,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
                   _WatchHero(item: _heroDisplayItem(item, session)),
                   const SizedBox(height: AppSpacing.xxl),
                   if (session != null) ...<Widget>[
-                    // Step 1 — Season picker (series with multiple seasons)
+                    // Step 1: season picker for series with multiple seasons.
                     if (session.step == WatchStep.pickSeason)
                       _SeasonPickerSection(
                         item: item,
@@ -1072,7 +1070,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
                       const SizedBox(height: AppSpacing.xxl),
                     ],
 
-                    // Tab 0 — Source search (hidden when on episode tab so searches
+                    // Tab 0: source search. Hide it on the episode tab so searches
                     // stop after picking a source and restart if the user returns)
                     if (session.step != WatchStep.pickSeason &&
                         session.step != WatchStep.pickSourceSeason &&
@@ -1086,7 +1084,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
                         ),
                       ),
 
-                    // Tab 1 — Episode picker
+                    // Tab 1: episode picker.
                     if (session.step != WatchStep.pickSeason &&
                         session.step != WatchStep.pickSourceSeason &&
                         _visibleTab == 1 &&
@@ -1163,9 +1161,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
   }
 }
 
-// ---------------------------------------------------------------------------
 // Hero
-// ---------------------------------------------------------------------------
 
 class _WatchHero extends ConsumerWidget {
   const _WatchHero({required this.item});
@@ -1296,9 +1292,7 @@ class _WatchPoster extends StatelessWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
 // Watch tab bar
-// ---------------------------------------------------------------------------
 
 class _WatchTabBar extends StatelessWidget {
   const _WatchTabBar({
@@ -1394,9 +1388,7 @@ class _WatchTab extends StatelessWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
 // Season picker
-// ---------------------------------------------------------------------------
 
 class _SeasonPickerSection extends StatelessWidget {
   const _SeasonPickerSection({
@@ -1754,9 +1746,7 @@ class _SourceSeasonPickerSection extends ConsumerWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
 // Source search
-// ---------------------------------------------------------------------------
 
 class _SourceSearchSection extends ConsumerStatefulWidget {
   const _SourceSearchSection({
@@ -1811,7 +1801,7 @@ class _SourceSearchSectionState extends ConsumerState<_SourceSearchSection> {
       );
     }
 
-    // Ordered list of enabled addons — each loads independently.
+    // Load each enabled addon independently in its configured order.
     final List<SoraInstalledAddon> enabledAddons = addonsState.enabledOrdered;
 
     return GlassCard(
@@ -2559,9 +2549,7 @@ class _ThumbnailFallback extends StatelessWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
 // Episode picker
-// ---------------------------------------------------------------------------
 
 class _EpisodePickerSection extends ConsumerStatefulWidget {
   const _EpisodePickerSection({
@@ -3010,7 +2998,7 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
 
               // Compute the max watched episode number from soraEpisodeProgress
               // as fallback when AniList is not connected.
-              // Episode 0 (number < 1) is excluded — it's a special/prologue
+              // Exclude episode 0 because it represents a special or prologue
               // that must not shift the watched range for numbered episodes.
               int maxLocalWatched = 0;
               for (final SoraEpisode ep in episodes) {
@@ -3048,7 +3036,7 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
                 }
               }
 
-              // In AniList mode, AniList is the sole source of truth — never
+              // In AniList mode, AniList is the sole source of truth. Never
               // fall back to local data, so that AniList decrements/resets
               // are immediately reflected in the episode list.
               final int effectiveContinued = useAniListProgress
@@ -3126,7 +3114,7 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
                       );
                   // Episode 0 (number < 1): only its own local data,
                   //   never derived from the range counter.
-                  // AniList mode: AniList is sole truth — local playback
+                  // AniList mode: AniList is the sole source of truth. Local playback
                   //   must not override decremented/reset AniList progress.
                   // Local mode: full local data.
                   final bool isWatched;
@@ -3849,9 +3837,7 @@ SoraEpisode _episodeForPlayback(
   );
 }
 
-// ---------------------------------------------------------------------------
 // Stream resolving section
-// ---------------------------------------------------------------------------
 
 class _StreamResolvingSection extends ConsumerWidget {
   const _StreamResolvingSection({
@@ -3942,9 +3928,7 @@ class _StreamResolvingSection extends ConsumerWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
 // Choose stream sheet
-// ---------------------------------------------------------------------------
 
 class _StreamReadySheet extends StatefulWidget {
   const _StreamReadySheet({
@@ -4166,9 +4150,7 @@ class _StreamReadySheetState extends State<_StreamReadySheet> {
   }
 }
 
-// ---------------------------------------------------------------------------
 // Error banner
-// ---------------------------------------------------------------------------
 
 class _ErrorBanner extends StatelessWidget {
   const _ErrorBanner({required this.message});
@@ -4197,9 +4179,7 @@ class _ErrorBanner extends StatelessWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 List<MediaSeason> _selectableSeasons(MediaItem item) {
   final List<MediaSeason> seasons = item.seasons.toList(growable: false);
@@ -4512,7 +4492,7 @@ MediaItem _playerRouteItem(MediaItem item, WatchSession session) {
 }
 
 /// Returns a display-only MediaItem reflecting the selected season's poster,
-/// overview, and full title. Used only for the hero — source search continues
+/// overview, and full title. This is used only for the hero; source search continues
 /// to use [_seasonSearchItem].
 MediaItem _heroDisplayItem(MediaItem item, WatchSession? session) {
   if (session == null || session.step == WatchStep.pickSeason) return item;
@@ -4530,7 +4510,7 @@ MediaItem _heroDisplayItem(MediaItem item, WatchSession? session) {
   final String seasonName = season.name.trim();
   // Only replace the title when the season has a real distinctive name.
   // Synthetic fallbacks like "Season 1", "Season 2", "Specials" are not
-  // meaningful titles — showing them appended to the series name would be
+  // meaningful titles. Appending them to the series name would be
   // misleading (e.g. "Rascal Does Not Dream: Season 1").
   final bool hasRealName =
       seasonName.isNotEmpty &&

@@ -43,7 +43,11 @@ async function appProofQuery(): Promise<string> {
 	return params.toString();
 }
 
-async function fetchWorker(path: string, init?: RequestInit, options: { proof?: boolean } = {}) {
+async function fetchWorker(
+	path: string,
+	init?: RequestInit<IncomingRequestCfProperties>,
+	options: { proof?: boolean } = {},
+) {
 	const headers = new Headers(init?.headers);
 	const proof = options.proof ?? path !== '/callback';
 	if (proof) {

@@ -40,7 +40,7 @@ const int _seekVerificationAttempts = 4;
 }) {
   if (!isNetwork) return (maxBytes: 32 * 1024 * 1024, readaheadSecs: 10);
   // readaheadSecs is the TARGET look-ahead, not the minimum-to-start.
-  // Keep it moderate (≤30s) so MPV starts reporting buffer progress quickly
+  // Keep it moderate (<=30s) so MPV starts reporting buffer progress quickly
   // even on slow CDNs.  Larger maxBytes gives plenty of room once playing.
   if (isHls) {
     if (speed <= 1.0) return (maxBytes: 300 * 1024 * 1024, readaheadSecs: 15);
@@ -85,12 +85,12 @@ class MediaKitPlayerEngine extends PlayerEngine {
   final bool _previewMode;
   final ValueNotifier<PlayerEngineState> _state;
 
-  // mpv/MediaKit is initialized lazily — only when a player is actually about
-  // to be created — instead of eagerly at app startup. `MediaKit.ensureInitialized()`
+  // Initialize mpv and MediaKit only when creating a player instead of at app
+  // startup. `MediaKit.ensureInitialized()`
   // dlopens libmpv and runs mpv/ffmpeg's global init; doing that at startup
   // poisoned the flutter_js QuickJS addon runtime on Linux (deterministic
   // SIGSEGV while resolving streams, even when just browsing). Deferring it
-  // keeps addon resolution running in a clean process — mpv only loads once the
+  // keeps addon resolution in a clean process. mpv loads only after the
   // user actually plays, after the stream URL has already been resolved by the
   // addon JS.
   static bool _mediaKitInitialized = false;
@@ -316,7 +316,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
           _usingProxy = true;
           debugPrint('MediaKit open via proxy: $playbackUrl');
         } on Object catch (proxyErr) {
-          // Proxy failed to start — fall back to direct CDN access.
+          // Fall back to direct CDN access when the proxy cannot start.
           debugPrint(
             'MediaKit proxy start failed, falling back direct: $proxyErr',
           );
@@ -405,32 +405,32 @@ class MediaKitPlayerEngine extends PlayerEngine {
     );
 
     // Only include confirmed MPV runtime-settable properties. Avoid:
-    //   - demuxer-lavf-o / stream-lavf-o  — key-value list options; MPV can
+    //   - demuxer-lavf-o / stream-lavf-o: key-value list options; MPV can
     //     emit async "Expected '=' and a value" errors on player.stream.error
     //     when the value format or option name is not recognised at runtime,
     //     which our catchError cannot intercept (MPV reports it after the call).
-    //   - demuxer-lavf-analyzeduration / demuxer-lavf-probesize — init-time
+    //   - demuxer-lavf-analyzeduration / demuxer-lavf-probesize: init-time
     //     options only; not settable at runtime via mpv_set_property_string.
-    //   - stream-timeout / vd-lavc-software-fallback — uncertain availability.
+    //   - stream-timeout / vd-lavc-software-fallback: uncertain availability.
     final List<(String, String)> props = <(String, String)>[
-      // ── Demuxer cache ─────────────────────────────────────────────────────
+      // Demuxer cache
       ('cache', 'yes'),
       ('cache-secs', '30'),
       ('demuxer-seekable-cache', 'yes'),
       ('demuxer-max-back-bytes', '${64 * 1024 * 1024}'),
 
-      // ── Speed-scaled forward buffer ───────────────────────────────────────
+      // Speed-scaled forward buffer
       ('demuxer-max-bytes', '$maxBytes'),
       ('demuxer-readahead-secs', '$readaheadSecs'),
 
-      // ── Seek / frame-drop policy ──────────────────────────────────────────
+      // Seek / frame-drop policy
       ('hr-seek-framedrop', 'no'),
       ('framedrop', 'no'),
 
-      // ── A/V sync ──────────────────────────────────────────────────────────
+      // A/V sync
       ('video-sync', 'audio'),
 
-      // ── Hardware decoding ─────────────────────────────────────────────────
+      // Hardware decoding
       ('hwdec', 'auto-safe'),
     ];
 
@@ -528,7 +528,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
         _syncState();
         return;
       }
-      // Slow CDN stream — skip seek to avoid breaking loading.
+      // Skip seeking on a slow CDN stream to avoid interrupting loading.
       // PlaybackController._reinforceInitialSeek retries once initialised.
       debugPrint(
         'MediaKit: startup did not settle within '
@@ -545,7 +545,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
       return;
     }
 
-    // Stream settled — safe to seek and apply speed.
+    // The settled stream can safely accept seeks and speed changes.
     if (_requireVideoSurfaceDuringStartup) {
       _requireVideoSurfaceDuringStartup = false;
     }

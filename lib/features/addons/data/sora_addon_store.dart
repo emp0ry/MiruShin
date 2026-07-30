@@ -716,10 +716,7 @@ class SoraAddonStore {
       if (manifestUrl.isEmpty) {
         throw SoraAddonException('Addon "$id" has no manifest URL.');
       }
-      return _parseUri(
-        manifestUrl,
-        'Addon "$id" has an invalid manifest URL.',
-      );
+      return _parseUri(manifestUrl, 'Addon "$id" has an invalid manifest URL.');
     }
     throw SoraAddonException('No addon found in the library with id "$id".');
   }

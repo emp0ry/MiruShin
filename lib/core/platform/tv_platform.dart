@@ -8,7 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 /// The native side ([MainActivity]) answers a one-shot `isTelevision` call over
 /// the `mirushin/device` method channel. We resolve it once during startup (see
 /// [ensureInitialized]) so the value is available synchronously while building
-/// the first frame — this avoids a layout flash between the phone and TV shells.
+/// the first frame. This prevents a layout flash between the phone and TV shells.
 class TvPlatform {
   TvPlatform._();
 

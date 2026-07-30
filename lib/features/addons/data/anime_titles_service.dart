@@ -64,7 +64,7 @@ class AnimeTitlesService {
     String romaji = '';
     String russian = '';
 
-    // ── 1. AniList -> English, Romaji, Japanese ──────────────────────────────
+    // 1. AniList -> English, Romaji, Japanese
     if (anilistId != null && anilistId.trim().isNotEmpty) {
       try {
         final AnimeTitles al = await _fromAniList(dio, anilistId.trim());
@@ -79,7 +79,7 @@ class AnimeTitlesService {
       }
     }
 
-    // ── 2. Jikan (unofficial MAL) fallback ──────────────────────────────────
+    // 2. Jikan (unofficial MAL) fallback
     if ((english.isEmpty || romaji.isEmpty) &&
         malId != null &&
         malId.trim().isNotEmpty) {
@@ -96,7 +96,7 @@ class AnimeTitlesService {
       }
     }
 
-    // ── 3. Shikimori -> Russian (primary); fallback titles if others failed ──
+    // 3. Shikimori -> Russian (primary); fallback titles if others failed
     if (malId != null && malId.trim().isNotEmpty) {
       try {
         final AnimeTitles sh = await _withRetry429(
@@ -105,7 +105,7 @@ class AnimeTitlesService {
         russian = sh.russian;
         if (english.isEmpty) english = sh.english;
         if (japanese.isEmpty) japanese = sh.japanese;
-        // Shikimori `name` is romanized (≈ romaji)
+        // Shikimori `name` is romanized (approximately romaji)
         if (romaji.isEmpty) romaji = sh.romaji;
         debugPrint('[AnimeTitles] Shikimori OK — RU:"$russian"');
       } catch (e) {
@@ -145,7 +145,7 @@ class AnimeTitlesService {
     return result;
   }
 
-  // ── Persistent cache helpers ───────────────────────────────────────────────
+  // Persistent cache helpers
 
   static String? _cacheKeyFor(String? anilistId, String? malId) {
     if (anilistId != null && anilistId.trim().isNotEmpty) {
@@ -166,8 +166,9 @@ class AnimeTitlesService {
       if (decoded is! Map) return null;
       final int? cachedAt = decoded['cachedAt'] as int?;
       if (cachedAt == null) return null;
-      final DateTime expiry = DateTime.fromMillisecondsSinceEpoch(cachedAt)
-          .add(_cacheTtl);
+      final DateTime expiry = DateTime.fromMillisecondsSinceEpoch(
+        cachedAt,
+      ).add(_cacheTtl);
       if (DateTime.now().isAfter(expiry)) {
         await prefs.remove(key);
         return null;
@@ -199,7 +200,7 @@ class AnimeTitlesService {
     } catch (_) {}
   }
 
-  // ── AniList ────────────────────────────────────────────────────────────────
+  // AniList
 
   static Future<AnimeTitles> _fromAniList(Dio dio, String anilistId) async {
     const String query = r'''
@@ -229,7 +230,7 @@ query ($id: Int) {
     );
   }
 
-  // ── Jikan (unofficial MAL REST) ───────────────────────────────────────────
+  // Jikan (unofficial MAL REST)
 
   static Future<AnimeTitles> _fromJikan(Dio dio, String malId) async {
     final Response<dynamic> response = await dio.get<dynamic>(
@@ -264,7 +265,7 @@ query ($id: Int) {
     return AnimeTitles(english: english, japanese: japanese, romaji: romaji);
   }
 
-  // ── Shikimori GraphQL ──────────────────────────────────────────────────────
+  // Shikimori GraphQL
 
   static Future<AnimeTitles> _fromShikimori(Dio dio, String malId) async {
     // Shikimori uses MAL IDs. `name` is the romanized title.

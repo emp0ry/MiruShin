@@ -62,9 +62,9 @@ Future<OAuthCodeListener> startOAuthCodeListener({required int port}) async {
     final String? state = request.uri.queryParameters['state'];
 
     request.response.headers.contentType = ContentType.html;
-    request.response.write(code != null && code.trim().isNotEmpty
-        ? _successPage
-        : _failurePage);
+    request.response.write(
+      code != null && code.trim().isNotEmpty ? _successPage : _failurePage,
+    );
     await request.response.close();
 
     if (!completer.isCompleted && code != null && code.trim().isNotEmpty) {

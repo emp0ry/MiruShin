@@ -9,7 +9,7 @@ void main() {
   test('batchRussianTitles fetches large libraries in chunks', () async {
     final _FakeShikimoriAdapter adapter = _FakeShikimoriAdapter();
     final Dio dio = Dio()..httpClientAdapter = adapter;
-    final ShikiMoriClient client = ShikiMoriClient(dio: dio);
+    final ShikimoriClient client = ShikimoriClient(dio: dio);
 
     final Map<int, String> titles = await client.batchRussianTitles(
       List<int>.generate(55, (int index) => index + 1),
@@ -48,7 +48,7 @@ void main() {
           'description': '[b]Русское описание[/b]',
         };
       final Dio dio = Dio()..httpClientAdapter = adapter;
-      final ShikiMoriClient client = ShikiMoriClient(dio: dio);
+      final ShikimoriClient client = ShikimoriClient(dio: dio);
 
       final ShikimoriRussianDetails? details = await client
           .getRussianDetailsForMedia(
@@ -104,7 +104,7 @@ void main() {
         ],
       };
     final Dio dio = Dio()..httpClientAdapter = adapter;
-    final ShikiMoriClient client = ShikiMoriClient(dio: dio);
+    final ShikimoriClient client = ShikimoriClient(dio: dio);
 
     final ShikimoriRussianDetails? details = await client
         .getRussianDetailsForMedia(malId: 10);
@@ -133,7 +133,7 @@ void main() {
           ],
         };
       final Dio dio = Dio()..httpClientAdapter = adapter;
-      final ShikiMoriClient client = ShikiMoriClient(dio: dio);
+      final ShikimoriClient client = ShikimoriClient(dio: dio);
 
       final ShikimoriRussianDetails? details = await client
           .getRussianDetailsForMedia(malId: 20);
@@ -172,7 +172,7 @@ void main() {
         ],
       };
     final Dio dio = Dio()..httpClientAdapter = adapter;
-    final ShikiMoriClient client = ShikiMoriClient(dio: dio);
+    final ShikimoriClient client = ShikimoriClient(dio: dio);
 
     final ShikimoriRussianDetails? details = await client
         .getRussianDetailsForMedia(malId: 61839);

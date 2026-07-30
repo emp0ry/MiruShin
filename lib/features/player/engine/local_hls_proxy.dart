@@ -7,8 +7,8 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
-// Per-request timeout — short enough that failures are detected, but long
-// enough for slow HLS CDNs that only send a chunk every few seconds.
+// The per-request timeout detects failures while allowing slow HLS CDNs that
+// send a chunk only every few seconds.
 const Duration _kConnectTimeout = Duration(seconds: 10);
 const Duration _kReadTimeout = Duration(seconds: 30);
 const int _kPlaylistRetries = 3;
@@ -81,7 +81,7 @@ class LocalHlsProxy {
     return Uri(scheme: 'http', host: '127.0.0.1', port: p);
   }
 
-  // ── Lifecycle ─────────────────────────────────────────────────────────────
+  // Lifecycle
 
   Future<void> start() async {
     if (_server != null) return;
@@ -113,7 +113,7 @@ class LocalHlsProxy {
     }
   }
 
-  // ── Public URL builder ────────────────────────────────────────────────────
+  // Public URL builder
 
   /// Returns the proxied URL for the given HLS master/media playlist.
   /// Headers are embedded as JSON in the `h` query-param so that the proxy
@@ -160,7 +160,7 @@ class LocalHlsProxy {
     return '$_base/dash?id=${Uri.encodeQueryComponent(id)}';
   }
 
-  // ── Request dispatch ──────────────────────────────────────────────────────
+  // Request dispatch
 
   Future<void> _dispatch(HttpRequest req) async {
     try {
@@ -240,7 +240,7 @@ class LocalHlsProxy {
         .replaceAll("'", '&apos;');
   }
 
-  // ── Playlist handler ──────────────────────────────────────────────────────
+  // Playlist handler
 
   Future<void> _servePlaylist(HttpRequest req) async {
     final String? rawUrl = req.uri.queryParameters['u'];
@@ -347,7 +347,7 @@ class LocalHlsProxy {
     throw StateError('unreachable');
   }
 
-  // ── Segment handler ───────────────────────────────────────────────────────
+  // Segment handler
 
   Future<void> _serveSegment(
     HttpRequest req, {
@@ -705,7 +705,7 @@ class LocalHlsProxy {
     }
   }
 
-  // ── M3U8 rewriting ────────────────────────────────────────────────────────
+  // M3U8 rewriting
 
   String _rewriteMaster(Uri base, String text) {
     final List<String> lines = const LineSplitter().convert(text);
@@ -836,7 +836,7 @@ class LocalHlsProxy {
     }
   }
 
-  // ── HttpClient helpers ────────────────────────────────────────────────────
+  // HttpClient helpers
 
   HttpClient _makeClient() => HttpClient()
     ..connectionTimeout = _kConnectTimeout
@@ -918,7 +918,7 @@ class LocalHlsProxy {
     r.headers.set('Cache-Control', 'no-cache');
     r.headers.set('Pragma', 'no-cache');
 
-    // Set Accept explicitly — some CDNs reject requests that omit it.
+    // Set Accept explicitly because some CDNs reject requests that omit it.
     if (r.headers.value('Accept') == null) {
       r.headers.set('Accept', '*/*');
     }
@@ -944,7 +944,7 @@ class LocalHlsProxy {
     // playlist rewriting and segment forwarding codec-agnostic.
     r.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
 
-    // Ensure Referer is always set — many CDNs require it.
+    // Ensure Referer is set because many CDNs require it.
     if (r.headers.value(HttpHeaders.refererHeader) == null) {
       r.headers.set(HttpHeaders.refererHeader, '${url.scheme}://${url.host}/');
     }

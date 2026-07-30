@@ -7,7 +7,7 @@ import 'package:flutter/services.dart';
 /// remote there is no way to leave the field and reach the widgets above or
 /// below it. This wraps the field in a non-focusable [Focus] whose `onKeyEvent`
 /// re-routes Up/Down to directional focus traversal. Only use this around
-/// single-line inputs — a multi-line field genuinely needs Up/Down.
+/// single-line inputs because a multi-line field genuinely needs Up/Down.
 class TvTextFieldFocus extends StatefulWidget {
   const TvTextFieldFocus({
     required this.child,

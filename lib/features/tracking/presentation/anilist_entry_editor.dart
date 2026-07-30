@@ -9,16 +9,16 @@ import '../../../app/localization/app_localizations.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_radius.dart';
 import '../../../app/theme/app_spacing.dart';
-import '../../../core/widgets/tv_text_field_focus.dart';
 import '../../../app/theme/app_theme_extension.dart';
+import '../../../core/widgets/tv_text_field_focus.dart';
 import '../../../shared/models/anilist_models.dart';
-import '../../settings/presentation/settings_state.dart';
+import '../../settings/application/settings_state.dart';
 import '../application/anilist_library_provider.dart';
 import '../application/tracker_sync_coordinator.dart';
 import '../data/anilist_api_client.dart';
 import 'anilist_favorite_button.dart';
 
-// ─── Draft model ─────────────────────────────────────────────────────────────
+// Draft model
 
 class AniListEntryEditDraft {
   const AniListEntryEditDraft({
@@ -60,7 +60,7 @@ AniListListStatus? _statusFromEditorKey(String key) {
   return null;
 }
 
-// ─── Entry lookup ─────────────────────────────────────────────────────────────
+// Entry lookup
 
 int? entryAniListId(AniListAnimeListEntry entry) {
   final String? externalId = entry.mediaItem.externalIds['anilist'];
@@ -79,7 +79,7 @@ bool _isMangaEntry(AniListAnimeListEntry entry) {
       entry.mediaItem.id.toLowerCase().startsWith('anilist:manga:');
 }
 
-// ─── Editor sheet ─────────────────────────────────────────────────────────────
+// Editor sheet
 
 Future<AniListEntryEditDraft?> showAniListEntryEditor(
   BuildContext context, {
@@ -368,7 +368,7 @@ Future<AniListEntryEditDraft?> showAniListEntryEditor(
   }
 }
 
-// ─── Save / delete ────────────────────────────────────────────────────────────
+// Save / delete
 
 Future<AniListEntrySaveResult> saveAniListEntryEdit({
   required BuildContext context,
@@ -597,7 +597,7 @@ String aniListEditFailureMessage(Object error) {
       : 'AniList save failed: $message';
 }
 
-// ─── Score helpers ────────────────────────────────────────────────────────────
+// Score helpers
 
 String formatAniListScore(double score, String format) {
   if (score <= 0) return '';
@@ -635,7 +635,7 @@ IconData aniListSmileyScoreIcon(double score) {
 bool isSmileyAniListFormat(String format) =>
     format == 'SMILEY' || format == 'POINT_3';
 
-// ─── Widgets ──────────────────────────────────────────────────────────────────
+// Widgets
 
 class AniListSheetSurface extends StatelessWidget {
   const AniListSheetSurface({required this.child, super.key});

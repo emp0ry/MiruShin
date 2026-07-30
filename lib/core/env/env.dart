@@ -15,7 +15,7 @@ part 'env.g.dart';
 @Envied(path: '.env', obfuscate: true)
 abstract final class Env {
   /// Default TMDB v4 Read Access Token used when the user has not enabled a
-  /// custom API key in Settings → API Connections.
+  /// custom API key in Settings -> API Connections.
   @EnviedField(varName: 'TMDB_READ_ACCESS_TOKEN', obfuscate: true)
   static final String tmdbReadAccessToken = _Env.tmdbReadAccessToken;
 
@@ -24,5 +24,4 @@ abstract final class Env {
   /// the endpoint is not a plain string in the source or compiled binary.
   @EnviedField(varName: 'MODULE_LIBRARY_URL', obfuscate: true)
   static final String moduleLibraryUrl = _Env.moduleLibraryUrl;
-
 }

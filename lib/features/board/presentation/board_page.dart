@@ -5,8 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../../app/localization/app_localizations.dart';
 import '../../../app/app_routes.dart';
+import '../../../app/localization/app_localizations.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_radius.dart';
 import '../../../app/theme/app_spacing.dart';
@@ -21,17 +21,17 @@ import '../../../core/widgets/neutral_placeholder.dart';
 import '../../../core/widgets/section_header.dart';
 import '../../../core/widgets/skeleton_box.dart';
 import '../../../core/widgets/tv_directional_focus.dart';
+import '../../../shared/models/anilist_models.dart';
+import '../../../shared/models/library_item.dart';
+import '../../../shared/models/media_item.dart';
 import '../../catalog/application/catalog_mode.dart';
 import '../../catalog/presentation/catalog_offline_banner.dart';
 import '../../library/application/local_library_provider.dart';
 import '../../metadata/application/metadata_providers.dart';
 import '../../profile/application/anilist_user_settings_provider.dart';
-import '../../settings/presentation/settings_state.dart';
+import '../../settings/application/settings_state.dart';
 import '../../tracking/application/anilist_library_provider.dart';
 import '../../tracking/presentation/anilist_entry_editor.dart';
-import '../../../shared/models/anilist_models.dart';
-import '../../../shared/models/library_item.dart';
-import '../../../shared/models/media_item.dart';
 
 class BoardPage extends ConsumerWidget {
   const BoardPage({super.key});
@@ -515,7 +515,9 @@ class _MediaSection extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final bool forceCompact = ref.watch(
-      settingsProvider.select((SettingsState settings) => settings.compactCards),
+      settingsProvider.select(
+        (SettingsState settings) => settings.compactCards,
+      ),
     );
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {

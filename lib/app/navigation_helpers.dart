@@ -7,10 +7,7 @@ void goBackOrGo(BuildContext context, String fallbackLocation) {
   unawaited(_goBackOrGo(context, fallbackLocation));
 }
 
-Future<void> _goBackOrGo(
-  BuildContext context,
-  String fallbackLocation,
-) async {
+Future<void> _goBackOrGo(BuildContext context, String fallbackLocation) async {
   final NavigatorState navigator = Navigator.of(context);
   if (await navigator.maybePop()) {
     return;

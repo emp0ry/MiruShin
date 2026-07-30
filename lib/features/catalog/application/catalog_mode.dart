@@ -35,8 +35,6 @@ class CatalogModeController extends Notifier<CatalogMode> {
     return CatalogMode.anilist;
   }
 
-  Future<void> toggle() => setMode(state.toggled);
-
   Future<void> setMode(CatalogMode mode) async {
     if (state == mode) return;
     state = mode;

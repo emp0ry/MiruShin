@@ -239,7 +239,7 @@ final class MiruShinAVPlayerViewController: AVPlayerViewController {
 
   override func viewDidDisappear(_ animated: Bool) {
     super.viewDidDisappear(animated)
-    // PiP causes a fake dismissal — ignore it.
+    // PiP triggers a dismissal callback that must be ignored.
     if pipActive { return }
     if didReachEnd || didSendTerminalEvent { return }
     let actuallyDismissing = isBeingDismissed || view.window == nil
@@ -553,7 +553,7 @@ final class NativePlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
     }
     // Don't re-present if the episode already completed during PiP.
     if vc.didReachEnd || vc.didSendTerminalEvent { completionHandler(true); return }
-    // Already on screen — nothing to do.
+    // The player is already on screen.
     if vc.presentingViewController != nil {
       vc.didRestoreFromPip = true
       completionHandler(true)

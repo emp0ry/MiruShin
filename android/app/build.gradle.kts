@@ -10,7 +10,7 @@ plugins {
 
 // Load a stable release signing key from android/key.properties when present.
 // A consistent signing key is what lets users INSTALL AN UPDATE over an
-// existing install — APKs signed with a different (e.g. per-machine debug) key
+// existing install. APKs signed with a different (e.g. per-machine debug) key
 // are rejected by Android with a signature mismatch, forcing an uninstall.
 val keystoreProperties = Properties()
 val keystorePropertiesFile = rootProject.file("key.properties")

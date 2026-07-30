@@ -264,7 +264,7 @@ class SettingsPreferences {
     return _preferences.setString(anilistUserSettingsCacheKey, value);
   }
 
-  // --- Tracker primary source + MAL/Shikimori connections ---
+  // Tracker primary source + MAL/Shikimori connections
 
   String? readPrimaryTrackerSource() =>
       _preferences.getString(primaryTrackerSourceKey);

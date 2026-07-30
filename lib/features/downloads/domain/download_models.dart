@@ -2,29 +2,17 @@ import '../../../shared/models/media_item.dart';
 
 /// Lifecycle of a single downloaded episode.
 ///
-/// `queued`      — accepted, waiting for the engine.
-/// `downloading` — actively fetching bytes/segments.
-/// `paused`      — stopped by the user or carried over from a previous app run
+/// `queued`: Accepted and waiting for the engine.
+/// `downloading`: Actively fetching bytes or segments.
+/// `paused`: Stopped by the user or carried over from a previous app run
 ///                 (in-progress downloads are reconciled to paused on launch).
-/// `completed`   — fully on disk and playable offline.
-/// `failed`      — stopped with an error; can be retried.
+/// `completed`: Fully on disk and playable offline.
+/// `failed`: Stopped with an error and available for retry.
 enum DownloadStatus { queued, downloading, paused, completed, failed }
 
 /// Stream container we know how to download. `dash`/anything else is treated as
 /// not downloadable and never enqueued.
 enum DownloadKind { mp4, hls }
-
-DownloadKind? downloadKindFromStreamType(String streamType) {
-  switch (streamType.trim().toUpperCase()) {
-    case 'HLS':
-      return DownloadKind.hls;
-    case 'MP4':
-    case '':
-      return DownloadKind.mp4;
-    default:
-      return null;
-  }
-}
 
 class DownloadedSubtitle {
   const DownloadedSubtitle({
@@ -163,7 +151,7 @@ class DownloadedEpisode {
   final DownloadStreamPreference streamPreference;
 
   /// Serialized `SoraEpisode` (raw fields) so the stream can be re-resolved
-  /// faithfully on resume — module URLs expire and are never persisted.
+  /// faithfully on resume because module URLs expire and are never persisted.
   final Map<String, dynamic> episodeData;
   final List<DownloadedSubtitle> subtitles;
 

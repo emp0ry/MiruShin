@@ -5,7 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../../../features/settings/presentation/settings_state.dart';
+import '../../../features/settings/application/settings_state.dart';
 import '../../../shared/models/media_item.dart';
 import '../../catalog/application/catalog_mode.dart';
 import '../../watch/domain/normalized_models.dart';
@@ -132,11 +132,8 @@ void cancelAllSoraSearches([SoraJsRuntime? runtime]) {
   debugPrint('[Sora] Search loading cancel requested epoch=$_soraSearchEpoch');
 }
 
-final soraSourceSearchProvider =
-    FutureProvider.autoDispose.family<
-      SoraSourceSearchBundle,
-      SoraSourceSearchRequest
-    >((
+final soraSourceSearchProvider = FutureProvider.autoDispose
+    .family<SoraSourceSearchBundle, SoraSourceSearchRequest>((
       Ref ref,
       SoraSourceSearchRequest request,
     ) async {
@@ -359,64 +356,6 @@ final soraSourceSearchProvider =
       }
     });
 
-final soraSourceDetailsProvider =
-    FutureProvider.family<SoraSourceDetails, SoraSourceRequest>((
-      Ref ref,
-      SoraSourceRequest request,
-    ) async {
-      final SoraInstalledAddon? addon = ref
-          .watch(soraAddonsProvider)
-          .byId(request.addonId);
-      if (addon == null) {
-        throw const SoraAddonException('Addon is no longer installed.');
-      }
-      final runtime = ref.watch(soraJsRuntimeProvider);
-      return runtime.extractDetails(addon: addon, result: request.result);
-    });
-
-final soraSourceEpisodesProvider =
-    FutureProvider.autoDispose.family<List<SoraEpisode>, SoraSourceRequest>((
-      Ref ref,
-      SoraSourceRequest request,
-    ) async {
-      final SoraInstalledAddon? addon = ref
-          .watch(soraAddonsProvider)
-          .byId(request.addonId);
-      if (addon == null) {
-        throw const SoraAddonException('Addon is no longer installed.');
-      }
-      return ref
-          .watch(soraJsRuntimeProvider)
-          .extractEpisodes(addon: addon, result: request.result);
-    });
-
-final soraSourceContentProvider =
-    FutureProvider.autoDispose.family<SoraSourceContent, SoraSourceRequest>((
-      Ref ref,
-      SoraSourceRequest request,
-    ) async {
-      final SoraInstalledAddon? addon = ref
-          .watch(soraAddonsProvider)
-          .byId(request.addonId);
-      if (addon == null) {
-        throw const SoraAddonException('Addon is no longer installed.');
-      }
-      final Future<SoraSourceDetails> detailsFuture = ref.watch(
-        soraSourceDetailsProvider(request).future,
-      );
-      final Future<List<SoraEpisode>> episodesFuture = ref.watch(
-        soraSourceEpisodesProvider(request).future,
-      );
-      final SoraSourceDetails details = await detailsFuture;
-      final List<SoraEpisode> episodes = await episodesFuture;
-      return SoraSourceContent(
-        addon: addon,
-        result: request.result,
-        details: details,
-        episodes: episodes,
-      );
-    });
-
 final soraStreamResolveProvider =
     FutureProvider.family<SoraResolvedStreams, SoraStreamRequest>((
       Ref ref,
@@ -503,20 +442,6 @@ class SoraSourceError {
   final String message;
 }
 
-class SoraSourceContent {
-  const SoraSourceContent({
-    required this.addon,
-    required this.result,
-    required this.details,
-    required this.episodes,
-  });
-
-  final SoraInstalledAddon addon;
-  final SoraSearchResult result;
-  final SoraSourceDetails details;
-  final List<SoraEpisode> episodes;
-}
-
 class SoraSourceLanguageController extends Notifier<List<String>> {
   static const String _key = 'sora.sourceLanguages';
 
@@ -558,12 +483,6 @@ class SoraSourceLanguageController extends Notifier<List<String>> {
       ..removeAt(index)
       ..insert(target, code);
     state = next;
-    debugPrint('[Sora] Source language order: ${state.join(' -> ')}');
-    await _save();
-  }
-
-  Future<void> reset() async {
-    state = SoraSearchLanguage.defaultPriority;
     debugPrint('[Sora] Source language order: ${state.join(' -> ')}');
     await _save();
   }
@@ -637,53 +556,6 @@ class SoraEpisodeProgressController extends Notifier<Set<String>> {
     return <String>{};
   }
 
-  bool isWatched({
-    required String mediaId,
-    required SoraSearchResult result,
-    required SoraEpisode episode,
-  }) {
-    return state.contains(
-      keyFor(mediaId: mediaId, result: result, episode: episode),
-    );
-  }
-
-  Future<void> mark({
-    required String mediaId,
-    required SoraSearchResult result,
-    required SoraEpisode episode,
-    required bool watched,
-  }) async {
-    final Set<String> next = <String>{...state};
-    final String key = keyFor(
-      mediaId: mediaId,
-      result: result,
-      episode: episode,
-    );
-    if (watched) {
-      next.add(key);
-    } else {
-      next.remove(key);
-    }
-    state = next;
-    await _save();
-  }
-
-  Future<void> markPrevious({
-    required String mediaId,
-    required SoraSearchResult result,
-    required List<SoraEpisode> episodes,
-    required SoraEpisode episode,
-  }) async {
-    final Set<String> next = <String>{...state};
-    for (final SoraEpisode current in episodes) {
-      if (current.number <= episode.number) {
-        next.add(keyFor(mediaId: mediaId, result: result, episode: current));
-      }
-    }
-    state = next;
-    await _save();
-  }
-
   String keyFor({
     required String mediaId,
     required SoraSearchResult result,
@@ -695,11 +567,6 @@ class SoraEpisodeProgressController extends Notifier<Set<String>> {
   Future<void> _load() async {
     final SharedPreferences preferences = await SharedPreferences.getInstance();
     state = (preferences.getStringList(_key) ?? const <String>[]).toSet();
-  }
-
-  Future<void> _save() async {
-    final SharedPreferences preferences = await SharedPreferences.getInstance();
-    await preferences.setStringList(_key, state.toList(growable: false));
   }
 }
 

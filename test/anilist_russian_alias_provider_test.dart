@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mirushin/core/cache/metadata_cache_store.dart';
+import 'package:mirushin/features/metadata/application/metadata_cache_provider.dart';
 import 'package:mirushin/features/tracking/application/anilist_library_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 

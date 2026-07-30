@@ -39,9 +39,7 @@ class WatchPartyScreen extends ConsumerWidget {
                       ),
                       const SizedBox(height: 16),
                       Text(
-                        context.t(
-                          'Watch the same episode together, in sync.',
-                        ),
+                        context.t('Watch the same episode together, in sync.'),
                         textAlign: TextAlign.center,
                         style: Theme.of(context).textTheme.titleMedium,
                       ),

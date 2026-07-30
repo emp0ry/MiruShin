@@ -30,12 +30,4 @@ abstract final class SupportedLanguages {
       nativeName: '日本語',
     ),
   ];
-
-  static SupportedLanguage fromLocale(Locale? locale) {
-    return all.firstWhere(
-      (SupportedLanguage language) =>
-          language.locale.languageCode == locale?.languageCode,
-      orElse: () => all.first,
-    );
-  }
 }

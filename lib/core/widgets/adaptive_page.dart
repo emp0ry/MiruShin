@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/theme/app_spacing.dart';
-import '../../features/settings/presentation/settings_state.dart';
+import '../../features/settings/application/settings_state.dart';
 import '../responsive/app_breakpoints.dart';
 
 class AdaptivePage extends ConsumerWidget {
@@ -14,9 +14,7 @@ class AdaptivePage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final bool forceCompact = ref.watch(
-      settingsProvider.select(
-        (SettingsState settings) => settings.compactMode,
-      ),
+      settingsProvider.select((SettingsState settings) => settings.compactMode),
     );
     // Derive the size class from the window width (MediaQuery) instead of a
     // LayoutBuilder. Nesting a LayoutBuilder at every page root inside the

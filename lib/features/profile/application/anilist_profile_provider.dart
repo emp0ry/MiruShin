@@ -1,8 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../shared/models/media_item.dart';
 import '../../metadata/data/shikimori_client.dart';
-import '../../settings/presentation/settings_state.dart';
+import '../../settings/application/settings_state.dart';
 import '../../tracking/data/anilist_api_client.dart';
 import '../domain/anilist_profile_models.dart';
 import 'anilist_user_settings_provider.dart';
@@ -30,7 +29,7 @@ final aniListProfileClientProvider = Provider<AniListApiClient>((Ref ref) {
     accessToken: token.isEmpty ? null : token,
     titleLanguage: ref.watch(aniListEffectiveTitleLanguageProvider),
     showAdultContent: ref.watch(aniListEffectiveAdultContentProvider),
-    shikimori: ShikiMoriClient(),
+    shikimori: ShikimoriClient(),
   );
 });
 
@@ -74,34 +73,8 @@ final aniListActivitiesProvider =
           );
     });
 
-final aniListFavouritesProvider =
-    FutureProvider.family<AniListPagedChunk<MediaItem>, AniListFavouriteQuery>((
-      Ref ref,
-      AniListFavouriteQuery query,
-    ) async {
-      return ref
-          .watch(aniListProfileClientProvider)
-          .fetchFavouritePage(
-            userId: query.userId,
-            kind: query.kind,
-            page: query.page,
-          );
-    });
-
-final aniListSocialUsersProvider =
-    FutureProvider.family<
-      AniListPagedChunk<AniListUserSnippet>,
-      AniListSocialUsersQuery
-    >((Ref ref, AniListSocialUsersQuery query) async {
-      return ref
-          .watch(aniListProfileClientProvider)
-          .fetchSocialUsers(
-            userId: query.userId,
-            following: query.following,
-            page: query.page,
-          );
-    });
-
+// These providers support profile sections that are intentionally disabled in
+// the presentation layer and remain available for re-enabling those features.
 final aniListReviewsProvider =
     FutureProvider.family<
       AniListPagedChunk<AniListReviewItem>,
@@ -174,52 +147,6 @@ class AniListActivitiesQuery {
     page,
     Object.hashAll(typeIn ?? const <String>[]),
   );
-}
-
-class AniListFavouriteQuery {
-  const AniListFavouriteQuery({
-    required this.userId,
-    required this.kind,
-    this.page = 1,
-  });
-
-  final int userId;
-  final AniListFavouriteKind kind;
-  final int page;
-
-  @override
-  bool operator ==(Object other) {
-    return other is AniListFavouriteQuery &&
-        other.userId == userId &&
-        other.kind == kind &&
-        other.page == page;
-  }
-
-  @override
-  int get hashCode => Object.hash(userId, kind, page);
-}
-
-class AniListSocialUsersQuery {
-  const AniListSocialUsersQuery({
-    required this.userId,
-    required this.following,
-    this.page = 1,
-  });
-
-  final int userId;
-  final bool following;
-  final int page;
-
-  @override
-  bool operator ==(Object other) {
-    return other is AniListSocialUsersQuery &&
-        other.userId == userId &&
-        other.following == following &&
-        other.page == page;
-  }
-
-  @override
-  int get hashCode => Object.hash(userId, following, page);
 }
 
 class AniListReviewsQuery {

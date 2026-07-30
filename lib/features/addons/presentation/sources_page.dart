@@ -496,9 +496,7 @@ class _AddSourceDialogState extends ConsumerState<_AddSourceDialog> {
   }
 }
 
-// ===========================================================================
 // Source modules browser
-// ===========================================================================
 
 class SourceModulesPage extends ConsumerStatefulWidget {
   const SourceModulesPage({required this.source, super.key});

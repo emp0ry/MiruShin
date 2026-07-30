@@ -10,7 +10,6 @@ import '../../app/app_routes.dart';
 import '../../app/theme/app_spacing.dart';
 import '../../app/theme/app_theme_extension.dart';
 import '../../features/catalog/application/catalog_mode.dart';
-import '../../features/settings/presentation/startup_update_popup.dart';
 import '../navigation/edge_swipe_back.dart';
 import '../platform/tv_platform.dart';
 import 'adaptive_navigation.dart';
@@ -22,12 +21,14 @@ class ResponsiveScaffold extends ConsumerStatefulWidget {
     required this.child,
     required this.currentLocation,
     required this.onDestinationSelected,
+    required this.topOverlay,
     super.key,
   });
 
   final Widget child;
   final String currentLocation;
   final ValueChanged<String> onDestinationSelected;
+  final Widget topOverlay;
 
   @override
   ConsumerState<ResponsiveScaffold> createState() => _ResponsiveScaffoldState();
@@ -104,12 +105,7 @@ class _ResponsiveScaffoldState extends ConsumerState<ResponsiveScaffold> {
         Widget content = Stack(
           children: <Widget>[
             widget.child,
-            const Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: StartupUpdatePopup(),
-            ),
+            Positioned(top: 0, left: 0, right: 0, child: widget.topOverlay),
           ],
         );
         // On touch phones/tablets, let a swipe from the left edge navigate back
@@ -167,8 +163,8 @@ class _ResponsiveScaffoldState extends ConsumerState<ResponsiveScaffold> {
         return PopScope<void>(
           // Only let the system pop (which exits the app) when we are on the
           // home tab with nothing pushed on top. Everywhere else, BACK navigates
-          // within the app — pop the pushed route, otherwise return to the home
-          // tab — instead of jumping straight to the Android TV launcher.
+          // within the app. Pop a pushed route or return to the home tab instead
+          // of jumping directly to the Android TV launcher.
           canPop: atHome && !router.canPop(),
           onPopInvokedWithResult: (bool didPop, void result) {
             if (didPop) return;

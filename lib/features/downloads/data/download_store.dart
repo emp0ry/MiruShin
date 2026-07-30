@@ -22,17 +22,12 @@ import '../domain/download_models.dart';
 class DownloadStore {
   static const String _registryFile = 'registry.json';
 
-  String? _rootPath;
-
-  String? get rootPathOrNull => _rootPath;
-
   Future<Directory> root() async {
     final Directory support = await getApplicationSupportDirectory();
     final Directory dir = Directory(p.join(support.path, 'downloads'));
     if (!dir.existsSync()) {
       await dir.create(recursive: true);
     }
-    _rootPath = dir.path;
     return dir;
   }
 
@@ -41,12 +36,6 @@ class DownloadStore {
   /// Absolute path to an episode's video file.
   String videoPath(String rootPath, DownloadedEpisode episode) =>
       p.join(rootPath, episode.relDir, episode.videoFileName);
-
-  String filePath(
-    String rootPath,
-    DownloadedEpisode episode,
-    String fileName,
-  ) => p.join(rootPath, episode.relDir, fileName);
 
   /// Relative directory for a new episode download.
   String relDirFor({

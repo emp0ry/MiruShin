@@ -242,10 +242,7 @@ class DiscordRpcService {
 }
 
 class _DiscordIpcClient {
-  _DiscordIpcClient({
-    required this.applicationId,
-    required this.onClosed,
-  });
+  _DiscordIpcClient({required this.applicationId, required this.onClosed});
 
   final String applicationId;
   final void Function() onClosed;
@@ -274,13 +271,10 @@ class _DiscordIpcClient {
     if (transport == null || _closed) {
       throw StateError('Discord IPC is not connected.');
     }
-    await transport.sendCommand(
-      'SET_ACTIVITY',
-      <String, Object?>{
-        'pid': pid,
-        'activity': activity?.toJson(),
-      },
-    );
+    await transport.sendCommand('SET_ACTIVITY', <String, Object?>{
+      'pid': pid,
+      'activity': activity?.toJson(),
+    });
   }
 
   Future<void> close() async {
@@ -321,10 +315,7 @@ class _DiscordIpcClient {
 enum _DiscordOpcode { handshake, frame, close, ping, pong }
 
 class _DiscordFrame {
-  const _DiscordFrame({
-    required this.opcode,
-    required this.payload,
-  });
+  const _DiscordFrame({required this.opcode, required this.payload});
 
   final _DiscordOpcode opcode;
   final Map<String, dynamic> payload;
@@ -411,18 +402,12 @@ abstract class _DiscordTransport {
     Map<String, Object?> extra = const <String, Object?>{},
   });
 
-  Future<void> sendCommand(
-    String command,
-    Map<String, Object?> args,
-  ) {
-    return send(
-      <String, Object?>{
-        'cmd': command,
-        'args': args,
-        'nonce': DateTime.now().microsecondsSinceEpoch.toString(),
-      },
-      opcode: _DiscordOpcode.frame,
-    );
+  Future<void> sendCommand(String command, Map<String, Object?> args) {
+    return send(<String, Object?>{
+      'cmd': command,
+      'args': args,
+      'nonce': DateTime.now().microsecondsSinceEpoch.toString(),
+    }, opcode: _DiscordOpcode.frame);
   }
 
   Future<void> close();
@@ -566,7 +551,9 @@ class _DiscordWindowsTransport extends _DiscordTransport {
     if (file == null) {
       throw StateError('Discord IPC pipe is closed.');
     }
-    await file.writeFrom(encode(opcode, <String, Object?>{...payload, ...extra}));
+    await file.writeFrom(
+      encode(opcode, <String, Object?>{...payload, ...extra}),
+    );
   }
 
   @override
@@ -674,25 +661,16 @@ class _DiscordActivityAssets {
 }
 
 class _DiscordActivityButton {
-  const _DiscordActivityButton({
-    required this.label,
-    required this.url,
-  });
+  const _DiscordActivityButton({required this.label, required this.url});
 
   final String label;
   final String url;
 
-  Map<String, String> toJson() => <String, String>{
-    'label': label,
-    'url': url,
-  };
+  Map<String, String> toJson() => <String, String>{'label': label, 'url': url};
 }
 
 class _DiscordActivityTimestamps {
-  const _DiscordActivityTimestamps({
-    this.start,
-    this.end,
-  });
+  const _DiscordActivityTimestamps({this.start, this.end});
 
   final DateTime? start;
   final DateTime? end;

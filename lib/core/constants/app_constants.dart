@@ -3,7 +3,6 @@ import 'package:package_info_plus/package_info_plus.dart';
 abstract final class AppConstants {
   static const String appName = 'MiruShin';
   static String appVersion = '';
-  static const String githubProjectUrl = 'https://github.com/emp0ry/MiruShin';
   static const String githubLatestReleaseUrl =
       'https://github.com/emp0ry/MiruShin/releases/latest';
   static const String appWebsiteUrl = 'https://mirushin.emp0ry.com/';
@@ -24,9 +23,6 @@ abstract final class AppConstants {
   // Redirect target shared by the authorization-code trackers (MAL, Shikimori).
   // On mobile the in-app WebView intercepts this URL before navigation; on
   // desktop the local callback server listens on the matching localhost port.
-  static const String trackerRedirectScheme = 'app';
-  static const String trackerRedirectHost = 'mirushin';
-  static const String trackerRedirectPath = '/auth';
   static const String trackerMobileRedirectUri = 'app://mirushin/auth';
 
   // MyAnimeList OAuth2 (authorization code + PKCE, no client secret).
@@ -53,9 +49,9 @@ abstract final class AppConstants {
   // listener so the app captures it automatically (like MAL/AniList) instead of
   // making the user copy it by hand.
   static const int shikimoriDesktopCallbackPort = 28374;
-  // Canonical API host. shikimori.one 301-redirects here, and that cross-host
-  // redirect strips the Authorization header — so authenticated calls (whoami,
-  // user_rates) must target shikimori.io directly or they arrive unauthenticated.
+  // Canonical API host. shikimori.one redirects here, but the cross-host
+  // redirect strips the Authorization header. Authenticated calls such as
+  // whoami and user_rates must target shikimori.io directly.
   static const String shikimoriApiBaseUrl = 'https://shikimori.io';
   static const String shikimoriUserAgent = 'MiruShin';
   // Legacy OOB code page parsing fallback.

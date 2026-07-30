@@ -144,9 +144,7 @@ class AniraClient {
     final List<Map<String, dynamic>>? cached =
         _fromCache<List<Map<String, dynamic>>>(key);
     if (cached != null) {
-      return cached
-          .map(AniraWatchOrderEntry.fromJson)
-          .toList(growable: false);
+      return cached.map(AniraWatchOrderEntry.fromJson).toList(growable: false);
     }
 
     await _ensureThrottle();
@@ -183,7 +181,7 @@ class AniraClient {
     return null;
   }
 
-  // ─── helpers ────────────────────────────────────────────────────────────────
+  // Helpers
 
   static Map<String, dynamic>? _toMap(Object? value) {
     if (value is Map<String, dynamic>) return value;

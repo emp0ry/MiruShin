@@ -14,16 +14,17 @@ class MalApiClient {
     required String accessToken,
     Future<String?> Function()? onRefreshToken,
     Dio? dio,
-  })  : _accessToken = accessToken,
-        _onRefreshToken = onRefreshToken,
-        _dio = dio ??
-            Dio(
-              BaseOptions(
-                baseUrl: AppConstants.malApiBaseUrl,
-                connectTimeout: const Duration(seconds: 12),
-                receiveTimeout: const Duration(seconds: 18),
-              ),
-            );
+  }) : _accessToken = accessToken,
+       _onRefreshToken = onRefreshToken,
+       _dio =
+           dio ??
+           Dio(
+             BaseOptions(
+               baseUrl: AppConstants.malApiBaseUrl,
+               connectTimeout: const Duration(seconds: 12),
+               receiveTimeout: const Duration(seconds: 18),
+             ),
+           );
 
   final Dio _dio;
   String _accessToken;
@@ -65,8 +66,9 @@ class MalApiClient {
         nodes.addAll(list.whereType<Map<String, dynamic>>());
       }
       final Object? paging = data['paging'];
-      final String? next =
-          paging is Map<String, dynamic> ? paging['next'] as String? : null;
+      final String? next = paging is Map<String, dynamic>
+          ? paging['next'] as String?
+          : null;
       if (next == null || next.trim().isEmpty) break;
       path = next;
     }
@@ -98,7 +100,7 @@ class MalApiClient {
     await _request('DELETE', '/anime/$malId/my_list_status');
   }
 
-  // --- internal helpers ---
+  // Internal helpers
 
   List<AniListAnimeListFolder> _foldersFromNodes(
     List<Map<String, dynamic>> nodes,
@@ -161,16 +163,15 @@ class MalApiClient {
     final Object? picture = node['main_picture'];
     final String poster = picture is Map<String, dynamic>
         ? _string(picture['large']).isNotEmpty
-            ? _string(picture['large'])
-            : _string(picture['medium'])
+              ? _string(picture['large'])
+              : _string(picture['medium'])
         : '';
     final Object? altTitles = node['alternative_titles'];
     final String original = altTitles is Map<String, dynamic>
         ? _string(altTitles['ja'])
         : '';
     final Object? season = node['start_season'];
-    final int year =
-        season is Map<String, dynamic> ? _int(season['year']) : 0;
+    final int year = season is Map<String, dynamic> ? _int(season['year']) : 0;
     return MediaItem(
       id: 'mal:$malId',
       title: _string(node['title']),
@@ -254,8 +255,7 @@ class MalApiClient {
     return 0;
   }
 
-  static String _string(Object? value) =>
-      value is String ? value.trim() : '';
+  static String _string(Object? value) => value is String ? value.trim() : '';
 
   static String? _nullableString(Object? value) {
     final String parsed = _string(value);

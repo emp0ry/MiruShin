@@ -1,4 +1,4 @@
-/// Detects Cloudflare anti-bot interstitials ("Just a moment…" / Turnstile) in
+/// Detects Cloudflare anti-bot interstitials ("Just a moment..." / Turnstile) in
 /// the responses the Sora JS runtime gets back from Dio.
 ///
 /// Cloudflare serves these as a `403`/`503` with a `Server: cloudflare` header
@@ -38,8 +38,10 @@ class CloudflareChallenge {
     final String mitigated = _header(headers, 'cf-mitigated').toLowerCase();
     if (mitigated.contains('challenge')) return true;
 
-    final bool servedByCloudflare =
-        _header(headers, 'server').toLowerCase().contains('cloudflare');
+    final bool servedByCloudflare = _header(
+      headers,
+      'server',
+    ).toLowerCase().contains('cloudflare');
     if (!servedByCloudflare) return false;
 
     final String haystack = body.toLowerCase();

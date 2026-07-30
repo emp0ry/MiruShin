@@ -1,7 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../shared/models/media_item.dart';
-import '../../settings/presentation/settings_state.dart';
+import '../../settings/application/settings_state.dart';
 import '../data/anilist_api_client.dart';
 import 'anilist_library_provider.dart';
 
@@ -38,9 +38,8 @@ class AniListFavoriteController extends Notifier<Map<int, bool>> {
       await AniListApiClient(
         accessToken: token,
       ).toggleFavouriteMedia(mediaId: mediaId, isManga: isManga);
-      // Keep the optimistic value (next). Do not re-read from the API here —
-      // AniList often returns the pre-toggle state immediately after the
-      // mutation, which would silently revert the visual update.
+      // Keep the optimistic value. AniList often returns the pre-toggle state
+      // immediately after mutations, which would revert the visual update.
       if (isManga) {
         invalidateAniListMangaLibraryProviders(ref.invalidate);
       } else {

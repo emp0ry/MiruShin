@@ -3,10 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../features/metadata/data/anilist_anime_client.dart';
 import '../../../features/metadata/data/anira_client.dart';
 import '../../../features/metadata/domain/anira_models.dart';
-import '../application/playback_controller.dart';
-import '../application/player_settings.dart';
 import '../data/aniskip_client.dart';
 import '../domain/player_models.dart';
+import 'playback_controller.dart';
+import 'player_settings.dart';
 
 final _aniSkipForPlayerProvider = Provider<AniSkipClient>(
   (Ref ref) => AniSkipClient(),

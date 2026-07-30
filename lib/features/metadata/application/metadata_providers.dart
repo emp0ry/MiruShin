@@ -6,19 +6,20 @@ import '../../catalog/application/catalog_mode.dart';
 import '../../catalog/application/catalog_repository.dart';
 import '../../catalog/application/catalog_status.dart';
 import '../../profile/application/anilist_user_settings_provider.dart';
-import '../../settings/presentation/settings_state.dart';
+import '../../settings/application/settings_state.dart';
+import '../../tracking/data/anilist_api_client.dart';
 import '../data/anime_episode_metadata_client.dart';
 import '../data/shikimori_client.dart';
 import '../data/tmdb_metadata_provider.dart';
-import '../../tracking/data/anilist_api_client.dart';
 import '../domain/anime_episode_metadata.dart';
 import '../domain/metadata_provider.dart';
 import '../domain/tmdb_episode_metadata.dart';
 import 'media_catalog.dart';
+import 'metadata_cache_provider.dart';
 
-export 'media_catalog.dart' show BoardRails, MediaCatalog;
+export 'media_catalog.dart' show BoardRails;
 
-// ─── TMDB (primary) ──────────────────────────────────────────────────────────
+// TMDB (primary)
 
 final tmdbProviderProvider = Provider<TmdbMetadataProvider?>((Ref ref) {
   final SettingsState settings = ref.watch(settingsProvider);
@@ -33,13 +34,13 @@ final tmdbProviderProvider = Provider<TmdbMetadataProvider?>((Ref ref) {
   );
 });
 
-// ─── Shikimori ───────────────────────────────────────────────────────────────
+// Shikimori
 
-final _shikimoriClientProvider = Provider<ShikiMoriClient>(
-  (Ref ref) => ShikiMoriClient(),
+final _shikimoriClientProvider = Provider<ShikimoriClient>(
+  (Ref ref) => ShikimoriClient(),
 );
 
-// ─── AniList ─────────────────────────────────────────────────────────────────
+// AniList
 
 final anilistApiClientProvider = Provider<AniListApiClient>((Ref ref) {
   final SettingsState settings = ref.watch(settingsProvider);
@@ -57,13 +58,7 @@ final _animeEpisodeMetadataClientProvider =
       (Ref ref) => AnimeEpisodeMetadataClient(),
     );
 
-// ─── Catalog Mode Routing ────────────────────────────────────────────────────
-
-final mediaCatalogProvider = Provider<MediaCatalog?>((Ref ref) {
-  final TmdbMetadataProvider? tmdb = ref.watch(tmdbProviderProvider);
-  if (tmdb == null) return null;
-  return MediaCatalog(tmdb: tmdb);
-});
+// Catalog Mode Routing
 
 final activeCatalogRepositoryProvider = Provider<CatalogRepository?>((Ref ref) {
   final MetadataCacheStore cache = ref.watch(metadataCacheStoreProvider);
@@ -124,14 +119,14 @@ final activeCatalogRepositoryProvider = Provider<CatalogRepository?>((Ref ref) {
   };
 });
 
-// ─── MetadataRepository (search + details) ───────────────────────────────────
+// MetadataRepository (search + details)
 
 final metadataRepositoryProvider = Provider<MetadataRepository>((Ref ref) {
   final TmdbMetadataProvider? tmdb = ref.watch(tmdbProviderProvider);
   return MetadataRepository(providers: <MetadataProvider>[?tmdb]);
 });
 
-// ─── Riverpod FutureProviders consumed by UI ─────────────────────────────────
+// Riverpod FutureProviders consumed by UI
 
 final boardRailsProvider = FutureProvider<BoardRails>((Ref ref) async {
   final CatalogRepository? catalog = ref.watch(activeCatalogRepositoryProvider);

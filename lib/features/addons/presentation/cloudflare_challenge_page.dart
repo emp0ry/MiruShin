@@ -28,8 +28,8 @@ import '../data/cloudflare_challenge.dart';
 /// As soon as a `cf_clearance` cookie appears it captures every cookie for the
 /// host plus the native UA and reports them through [onResult]; the host removes
 /// the overlay. Hosted in an [OverlayEntry] (not a route) so unrelated
-/// navigation — e.g. a source-resolution flow popping its own routes — can't
-/// tear it down before the user solves.
+/// navigation. A source-resolution flow that pops its own routes cannot tear it
+/// down before the user solves the challenge.
 class CloudflareChallengePage extends StatefulWidget {
   const CloudflareChallengePage({
     required this.url,
@@ -115,7 +115,7 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
 
   Future<void> _preClearCookies() async {
     try {
-      // Delete without webViewController — the WebView2 instance doesn't exist
+      // Delete without webViewController because the WebView2 instance does not exist
       // yet, and using webViewController in onWebViewCreated can race against
       // WebView2 initialisation and silently block the subsequent navigation.
       await _cookies
@@ -402,8 +402,8 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
           .where((Cookie c) => _cookieValue(c).isNotEmpty)
           .map((Cookie c) => '${c.name}=${_cookieValue(c)}')
           .join('; ');
-      // cf_clearance is bound to the UA that solved it — capture the WebView's
-      // real UA so the runtime can replay it on subsequent requests.
+      // cf_clearance is bound to the user agent that solved it. Capture the
+      // WebView's user agent so the runtime can replay subsequent requests.
       final String userAgent = await _readUserAgent();
       if (_isWindows &&
           !await _verifyWindowsClearance(
@@ -860,7 +860,7 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
       // No initialUrlRequest: we clear stale cookies first, then load (below),
       // exactly like v2.1.0. The challenge must write cf_clearance into the same
       // controller-backed store CookieManager.getCookies reads.
-      // No custom userAgent on purpose — see the class doc.
+      // No custom userAgent is set. See the class documentation.
       initialSettings: InAppWebViewSettings(
         javaScriptEnabled: true,
         thirdPartyCookiesEnabled: true,
@@ -905,7 +905,7 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
         children: <Widget>[
           _ready
               ? InAppWebView(
-                  // No custom userAgent on purpose — see the class doc.
+                  // No custom userAgent is set. See the class documentation.
                   key: const ValueKey<String>('cloudflare-main-webview'),
                   initialUrlRequest: URLRequest(url: _rootUri),
                   initialSettings: InAppWebViewSettings(

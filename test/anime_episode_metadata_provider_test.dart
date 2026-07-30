@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mirushin/core/cache/metadata_cache_store.dart';
+import 'package:mirushin/features/metadata/application/metadata_cache_provider.dart';
 import 'package:mirushin/features/metadata/application/metadata_providers.dart';
 import 'package:mirushin/features/metadata/domain/anime_episode_metadata.dart';
 import 'package:shared_preferences/shared_preferences.dart';

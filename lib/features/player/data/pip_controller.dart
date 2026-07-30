@@ -38,7 +38,7 @@ abstract class PipController {
   void dispose();
 }
 
-// ── Unsupported stub ────────────────────────────────────────────────────────
+// Unsupported stub
 
 class UnsupportedPipController implements PipController {
   const UnsupportedPipController();
@@ -87,7 +87,7 @@ class UnsupportedPipController implements PipController {
   void dispose() {}
 }
 
-// ── Android implementation ──────────────────────────────────────────────────
+// Android implementation
 
 class AndroidPipController implements PipController {
   static const MethodChannel _ch = MethodChannel('mirushin/pip');
@@ -124,7 +124,7 @@ class AndroidPipController implements PipController {
     bool hasNext = false,
   }) async {
     if (TvPlatform.isAndroidTv) return;
-    // Clamp to Android's valid Rational range (1–239 for both w/h).
+    // Clamp to Android's valid Rational range (1-239 for both w/h).
     // We express the ratio as (ratio*100 / 100) to get integer numerator/denom.
     final int w = (aspectRatio * 100).round().clamp(1, 23900);
     const int h = 100;
@@ -136,7 +136,7 @@ class AndroidPipController implements PipController {
         'hasNext': hasNext,
       });
     } on PlatformException {
-      // Silently ignore – PiP not available or denied.
+      // PiP is unavailable or permission was denied.
     }
   }
 
@@ -151,7 +151,7 @@ class AndroidPipController implements PipController {
         'hasNext': hasNext,
       });
     } on PlatformException {
-      // Ignore.
+      // PiP parameter updates are best effort after the window closes.
     }
   }
 
@@ -160,7 +160,7 @@ class AndroidPipController implements PipController {
     try {
       await _ch.invokeMethod<void>('bringToForeground');
     } on PlatformException {
-      // Ignore.
+      // The app may already be in the foreground.
     }
   }
 
@@ -185,12 +185,12 @@ class AndroidPipController implements PipController {
   }
 }
 
-// ── Desktop (Windows) implementation ────────────────────────────────────────
+// Desktop (Windows) implementation
 //
 // There is no OS-level PiP on Windows, so instead of spinning up a
 // second video engine, we shrink the *main* application window into a small
-// always-on-top "mini player". The same current engine keeps decoding —
-// exactly like OS PiP reuses the one player. All window manipulation goes
+// always-on-top "mini player". The current engine keeps decoding, just as OS
+// PiP reuses one player. All window manipulation goes
 // through the existing `mirushin/window` MethodChannel implemented natively.
 
 class DesktopPipController implements PipController {
@@ -258,7 +258,7 @@ class DesktopPipController implements PipController {
       _inPip = true;
       _pipModeCtrl.add(true);
     } on PlatformException {
-      // Window manipulation unavailable — stay in normal mode.
+      // Stay in normal mode when window manipulation is unavailable.
     } on MissingPluginException {
       // Channel not wired on this platform.
     }
@@ -287,9 +287,9 @@ class DesktopPipController implements PipController {
         await _win.invokeMethod<void>('setFullscreen', true);
       }
     } on PlatformException {
-      // Ignore — best effort restore.
+      // Restoring the window is best effort.
     } on MissingPluginException {
-      // Ignore.
+      // Desktop PiP is unavailable on this platform build.
     } finally {
       _savedRect = null;
       _wasFullscreen = false;
@@ -304,9 +304,9 @@ class DesktopPipController implements PipController {
     try {
       await _win.invokeMethod<void>('startWindowDrag');
     } on PlatformException {
-      // Ignore — best effort.
+      // Window dragging is best effort.
     } on MissingPluginException {
-      // Ignore.
+      // Desktop window dragging is unavailable on this platform build.
     }
   }
 
@@ -346,9 +346,9 @@ class DesktopPipController implements PipController {
         'height': height.round().clamp(135, 4320),
       });
     } on PlatformException {
-      // Ignore.
+      // The PiP window may have closed before the resize completed.
     } on MissingPluginException {
-      // Ignore.
+      // Desktop window resizing is unavailable on this platform build.
     }
   }
 
@@ -358,7 +358,7 @@ class DesktopPipController implements PipController {
   }
 }
 
-// ── Provider ─────────────────────────────────────────────────────────────────
+// Provider
 
 final Provider<PipController> pipControllerProvider = Provider<PipController>((
   Ref ref,

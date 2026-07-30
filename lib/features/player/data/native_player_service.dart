@@ -27,7 +27,7 @@ final class NativePlayerCompleted extends NativePlayerEvent {
 }
 
 // Fires when the user exits PiP and the native player is restored to fullscreen.
-// The native player is still running — only save progress, don't touch FVP.
+// Save progress only because the native player is still running.
 final class NativePlayerPipRestored extends NativePlayerEvent {
   const NativePlayerPipRestored({
     required this.positionMs,
@@ -84,7 +84,7 @@ class NativePlayerService {
           NativePlayerCompleted(positionMs: posMs, durationMs: durMs),
         );
       case 'pipRestored':
-        // _active stays true — native player is still running
+        // Keep _active true while the native player is running.
         _eventCtrl.add(
           NativePlayerPipRestored(positionMs: posMs, durationMs: durMs),
         );

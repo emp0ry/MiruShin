@@ -6,11 +6,11 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../../app/localization/app_localizations.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../shared/models/anilist_models.dart';
-import '../../settings/presentation/settings_state.dart';
+import '../../settings/application/settings_state.dart';
 import '../application/anilist_library_provider.dart';
 import '../data/anilist_api_client.dart';
 import '../data/anilist_oauth_service.dart';
-import '../presentation/anilist_login_page.dart';
+import 'anilist_login_page.dart';
 
 /// Launches the platform-appropriate AniList OAuth flow and, on success,
 /// stores the token and refreshes the library providers.

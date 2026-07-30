@@ -6,8 +6,8 @@ import 'package:qr_flutter/qr_flutter.dart';
 import '../../../app/localization/app_localizations.dart';
 import '../application/watch_party_controller.dart';
 import '../domain/watch_party_models.dart';
+import '../domain/watch_party_qr.dart';
 import 'watch_party_permission_controls.dart';
-import 'watch_party_qr.dart';
 import 'watch_party_status_text.dart';
 
 /// Host screen: creates a room, shows the code + QR, and waits for a guest.
@@ -68,10 +68,7 @@ class _CreateRoomScreenState extends ConsumerState<CreateRoomScreen> {
                           decoration: BoxDecoration(
                             color: Colors.white,
                             borderRadius: BorderRadius.circular(26),
-                            border: Border.all(
-                              color: colors.primary,
-                              width: 3,
-                            ),
+                            border: Border.all(color: colors.primary, width: 3),
                             boxShadow: <BoxShadow>[
                               BoxShadow(
                                 color: colors.primary.withValues(alpha: 0.18),
@@ -99,19 +96,18 @@ class _CreateRoomScreenState extends ConsumerState<CreateRoomScreen> {
                                   color: Colors.black,
                                 ),
                                 errorStateBuilder:
-                                    (BuildContext _, Object? _) =>
-                                        SizedBox(
-                                          width: 200,
-                                          height: 200,
-                                          child: Center(
-                                            child: Text(
-                                              context.t('QR unavailable'),
-                                              style: const TextStyle(
-                                                color: Colors.black54,
-                                              ),
-                                            ),
+                                    (BuildContext _, Object? _) => SizedBox(
+                                      width: 200,
+                                      height: 200,
+                                      child: Center(
+                                        child: Text(
+                                          context.t('QR unavailable'),
+                                          style: const TextStyle(
+                                            color: Colors.black54,
                                           ),
                                         ),
+                                      ),
+                                    ),
                               ),
                             ),
                           ),

@@ -5,16 +5,18 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+
 import '../../../app/app_routes.dart';
-import '../../../core/utils/app_wakelock.dart';
 import '../../../app/localization/app_localizations.dart';
-import '../../watch_party/application/watch_party_controller.dart';
-import '../../watch_party/domain/watch_party_models.dart';
 import '../../../core/platform/tv_platform.dart';
+import '../../../core/utils/app_wakelock.dart';
 import '../../../core/widgets/tv_focusable.dart';
 import '../../catalog/application/catalog_mode.dart';
+import '../../watch_party/application/watch_party_controller.dart';
+import '../../watch_party/domain/watch_party_models.dart';
 import '../application/playback_controller.dart';
 import '../application/player_settings.dart';
+import '../application/skip_markers_provider.dart';
 import '../data/cast_controller.dart';
 import '../data/discord_rpc_service.dart';
 import '../data/native_player_service.dart';
@@ -23,7 +25,6 @@ import '../data/subtitle_loader.dart';
 import '../domain/auto_skip.dart';
 import '../domain/player_models.dart';
 import '../engine/player_engine.dart';
-import '../domain/skip_markers_provider.dart';
 import 'widgets/auto_next_overlay.dart';
 import 'widgets/gesture_overlay.dart';
 import 'widgets/player_shortcuts_view.dart';
@@ -133,7 +134,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     WidgetsBinding.instance.addObserver(this);
     FocusManager.instance.addEarlyKeyEventHandler(_handlePlayerShortcutEvent);
     unawaited(AppWakelock.acquire(this));
-    // Re-assert the wakelock every 60 s – guards against any platform-level
+    // Refresh the wakelock every 60 seconds to guard against platform-level
     // release that the one-shot enable() might not survive (e.g. system sleep
     // assertion expiry on macOS or focus-change edge cases on Android).
     _wakelockTimer = Timer.periodic(const Duration(seconds: 60), (_) {
@@ -261,7 +262,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
 
   // Enter the Windows mini-player: the DesktopPipController shrinks the
   // main window and flips _inPipMode via pipModeStream. Playback keeps going
-  // in the existing engine — no handoff to a second engine.
+  // in the existing engine without handing playback to a second engine.
   Future<void> _enterWindowPip() async {
     final PlayerEngine? engine = ref.read(playbackControllerProvider).engine;
     final double aspectRatio = (engine?.value.aspectRatio ?? 0) > 0
@@ -506,8 +507,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
         settings.autoplayNext &&
         state.autoNextVisible;
     if (shouldAutoNext && _autoNextTimer == null) {
-      // ignore: avoid_print
-      print('[DEBUG] auto-next: scheduling advance in 5s');
+      debugPrint('[DEBUG] auto-next: scheduling advance in 5s');
       _autoNextTimer = Timer(const Duration(seconds: 5), () {
         if (!mounted) return;
         final PlaybackState currentState = ref.read(playbackControllerProvider);
@@ -518,8 +518,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
         }
         _autoNextTimer?.cancel();
         _autoNextTimer = null;
-        // ignore: avoid_print
-        print('[DEBUG] auto-next: timer fired -> advancing to next episode');
+        debugPrint(
+          '[DEBUG] auto-next: timer fired -> advancing to next episode',
+        );
         final PlaybackController notifier = ref.read(
           playbackControllerProvider.notifier,
         );
@@ -780,7 +781,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
       return;
     }
     // While the stream is still loading there is nothing to drop fullscreen out
-    // to — back must exit the player directly instead of being swallowed.
+    // to. Back must exit the player directly instead of being swallowed.
     final bool engineReady =
         ref.read(playbackControllerProvider).engine?.value.isInitialized ??
         false;
@@ -1063,7 +1064,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
   }
 
   // Universal "do the on-screen action" key: triggers whichever contextual
-  // prompt is currently offered — the next-episode overlay, or the Skip
+  // prompt is currently offered: the next-episode overlay or the Skip
   // OP/ED action when the playhead is inside that marker. Returns false when
   // there is nothing to act on.
   bool _handleUniversalSkip() {
@@ -1071,7 +1072,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     final PlaybackController notifier = ref.read(
       playbackControllerProvider.notifier,
     );
-    // 1) Next episode — the overlay only surfaces at the very end, so it wins.
+    // 1. Next episode: the overlay appears only at the end, so it takes priority.
     if (state.autoNextVisible) {
       notifier.dismissAutoNext();
       unawaited(_exitPlayer(playNext: true));
@@ -1157,7 +1158,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
 
     // Opening a stream forces the controls visible (see _open). The one-shot
     // hide timer armed in initState races the source resolution and is already
-    // spent by the time a (slow) stream finishes opening — which on an
+    // spent by the time a slow stream finishes opening. On an
     // auto-advance leaves the chrome + cursor stranded because there is no user
     // interaction to re-arm it. Re-arm the hide whenever a stream finishes
     // opening (loading: true -> false).
@@ -1340,7 +1341,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
             }
             // Standard TV pattern: BACK first dismisses the on-screen chrome,
             // a second BACK exits. While loading or on error the chrome is
-            // force-visible, so BACK must still exit directly — and trailers
+            // force-visible, so Back must still exit directly. Trailers
             // keep their single-BACK exit.
             final PlaybackState popState = ref.read(playbackControllerProvider);
             if (_isTv &&
@@ -1408,7 +1409,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
                         fullscreenButtonBottom: 85,
                       )
                     else
-                      // Player + gesture layer — always present for native streams.
+                      // The player and gesture layer remain present for native streams.
                       MouseRegion(
                         cursor: state.controlsVisible && !state.locked
                             ? SystemMouseCursors.basic
@@ -1448,7 +1449,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
                                 settings: settings,
                                 markers: markers,
                               ),
-                              // Everything below is hidden in PiP – the window is too
+                              // Hide the remaining controls in PiP because the window is too
                               // small to interact with and controls are via PiP actions.
                               if (!_inPipMode) ...<Widget>[
                                 _SubtitleOverlay(
@@ -1991,8 +1992,7 @@ class _AutoSkipWorkerState extends ConsumerState<_AutoSkipWorker> {
     if (_skippedRanges.contains(key)) return false;
     _skippedRanges.add(key);
     _skipInFlight = true;
-    // ignore: avoid_print
-    print(
+    debugPrint(
       '[DEBUG] auto-skip ($kind): position=$position -> target=$target range=$rangeStart-$rangeEnd',
     );
     unawaited(_skipTo(target));
@@ -2713,7 +2713,7 @@ class _InlineVolumeControlState extends ConsumerState<_InlineVolumeControl> {
             icon: Icon(icon),
           ),
           // While collapsed (width 0) the slider is invisible but would still
-          // be focusable — on TV that makes the D-pad vanish into it and the
+          // be focusable. On TV, that makes the D-pad vanish into it while the
           // slider then eats all four arrow keys. Keep it out of focus until
           // it is actually shown.
           ExcludeFocus(
@@ -4647,7 +4647,7 @@ class _WindowPipOverlay extends StatelessWidget {
       child: Stack(
         fit: StackFit.expand,
         children: <Widget>[
-          // Whole surface is a drag handle — grab anywhere to move the window.
+          // The entire surface acts as a drag handle for moving the window.
           Listener(
             onPointerDown: (_) => onMoveStart(),
             behavior: HitTestBehavior.translucent,
@@ -4686,7 +4686,7 @@ class _WindowPipOverlay extends StatelessWidget {
                       ),
                     ),
                   ),
-                  // Exit PiP — top-left corner.
+                  // Place the PiP exit action in the top-left corner.
                   Positioned(
                     top: 8,
                     left: 8,
@@ -4696,7 +4696,7 @@ class _WindowPipOverlay extends StatelessWidget {
                       onPressed: onExpand,
                     ),
                   ),
-                  // Play / pause — centre, like the original player.
+                  // Center the play and pause action like the original player.
                   Center(
                     child: _MiniButton(
                       icon: isPlaying
@@ -4785,7 +4785,7 @@ class _MiniButtonState extends State<_MiniButton> {
 
 // Invisible corner resize handle for the borderless mini-player. Pans are
 // applied as a new window rect anchored to the opposite corner, preserving the
-// video aspect ratio. No icon is drawn — only the cursor hints at resizing.
+// video aspect ratio. The resize cursor is the only visual indicator.
 class _PipResizeHandle extends StatefulWidget {
   const _PipResizeHandle({
     required this.corner,

@@ -28,11 +28,11 @@ class TrackerPendingEdit {
   }
 
   Map<String, dynamic> toJson() => <String, dynamic>{
-        'malId': malId,
-        if (status != null) 'status': status!.name,
-        if (progress != null) 'progress': progress,
-        if (score != null) 'score': score,
-      };
+    'malId': malId,
+    if (status != null) 'status': status!.name,
+    if (progress != null) 'progress': progress,
+    if (score != null) 'score': score,
+  };
 
   static TrackerPendingEdit? fromJson(Map<String, dynamic> json) {
     final Object? id = json['malId'];
@@ -63,8 +63,9 @@ class TrackerEditQueue {
 
   Future<void> upsert(TrackerPendingEdit edit) async {
     final List<TrackerPendingEdit> edits = await load();
-    final int index =
-        edits.indexWhere((TrackerPendingEdit e) => e.malId == edit.malId);
+    final int index = edits.indexWhere(
+      (TrackerPendingEdit e) => e.malId == edit.malId,
+    );
     if (index >= 0) {
       edits[index] = edits[index].mergedWith(edit);
     } else {
@@ -81,7 +82,8 @@ class TrackerEditQueue {
 
   Future<List<TrackerPendingEdit>> load() async {
     final SharedPreferences prefs = await SharedPreferences.getInstance();
-    final List<String> raw = prefs.getStringList(storageKey) ?? const <String>[];
+    final List<String> raw =
+        prefs.getStringList(storageKey) ?? const <String>[];
     return raw
         .map((String value) {
           try {

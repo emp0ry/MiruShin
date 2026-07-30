@@ -517,7 +517,7 @@ class FvpPlayerEngine extends PlayerEngine {
     final mdk.Player? player = _player;
     if (player == null) return;
 
-    // Do NOT reopen HLS on resume. Reopening replaces the decoder/session and
+    // Do not reopen HLS on resume. Reopening replaces the decoder and session and
     // can reset MDK to 0 if the delayed seek is ignored or stream metadata is
     // not ready. Resume must only continue the existing player instance.
     player.state = mdk.PlaybackState.playing;
@@ -1008,7 +1008,7 @@ class FvpPlayerEngine extends PlayerEngine {
         'file,http,https,tcp,tls,crypto',
       );
     } on Object {
-      // Not all MDK builds expose avformat properties — safe to ignore.
+      // Ignore missing avformat properties on MDK builds that omit them.
     }
 
     try {
@@ -1018,7 +1018,7 @@ class FvpPlayerEngine extends PlayerEngine {
       player.setProperty('avio.reconnect_delay_max', '5');
       player.setProperty('avio.rw_timeout', '15000000');
     } on Object {
-      // Older MDK builds may not expose all avio properties — safe to ignore.
+      // Ignore missing avio properties on older MDK builds.
     }
   }
 

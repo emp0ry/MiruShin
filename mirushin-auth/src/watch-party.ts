@@ -96,7 +96,7 @@ export async function handleWatchParty(request: Request, url: URL, env: WatchPar
 		return null;
 	}
 
-	// POST /watch-party/rooms — create a room from the host offer.
+	// POST /watch-party/rooms creates a room from the host offer.
 	if (path === '/watch-party/rooms') {
 		if (request.method !== 'POST') {
 			return json({ error: 'method_not_allowed' }, 405);
@@ -129,7 +129,7 @@ export async function handleWatchParty(request: Request, url: URL, env: WatchPar
 	if (!CODE_RE.test(code)) return json({ error: 'invalid_code' }, 400);
 	const sub = segments[1];
 
-	// /watch-party/rooms/:code — fetch the offer or delete the room.
+	// /watch-party/rooms/:code fetches the offer or deletes the room.
 	if (segments.length === 1) {
 		if (request.method === 'GET') {
 			const room = await loadRoom(env, code);
@@ -143,7 +143,7 @@ export async function handleWatchParty(request: Request, url: URL, env: WatchPar
 		return json({ error: 'method_not_allowed' }, 405);
 	}
 
-	// /watch-party/rooms/:code/answer — guest stores answer, host fetches it.
+	// /watch-party/rooms/:code/answer stores and retrieves the guest answer.
 	if (segments.length === 2 && sub === 'answer') {
 		const room = await loadRoom(env, code);
 		if (!room) return json({ error: 'not_found' }, 404);
@@ -171,7 +171,7 @@ export async function handleWatchParty(request: Request, url: URL, env: WatchPar
 		return json({ error: 'method_not_allowed' }, 405);
 	}
 
-	// /watch-party/rooms/:code/candidates — trickle ICE both directions. Each
+	// /watch-party/rooms/:code/candidates exchanges ICE candidates. Each
 	// side posts with its own role and polls for the other side's list (?for=).
 	if (segments.length === 2 && sub === 'candidates') {
 		const room = await loadRoom(env, code);

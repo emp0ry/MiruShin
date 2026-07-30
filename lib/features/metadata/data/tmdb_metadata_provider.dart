@@ -2,8 +2,8 @@ import 'package:dio/dio.dart';
 
 import '../../../shared/models/calendar_item.dart';
 import '../../../shared/models/media_item.dart';
-import '../domain/tmdb_episode_metadata.dart';
 import '../domain/metadata_provider.dart';
+import '../domain/tmdb_episode_metadata.dart';
 
 class TmdbConfigurationException implements Exception {
   const TmdbConfigurationException(this.message);

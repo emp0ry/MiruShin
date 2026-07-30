@@ -37,7 +37,7 @@ class WatchPartyGuestResolver {
       playbackControllerProvider.notifier,
     );
 
-    // Already on this exact episode/source — just realign, no reload.
+    // Realign without reloading when the exact episode and source are active.
     final PlaybackState currentState = _ref.read(playbackControllerProvider);
     final MediaPlaybackItem? current = currentState.item;
     if (_isSameSource(currentState, descriptor)) {
@@ -57,12 +57,12 @@ class WatchPartyGuestResolver {
     );
 
     if (current == null) {
-      // Guest is not in the player yet — navigate in. PlayerPage will load it.
+      // Navigate to the player when the guest has not entered it yet.
       final BuildContext? context = rootNavigatorKey.currentContext;
       if (context == null || !context.mounted) return;
       await context.push(AppRoutes.watchPlay, extra: item);
     } else {
-      // Already in the player — swap the episode/source in place.
+      // Swap the episode and source in place when the player is already open.
       await playback.load(item);
     }
     await _align(

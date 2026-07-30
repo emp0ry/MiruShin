@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
-import '../features/profile/presentation/profile_page.dart';
-import 'app_routes.dart';
 import '../core/responsive/responsive_scaffold.dart';
 import '../features/addons/presentation/addons_page.dart';
 import '../features/addons/presentation/sources_page.dart';
@@ -12,15 +10,18 @@ import '../features/discovery/presentation/discovery_page.dart';
 import '../features/downloads/presentation/offline_title_page.dart';
 import '../features/library/presentation/library_page.dart';
 import '../features/media_details/presentation/media_details_page.dart';
-import '../features/settings/presentation/settings_page.dart';
 import '../features/player/domain/player_models.dart';
 import '../features/player/presentation/player_page.dart';
+import '../features/profile/presentation/profile_page.dart';
+import '../features/settings/presentation/settings_page.dart';
+import '../features/settings/presentation/startup_update_popup.dart';
 import '../features/watch/domain/normalized_models.dart';
 import '../features/watch/presentation/watch_page.dart';
 import '../features/watch_party/presentation/create_room_screen.dart';
 import '../features/watch_party/presentation/join_room_screen.dart';
 import '../features/watch_party/presentation/watch_party_screen.dart';
 import '../shared/models/media_item.dart';
+import 'app_routes.dart';
 
 /// Root navigator key, so context-less services (e.g. the Cloudflare challenge
 /// solver) can push full-screen pages over the whole app.
@@ -61,6 +62,7 @@ GoRouter buildAppRouter(String initialLocation) => GoRouter(
         final String currentLocation = state.uri.path;
         return ResponsiveScaffold(
           currentLocation: currentLocation,
+          topOverlay: const StartupUpdatePopup(),
           onDestinationSelected: (String location) {
             if (currentLocation != location) {
               context.go(location);

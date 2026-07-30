@@ -75,9 +75,9 @@ class MediaSessionService {
         'hasNext': hasNext,
       });
     } on MissingPluginException {
-      // Platform has no native implementation – skip silently.
+      // No native implementation is available on this platform.
     } on PlatformException {
-      // Native error – skip silently.
+      // Ignore native media-session errors.
     }
   }
 
@@ -85,9 +85,9 @@ class MediaSessionService {
     try {
       await _ch.invokeMethod<void>('clearNowPlaying');
     } on MissingPluginException {
-      // ignore
+      // The platform does not provide media-session integration.
     } on PlatformException {
-      // ignore
+      // Clearing stale platform metadata is best effort.
     }
   }
 }

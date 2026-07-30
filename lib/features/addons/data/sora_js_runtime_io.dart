@@ -33,7 +33,6 @@ class SoraJsRuntime {
   // Episode APIs can include many voiceover/player entries in one JSON body.
   static const int _maxBodyBytes = 8 * 1024 * 1024;
 
-
   final SoraAddonStore _store;
   final Dio _dio;
   final CloudflareChallengeService _cf = CloudflareChallengeService.instance;
@@ -45,7 +44,7 @@ class SoraJsRuntime {
   // flutter_js bridge (the `_dartToJs(Future)` -> promise-capability -> native
   // resolve-callback path is what corrupts QuickJS under heavy fetch load and
   // SIGSEGVs on Linux). Instead every async hop is a synchronous channel
-  // message plus a pure-JS promise resolved later via `evaluate('__miruResolve…')`.
+  // message plus a pure-JS promise resolved later via `evaluate('__miruResolve...')`.
   int _reqSeq = 0;
   // Active `_call` completers keyed by call id; completed by the synchronous
   // `MiruSoraCallDone` channel message rather than `handlePromise`.
@@ -53,21 +52,21 @@ class SoraJsRuntime {
       <String, Completer<String>>{};
 
   // Single shared QuickJS/JavaScriptCore context for all addon modules.
-  // Created lazily on first use. Never disposed during normal operation —
-  // creating and destroying per-addon contexts caused SIGSEGV in QuickJS on
+  // Created lazily and retained for normal operation because creating and
+  // destroying per-addon contexts caused SIGSEGV in QuickJS on
   // Linux (the dispose path races with pending promise callbacks).
   JavascriptRuntime? _sharedRuntime;
 
   // Persistent QuickJS event-loop pump.
   //
   // flutter_js's QuickJS binding (QuickJsRuntime2) ships WITHOUT a running
-  // event loop — its `dispatch()` has the `await for (port)` loop commented
+  // event loop because its `dispatch()` has the `await for (port)` loop commented
   // out, so pending JS jobs only drain while `handlePromise`'s short-lived
   // 20ms timer is alive. The moment the awaited promise settles, that timer is
   // cancelled. Any background task an addon fired but didn't await (a
   // fire-and-forget `fetchv2`, a `setTimeout`) later completes on the Dart side
   // and re-enters QuickJS via the promise-resolve callback in
-  // `_dartToJs(Future)` — which enqueues reaction jobs that nothing pumps.
+  // `_dartToJs(Future)`, which enqueues reaction jobs that nothing pumps.
   // Those stale jobs run interleaved with the next evaluation after GC has
   // moved/freed objects, jumping through a dangling function pointer -> SIGSEGV
   // (the libquickjs_c_bridge crash seen on Linux). JavaScriptCore on
@@ -102,7 +101,7 @@ class SoraJsRuntime {
     return rt;
   }
 
-  // ── Public API ─────────────────────────────────────────────────────────────
+  // Public API
 
   Future<List<SoraSearchResult>> searchResults({
     required SoraInstalledAddon addon,
@@ -247,7 +246,7 @@ class SoraJsRuntime {
     }
   }
 
-  // ── Internal queue ────────────────────────────────────────────────────────
+  // Internal queue
 
   Future<T> _serialized<T>(Future<T> Function() action) async {
     final Future<void> previous = _jsTail;
@@ -263,7 +262,7 @@ class SoraJsRuntime {
     }
   }
 
-  // ── Module lifecycle ──────────────────────────────────────────────────────
+  // Module lifecycle
 
   void _removeModule(String addonId) {
     _loadOrder.remove(addonId);
@@ -293,7 +292,7 @@ class SoraJsRuntime {
     } catch (_) {}
   }
 
-  // ── JS call ───────────────────────────────────────────────────────────────
+  // JS call
 
   Future<Object?> _call({
     required SoraInstalledAddon addon,
@@ -347,10 +346,10 @@ class SoraJsRuntime {
   }
 
   // Runs a single addon function and waits for its result via a synchronous
-  // `MiruSoraCallDone` channel message — NOT `handlePromise`. The async IIFE
+  // `MiruSoraCallDone` channel message instead of `handlePromise`. The async IIFE
   // resolves entirely inside QuickJS (driven by the persistent pump); host I/O
   // is dispatched through synchronous channel messages and resolved back into
-  // JS via `evaluate('__miruResolve…')`. No Dart Future ever crosses the
+  // JS via `evaluate('__miruResolve...')`. No Dart Future ever crosses the
   // flutter_js bridge, so the crashing `_dartToJs(Future)` path is never hit.
   Future<Object?> _invokeFunction({
     required JavascriptRuntime rt,
@@ -450,8 +449,8 @@ class SoraJsRuntime {
 
   // Wait for background host requests spawned during this call to settle, so a
   // straggler can't resolve against the next addon's context. Resolution is
-  // pure-JS (`evaluate('__miruResolve…')`), so there is no crash risk here —
-  // this is purely for correctness/cleanliness.
+  // pure JavaScript (`evaluate('__miruResolve(...)')`), so this cleanup is for
+  // correctness rather than crash prevention.
   Future<void> _settlePending(
     JavascriptRuntime rt,
     _LoadedSoraModule module,
@@ -591,7 +590,7 @@ class SoraJsRuntime {
     return loaded;
   }
 
-  // ── Shared bridge (installed once per runtime) ────────────────────────────
+  // Shared bridge (installed once per runtime)
 
   void _installSharedBridge(JavascriptRuntime runtime) {
     runtime.onMessage('MiruSoraLog', (dynamic args) {
@@ -625,10 +624,11 @@ class SoraJsRuntime {
       return null;
     });
 
-    // ── Async host requests ──────────────────────────────────────────────
-    // Each handler is SYNCHRONOUS (returns an ack string, never a Future).
+    // Async host requests
+    // Each handler is synchronous and returns an acknowledgement string rather
+    // than a Future.
     // The real work runs in the background and resolves the pure-JS promise
-    // via `evaluate('__miruSoraResolve(id, …)')`. This avoids the
+    // via `evaluate('__miruSoraResolve(id, ...)')`. This avoids the
     // `_dartToJs(Future)` promise-capability path that corrupts QuickJS.
     runtime.onMessage('MiruSoraHttpFetch', (dynamic args) {
       final Map<String, dynamic> payload = _asMap(args);
@@ -657,8 +657,8 @@ class SoraJsRuntime {
     runtime.evaluate(_bridgeScript());
   }
 
-  // Resolve a pending JS promise by calling back into JS via `evaluate` — the
-  // stable path. `raw` is passed as a JS string the bridge JSON-parses.
+  // Resolve a pending JavaScript promise through the stable `evaluate` path.
+  // `raw` is passed as a JavaScript string that the bridge parses as JSON.
   void _resolveJs(String reqId, String raw) {
     if (reqId.isEmpty) return;
     final JavascriptRuntime? rt = _sharedRuntime;
@@ -778,7 +778,7 @@ class SoraJsRuntime {
     _resolveJs(reqId, body);
   }
 
-  // ── HTTP helpers ──────────────────────────────────────────────────────────
+  // HTTP helpers
 
   /// Merges any stored Cloudflare clearance for [uri] into [headers] (the
   /// `Cookie` header plus the User-Agent the clearance was minted with).
@@ -937,8 +937,10 @@ class SoraJsRuntime {
       if (htmlContent.isNotEmpty) {
         body = htmlContent;
       } else {
-        final int timeoutSec =
-            _int(payload['timeoutSeconds'], fallback: 7).clamp(1, 30).toInt();
+        final int timeoutSec = _int(
+          payload['timeoutSeconds'],
+          fallback: 7,
+        ).clamp(1, 30).toInt();
         final Map<String, String> baseHeaders = <String, String>{
           'User-Agent': _userAgent,
           'Accept':
@@ -1057,7 +1059,7 @@ class SoraJsRuntime {
     return fallback;
   }
 
-  // ── Bridge script (installed once on the shared runtime) ─────────────────
+  // Bridge script (installed once on the shared runtime)
   //
   // Key difference from the old per-module bridge: every sendMessage call
   // includes `__addonId: globalThis.__miruCurrentAddonId` so the Dart-side
@@ -1072,8 +1074,8 @@ class SoraJsRuntime {
       globalThis.__miruSoraPendingResolvers = globalThis.__miruSoraPendingResolvers || {};
       globalThis.__miruSoraReqSeq = globalThis.__miruSoraReqSeq || 0;
 
-      // Resolve a pending host-request promise. Called FROM DART via
-      // evaluate('__miruSoraResolve(...)') — the stable bridge path. A Dart
+      // Resolve a pending host-request promise from Dart through the stable
+      // evaluate('__miruSoraResolve(...)') bridge path. A Dart
       // Future is never handed back across the bridge (that path corrupts
       // QuickJS), so every async result arrives through here as a string.
       globalThis.__miruSoraResolve = function(id, raw) {
@@ -1384,7 +1386,7 @@ class SoraJsRuntime {
     ''';
   }
 
-  // ── Module source preparation ─────────────────────────────────────────────
+  // Module source preparation
 
   String _prepareModuleSource(String source) {
     return source
@@ -1402,7 +1404,7 @@ class SoraJsRuntime {
         );
   }
 
-  // ── Utilities ─────────────────────────────────────────────────────────────
+  // Utilities
 
   bool _isMissingFunction(Object? decoded) {
     if (decoded is Map<String, dynamic>) {

@@ -1,22 +1,10 @@
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../platform/io_compat.dart' if (dart.library.io) 'dart:io';
-import '../../features/settings/presentation/settings_state.dart';
-
-final metadataCacheStoreProvider = Provider<MetadataCacheStore>(
-  (Ref ref) => MetadataCacheStore(
-    enabled: ref.watch(
-      settingsProvider.select(
-        (SettingsState settings) => settings.metadataCacheEnabled,
-      ),
-    ),
-  ),
-);
 
 class MetadataCacheStore {
   const MetadataCacheStore({this.enabled = true});

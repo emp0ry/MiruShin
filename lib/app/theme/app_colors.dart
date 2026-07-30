@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 abstract final class AppColors {
   static const Color background = Color(0xFF070A12);
-  static const Color backgroundElevated = Color(0xFF0B1020);
   static const Color surface = Color(0xFF111827);
   static const Color surfaceSoft = Color(0xFF172033);
   static const Color surfaceGlass = Color(0xB31A2338);

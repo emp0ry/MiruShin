@@ -429,8 +429,8 @@ class _NavigationRail extends StatelessWidget {
     final AppThemeExtension palette = AppThemeExtension.of(context);
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
-        // Never collapse destinations into a modal sheet on TV — every
-        // destination must be directly reachable with the D-pad.
+        // Keep every TV destination directly reachable with the D-pad instead
+        // of collapsing destinations into a modal sheet.
         final bool useMore =
             !isTv && constraints.maxHeight < _railMoreHeightBreakpoint;
         final List<AppNavigationItem> visibleItems = useMore

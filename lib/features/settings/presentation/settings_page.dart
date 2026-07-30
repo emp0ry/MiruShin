@@ -3,8 +3,8 @@ import 'dart:math' as math;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -14,8 +14,8 @@ import '../../../app/localization/supported_languages.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_radius.dart';
 import '../../../app/theme/app_spacing.dart';
-import '../../../core/constants/app_constants.dart';
 import '../../../core/cache/metadata_cache_store.dart';
+import '../../../core/constants/app_constants.dart';
 import '../../../core/platform/io_compat.dart' if (dart.library.io) 'dart:io';
 import '../../../core/platform/tv_platform.dart';
 import '../../../core/platform/url_opener.dart';
@@ -24,22 +24,23 @@ import '../../../core/widgets/glass_card.dart';
 import '../../../core/widgets/section_header.dart';
 import '../../../core/widgets/tv_directional_focus.dart';
 import '../../../core/widgets/tv_text_field_focus.dart';
+import '../../../shared/models/anilist_models.dart';
 import '../../calendar/application/calendar_items_provider.dart';
 import '../../catalog/application/catalog_mode.dart';
 import '../../downloads/application/downloads_provider.dart';
-import '../../metadata/data/tmdb_metadata_provider.dart';
+import '../../metadata/application/metadata_cache_provider.dart';
 import '../../metadata/application/metadata_providers.dart';
+import '../../metadata/data/tmdb_metadata_provider.dart';
 import '../../player/application/player_settings.dart';
 import '../../player/data/discord_rpc_service.dart';
 import '../../player/domain/player_models.dart';
-import '../../../shared/models/anilist_models.dart';
 import '../../tracking/application/anilist_library_provider.dart';
-import '../../tracking/application/anilist_login_flow.dart';
 import '../../tracking/application/tracker_library_provider.dart';
-import '../../tracking/application/tracker_login_flow.dart';
 import '../../tracking/domain/tracker_models.dart';
+import '../../tracking/presentation/anilist_login_flow.dart';
+import '../../tracking/presentation/tracker_login_flow.dart';
+import '../application/settings_state.dart';
 import '../application/update_checker_provider.dart';
-import 'settings_state.dart';
 import 'widgets/settings_widgets.dart';
 
 class SettingsPage extends ConsumerWidget {
@@ -396,138 +397,6 @@ class _ApiConnectionsSection extends ConsumerWidget {
         ),
       );
     }
-  }
-}
-
-// ─── AniList settings section ─────────────────────────────────────────────────
-
-// ignore: unused_element
-class _AniListSettingsSection extends ConsumerWidget {
-  const _AniListSettingsSection({
-    required this.settings,
-    required this.controller,
-  });
-
-  final SettingsState settings;
-  final SettingsController controller;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final PlayerSettings playerSettings =
-        ref.watch(playerSettingsProvider).value ?? const PlayerSettings();
-    return SettingsSection(
-      title: 'AniList',
-      icon: Icons.list_alt_rounded,
-      children: <Widget>[
-        SettingsRow(
-          title: context.t('Auto track progress'),
-          subtitle: context.t(
-            'Update AniList when 85% of an episode is watched.',
-          ),
-          trailing: Switch(
-            value: playerSettings.autoAnilistSync,
-            onChanged: (bool value) => ref
-                .read(playerSettingsProvider.notifier)
-                .setAutoAnilistSync(value),
-          ),
-        ),
-        SettingsRow(
-          title: context.t('Title language'),
-          subtitle: context.t('Language to display anime titles in.'),
-          trailing: DropdownButton<String>(
-            value: settings.anilistTitleLanguage,
-            items: <DropdownMenuItem<String>>[
-              DropdownMenuItem<String>(
-                value: 'ROMAJI',
-                child: Text(context.t('Romaji')),
-              ),
-              DropdownMenuItem<String>(
-                value: 'ENGLISH',
-                child: Text(context.t('English')),
-              ),
-              DropdownMenuItem<String>(
-                value: 'NATIVE',
-                child: Text(context.t('Native')),
-              ),
-              DropdownMenuItem<String>(
-                value: 'RUSSIAN',
-                child: Text(context.t('Russian (Shikimori)')),
-              ),
-            ],
-            onChanged: (String? value) {
-              if (value != null) controller.setAniListTitleLanguage(value);
-            },
-          ),
-        ),
-        SettingsRow(
-          title: context.t('Default Library page'),
-          subtitle: context.t(
-            'Opened first when that AniList folder has entries.',
-          ),
-          trailing: DropdownButton<AniListLibraryDefaultPage>(
-            value: settings.anilistLibraryDefaultPage,
-            items: AniListLibraryDefaultPage.values
-                .map(
-                  (AniListLibraryDefaultPage page) =>
-                      DropdownMenuItem<AniListLibraryDefaultPage>(
-                        value: page,
-                        child: Text(context.t(page.labelKey)),
-                      ),
-                )
-                .toList(growable: false),
-            onChanged: (AniListLibraryDefaultPage? value) {
-              if (value != null) {
-                controller.setAniListLibraryDefaultPage(value);
-              }
-            },
-          ),
-        ),
-        SettingsRow(
-          title: context.t('Score format'),
-          subtitle: context.t('How scores are displayed and entered.'),
-          trailing: DropdownButton<String>(
-            value: settings.anilistScoreFormat,
-            items: <DropdownMenuItem<String>>[
-              DropdownMenuItem<String>(
-                value: 'POINT_100',
-                child: Text(context.t('100-point')),
-              ),
-              DropdownMenuItem<String>(
-                value: 'POINT_10_DECIMAL',
-                child: Text(context.t('10-point decimal')),
-              ),
-              DropdownMenuItem<String>(
-                value: 'POINT_10',
-                child: Text(context.t('10-point')),
-              ),
-              DropdownMenuItem<String>(
-                value: 'POINT_5',
-                child: Text(context.t('5-star')),
-              ),
-              DropdownMenuItem<String>(
-                value: 'POINT_3',
-                child: Text(context.t('3-point')),
-              ),
-              DropdownMenuItem<String>(
-                value: 'SMILEY',
-                child: Text(context.t('Smiley')),
-              ),
-            ],
-            onChanged: (String? value) {
-              if (value != null) controller.setAniListScoreFormat(value);
-            },
-          ),
-        ),
-        SettingsRow(
-          title: context.t('Show adult content'),
-          subtitle: context.t('Display +18 titles in AniList catalog.'),
-          trailing: Switch(
-            value: settings.anilistShowAdultContent,
-            onChanged: controller.setAniListShowAdultContent,
-          ),
-        ),
-      ],
-    );
   }
 }
 

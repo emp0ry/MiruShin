@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:path/path.dart' as p;
 
 import '../../../shared/models/media_item.dart';
 import '../../addons/application/sora_addons_provider.dart';
@@ -81,20 +80,7 @@ class DownloadController extends Notifier<List<DownloadedEpisode>> {
 
   String? get rootPath => _rootPath;
 
-  /// Absolute path to a downloaded episode's playable file.
-  String? videoPathFor(DownloadedEpisode episode) {
-    final String? root = _rootPath;
-    if (root == null) return null;
-    return _store.videoPath(root, episode);
-  }
-
-  String? filePathFor(DownloadedEpisode episode, String fileName) {
-    final String? root = _rootPath;
-    if (root == null) return null;
-    return p.join(root, episode.relDir, fileName);
-  }
-
-  // ---- Queries -------------------------------------------------------------
+  // Queries
 
   DownloadedEpisode? _byId(String id) {
     for (final DownloadedEpisode e in state) {
@@ -127,7 +113,7 @@ class DownloadController extends Notifier<List<DownloadedEpisode>> {
     return mode == CatalogMode.tmdb ? isTmdb : !isTmdb;
   }
 
-  // ---- Mutations -----------------------------------------------------------
+  // Mutations
 
   Future<void> enqueue({
     required MediaItem item,
@@ -249,7 +235,7 @@ class DownloadController extends Notifier<List<DownloadedEpisode>> {
     await _persist();
   }
 
-  // ---- Queue runner --------------------------------------------------------
+  // Queue runner
 
   Future<void> _pump() async {
     if (_pumping) return;
@@ -451,7 +437,7 @@ class DownloadController extends Notifier<List<DownloadedEpisode>> {
     }
   }
 
-  // ---- Helpers -------------------------------------------------------------
+  // Helpers
 
   Future<void> _cacheMissingArtworkForCompletedDownloads() async {
     final String rootPath = _rootPath ??= await _store.rootPath();
@@ -617,9 +603,9 @@ class DownloadController extends Notifier<List<DownloadedEpisode>> {
   }
 
   /// Picks the best directly-downloadable (http/https) stream. Embed-aggregator
-  /// modules hand back non-http descriptors that mpv
-  /// can't open and we can't download — those return null so the caller fails
-  /// cleanly instead of crashing on `Uri.parse`.
+  /// modules return non-HTTP descriptors that neither mpv nor the download
+  /// engine can open. These return null so the caller fails cleanly instead of
+  /// crashing on `Uri.parse`.
   _StreamPick? _pickHighest(NormalizedStreamBundle bundle) {
     // Prefer the player's default server, then any other server.
     final List<NormalizedServer> servers = <NormalizedServer>[

@@ -2,7 +2,7 @@
 #
 # Build an unsigned iOS .ipa locally on macOS, mirroring .github/workflows/build-ios.yml.
 #
-# The produced .ipa is NOT code-signed — it is meant for sideloading tools
+# The produced .ipa is unsigned and intended for sideloading tools
 # (AltStore/SideStore, etc.) that re-sign on install, the same as the CI artifact.
 #
 # Usage:
@@ -30,7 +30,7 @@ for arg in "$@"; do
   esac
 done
 
-# --- Sanity checks --------------------------------------------------------
+# Sanity checks
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "ERROR: iOS builds require macOS." >&2
   exit 1
@@ -46,7 +46,7 @@ if [[ ! -f .env ]]; then
   exit 1
 fi
 
-# --- No-codesign xcconfig (restored on exit so the tree stays clean) ------
+# No-codesign xcconfig (restored on exit so the tree stays clean)
 XCCONFIG="ios/Flutter/Release.xcconfig"
 BACKUP="$(mktemp)"
 cp "$XCCONFIG" "$BACKUP"
@@ -64,7 +64,7 @@ trap restore_xcconfig EXIT
   echo "CODE_SIGN_STYLE=Manual"
 } >> "$XCCONFIG"
 
-# --- Build ----------------------------------------------------------------
+# Build
 if [[ "$DO_CLEAN" == true ]]; then
   echo "==> flutter clean"
   flutter clean
@@ -81,7 +81,7 @@ fi
 echo "==> flutter build ios --release --no-codesign"
 flutter build ios --release --no-codesign
 
-# --- Package --------------------------------------------------------------
+# Package
 VERSION="$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d'+' -f1)"
 APP_PATH="build/ios/iphoneos/Runner.app"
 if [[ ! -d "$APP_PATH" ]]; then

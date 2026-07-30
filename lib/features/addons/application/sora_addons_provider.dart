@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../settings/presentation/settings_state.dart';
+import '../../settings/application/settings_state.dart';
 import '../data/sora_addon_store.dart';
 import '../data/sora_js_runtime.dart';
 import '../domain/sora_models.dart';

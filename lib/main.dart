@@ -9,7 +9,7 @@ import 'core/constants/app_constants.dart';
 import 'core/platform/single_instance_guard.dart';
 import 'core/platform/tv_platform.dart';
 import 'core/utils/settings_preferences.dart';
-import 'features/settings/presentation/settings_state.dart';
+import 'features/settings/application/settings_state.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();

@@ -136,9 +136,7 @@ class AddonSourcesController extends Notifier<AddonSourcesState> {
     final SharedPreferences preferences = await SharedPreferences.getInstance();
     await preferences.setString(
       _key,
-      jsonEncode(
-        sources.map((AddonSource source) => source.toJson()).toList(),
-      ),
+      jsonEncode(sources.map((AddonSource source) => source.toJson()).toList()),
     );
   }
 

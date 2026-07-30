@@ -22,6 +22,7 @@ class AiringNotificationScheduler {
   static bool _channelsCreated = false;
   static bool _permissionsRequested = false;
   static bool _timeZonesInitialized = false;
+  static bool _initializationFailureLogged = false;
 
   static bool get isSupported {
     if (kIsWeb) return false;
@@ -40,8 +41,8 @@ class AiringNotificationScheduler {
       return;
     }
 
-    await _ensureReady();
-    await cancelAll();
+    if (!await _ensureReady()) return;
+    if (!await _cancelAll()) return;
 
     final DateTime now = DateTime.now();
     for (final AniListAnimeListFolder folder in folders) {
@@ -53,9 +54,21 @@ class AiringNotificationScheduler {
   }
 
   static Future<void> cancelAll() async {
-    if (!isSupported) return;
-    await _ensureInitialized();
-    await _plugin.cancelAll();
+    await _cancelAll();
+  }
+
+  static Future<bool> _cancelAll() async {
+    if (!isSupported) return true;
+    if (!await _ensureInitialized()) return false;
+    try {
+      await _plugin.cancelAll();
+      return true;
+    } catch (error) {
+      if (kDebugMode) {
+        debugPrint('Unable to clear airing notifications: $error');
+      }
+      return false;
+    }
   }
 
   static bool _shouldSchedule(
@@ -139,28 +152,39 @@ class AiringNotificationScheduler {
     }
   }
 
-  static Future<void> _ensureReady() async {
-    await _ensureInitialized();
+  static Future<bool> _ensureReady() async {
+    if (!await _ensureInitialized()) return false;
     _ensureTimeZones();
     await _ensurePermissions();
     await _ensureAndroidChannel();
+    return true;
   }
 
-  static Future<void> _ensureInitialized() async {
-    if (_initialized) return;
+  static Future<bool> _ensureInitialized() async {
+    if (_initialized) return true;
     const DarwinInitializationSettings darwin = DarwinInitializationSettings(
       requestAlertPermission: false,
       requestBadgePermission: false,
       requestSoundPermission: false,
     );
-    await _plugin.initialize(
-      settings: const InitializationSettings(
-        android: AndroidInitializationSettings('@mipmap/ic_launcher'),
-        iOS: darwin,
-        macOS: darwin,
-      ),
-    );
-    _initialized = true;
+    try {
+      await _plugin.initialize(
+        settings: const InitializationSettings(
+          android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+          iOS: darwin,
+          macOS: darwin,
+        ),
+      );
+      _initialized = true;
+      _initializationFailureLogged = false;
+      return true;
+    } catch (error) {
+      if (kDebugMode && !_initializationFailureLogged) {
+        _initializationFailureLogged = true;
+        debugPrint('Airing notifications are unavailable: $error');
+      }
+      return false;
+    }
   }
 
   static void _ensureTimeZones() {

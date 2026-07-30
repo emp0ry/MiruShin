@@ -7,8 +7,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../../../app/localization/app_localizations.dart';
 import '../../../app/app_routes.dart';
+import '../../../app/localization/app_localizations.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_radius.dart';
 import '../../../app/theme/app_spacing.dart';
@@ -27,16 +27,16 @@ import '../../catalog/presentation/catalog_offline_banner.dart';
 import '../../downloads/application/downloads_provider.dart';
 import '../../downloads/presentation/downloaded_tab.dart';
 import '../../profile/application/anilist_user_settings_provider.dart';
-import '../application/local_library_provider.dart';
-import 'local_library_editor.dart';
-import '../../settings/presentation/settings_state.dart';
+import '../../settings/application/settings_state.dart';
 import '../../tracking/application/anilist_library_provider.dart';
-import '../../tracking/application/anilist_login_flow.dart';
 import '../../tracking/application/tracker_library_provider.dart';
 import '../../tracking/domain/tracker_models.dart';
 import '../../tracking/presentation/anilist_entry_editor.dart';
+import '../../tracking/presentation/anilist_login_flow.dart';
+import '../application/local_library_provider.dart';
+import 'local_library_editor.dart';
 
-// ─── Constants ────────────────────────────────────────────────────────────────
+// Constants
 
 const double _kTileHeight = 156.0;
 const double _kCoverAspect = 1.45; // H:W ratio (same as AnimeShin)
@@ -82,7 +82,7 @@ bool _hasAnyEntries(List<AniListAnimeListFolder> folders) {
   );
 }
 
-// ─── Sort ─────────────────────────────────────────────────────────────────────
+// Sort
 
 enum _Sort {
   titleAZ('Title A–Z'),
@@ -156,7 +156,7 @@ class _AniListTabViewState {
   final Future<void> Function()? onRetry;
 }
 
-// ─── Root page ────────────────────────────────────────────────────────────────
+// Root page
 
 class LibraryPage extends ConsumerStatefulWidget {
   const LibraryPage({super.key});
@@ -539,7 +539,7 @@ class _AniListDataTabState extends ConsumerState<_AniListDataTab>
   }
 }
 
-// ─── AniList tab content ──────────────────────────────────────────────────────
+// AniList tab content
 
 class _AniListTabContent extends ConsumerWidget {
   const _AniListTabContent({
@@ -766,7 +766,7 @@ class _AniListLoadingState extends StatelessWidget {
   }
 }
 
-// ─── AniList tabbed view ──────────────────────────────────────────────────────
+// AniList tabbed view
 
 class _AniListView extends ConsumerStatefulWidget {
   const _AniListView({
@@ -937,7 +937,7 @@ class _AniListViewState extends ConsumerState<_AniListView>
   }
 }
 
-// ─── Per-status folder view ───────────────────────────────────────────────────
+// Per-status folder view
 
 class _FolderView extends ConsumerStatefulWidget {
   const _FolderView({
@@ -2109,7 +2109,7 @@ class _FolderViewState extends ConsumerState<_FolderView>
           // ),
           if (upcoming.isNotEmpty)
             SliverToBoxAdapter(child: _AiringSoonStrip(entries: upcoming)),
-          // ── Entry list / grid ─────────────────────────────────────────────
+          // Entry list / grid
           if (entries.isEmpty)
             _buildEmptySliver(context, palette, filterActive)
           else if (_isGrid)
@@ -2488,7 +2488,7 @@ class _AiringSoonStrip extends StatelessWidget {
   }
 }
 
-// ─── Collection tile (156px, exact AnimeShin layout) ─────────────────────────
+// Collection tile (156px, exact AnimeShin layout)
 
 class _CollectionTile extends ConsumerStatefulWidget {
   const _CollectionTile({required this.entry});
@@ -2543,7 +2543,7 @@ class _CollectionTileState extends ConsumerState<_CollectionTile> {
 
     final int nextProgress = _progress + delta;
 
-    // Reaching the final episode marks the entry completed — but only when the
+    // Reaching the final episode marks the entry completed only when the
     // total episode count is actually known. For an unknown count (shown as
     // "?") "12 of ?" never means finished, so leave the status untouched.
     final int? total = _total;
@@ -2732,7 +2732,7 @@ class _CollectionTileState extends ConsumerState<_CollectionTile> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                // ── Cover ──────────────────────────────────────────────
+                // Cover
                 SizedBox(
                   width: _kCoverWidth,
                   height: _kTileHeight,
@@ -2744,7 +2744,7 @@ class _CollectionTileState extends ConsumerState<_CollectionTile> {
                         )
                       : _CoverFallback(media.title),
                 ),
-                // ── Content ────────────────────────────────────────────
+                // Content
                 Expanded(
                   child: Padding(
                     padding: const EdgeInsets.all(AppSpacing.md),
@@ -2816,7 +2816,7 @@ class _CollectionTileState extends ConsumerState<_CollectionTile> {
                           const SizedBox(height: AppSpacing.xs),
                           _AiringBadge(label: airingLabel),
                         ],
-                        // TextRail — status / genre / runtime
+                        // Text rail: status, genre, and runtime.
                         if (railItems.isNotEmpty)
                           Expanded(
                             child: Align(
@@ -3327,7 +3327,7 @@ class _AiringBadge extends StatelessWidget {
   }
 }
 
-// ─── Grid cell ────────────────────────────────────────────────────────────────
+// Grid cell
 
 class _GridCell extends ConsumerWidget {
   const _GridCell({required this.entry});
@@ -3509,7 +3509,7 @@ class _GridCell extends ConsumerWidget {
   }
 }
 
-// ─── TextRail (mirrors AnimeShin's TextRail widget) ────────────────────────────
+// TextRail (mirrors AnimeShin's TextRail widget)
 
 class _TextRail extends StatelessWidget {
   const _TextRail(this.items);
@@ -3547,7 +3547,7 @@ class _TextRail extends StatelessWidget {
   }
 }
 
-// ─── Swipe action background ──────────────────────────────────────────────────
+// Swipe action background
 
 class _SwipeBg extends StatelessWidget {
   const _SwipeBg({
@@ -3579,7 +3579,7 @@ class _SwipeBg extends StatelessWidget {
   }
 }
 
-// ─── Cover fallback ───────────────────────────────────────────────────────────
+// Cover fallback
 
 class _CoverFallback extends StatelessWidget {
   const _CoverFallback(this.title);
@@ -3601,7 +3601,7 @@ class _CoverFallback extends StatelessWidget {
   }
 }
 
-// ─── Bar icon button ──────────────────────────────────────────────────────────
+// Bar icon button
 
 class _BarIcon extends StatelessWidget {
   const _BarIcon({
@@ -3689,7 +3689,7 @@ class _FilterTriStateChips<T> extends StatelessWidget {
   }
 }
 
-// ─── Local library view ───────────────────────────────────────────────────────
+// Local library view
 
 const List<LibraryStatus> _kLocalStatuses = <LibraryStatus>[
   LibraryStatus.planned,
@@ -4352,7 +4352,7 @@ class _LocalLibraryViewState extends ConsumerState<_LocalLibraryView> {
 
     return Column(
       children: <Widget>[
-        // ── Search / grid / sort bar ──────────────────────────────────────
+        // Search / grid / sort bar
         if (!showDownloads)
           Padding(
             padding: const EdgeInsets.fromLTRB(
@@ -4430,7 +4430,7 @@ class _LocalLibraryViewState extends ConsumerState<_LocalLibraryView> {
             ),
           ),
 
-        // ── Status filter chips (+ Downloaded) ────────────────────────────
+        // Status filter chips (+ Downloaded)
         if (presentStatuses.length > 1 || hasDownloads)
           SizedBox(
             height: 44,
@@ -4476,7 +4476,7 @@ class _LocalLibraryViewState extends ConsumerState<_LocalLibraryView> {
             ),
           ),
 
-        // ── Content ───────────────────────────────────────────────────────
+        // Content
         if (showDownloads)
           const Expanded(child: DownloadedTab(catalog: CatalogMode.tmdb))
         else if (items.isEmpty)
@@ -4521,7 +4521,7 @@ class _LocalLibraryViewState extends ConsumerState<_LocalLibraryView> {
   }
 }
 
-// ─── Local tile ───────────────────────────────────────────────────────────────
+// Local tile
 
 class _LocalTile extends ConsumerStatefulWidget {
   const _LocalTile({required this.item});
@@ -4620,7 +4620,7 @@ class _LocalTileState extends ConsumerState<_LocalTile> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                // ── Cover ──────────────────────────────────────────────
+                // Cover
                 SizedBox(
                   width: _kCoverWidth,
                   height: _kTileHeight,
@@ -4632,7 +4632,7 @@ class _LocalTileState extends ConsumerState<_LocalTile> {
                         )
                       : _CoverFallback(media.title),
                 ),
-                // ── Content ────────────────────────────────────────────
+                // Content
                 Expanded(
                   child: Padding(
                     padding: const EdgeInsets.all(AppSpacing.md),
@@ -4737,7 +4737,7 @@ class _LocalTileState extends ConsumerState<_LocalTile> {
   }
 }
 
-// ─── Local grid cell ──────────────────────────────────────────────────────────
+// Local grid cell
 
 class _LocalGridCell extends ConsumerWidget {
   const _LocalGridCell({required this.item});

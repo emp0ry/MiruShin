@@ -57,9 +57,7 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
     return WatchPartyRoomState.idle;
   }
 
-  // ---------------------------------------------------------------------------
   // Public API
-  // ---------------------------------------------------------------------------
 
   /// Host: create a room and wait for a guest to pair.
   Future<void> createRoom() async {
@@ -159,9 +157,7 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
     _updatePermissions(state.permissions.copyWith(canChangeSpeed: allowed));
   }
 
-  // ---------------------------------------------------------------------------
   // PlaybackSyncSink (host -> guests)
-  // ---------------------------------------------------------------------------
 
   @override
   void onHostPlay(Duration position, double speed) {
@@ -243,9 +239,7 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
     );
   }
 
-  // ---------------------------------------------------------------------------
   // WebRTC wiring
-  // ---------------------------------------------------------------------------
 
   void _bindWebrtc(WebRtcSyncService webrtc, {required String role}) {
     _channelSub = webrtc.channelOpen.listen((bool open) {
@@ -259,7 +253,7 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
 
   void _onChannelOpen() {
     if (state.status == WatchPartyConnectionStatus.connected) {
-      // A reconnect recovered — ask for a fresh snapshot to realign.
+      // Request a fresh snapshot after reconnecting so playback can realign.
       state = state.copyWith(status: WatchPartyConnectionStatus.connected);
       if (state.isGuest) {
         _send(WatchPartyEvent(type: WatchPartyEventType.helloRequest));
@@ -320,9 +314,7 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
     }
   }
 
-  // ---------------------------------------------------------------------------
   // Incoming messages
-  // ---------------------------------------------------------------------------
 
   void _onMessage(WatchPartyEvent event) {
     if (state.isHost) {
@@ -529,9 +521,7 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
     return event.position + Duration(milliseconds: advancedMs);
   }
 
-  // ---------------------------------------------------------------------------
   // Host snapshot / heartbeat
-  // ---------------------------------------------------------------------------
 
   WatchPartyEvent _snapshotEvent() {
     final PlaybackController playback = ref.read(
@@ -598,9 +588,7 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
     );
   }
 
-  // ---------------------------------------------------------------------------
   // Signaling polling
-  // ---------------------------------------------------------------------------
 
   void _startHostPolling() {
     _pollTimer?.cancel();
@@ -680,9 +668,7 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
     });
   }
 
-  // ---------------------------------------------------------------------------
   // Teardown
-  // ---------------------------------------------------------------------------
 
   void _send(WatchPartyEvent event) {
     unawaited(_webrtc?.send(event));

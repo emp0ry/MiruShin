@@ -86,7 +86,7 @@ class SignalingService {
 
   /// Best-effort ICE trickle: candidates are retried as the connection settles,
   /// so a single failed post (transport error or transient 5xx) is swallowed
-  /// rather than thrown — it must never crash the app from a fire-and-forget call.
+  /// rather than thrown because a fire-and-forget call must never crash the app.
   Future<void> postCandidate(
     String code,
     String role,

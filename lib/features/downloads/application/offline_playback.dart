@@ -2,8 +2,8 @@ import 'package:path/path.dart' as p;
 
 import '../../../shared/models/media_item.dart';
 import '../../player/domain/player_models.dart';
-import 'download_episode_display.dart';
 import '../domain/download_models.dart';
+import 'download_episode_display.dart';
 
 /// Builds a [MediaPlaybackItem] that plays a downloaded episode entirely from
 /// local files through the existing player. The `sora_addon_id` /

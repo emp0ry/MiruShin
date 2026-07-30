@@ -5,7 +5,8 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../../app/localization/app_localizations.dart';
 import '../../../core/constants/app_constants.dart';
-import '../../settings/presentation/settings_state.dart';
+import '../../settings/application/settings_state.dart';
+import '../application/tracker_library_provider.dart';
 import '../data/mal_api_client.dart';
 import '../data/mal_oauth_service.dart';
 import '../data/oauth_code_listener.dart';
@@ -13,8 +14,7 @@ import '../data/oauth_token_bundle.dart';
 import '../data/shikimori_api_client.dart';
 import '../data/shikimori_oauth_service.dart';
 import '../domain/tracker_models.dart';
-import '../presentation/oauth_code_webview_page.dart';
-import 'tracker_library_provider.dart';
+import 'oauth_code_webview_page.dart';
 
 bool get _isMobile =>
     defaultTargetPlatform == TargetPlatform.android ||

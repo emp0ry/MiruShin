@@ -1,8 +1,8 @@
 import 'dart:convert';
 import 'dart:math' as math;
 
-import 'sora_models.dart';
 import '../../watch/domain/normalized_models.dart';
+import 'sora_models.dart';
 
 Object? decodeSoraPayload(Object? value) {
   Object? current = value;
@@ -566,7 +566,7 @@ List<SoraStreamCandidate> _parseStreamValue(Object? value) {
   // per-quality candidates from url1080/url720/... fields, where the quality is
   // appended explicitly. For a plain stream entry we must keep [rawTitle] so a
   // quality baked into the title survives for
-  // _extractQualityLabel — _serverName strips it again later for display.
+  // _serverName removes the quality label returned by _extractQualityLabel.
   final String title = _cleanServerName(rawTitle, _string(json['quality']));
 
   final Map<String, String> headers = _headers(json['headers']);
@@ -830,7 +830,7 @@ SoraSubtitle? _parseSubtitleEntry(
 
 /// Produces a human-readable track name. Prefers a real label, then the
 /// language (codes like `en`/`eng` are mapped to names), then a hint from the
-/// URL filename — never a meaningless "Subtitle" unless nothing else is known.
+/// URL filename. It returns "Subtitle" only when no better label is available.
 String _subtitleLabel(String label, String language, [String url = '']) {
   final String trimmed = label.trim();
   final bool generic =
@@ -840,7 +840,7 @@ String _subtitleLabel(String label, String language, [String url = '']) {
         caseSensitive: false,
       ).hasMatch(trimmed);
   if (!generic) {
-    // A label that is itself a language code (e.g. "eng") → expand to the name.
+    // A label that is itself a language code (e.g. "eng") -> expand to the name.
     final String mapped = _languageName(trimmed);
     return mapped.isNotEmpty ? mapped : trimmed;
   }
@@ -860,7 +860,7 @@ String _languageName(String value) {
 }
 
 /// Best-effort language detection from a subtitle filename, e.g.
-/// `…/foo.en.vtt` or `…/sub_eng.srt`.
+/// `.../foo.en.vtt` or `.../sub_eng.srt`.
 String _languageFromUrl(String url) {
   final RegExpMatch? match = RegExp(
     r'[._\-]([a-z]{2,3})\.(?:vtt|srt|ass|ssa|sub|txt)(?:[?#]|$)',
@@ -873,28 +873,76 @@ String _languageFromUrl(String url) {
 }
 
 const Map<String, String> _languageNames = <String, String>{
-  'en': 'English', 'eng': 'English', 'english': 'English',
-  'ms': 'Malay', 'may': 'Malay', 'msa': 'Malay', 'malay': 'Malay',
-  'ru': 'Russian', 'rus': 'Russian', 'russian': 'Russian',
-  'ja': 'Japanese', 'jpn': 'Japanese', 'japanese': 'Japanese',
-  'fr': 'French', 'fra': 'French', 'fre': 'French', 'french': 'French',
-  'es': 'Spanish', 'spa': 'Spanish', 'spanish': 'Spanish',
-  'de': 'German', 'deu': 'German', 'ger': 'German', 'german': 'German',
-  'ar': 'Arabic', 'ara': 'Arabic', 'arabic': 'Arabic',
-  'pt': 'Portuguese', 'por': 'Portuguese', 'portuguese': 'Portuguese',
-  'pt-br': 'Portuguese (BR)', 'id': 'Indonesian', 'ind': 'Indonesian',
+  'en': 'English',
+  'eng': 'English',
+  'english': 'English',
+  'ms': 'Malay',
+  'may': 'Malay',
+  'msa': 'Malay',
+  'malay': 'Malay',
+  'ru': 'Russian',
+  'rus': 'Russian',
+  'russian': 'Russian',
+  'ja': 'Japanese',
+  'jpn': 'Japanese',
+  'japanese': 'Japanese',
+  'fr': 'French',
+  'fra': 'French',
+  'fre': 'French',
+  'french': 'French',
+  'es': 'Spanish',
+  'spa': 'Spanish',
+  'spanish': 'Spanish',
+  'de': 'German',
+  'deu': 'German',
+  'ger': 'German',
+  'german': 'German',
+  'ar': 'Arabic',
+  'ara': 'Arabic',
+  'arabic': 'Arabic',
+  'pt': 'Portuguese',
+  'por': 'Portuguese',
+  'portuguese': 'Portuguese',
+  'pt-br': 'Portuguese (BR)',
+  'id': 'Indonesian',
+  'ind': 'Indonesian',
   'indonesian': 'Indonesian',
-  'ko': 'Korean', 'kor': 'Korean', 'korean': 'Korean',
-  'zh': 'Chinese', 'zho': 'Chinese', 'chi': 'Chinese', 'chinese': 'Chinese',
-  'it': 'Italian', 'ita': 'Italian', 'italian': 'Italian',
-  'tr': 'Turkish', 'tur': 'Turkish', 'turkish': 'Turkish',
-  'hi': 'Hindi', 'hin': 'Hindi', 'hindi': 'Hindi',
-  'th': 'Thai', 'tha': 'Thai', 'thai': 'Thai',
-  'vi': 'Vietnamese', 'vie': 'Vietnamese', 'vietnamese': 'Vietnamese',
-  'pl': 'Polish', 'pol': 'Polish', 'polish': 'Polish',
-  'nl': 'Dutch', 'nld': 'Dutch', 'dut': 'Dutch', 'dutch': 'Dutch',
-  'uk': 'Ukrainian', 'ukr': 'Ukrainian', 'ukrainian': 'Ukrainian',
-  'fil': 'Filipino', 'tl': 'Filipino', 'tgl': 'Filipino', 'filipino': 'Filipino',
+  'ko': 'Korean',
+  'kor': 'Korean',
+  'korean': 'Korean',
+  'zh': 'Chinese',
+  'zho': 'Chinese',
+  'chi': 'Chinese',
+  'chinese': 'Chinese',
+  'it': 'Italian',
+  'ita': 'Italian',
+  'italian': 'Italian',
+  'tr': 'Turkish',
+  'tur': 'Turkish',
+  'turkish': 'Turkish',
+  'hi': 'Hindi',
+  'hin': 'Hindi',
+  'hindi': 'Hindi',
+  'th': 'Thai',
+  'tha': 'Thai',
+  'thai': 'Thai',
+  'vi': 'Vietnamese',
+  'vie': 'Vietnamese',
+  'vietnamese': 'Vietnamese',
+  'pl': 'Polish',
+  'pol': 'Polish',
+  'polish': 'Polish',
+  'nl': 'Dutch',
+  'nld': 'Dutch',
+  'dut': 'Dutch',
+  'dutch': 'Dutch',
+  'uk': 'Ukrainian',
+  'ukr': 'Ukrainian',
+  'ukrainian': 'Ukrainian',
+  'fil': 'Filipino',
+  'tl': 'Filipino',
+  'tgl': 'Filipino',
+  'filipino': 'Filipino',
 };
 
 List<String> _stringList(Object? value) {

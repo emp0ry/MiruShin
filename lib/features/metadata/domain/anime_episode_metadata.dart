@@ -44,15 +44,6 @@ class AnimeEpisodeMetadata {
   String get preferredImage =>
       aniZipImage.isNotEmpty ? aniZipImage : aniListThumbnail;
 
-  String cardTitle(double number) {
-    for (final String title in <String>[aniZipTitle, aniListTitle]) {
-      if (title.isNotEmpty && !isGenericEpisodeTitle(title, number)) {
-        return title;
-      }
-    }
-    return '';
-  }
-
   String fallbackTitle(double number) {
     for (final String title in <String>[aniZipTitle, aniListTitle]) {
       if (title.isNotEmpty && !isGenericEpisodeTitle(title, number)) {

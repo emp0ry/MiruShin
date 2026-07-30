@@ -8,8 +8,8 @@ import 'package:media_kit/media_kit.dart';
 /// `resolvePlayerEngineBackend` in player_engine_factory_io), and merely
 /// loading libmpv + its large native
 /// dependency tree into the process destabilizes the flutter_js QuickJS addon
-/// runtime, causing a hard SIGSEGV when opening a stream. v1.2.2 — which never
-/// initialized MediaKit — was stable on Linux for exactly this reason.
+/// runtime, causing a hard SIGSEGV when opening a stream. Version 1.2.2 never
+/// initialized MediaKit and was stable on Linux for this reason.
 void configureMiruShinMediaKit() {
   if (Platform.isLinux) return;
   MediaKit.ensureInitialized();

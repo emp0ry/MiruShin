@@ -12,27 +12,27 @@ import '../../../app/navigation_helpers.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_radius.dart';
 import '../../../app/theme/app_spacing.dart';
-import '../../../core/cache/metadata_cache_store.dart';
 import '../../../core/responsive/responsive_grid.dart';
 import '../../../core/widgets/adaptive_page.dart';
 import '../../../core/widgets/glass_card.dart';
 import '../../../core/widgets/neutral_placeholder.dart';
-import '../../../core/widgets/tv_text_field_focus.dart';
 import '../../../core/widgets/page_back_button.dart';
 import '../../../core/widgets/section_header.dart';
+import '../../../core/widgets/tv_text_field_focus.dart';
 import '../../../shared/models/anilist_models.dart';
 import '../../../shared/models/media_item.dart';
 import '../../../shared/utils/media_status_formatter.dart';
 import '../../catalog/application/catalog_mode.dart';
+import '../../metadata/application/metadata_cache_provider.dart';
 import '../../metadata/application/metadata_providers.dart';
 import '../../notifications/airing_notification_scope.dart';
 import '../../player/application/player_settings.dart';
 import '../../player/domain/player_models.dart';
-import '../../settings/presentation/settings_state.dart';
+import '../../settings/application/settings_state.dart';
 import '../../settings/presentation/widgets/settings_widgets.dart';
 import '../../tracking/application/anilist_library_provider.dart';
-import '../../tracking/application/anilist_login_flow.dart';
 import '../../tracking/data/anilist_api_client.dart';
+import '../../tracking/presentation/anilist_login_flow.dart';
 import '../application/anilist_profile_export.dart';
 import '../application/anilist_profile_provider.dart';
 import '../application/anilist_user_settings_provider.dart';
@@ -3316,60 +3316,6 @@ class _ReviewTile extends StatelessWidget {
                   ),
                 ],
               ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ignore: unused_element
-class _MediaSummaryTile extends StatelessWidget {
-  const _MediaSummaryTile({required this.item});
-
-  final MediaItem item;
-
-  @override
-  Widget build(BuildContext context) {
-    return GlassCard(
-      child: Row(
-        children: <Widget>[
-          ClipRRect(
-            borderRadius: AppRadius.all(AppRadius.md),
-            child: Container(
-              width: 62,
-              height: 90,
-              color: Theme.of(context).colorScheme.surfaceContainerHighest,
-              child: item.posterUrl.isEmpty
-                  ? const Icon(Icons.article_outlined)
-                  : Image(
-                      image: CachedNetworkImageProvider(item.posterUrl),
-                      fit: BoxFit.cover,
-                    ),
-            ),
-          ),
-          const SizedBox(width: AppSpacing.md),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(
-                  item.title,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: AppSpacing.xs),
-                Text(
-                  item.overview,
-                  maxLines: 3,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodyMedium?.copyWith(color: AppColors.textMuted),
-                ),
-              ],
             ),
           ),
         ],

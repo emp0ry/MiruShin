@@ -15,10 +15,10 @@ import '../features/addons/application/cloudflare_challenge_service.dart';
 import '../features/addons/application/sora_addons_provider.dart';
 import '../features/addons/presentation/cloudflare_challenge_page.dart';
 import '../features/player/application/playback_controller.dart';
-import 'app_routes.dart';
 import '../features/profile/application/anilist_user_settings_provider.dart';
-import '../features/settings/presentation/settings_state.dart';
+import '../features/settings/application/settings_state.dart';
 import '../features/tracking/application/anilist_library_provider.dart';
+import 'app_routes.dart';
 import 'localization/app_localizations.dart';
 import 'router.dart';
 import 'theme/app_theme.dart';
@@ -158,8 +158,8 @@ bool get _cloudflareWebViewSupported {
 ///
 /// An overlay entry (rather than a pushed route) is deliberate: a Sora source
 /// can fire many parallel fetches, and the flow that triggered them often pops
-/// its own routes when it finishes — which would tear a pushed challenge page
-/// down before the user solves it. An overlay sits outside the navigation stack,
+/// its own routes when it finishes. Popping those routes would tear down a
+/// challenge page before the user solves it. An overlay sits outside the navigation stack,
 /// so it survives until the user solves or cancels.
 Future<CloudflareSolveResult?> _solveCloudflareChallenge({
   required Uri url,

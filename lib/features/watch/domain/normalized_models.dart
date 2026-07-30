@@ -11,28 +11,6 @@ String? soraEpisodeProgressMediaId({
       '${Uri.encodeComponent(cleanHref)}';
 }
 
-class NormalizedSourceMatch {
-  const NormalizedSourceMatch({
-    required this.addonId,
-    required this.addonName,
-    required this.addonIconUrl,
-    required this.title,
-    required this.imageUrl,
-    required this.href,
-    required this.score,
-    required this.languageCode,
-  });
-
-  final String addonId;
-  final String addonName;
-  final String addonIconUrl;
-  final String title;
-  final String imageUrl;
-  final String href;
-  final double score;
-  final String languageCode;
-}
-
 class NormalizedServer {
   const NormalizedServer({
     required this.id,
@@ -66,38 +44,6 @@ class NormalizedQuality {
   final String label;
   final String streamUrl;
   final Map<String, String> headers;
-}
-
-class NormalizedEpisode {
-  const NormalizedEpisode({
-    required this.number,
-    required this.href,
-    required this.title,
-    required this.imageUrl,
-    required this.overview,
-    this.durationLabel = '',
-    this.isSpecial = false,
-    this.progress,
-  });
-
-  final double number;
-  final String href;
-  final String title;
-  final String imageUrl;
-  final String overview;
-  final String durationLabel;
-  final bool isSpecial;
-  final EpisodeProgress? progress;
-
-  String get displayNumber {
-    if (number <= 0) {
-      return '';
-    }
-    if (number == number.roundToDouble()) {
-      return number.round().toString();
-    }
-    return number.toString();
-  }
 }
 
 class EpisodeProgress {

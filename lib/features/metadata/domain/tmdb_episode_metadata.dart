@@ -35,9 +35,4 @@ class TmdbEpisodeMetadata {
   final String overview;
   final String imageUrl;
   final int? runtimeMinutes;
-
-  String get durationLabel {
-    final int? minutes = runtimeMinutes;
-    return minutes == null || minutes <= 0 ? '' : '$minutes min';
-  }
 }

@@ -344,7 +344,7 @@ class _GestureOverlayState extends ConsumerState<GestureOverlay> {
         .watch(playbackControllerProvider)
         .controlsVisible;
     if (!widget.enableGestures) {
-      // PiP mini-player: no player gestures — the child layer owns drag/resize.
+      // The PiP child layer owns dragging and resizing, so player gestures are disabled.
       return widget.child;
     }
     return Listener(

@@ -19,8 +19,8 @@ class ShikimoriSearchHit {
   final String name;
 }
 
-class ShikiMoriClient {
-  ShikiMoriClient({Dio? dio})
+class ShikimoriClient {
+  ShikimoriClient({Dio? dio})
     : _dio =
           dio ??
           Dio(
@@ -39,7 +39,7 @@ class ShikiMoriClient {
   static const Duration _cacheTtl = Duration(hours: 12);
   static const int _maxCacheSize = 300;
 
-  // Direct lookup by MAL ID via GraphQL — reliable, no 301.
+  // Direct GraphQL lookup by MAL ID avoids redirects.
   Future<String?> findRussianTitleByMalId(int malId) async {
     final String key = 'mal:$malId';
     final _CacheEntry? cached = _cache[key];

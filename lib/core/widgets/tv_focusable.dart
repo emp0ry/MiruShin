@@ -10,8 +10,8 @@ import '../../app/theme/app_radius.dart';
 ///
 /// Designed for the 10-foot (Android TV) experience, but harmless everywhere
 /// else: the highlight is driven by [FocusableActionDetector.onShowFocusHighlight],
-/// which only fires for keyboard / remote ("directional") focus — pointer taps
-/// and touches never trigger the ring.
+/// which fires only for keyboard or remote directional focus. Pointer taps and
+/// touches never trigger the ring.
 ///
 /// The wrapper owns the focus node and maps [ActivateIntent] (the D-pad center /
 /// Enter / Space / gamepad-A keys) to [onTap]. By default it also handles

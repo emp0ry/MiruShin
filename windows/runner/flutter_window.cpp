@@ -99,7 +99,7 @@ void FlutterWindow::SetupWindowChannel() {
           return;
         }
 
-        // ── PiP / window-management helpers ──────────────────────────────
+        // PiP / window-management helpers
 
         if (call.method_name() == "getWindowRect") {
           RECT wr{};

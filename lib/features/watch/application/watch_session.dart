@@ -132,7 +132,7 @@ class AutoNextStreamResolutionState {
 
 bool _skipSeasonPicker(MediaItem item) {
   if (item.type == MediaType.movie) return true;
-  // AniList IDs are individual seasons — skip the franchise season picker.
+  // Skip the franchise season picker because AniList IDs represent individual seasons.
   if (item.type == MediaType.anime && item.id.startsWith('anilist:')) {
     return true;
   }

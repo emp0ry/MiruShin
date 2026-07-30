@@ -66,7 +66,7 @@ class AppSecureStorage {
     await _delete(anilistExpiresAtKey);
   }
 
-  // --- MyAnimeList ---
+  // MyAnimeList
 
   Future<String?> readMalAccessToken() => _read(malAccessTokenKey);
 
@@ -95,7 +95,7 @@ class AppSecureStorage {
     await _delete(malExpiresAtKey);
   }
 
-  // --- Shikimori ---
+  // Shikimori
 
   Future<String?> readShikimoriAccessToken() => _read(shikimoriAccessTokenKey);
 

@@ -25,7 +25,7 @@ using Microsoft::WRL::ComPtr;
 
 namespace pip {
 
-// ── Helpers ─────────────────────────────────────────────────────────────────
+// Helpers
 
 static std::wstring Utf8ToWide(const std::string& s) {
   if (s.empty()) {
@@ -63,7 +63,7 @@ static std::wstring Utf8ToWide(const std::string& s) {
   return ws;
 }
 
-// ── PipPlayer ───────────────────────────────────────────────────────────────
+// PipPlayer
 
 PipPlayer::PipPlayer() = default;
 
@@ -342,7 +342,7 @@ void PipPlayer::SetupMdkPlayer(
 
   // When MDK has decoded a new frame, blit it to the swap chain.
   // Check rtv_ in addition to swap_chain_ because ResizeSwapChain temporarily
-  // releases the RTV before recreating it — rendering against a null RTV
+  // releases the RTV before recreating it. Rendering against a null RTV
   // would crash. setVideoSurfaceSize(-1,-1) is called before rtv_.Reset() but
   // MDK's render thread can still fire once after that, so a null-check here
   // is the last line of defence.
@@ -519,7 +519,7 @@ void PipPlayer::Close() {
   Cleanup();
 }
 
-// ── Win32 message handling ──────────────────────────────────────────────────
+// Win32 message handling
 
 // static
 LRESULT CALLBACK PipPlayer::WndProc(HWND hwnd,

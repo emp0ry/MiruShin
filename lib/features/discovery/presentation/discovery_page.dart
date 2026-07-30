@@ -4,8 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../../app/localization/app_localizations.dart';
 import '../../../app/app_routes.dart';
+import '../../../app/localization/app_localizations.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../core/platform/tv_platform.dart';
 import '../../../core/responsive/responsive_grid.dart';
@@ -18,19 +18,19 @@ import '../../../core/widgets/section_header.dart';
 import '../../../core/widgets/skeleton_box.dart';
 import '../../../core/widgets/tv_directional_focus.dart';
 import '../../../core/widgets/tv_text_field_focus.dart';
+import '../../../shared/models/anilist_models.dart';
+import '../../../shared/models/media_item.dart';
 import '../../catalog/application/catalog_mode.dart';
 import '../../catalog/application/catalog_repository.dart';
 import '../../catalog/presentation/catalog_offline_banner.dart';
 import '../../metadata/application/metadata_providers.dart';
 import '../../metadata/data/tmdb_metadata_provider.dart';
-import '../../profile/application/anilist_user_settings_provider.dart';
 import '../../profile/application/anilist_profile_provider.dart';
-import '../../settings/presentation/settings_state.dart';
-import '../../tracking/data/anilist_api_client.dart';
+import '../../profile/application/anilist_user_settings_provider.dart';
+import '../../settings/application/settings_state.dart';
 import '../../tracking/application/anilist_library_provider.dart';
+import '../../tracking/data/anilist_api_client.dart';
 import '../../tracking/presentation/anilist_entry_editor.dart';
-import '../../../shared/models/anilist_models.dart';
-import '../../../shared/models/media_item.dart';
 
 enum _AniListDiscoveryKind {
   anime('Anime', 'anime'),
@@ -1180,7 +1180,7 @@ class _DiscoverySkeletonGrid extends StatelessWidget {
   }
 }
 
-// ── Advanced filter sheet ────────────────────────────────────────────────────
+// Advanced filter sheet
 
 class _DiscoveryAdvancedFilterSheet extends StatefulWidget {
   const _DiscoveryAdvancedFilterSheet({
@@ -1735,7 +1735,7 @@ class _SingleSelectChips extends StatelessWidget {
   }
 }
 
-// ── TMDB advanced filter sheet ───────────────────────────────────────────────
+// TMDB advanced filter sheet
 
 class _TmdbDiscoveryFilterSheet extends StatefulWidget {
   const _TmdbDiscoveryFilterSheet({

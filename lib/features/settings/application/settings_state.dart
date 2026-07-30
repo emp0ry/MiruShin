@@ -991,7 +991,7 @@ class SettingsController extends Notifier<SettingsState> {
     await preferences.saveAniListViewer(id: null, name: null, avatarUrl: null);
   }
 
-  // --- Tracker primary source + custom credentials ---
+  // Tracker primary source + custom credentials
 
   void setPrimaryTrackerSource(TrackerSource value) {
     state = state.copyWith(primaryTrackerSource: value);
@@ -1060,7 +1060,7 @@ class SettingsController extends Notifier<SettingsState> {
     );
   }
 
-  // --- MyAnimeList session ---
+  // MyAnimeList session
 
   Future<void> connectMal({
     required OAuthTokenBundle tokens,
@@ -1138,7 +1138,7 @@ class SettingsController extends Notifier<SettingsState> {
     return refreshMalToken();
   }
 
-  // --- Shikimori session ---
+  // Shikimori session
 
   Future<void> connectShikimori({
     required OAuthTokenBundle tokens,

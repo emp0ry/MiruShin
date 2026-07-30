@@ -13,7 +13,7 @@ import '../domain/tracker_models.dart';
 ///
 /// Note on ids: Shikimori keeps its anime ids aligned with MyAnimeList ids
 /// (it imported from MAL), so the MAL id is used directly as the Shikimori
-/// `target_id` for any anime that exists on MAL — which is exactly the set the
+/// `target_id` for any anime that exists on MAL, which is exactly the set the
 /// app carries a MAL id for.
 class ShikimoriApiClient {
   ShikimoriApiClient({
@@ -21,17 +21,18 @@ class ShikimoriApiClient {
     required int userId,
     Future<String?> Function()? onRefreshToken,
     Dio? dio,
-  })  : _accessToken = accessToken,
-        _userId = userId,
-        _onRefreshToken = onRefreshToken,
-        _dio = dio ??
-            Dio(
-              BaseOptions(
-                baseUrl: AppConstants.shikimoriApiBaseUrl,
-                connectTimeout: const Duration(seconds: 12),
-                receiveTimeout: const Duration(seconds: 18),
-              ),
-            );
+  }) : _accessToken = accessToken,
+       _userId = userId,
+       _onRefreshToken = onRefreshToken,
+       _dio =
+           dio ??
+           Dio(
+             BaseOptions(
+               baseUrl: AppConstants.shikimoriApiBaseUrl,
+               connectTimeout: const Duration(seconds: 12),
+               receiveTimeout: const Duration(seconds: 18),
+             ),
+           );
 
   final Dio _dio;
   String _accessToken;
@@ -52,8 +53,7 @@ class ShikimoriApiClient {
     final String? avatar = image is Map<String, dynamic>
         ? _nullableString(image['x160'] ?? image['x148'] ?? image['original'])
         : null;
-    final String? avatarUrl =
-        avatar != null ? _absoluteUrl(avatar) : null;
+    final String? avatarUrl = avatar != null ? _absoluteUrl(avatar) : null;
     return TrackerViewer(
       id: _userId,
       name: '${data['nickname'] ?? 'Shikimori User'}',
@@ -79,8 +79,9 @@ class ShikimoriApiClient {
       );
       final Object? data = response.data;
       if (data is! List<dynamic>) break;
-      final List<Map<String, dynamic>> batch =
-          data.whereType<Map<String, dynamic>>().toList();
+      final List<Map<String, dynamic>> batch = data
+          .whereType<Map<String, dynamic>>()
+          .toList();
       rates.addAll(batch);
       if (batch.length < 1000) break;
       page++;
@@ -102,7 +103,9 @@ class ShikimoriApiClient {
         rate['status'] as String?,
       );
       final double score = _double(rate['score']);
-      grouped.putIfAbsent(status, () => <AniListAnimeListEntry>[]).add(
+      grouped
+          .putIfAbsent(status, () => <AniListAnimeListEntry>[])
+          .add(
             AniListAnimeListEntry(
               id: _int(rate['id']),
               status: status,
@@ -171,7 +174,7 @@ class ShikimoriApiClient {
     await _request('DELETE', '/api/v2/user_rates/$existingId');
   }
 
-  // --- internal helpers ---
+  // Internal helpers
 
   Future<int?> _findRateId(int targetId) async {
     try {
@@ -195,11 +198,8 @@ class ShikimoriApiClient {
     return null;
   }
 
-  Future<Map<int, Map<String, dynamic>>> _fetchAnimeNodes(
-    List<int> ids,
-  ) async {
-    final Map<int, Map<String, dynamic>> result =
-        <int, Map<String, dynamic>>{};
+  Future<Map<int, Map<String, dynamic>>> _fetchAnimeNodes(List<int> ids) async {
+    final Map<int, Map<String, dynamic>> result = <int, Map<String, dynamic>>{};
     for (int i = 0; i < ids.length; i += 50) {
       final int end = i + 50 < ids.length ? i + 50 : ids.length;
       final String joined = ids.sublist(i, end).join(',');
@@ -214,10 +214,12 @@ class ShikimoriApiClient {
           authenticated: false,
         );
         final Object? body = response.data;
-        final Object? payload =
-            body is Map<String, dynamic> ? body['data'] : null;
-        final Object? animes =
-            payload is Map<String, dynamic> ? payload['animes'] : null;
+        final Object? payload = body is Map<String, dynamic>
+            ? body['data']
+            : null;
+        final Object? animes = payload is Map<String, dynamic>
+            ? payload['animes']
+            : null;
         if (animes is List<dynamic>) {
           for (final Object? node in animes) {
             if (node is Map<String, dynamic>) {
@@ -330,8 +332,7 @@ class ShikimoriApiClient {
     return 0;
   }
 
-  static String _string(Object? value) =>
-      value is String ? value.trim() : '';
+  static String _string(Object? value) => value is String ? value.trim() : '';
 
   static String? _nullableString(Object? value) {
     final String parsed = _string(value);

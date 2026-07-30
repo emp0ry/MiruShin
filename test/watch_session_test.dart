@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mirushin/features/addons/application/sora_source_providers.dart';
+import 'package:mirushin/features/settings/application/settings_state.dart';
 import 'package:mirushin/features/watch/application/watch_session.dart';
-import 'package:mirushin/features/watch/domain/title_variants.dart';
 import 'package:mirushin/shared/models/media_item.dart';
 
 void main() {
@@ -95,14 +96,15 @@ void main() {
     expect(synced.seasonPicked, isTrue);
   });
 
-  test('title variants do not append synthetic season suffixes', () {
-    final List<String> titles = buildTitleVariants(
-      _item(<MediaSeason>[
+  test('title variants do not append synthetic season suffixes', () async {
+    final List<String> titles = (await buildSoraTitleVariantsForTest(
+      media: _item(<MediaSeason>[
         _season(1, 'Blue Box'),
         _season(2, 'Blue Box Season 2'),
       ]),
-      2,
-    ).map((variant) => variant.title).toList(growable: false);
+      languageCodes: const <String>['en'],
+      settings: const SettingsState(),
+    )).map((variant) => variant.title).toList(growable: false);
 
     expect(titles, isNot(contains('Blue Box Season 2')));
     expect(titles, isNot(contains('Blue Box S2')));

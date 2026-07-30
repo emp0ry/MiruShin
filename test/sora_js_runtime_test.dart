@@ -185,71 +185,78 @@ async function extractStreamUrl(url) {
     expect(episodes.single.description, largeDescription);
   });
 
-  test('runtime drains fire-and-forget fetches before returning', () async {
-    final Directory temp = await Directory.systemTemp.createTemp('sora_js_');
-    addTearDown(() => temp.delete(recursive: true));
+  test(
+    'runtime drains fire-and-forget detail fetches before returning',
+    () async {
+      final Directory temp = await Directory.systemTemp.createTemp('sora_js_');
+      addTearDown(() => temp.delete(recursive: true));
 
-    const String logUrl = 'https://telemetry.example.com/rest/v1/app_logs';
-    final List<String> completedRequests = <String>[];
-    final Dio dio = Dio()
-      ..httpClientAdapter = _FakeAdapter(
-        <String, String>{logUrl: '{}'},
-        delay: const Duration(milliseconds: 40),
-        onComplete: completedRequests.add,
-      );
+      const String logUrl = 'https://telemetry.example.com/rest/v1/app_logs';
+      final List<String> completedRequests = <String>[];
+      final Dio dio = Dio()
+        ..httpClientAdapter = _FakeAdapter(
+          <String, String>{logUrl: '{}'},
+          delay: const Duration(milliseconds: 40),
+          onComplete: completedRequests.add,
+        );
 
-    final File script = File('${temp.path}/module.js');
-    await script.writeAsString('''
+      final File script = File('${temp.path}/module.js');
+      await script.writeAsString('''
 async function searchResults(keyword) {
-  fetchv2(${jsonEncode(logUrl)}, {}, "POST", JSON.stringify({ keyword }));
   return JSON.stringify([{ title: keyword + " Result", image: "poster.jpg", href: "/title" }]);
+}
+async function extractDetails(url) {
+  fetchv2(${jsonEncode(logUrl)}, {}, "POST", JSON.stringify({ url }));
+  return JSON.stringify({ title: "Background", description: "Details" });
 }
 ''');
 
-    final SoraInstalledAddon addon = SoraInstalledAddon(
-      id: 'background-fetch',
-      manifestUrl: 'https://example.com/addon.json',
-      manifest: SoraAddonManifest.fromJson(<String, dynamic>{
-        'sourceName': 'Background Fetch Sora',
-        'iconUrl': 'https://example.com/icon.png',
-        'author': <String, dynamic>{'name': 'Tester'},
-        'version': '1.0.0',
-        'language': 'en',
-        'streamType': 'HLS',
-        'quality': '1080p',
-        'baseUrl': 'https://example.com',
-        'searchBaseUrl': 'https://example.com/search',
-        'scriptUrl': 'https://example.com/module.js',
-        'type': 'anime',
-        'downloadSupport': false,
-      }),
-      manifestPath: '${temp.path}/manifest.json',
-      scriptPath: script.path,
-      enabled: true,
-      installedAt: DateTime.now(),
-      updatedAt: DateTime.now(),
-      lastCheckedAt: DateTime.now(),
-      lastError: null,
-      order: 0,
-    );
-    final SoraAddonStore store = SoraAddonStore(
-      supportDirectoryProvider: () async => temp,
-    );
-    final SoraJsRuntime runtime = SoraJsRuntime(store: store, dio: dio);
-    addTearDown(runtime.invalidateAll);
+      final SoraInstalledAddon addon = SoraInstalledAddon(
+        id: 'background-fetch',
+        manifestUrl: 'https://example.com/addon.json',
+        manifest: SoraAddonManifest.fromJson(<String, dynamic>{
+          'sourceName': 'Background Fetch Sora',
+          'iconUrl': 'https://example.com/icon.png',
+          'author': <String, dynamic>{'name': 'Tester'},
+          'version': '1.0.0',
+          'language': 'en',
+          'streamType': 'HLS',
+          'quality': '1080p',
+          'baseUrl': 'https://example.com',
+          'searchBaseUrl': 'https://example.com/search',
+          'scriptUrl': 'https://example.com/module.js',
+          'type': 'anime',
+          'downloadSupport': false,
+        }),
+        manifestPath: '${temp.path}/manifest.json',
+        scriptPath: script.path,
+        enabled: true,
+        installedAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+        lastCheckedAt: DateTime.now(),
+        lastError: null,
+        order: 0,
+      );
+      final SoraAddonStore store = SoraAddonStore(
+        supportDirectoryProvider: () async => temp,
+      );
+      final SoraJsRuntime runtime = SoraJsRuntime(store: store, dio: dio);
+      addTearDown(runtime.invalidateAll);
 
-    final List<SoraSearchResult> results = await runtime.searchResults(
-      addon: addon,
-      keyword: 'Background',
-      languageCode: 'en',
-      titleVariants: const <SoraTitleVariant>[
-        SoraTitleVariant(languageCode: 'en', title: 'Background'),
-      ],
-    );
+      final List<SoraSearchResult> results = await runtime.searchResults(
+        addon: addon,
+        keyword: 'Background',
+        languageCode: 'en',
+        titleVariants: const <SoraTitleVariant>[
+          SoraTitleVariant(languageCode: 'en', title: 'Background'),
+        ],
+      );
 
-    expect(results.single.title, 'Background Result');
-    expect(completedRequests, contains(logUrl));
-  });
+      expect(results.single.title, 'Background Result');
+      await runtime.extractDetails(addon: addon, result: results.single);
+      expect(completedRequests, contains(logUrl));
+    },
+  );
 }
 
 class _FakeAdapter implements HttpClientAdapter {

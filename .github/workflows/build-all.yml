@@ -238,7 +238,7 @@ jobs:
             --plugin gtk
 
           # Phase 2: libmdk dlopens its FFmpeg backend (libffmpeg.so.*) + codec
-          # plugins at RUNTIME — they are NOT in libmdk's DT_NEEDED graph, so
+          # plugins at runtime. They are not in libmdk's DT_NEEDED graph, so
           # linuxdeploy never bundles them and playback SIGSEGVs the instant it
           # starts (MediaIO::create -> NULL FFmpeg I/O vtable). Physically copy
           # the whole mdk runtime into usr/lib (where linuxdeploy put libmdk) so
@@ -288,7 +288,7 @@ jobs:
           DEB_DIR="deb/${PKG}"
 
           # Install the whole bundle under /usr/lib/<app> so the executable's
-          # RPATH ($ORIGIN/lib) finds every bundled lib — including libmdk and
+          # RPATH ($ORIGIN/lib) finds every bundled library, including libmdk and
           # its dlopen'd libffmpeg.so.8, which sit together in lib/.
           rm -rf deb
           mkdir -p "$DEB_DIR/DEBIAN" \

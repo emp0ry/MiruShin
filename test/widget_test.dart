@@ -10,8 +10,20 @@ import 'package:mirushin/shared/models/media_item.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  final TestWidgetsFlutterBinding binding =
+      TestWidgetsFlutterBinding.ensureInitialized();
+
+  setUpAll(() async {
+    await AppLocalizations.load(const Locale('en'));
+  });
+
   setUp(() {
-    SharedPreferences.setMockInitialValues(<String, Object>{});
+    binding.platformDispatcher.localeTestValue = const Locale('en');
+    addTearDown(binding.platformDispatcher.clearLocaleTestValue);
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'catalog.mode': 'tmdb',
+      'settings.appLanguage': 'en',
+    });
   });
 
   testWidgets(
@@ -100,27 +112,26 @@ void main() {
     },
   );
 
-  testWidgets(
-    'TMDB settings show sign-in placeholder and hide AniList controls',
-    (WidgetTester tester) async {
-      tester.view.physicalSize = const Size(1280, 900);
-      tester.view.devicePixelRatio = 1;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
+  testWidgets('TMDB settings hide sign-in and AniList-only controls', (
+    WidgetTester tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
 
-      await tester.pumpWidget(const ProviderScope(child: MiruShinApp()));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Settings').first);
-      await tester.pumpAndSettle();
+    await tester.pumpWidget(const ProviderScope(child: MiruShinApp()));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Settings').first);
+    await tester.pumpAndSettle();
 
-      expect(find.text('Sign in'), findsWidgets);
-      expect(find.text('Default Library page'), findsNothing);
-      expect(find.text('Score format'), findsNothing);
-      expect(find.text('Show adult content'), findsNothing);
-      expect(find.text('Theme mode'), findsWidgets);
-      expect(tester.takeException(), isNull);
-    },
-  );
+    expect(find.text('Sign in'), findsNothing);
+    expect(find.text('Default Library page'), findsNothing);
+    expect(find.text('Score format'), findsNothing);
+    expect(find.text('Show adult content'), findsNothing);
+    expect(find.text('Theme mode'), findsWidgets);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('AniList settings hide TMDB-only metadata language', (
     WidgetTester tester,
@@ -206,6 +217,7 @@ void main() {
       await tester.pumpWidget(
         ProviderScope(
           child: MaterialApp(
+            locale: const Locale('en'),
             theme: AppTheme.dark(),
             supportedLocales: AppLocalizations.supportedLocales,
             localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
@@ -214,12 +226,14 @@ void main() {
               GlobalWidgetsLocalizations.delegate,
               GlobalCupertinoLocalizations.delegate,
             ],
-            home: const MediaDetailsPage(id: 'tmdb:movie:1', initialItem: item),
+            home: const Scaffold(
+              body: MediaDetailsPage(id: 'tmdb:movie:1', initialItem: item),
+            ),
           ),
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.text('Add to Library'), findsOneWidget);
+      expect(find.text('Edit'), findsOneWidget);
       expect(tester.takeException(), isNull);
     }
 

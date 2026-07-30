@@ -7,7 +7,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import '../../../app/localization/app_localizations.dart';
 import '../application/watch_party_controller.dart';
 import '../domain/watch_party_models.dart';
-import 'watch_party_qr.dart';
+import '../domain/watch_party_qr.dart';
 import 'watch_party_status_text.dart';
 
 /// Guest screen: enter a room code manually or scan the host's QR.
@@ -133,7 +133,7 @@ class _JoinRoomScreenState extends ConsumerState<JoinRoomScreen> {
                         FilteringTextInputFormatter.allow(
                           RegExp('[A-Za-z0-9]'),
                         ),
-                        UpperCaseFormatter(),
+                        _UpperCaseFormatter(),
                       ],
                       decoration: const InputDecoration(
                         counterText: '',
@@ -178,7 +178,7 @@ class _JoinRoomScreenState extends ConsumerState<JoinRoomScreen> {
 }
 
 /// Forces typed room codes to uppercase as they are entered.
-class UpperCaseFormatter extends TextInputFormatter {
+class _UpperCaseFormatter extends TextInputFormatter {
   @override
   TextEditingValue formatEditUpdate(
     TextEditingValue oldValue,

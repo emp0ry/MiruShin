@@ -104,9 +104,7 @@ class DownloadEngine {
     }
   }
 
-  // --------------------------------------------------------------------------
-  // Single-file (MP4/MKV) — resumable via HTTP Range.
-  // --------------------------------------------------------------------------
+  // Single-file MP4 and MKV downloads support HTTP range requests.
 
   Future<void> downloadFile({
     required String url,
@@ -196,9 +194,7 @@ class DownloadEngine {
     return 0;
   }
 
-  // --------------------------------------------------------------------------
-  // HLS — download every segment + key and write a local playlist.
-  // --------------------------------------------------------------------------
+  // HLS downloads include every segment and key in a local playlist.
 
   Future<void> downloadHls({
     required String playlistUrl,
@@ -386,9 +382,7 @@ class DownloadEngine {
     return '.ts';
   }
 
-  // --------------------------------------------------------------------------
   // Subtitles
-  // --------------------------------------------------------------------------
 
   Future<DownloadedSubtitle?> downloadSubtitle({
     required String url,
@@ -470,9 +464,7 @@ class DownloadEngine {
     return '.jpg';
   }
 
-  // --------------------------------------------------------------------------
   // Low-level fetch helpers
-  // --------------------------------------------------------------------------
 
   Future<String> _fetchText(
     Uri uri,

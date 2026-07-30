@@ -40,7 +40,7 @@ class EdgeSwipeBack extends StatefulWidget {
 class _EdgeSwipeBackState extends State<EdgeSwipeBack> {
   // Distance (logical px) the swipe must travel rightwards to count as a back.
   static const double _distanceThreshold = 80;
-  // …or this much horizontal velocity for a quick flick to count.
+  // ...or this much horizontal velocity for a quick flick to count.
   static const double _velocityThreshold = 700;
 
   double _dragExtent = 0;
@@ -60,8 +60,7 @@ class _EdgeSwipeBackState extends State<EdgeSwipeBack> {
     _tracking = false;
     final double velocity = details.velocity.pixelsPerSecond.dx;
     final bool farEnough = _dragExtent >= _distanceThreshold;
-    final bool fastEnough =
-        velocity >= _velocityThreshold && _dragExtent > 0;
+    final bool fastEnough = velocity >= _velocityThreshold && _dragExtent > 0;
     if (farEnough || fastEnough) {
       widget.onBack();
     }

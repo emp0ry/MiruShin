@@ -202,8 +202,8 @@ class _TvWebCursorState extends State<TvWebCursor> {
     await Future<void>.delayed(const Duration(milliseconds: 250));
     if (!mounted || !_textInputMode) return;
     if (!await _hasEditableFocus()) {
-      // The tap didn't actually land in a text box — give the D-pad back to
-      // the cursor instead of stranding it in typing mode.
+      // The tap did not land in a text box. Return D-pad control to the cursor
+      // instead of leaving it in typing mode.
       _leaveTextInputMode();
       return;
     }
@@ -222,7 +222,7 @@ class _TvWebCursorState extends State<TvWebCursor> {
           );
       return result == true || result.toString() == 'true';
     } catch (_) {
-      // Can't tell — assume the editable focus is fine and keep typing mode.
+      // Preserve typing mode when editable focus cannot be determined.
       return true;
     }
   }

@@ -3,8 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
-import '../../../app/localization/app_localizations.dart';
 import '../../../app/app_routes.dart';
+import '../../../app/localization/app_localizations.dart';
 import '../../../app/theme/app_radius.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../app/theme/app_theme_extension.dart';
@@ -15,8 +15,8 @@ import '../../../core/widgets/neutral_placeholder.dart';
 import '../../../core/widgets/section_header.dart';
 import '../../../shared/models/calendar_item.dart';
 import '../../../shared/models/media_item.dart';
-import '../../catalog/presentation/catalog_offline_banner.dart';
 import '../../catalog/application/catalog_mode.dart';
+import '../../catalog/presentation/catalog_offline_banner.dart';
 import '../application/calendar_items_provider.dart';
 
 class CalendarPage extends ConsumerStatefulWidget {

@@ -25,21 +25,18 @@ final updateCheckerProvider = FutureProvider<UpdateInfo?>((ref) async {
         receiveTimeout: const Duration(seconds: 10),
       ),
     );
-    final Map<String, dynamic> data =
-        response.data as Map<String, dynamic>;
-    final String tagName =
-        (data['tag_name'] as String? ?? '').trim();
+    final Map<String, dynamic> data = response.data as Map<String, dynamic>;
+    final String tagName = (data['tag_name'] as String? ?? '').trim();
     final String htmlUrl =
         (data['html_url'] as String?)?.trim() ??
-            AppConstants.githubLatestReleaseUrl;
+        AppConstants.githubLatestReleaseUrl;
 
     if (tagName.isEmpty) return null;
 
     final String latestClean = tagName.startsWith('v')
         ? tagName.substring(1)
         : tagName;
-    final String currentClean =
-        AppConstants.appVersion.split('+').first.trim();
+    final String currentClean = AppConstants.appVersion.split('+').first.trim();
 
     return UpdateInfo(
       tagName: tagName,
@@ -53,10 +50,14 @@ final updateCheckerProvider = FutureProvider<UpdateInfo?>((ref) async {
 
 bool _isNewerVersion(String latest, String current) {
   try {
-    final List<int> l =
-        latest.split('.').map(int.parse).toList(growable: false);
-    final List<int> c =
-        current.split('.').map(int.parse).toList(growable: false);
+    final List<int> l = latest
+        .split('.')
+        .map(int.parse)
+        .toList(growable: false);
+    final List<int> c = current
+        .split('.')
+        .map(int.parse)
+        .toList(growable: false);
     final int len = l.length > c.length ? l.length : c.length;
     for (int i = 0; i < len; i++) {
       final int lv = i < l.length ? l[i] : 0;

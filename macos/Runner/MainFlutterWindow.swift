@@ -450,7 +450,7 @@ final class NativeMacPlayerCoordinator: NSObject, NSWindowDelegate, AVPictureInP
         self.pendingPlaybackRate = 0
       }
     }
-    // Hide source window — player layer stays alive in the hierarchy while PiP is active.
+    // Hide the source window while its player layer remains active for PiP.
     sourceWindow?.orderOut(nil)
   }
 
@@ -458,7 +458,7 @@ final class NativeMacPlayerCoordinator: NSObject, NSWindowDelegate, AVPictureInP
     _ controller: AVPictureInPictureController,
     failedToStartPictureInPictureWithError error: Error
   ) {
-    // PiP failed to start — show the source window as a plain player fallback.
+    // Show the source window as a standard player when PiP cannot start.
     pipActive = false
     sourceWindow?.makeKeyAndOrderFront(nil)
   }

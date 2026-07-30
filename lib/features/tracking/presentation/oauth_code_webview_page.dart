@@ -71,7 +71,7 @@ class _OAuthCodeWebViewPageState extends State<OAuthCodeWebViewPage> {
           onNavigationRequest: (NavigationRequest request) {
             _maybeComplete(request.url);
             // Never actually navigate to the redirect target. The WebView
-            // can't load app:// (ERR_UNKNOWN_URL_SCHEME → blank), and the
+            // can't load app:// (ERR_UNKNOWN_URL_SCHEME -> blank), and the
             // code/state is already captured from the URL above.
             if (_completed || _isRedirectTarget(request.url)) {
               return NavigationDecision.prevent;
@@ -146,9 +146,9 @@ class _OAuthCodeWebViewPageState extends State<OAuthCodeWebViewPage> {
         code.trim().isNotEmpty) {
       _completed = true;
       if (mounted) {
-        Navigator.of(context).pop(
-          OAuthCodeResult(code: code.trim(), state: state),
-        );
+        Navigator.of(
+          context,
+        ).pop(OAuthCodeResult(code: code.trim(), state: state));
       }
       return true;
     }

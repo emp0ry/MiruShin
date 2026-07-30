@@ -1,7 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../shared/models/anilist_models.dart';
-import '../../settings/presentation/settings_state.dart';
+import '../../settings/application/settings_state.dart';
 import '../data/mal_api_client.dart';
 import '../data/shikimori_api_client.dart';
 import 'tracker_edit_queue.dart';
@@ -42,8 +42,8 @@ class TrackerSyncCoordinator {
     if (malId == null) return;
     final AniListListStatus status =
         (total != null && total > 0 && episode >= total)
-            ? AniListListStatus.completed
-            : AniListListStatus.current;
+        ? AniListListStatus.completed
+        : AniListListStatus.current;
     await pushEntryEdit(
       externalIds: externalIds,
       status: status,
@@ -141,10 +141,7 @@ class TrackerSyncCoordinator {
   /// Flushes any queued edits for connected trackers. Safe to call on app
   /// resume / reconnect; failures are left queued for the next attempt.
   Future<void> flushPending() async {
-    await Future.wait<void>(<Future<void>>[
-      _flushMal(),
-      _flushShikimori(),
-    ]);
+    await Future.wait<void>(<Future<void>>[_flushMal(), _flushShikimori()]);
   }
 
   Future<void> _flushMal() async {

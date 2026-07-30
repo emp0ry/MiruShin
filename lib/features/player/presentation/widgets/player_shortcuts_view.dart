@@ -13,7 +13,7 @@ class PlayerShortcutsView extends StatelessWidget {
     super.key,
   });
 
-  /// The configured seek step, surfaced on the ←/→ keys (defaults to 10s).
+  /// The configured seek step shown on the left and right arrow keys.
   final int seekSeconds;
 
   /// Whether this device can enter Picture-in-Picture (hides the P key if not).
@@ -28,7 +28,7 @@ class PlayerShortcutsView extends StatelessWidget {
       children: <Widget>[
         _sectionHeader(context, Icons.keyboard_rounded, 'Keyboard'),
         const SizedBox(height: 14),
-        // Space bar — the headline action.
+        // The space bar is the primary action.
         Center(
           child: _LabeledKey(
             glyph: 'Space',
@@ -39,7 +39,9 @@ class PlayerShortcutsView extends StatelessWidget {
         ),
         const SizedBox(height: 18),
         // Arrow cluster laid out like a real keyboard d-pad.
-        Center(child: _LabeledKey(glyph: '↑', label: context.t('Volume up'))),
+        Center(
+          child: _LabeledKey(glyph: '↑', label: context.t('Volume up')),
+        ),
         const SizedBox(height: 10),
         Center(
           child: Row(
@@ -151,7 +153,10 @@ class _LabeledKey extends StatelessWidget {
     // ceiling (must stay >= minWidth to avoid an invalid constraint).
     final double maxCellWidth = minWidth < 100 ? 120 : minWidth + 40;
     return ConstrainedBox(
-      constraints: BoxConstraints(minWidth: minWidth + 24, maxWidth: maxCellWidth),
+      constraints: BoxConstraints(
+        minWidth: minWidth + 24,
+        maxWidth: maxCellWidth,
+      ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[

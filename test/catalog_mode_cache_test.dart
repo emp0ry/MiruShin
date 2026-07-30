@@ -7,32 +7,32 @@ import 'package:shared_preferences/shared_preferences.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  test('catalog mode defaults to TMDB and persists changes', () async {
+  test('catalog mode defaults to AniList and persists changes', () async {
     SharedPreferences.setMockInitialValues(<String, Object>{});
     final ProviderContainer container = ProviderContainer();
     addTearDown(container.dispose);
 
-    expect(container.read(catalogModeProvider), CatalogMode.tmdb);
+    expect(container.read(catalogModeProvider), CatalogMode.anilist);
 
     await container
         .read(catalogModeProvider.notifier)
-        .setMode(CatalogMode.anilist);
+        .setMode(CatalogMode.tmdb);
 
-    expect(container.read(catalogModeProvider), CatalogMode.anilist);
+    expect(container.read(catalogModeProvider), CatalogMode.tmdb);
     final SharedPreferences prefs = await SharedPreferences.getInstance();
-    expect(prefs.getString('catalog.mode'), 'anilist');
+    expect(prefs.getString('catalog.mode'), 'tmdb');
   });
 
   test('catalog mode loads persisted value asynchronously', () async {
     SharedPreferences.setMockInitialValues(<String, Object>{
-      'catalog.mode': 'anilist',
+      'catalog.mode': 'tmdb',
     });
     final ProviderContainer container = ProviderContainer();
     addTearDown(container.dispose);
 
-    expect(container.read(catalogModeProvider), CatalogMode.tmdb);
-    await Future<void>.delayed(Duration.zero);
     expect(container.read(catalogModeProvider), CatalogMode.anilist);
+    await Future<void>.delayed(Duration.zero);
+    expect(container.read(catalogModeProvider), CatalogMode.tmdb);
   });
 
   test('metadata cache reads, overwrites, and clears by mode prefix', () async {
