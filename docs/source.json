@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.4.2",
+          "date": "2026-07-30",
+          "localizedDescription": "- Improved play/pause responsiveness and playback resume stability.\n- Keep the screen awake while downloads are queued or active.\n- Limit offline episodes and downloads to episodes that have aired.\n- Choose whether airing notifications include all eligible titles or only Watching/Rewatching.\n- Removed the AniList Profile Feed and Reviews sections.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.4.2/MiruShin-ios-v2.4.2.ipa",
+          "size": 28022850,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.4.1",
           "date": "2026-07-15",
           "localizedDescription": "- PiP now works better with downloaded videos, especially on macOS and iOS.\n- Added anime opening and ending themes to anime detail pages.\n- Fixed playback time jumping backward after seeking or skipping an opening or ending.\n- Fixed Skip and Undo buttons appearing at the same time while buffering.",
@@ -375,11 +383,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.4.1",
-      "versionDate": "2026-07-15",
-      "versionDescription": "- PiP now works better with downloaded videos, especially on macOS and iOS.\n- Added anime opening and ending themes to anime detail pages.\n- Fixed playback time jumping backward after seeking or skipping an opening or ending.\n- Fixed Skip and Undo buttons appearing at the same time while buffering.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.4.1/MiruShin-ios-v2.4.1.ipa",
-      "size": 27998753,
+      "version": "2.4.2",
+      "versionDate": "2026-07-30",
+      "versionDescription": "- Improved play/pause responsiveness and playback resume stability.\n- Keep the screen awake while downloads are queued or active.\n- Limit offline episodes and downloads to episodes that have aired.\n- Choose whether airing notifications include all eligible titles or only Watching/Rewatching.\n- Removed the AniList Profile Feed and Reviews sections.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.4.2/MiruShin-ios-v2.4.2.ipa",
+      "size": 28022850,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
