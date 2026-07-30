@@ -15,7 +15,8 @@ jobs:
   select-draft-release:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      # GitHub omits draft releases from listings without push access.
+      contents: write
     outputs:
       tag: ${{ steps.release.outputs.tag }}
     steps:
