@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.4.3",
+          "date": "2026-07-30",
+          "localizedDescription": "- Improved airing notification reliability when platform services are unavailable.\n- Improved playback and external-link diagnostic logging.\n- Reorganized internal code for clearer feature boundaries and easier maintenance.\n- Improved automated testing across catalog, widget, Sora, and Worker components.\n- Added automated multi-platform artifact uploads to existing draft GitHub releases.\n- General stability and maintenance improvements.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.4.3/MiruShin-ios-v2.4.3.ipa",
+          "size": 28197529,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.4.2",
           "date": "2026-07-30",
           "localizedDescription": "- Improved play/pause responsiveness and playback resume stability.\n- Keep the screen awake while downloads are queued or active.\n- Limit offline episodes and downloads to episodes that have aired.\n- Choose whether airing notifications include all eligible titles or only Watching/Rewatching.\n- Removed the AniList Profile Feed and Reviews sections.",
@@ -383,11 +391,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.4.2",
+      "version": "2.4.3",
       "versionDate": "2026-07-30",
-      "versionDescription": "- Improved play/pause responsiveness and playback resume stability.\n- Keep the screen awake while downloads are queued or active.\n- Limit offline episodes and downloads to episodes that have aired.\n- Choose whether airing notifications include all eligible titles or only Watching/Rewatching.\n- Removed the AniList Profile Feed and Reviews sections.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.4.2/MiruShin-ios-v2.4.2.ipa",
-      "size": 28022850,
+      "versionDescription": "- Improved airing notification reliability when platform services are unavailable.\n- Improved playback and external-link diagnostic logging.\n- Reorganized internal code for clearer feature boundaries and easier maintenance.\n- Improved automated testing across catalog, widget, Sora, and Worker components.\n- Added automated multi-platform artifact uploads to existing draft GitHub releases.\n- General stability and maintenance improvements.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.4.3/MiruShin-ios-v2.4.3.ipa",
+      "size": 28197529,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
