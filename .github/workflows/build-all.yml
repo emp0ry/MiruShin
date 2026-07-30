@@ -1,6 +1,7 @@
 name: Build All (bundle)
 
 on:
+  workflow_call:
   workflow_dispatch:
 
 permissions:
