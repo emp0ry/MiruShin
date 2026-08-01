@@ -44,6 +44,7 @@ dependencies:
   qr_flutter: ^4.1.0
   share_plus: ^12.0.1
   shared_preferences: ^2.5.5
+  shared_preferences_platform_interface: ^2.4.2
   timezone: ^0.11.0
   url_launcher: ^6.3.2
   video_player: ^2.11.1

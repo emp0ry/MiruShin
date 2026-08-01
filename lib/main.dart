@@ -6,6 +6,7 @@ import 'app/app.dart';
 import 'bootstrap/mirushin_fvp_bootstrap.dart';
 import 'bootstrap/mirushin_media_kit_bootstrap.dart';
 import 'core/constants/app_constants.dart';
+import 'core/persistence/shared_preferences_recovery.dart';
 import 'core/platform/single_instance_guard.dart';
 import 'core/platform/tv_platform.dart';
 import 'core/utils/settings_preferences.dart';
@@ -20,10 +21,8 @@ Future<void> main() async {
   }
   await AppConstants.init();
   await TvPlatform.ensureInitialized();
-  final SharedPreferences prefs = await SharedPreferences.getInstance();
-  final String initialRoute = AppStartupPage.fromName(
-    prefs.getString(SettingsPreferences.startupPageKey),
-  ).route;
+  final SharedPreferences prefs = await MiruShinPreferences.initialize();
+  final String initialRoute = await _loadInitialRoute(prefs);
   final defaultFlutterError = FlutterError.onError;
   FlutterError.onError = (FlutterErrorDetails details) {
     final String message = details.exceptionAsString();
@@ -47,4 +46,20 @@ Future<void> main() async {
   configureMiruShinMediaKit();
   configureMiruShinFvp();
   runApp(ProviderScope(child: MiruShinApp(initialRoute: initialRoute)));
+}
+
+Future<String> _loadInitialRoute(SharedPreferences preferences) async {
+  final Object? storedRoute = preferences.get(
+    SettingsPreferences.startupPageKey,
+  );
+  if (storedRoute != null && storedRoute is! String) {
+    debugPrint(
+      'Ignoring invalid startup-page preference of type '
+      '${storedRoute.runtimeType}.',
+    );
+    await preferences.remove(SettingsPreferences.startupPageKey);
+  }
+  return AppStartupPage.fromName(
+    storedRoute is String ? storedRoute : null,
+  ).route;
 }
