@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.4.4",
+          "date": "2026-08-06",
+          "localizedDescription": "- Fixed the blank-window startup crash.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.4.4/MiruShin-ios-v2.4.4.ipa",
+          "size": 28215797,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.4.3",
           "date": "2026-07-30",
           "localizedDescription": "- Improved airing notification reliability when platform services are unavailable.\n- Improved playback and external-link diagnostic logging.\n- Reorganized internal code for clearer feature boundaries and easier maintenance.\n- Improved automated testing across catalog, widget, Sora, and Worker components.\n- Added automated multi-platform artifact uploads to existing draft GitHub releases.\n- General stability and maintenance improvements.",
@@ -391,11 +399,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.4.3",
-      "versionDate": "2026-07-30",
-      "versionDescription": "- Improved airing notification reliability when platform services are unavailable.\n- Improved playback and external-link diagnostic logging.\n- Reorganized internal code for clearer feature boundaries and easier maintenance.\n- Improved automated testing across catalog, widget, Sora, and Worker components.\n- Added automated multi-platform artifact uploads to existing draft GitHub releases.\n- General stability and maintenance improvements.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.4.3/MiruShin-ios-v2.4.3.ipa",
-      "size": 28197529,
+      "version": "2.4.4",
+      "versionDate": "2026-08-06",
+      "versionDescription": "- Fixed the blank-window startup crash.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.4.4/MiruShin-ios-v2.4.4.ipa",
+      "size": 28215797,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
