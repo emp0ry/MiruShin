@@ -22,6 +22,8 @@ import '../features/watch_party/presentation/join_room_screen.dart';
 import '../features/watch_party/presentation/watch_party_screen.dart';
 import '../shared/models/media_item.dart';
 import 'app_routes.dart';
+import 'navigation/app_page_transition.dart';
+import 'theme/app_animations.dart';
 
 /// Root navigator key, so context-less services (e.g. the Cloudflare challenge
 /// solver) can push full-screen pages over the whole app.
@@ -40,22 +42,22 @@ GoRouter buildAppRouter(String initialLocation) => GoRouter(
     GoRoute(
       path: AppRoutes.watchPlay,
       pageBuilder: (BuildContext context, GoRouterState state) =>
-          _playerPage(state),
+          _playerPage(context, state),
     ),
     GoRoute(
       path: AppRoutes.watchParty,
       pageBuilder: (BuildContext context, GoRouterState state) =>
-          _fadePage(state, const WatchPartyScreen()),
+          _appPage(context, state, const WatchPartyScreen()),
     ),
     GoRoute(
       path: AppRoutes.watchPartyCreate,
       pageBuilder: (BuildContext context, GoRouterState state) =>
-          _fadePage(state, const CreateRoomScreen()),
+          _appPage(context, state, const CreateRoomScreen()),
     ),
     GoRoute(
       path: AppRoutes.watchPartyJoin,
       pageBuilder: (BuildContext context, GoRouterState state) =>
-          _fadePage(state, const JoinRoomScreen()),
+          _appPage(context, state, const JoinRoomScreen()),
     ),
     ShellRoute(
       builder: (BuildContext context, GoRouterState state, Widget child) {
@@ -74,12 +76,17 @@ GoRouter buildAppRouter(String initialLocation) => GoRouter(
       routes: <RouteBase>[
         GoRoute(
           path: AppRoutes.board,
-          pageBuilder: (BuildContext context, GoRouterState state) =>
-              _fadePage(state, const BoardPage()),
+          pageBuilder: (BuildContext context, GoRouterState state) => _appPage(
+            context,
+            state,
+            const BoardPage(),
+            motion: AppPageMotion.fadeThrough,
+          ),
         ),
         GoRoute(
           path: AppRoutes.discovery,
-          pageBuilder: (BuildContext context, GoRouterState state) => _fadePage(
+          pageBuilder: (BuildContext context, GoRouterState state) => _appPage(
+            context,
             state,
             DiscoveryPage(
               initialType: _mediaTypeFromQuery(
@@ -88,79 +95,100 @@ GoRouter buildAppRouter(String initialLocation) => GoRouter(
               initialFilter: state.uri.queryParameters['filter'],
               initialAniListKind: state.uri.queryParameters['kind'],
             ),
+            motion: AppPageMotion.fadeThrough,
           ),
         ),
         GoRoute(
           path: AppRoutes.library,
-          pageBuilder: (BuildContext context, GoRouterState state) =>
-              _fadePage(state, const LibraryPage()),
+          pageBuilder: (BuildContext context, GoRouterState state) => _appPage(
+            context,
+            state,
+            const LibraryPage(),
+            motion: AppPageMotion.fadeThrough,
+          ),
         ),
         GoRoute(
           path: AppRoutes.calendar,
-          pageBuilder: (BuildContext context, GoRouterState state) =>
-              _fadePage(state, const CalendarPage()),
+          pageBuilder: (BuildContext context, GoRouterState state) => _appPage(
+            context,
+            state,
+            const CalendarPage(),
+            motion: AppPageMotion.fadeThrough,
+          ),
         ),
         GoRoute(
           path: AppRoutes.addons,
-          pageBuilder: (BuildContext context, GoRouterState state) =>
-              _fadePage(state, const AddonsPage()),
+          pageBuilder: (BuildContext context, GoRouterState state) => _appPage(
+            context,
+            state,
+            const AddonsPage(),
+            motion: AppPageMotion.fadeThrough,
+          ),
         ),
         GoRoute(
           path: AppRoutes.addonsSources,
           pageBuilder: (BuildContext context, GoRouterState state) =>
-              _fadePage(state, const SourcesPage()),
+              _appPage(context, state, const SourcesPage()),
         ),
         GoRoute(
           path: AppRoutes.settings,
-          pageBuilder: (BuildContext context, GoRouterState state) =>
-              _fadePage(state, const SettingsPage()),
+          pageBuilder: (BuildContext context, GoRouterState state) => _appPage(
+            context,
+            state,
+            const SettingsPage(),
+            motion: AppPageMotion.fadeThrough,
+          ),
         ),
         GoRoute(
           path: AppRoutes.profile,
-          pageBuilder: (BuildContext context, GoRouterState state) =>
-              _fadePage(state, const ProfilePage()),
+          pageBuilder: (BuildContext context, GoRouterState state) => _appPage(
+            context,
+            state,
+            const ProfilePage(),
+            motion: AppPageMotion.fadeThrough,
+          ),
         ),
         GoRoute(
           path: AppRoutes.profileActivities,
           pageBuilder: (BuildContext context, GoRouterState state) =>
-              _fadePage(state, const ProfileActivitiesPage()),
+              _appPage(context, state, const ProfileActivitiesPage()),
         ),
         GoRoute(
           path: AppRoutes.profileFavourites,
           pageBuilder: (BuildContext context, GoRouterState state) =>
-              _fadePage(state, const ProfileFavouritesPage()),
+              _appPage(context, state, const ProfileFavouritesPage()),
         ),
         GoRoute(
           path: AppRoutes.profileFeed,
           pageBuilder: (BuildContext context, GoRouterState state) =>
-              _fadePage(state, const ProfileFeedPage()),
+              _appPage(context, state, const ProfileFeedPage()),
         ),
         GoRoute(
           path: AppRoutes.profileSocial,
           pageBuilder: (BuildContext context, GoRouterState state) =>
-              _fadePage(state, const ProfileSocialPage()),
+              _appPage(context, state, const ProfileSocialPage()),
         ),
         GoRoute(
           path: AppRoutes.profileStatistics,
           pageBuilder: (BuildContext context, GoRouterState state) =>
-              _fadePage(state, const ProfileStatisticsPage()),
+              _appPage(context, state, const ProfileStatisticsPage()),
         ),
         GoRoute(
           path: AppRoutes.profileReviews,
           pageBuilder: (BuildContext context, GoRouterState state) =>
-              _fadePage(state, const ProfileReviewsPage()),
+              _appPage(context, state, const ProfileReviewsPage()),
         ),
         GoRoute(
           path: AppRoutes.profileSettings,
           pageBuilder: (BuildContext context, GoRouterState state) =>
-              _fadePage(state, const ProfileAniListSettingsPage()),
+              _appPage(context, state, const ProfileAniListSettingsPage()),
         ),
         GoRoute(
           path: AppRoutes.profileUser,
           pageBuilder: (BuildContext context, GoRouterState state) {
             final int userId =
                 int.tryParse(state.pathParameters['id'] ?? '') ?? 0;
-            return _fadePage(state, ProfileUserPage(userId: userId));
+            return _appPage(context, state, ProfileUserPage(userId: userId));
           },
         ),
         GoRoute(
@@ -169,7 +197,8 @@ GoRouter buildAppRouter(String initialLocation) => GoRouter(
             final String id = Uri.decodeComponent(
               state.pathParameters['id'] ?? '',
             );
-            return _fadePage(
+            return _appPage(
+              context,
               state,
               MediaDetailsPage(
                 id: id,
@@ -186,7 +215,8 @@ GoRouter buildAppRouter(String initialLocation) => GoRouter(
             final String id = Uri.decodeComponent(
               state.pathParameters['id'] ?? '',
             );
-            return _fadePage(
+            return _appPage(
+              context,
               state,
               WatchPage(
                 id: id,
@@ -203,7 +233,8 @@ GoRouter buildAppRouter(String initialLocation) => GoRouter(
             final String id = Uri.decodeComponent(
               state.pathParameters['id'] ?? '',
             );
-            return _fadePage(
+            return _appPage(
+              context,
               state,
               OfflineTitlePage(
                 mediaId: id,
@@ -217,17 +248,29 @@ GoRouter buildAppRouter(String initialLocation) => GoRouter(
   ],
 );
 
-CustomTransitionPage<void> _playerPage(GoRouterState state) {
+CustomTransitionPage<void> _playerPage(
+  BuildContext context,
+  GoRouterState state,
+) {
   if (state.extra is MediaPlaybackItem) {
-    return _fadePage(
+    return _appPage(
+      context,
       state,
       PlayerPage(item: state.extra! as MediaPlaybackItem),
+      motion: AppPageMotion.immersiveFade,
     );
   }
   final PlayerRouteArgs? args = state.extra is PlayerRouteArgs
       ? state.extra! as PlayerRouteArgs
       : null;
-  if (args == null) return _fadePage(state, const SizedBox.shrink());
+  if (args == null) {
+    return _appPage(
+      context,
+      state,
+      const SizedBox.shrink(),
+      motion: AppPageMotion.immersiveFade,
+    );
+  }
   final MediaPlaybackItem item = MediaPlaybackItem.fromBundle(
     args.bundle,
     args.item,
@@ -237,9 +280,11 @@ CustomTransitionPage<void> _playerPage(GoRouterState state) {
     seasons: args.episodeSeasons,
     initialQualityId: args.initialQualityId,
   );
-  return _fadePage(
+  return _appPage(
+    context,
     state,
     PlayerPage(item: item, startInFullscreen: args.startInFullscreen),
+    motion: AppPageMotion.immersiveFade,
   );
 }
 
@@ -253,11 +298,20 @@ MediaType? _mediaTypeFromQuery(String? value) {
   return null;
 }
 
-CustomTransitionPage<void> _fadePage(GoRouterState state, Widget child) {
+CustomTransitionPage<void> _appPage(
+  BuildContext context,
+  GoRouterState state,
+  Widget child, {
+  AppPageMotion motion = AppPageMotion.sharedAxis,
+}) {
+  final bool reduceMotion = AppAnimations.reduceMotion(context);
   return CustomTransitionPage<void>(
     key: state.pageKey,
     child: child,
-    transitionDuration: const Duration(milliseconds: 220),
+    transitionDuration: reduceMotion ? Duration.zero : AppAnimations.page,
+    reverseTransitionDuration: reduceMotion
+        ? Duration.zero
+        : AppAnimations.pageReverse,
     transitionsBuilder:
         (
           BuildContext context,
@@ -265,19 +319,11 @@ CustomTransitionPage<void> _fadePage(GoRouterState state, Widget child) {
           Animation<double> secondaryAnimation,
           Widget child,
         ) {
-          final Animation<double> curved = CurvedAnimation(
-            parent: animation,
-            curve: Curves.easeOutCubic,
-          );
-          return FadeTransition(
-            opacity: curved,
-            child: SlideTransition(
-              position: Tween<Offset>(
-                begin: const Offset(0, 0.015),
-                end: Offset.zero,
-              ).animate(curved),
-              child: child,
-            ),
+          return AppPageTransition(
+            animation: animation,
+            secondaryAnimation: secondaryAnimation,
+            motion: motion,
+            child: child,
           );
         },
   );

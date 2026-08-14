@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../app/app_routes.dart';
+import '../../app/theme/app_animations.dart';
 import '../../app/theme/app_spacing.dart';
 import '../../app/theme/app_theme_extension.dart';
 import '../../features/catalog/application/catalog_mode.dart';
@@ -216,49 +217,118 @@ class _ResponsiveScaffoldState extends ConsumerState<ResponsiveScaffold> {
 void _showCatalogSwitchBanner(BuildContext context, CatalogMode mode) {
   final OverlayState? overlay = Overlay.maybeOf(context);
   if (overlay == null) return;
-  final OverlayEntry entry = OverlayEntry(
-    builder: (BuildContext context) {
-      final ColorScheme scheme = Theme.of(context).colorScheme;
-      return Positioned(
-        top: MediaQuery.paddingOf(context).top + 12,
-        left: 24,
-        right: 24,
-        child: Center(
-          child: Material(
-            color: Colors.transparent,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: scheme.inverseSurface,
-                borderRadius: BorderRadius.circular(12),
-                boxShadow: <BoxShadow>[
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.22),
-                    blurRadius: 22,
-                    offset: const Offset(0, 8),
+  late final OverlayEntry entry;
+  entry = OverlayEntry(
+    builder: (BuildContext context) => _CatalogSwitchBanner(
+      mode: mode,
+      onDismissed: () {
+        if (entry.mounted) entry.remove();
+      },
+    ),
+  );
+  overlay.insert(entry);
+}
+
+class _CatalogSwitchBanner extends StatefulWidget {
+  const _CatalogSwitchBanner({required this.mode, required this.onDismissed});
+
+  final CatalogMode mode;
+  final VoidCallback onDismissed;
+
+  @override
+  State<_CatalogSwitchBanner> createState() => _CatalogSwitchBannerState();
+}
+
+class _CatalogSwitchBannerState extends State<_CatalogSwitchBanner>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(vsync: this);
+  Timer? _dismissTimer;
+  bool _started = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_started) return;
+    _started = true;
+    _controller
+      ..duration = AppAnimations.duration(context, AppAnimations.medium)
+      ..reverseDuration = AppAnimations.duration(context, AppAnimations.quick)
+      ..forward();
+    _dismissTimer = Timer(const Duration(seconds: 3), _dismiss);
+  }
+
+  Future<void> _dismiss() async {
+    if (!mounted) return;
+    try {
+      await _controller.reverse().orCancel;
+    } on TickerCanceled {
+      return;
+    }
+    if (mounted) widget.onDismissed();
+  }
+
+  @override
+  void dispose() {
+    _dismissTimer?.cancel();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    final Animation<double> curved = CurvedAnimation(
+      parent: _controller,
+      curve: AppAnimations.emphasized,
+      reverseCurve: AppAnimations.exit,
+    );
+    return Positioned(
+      top: MediaQuery.paddingOf(context).top + 12,
+      left: AppSpacing.lg,
+      right: AppSpacing.lg,
+      child: Center(
+        child: FadeTransition(
+          opacity: curved,
+          child: SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(0, -0.35),
+              end: Offset.zero,
+            ).animate(curved),
+            child: ScaleTransition(
+              scale: Tween<double>(begin: 0.96, end: 1).animate(curved),
+              child: Material(
+                color: Colors.transparent,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: scheme.inverseSurface,
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: <BoxShadow>[
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.22),
+                        blurRadius: 22,
+                        offset: const Offset(0, 8),
+                      ),
+                    ],
                   ),
-                ],
-              ),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 18,
-                  vertical: 12,
-                ),
-                child: Text(
-                  'Switched to ${mode.label}',
-                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                    color: scheme.onInverseSurface,
-                    fontWeight: FontWeight.w700,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 18,
+                      vertical: 12,
+                    ),
+                    child: Text(
+                      'Switched to ${widget.mode.label}',
+                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                        color: scheme.onInverseSurface,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
                   ),
                 ),
               ),
             ),
           ),
         ),
-      );
-    },
-  );
-  overlay.insert(entry);
-  Future<void>.delayed(const Duration(seconds: 3), () {
-    if (entry.mounted) entry.remove();
-  });
+      ),
+    );
+  }
 }

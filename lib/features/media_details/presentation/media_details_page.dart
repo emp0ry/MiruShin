@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../../../app/app_routes.dart';
 import '../../../app/localization/app_localizations.dart';
 import '../../../app/navigation_helpers.dart';
+import '../../../app/theme/app_animations.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_radius.dart';
 import '../../../app/theme/app_spacing.dart';
@@ -72,6 +73,39 @@ class _MediaDetailsPageState extends ConsumerState<MediaDetailsPage> {
       orElse: () => null,
     );
     final MediaItem? item = _withStickyTrailer(details ?? widget.initialItem);
+    final Widget pageState;
+    if (item == null && asyncDetails.isLoading) {
+      pageState = const SkeletonBox(
+        key: ValueKey<String>('details-loading'),
+        height: 520,
+        radius: AppRadius.xxl,
+      );
+    } else if (item == null) {
+      pageState = NeutralPlaceholder(
+        key: const ValueKey<String>('details-unavailable'),
+        title: context.t('Details unavailable'),
+        message: context.t(
+          'Metadata details could not be loaded. Check your settings.',
+        ),
+        height: 420,
+        icon: Icons.info_outline_rounded,
+        action: OutlinedButton.icon(
+          onPressed: () => context.go(AppRoutes.discovery),
+          icon: const Icon(Icons.explore_rounded),
+          label: Text(context.t('Discovery')),
+        ),
+      );
+    } else {
+      pageState = Column(
+        key: ValueKey<String>('details-${item.id}'),
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          _DetailsHero(item: item),
+          const SizedBox(height: AppSpacing.xxl),
+          _DetailsBody(item: item),
+        ],
+      );
+    }
 
     return AdaptivePage(
       child: SingleChildScrollView(
@@ -79,27 +113,31 @@ class _MediaDetailsPageState extends ConsumerState<MediaDetailsPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
             const CatalogOfflineBanner(),
-            if (item == null && asyncDetails.isLoading)
-              const SkeletonBox(height: 520, radius: AppRadius.xxl)
-            else if (item == null)
-              NeutralPlaceholder(
-                title: context.t('Details unavailable'),
-                message: context.t(
-                  'Metadata details could not be loaded. Check your settings.',
-                ),
-                height: 420,
-                icon: Icons.info_outline_rounded,
-                action: OutlinedButton.icon(
-                  onPressed: () => context.go(AppRoutes.discovery),
-                  icon: const Icon(Icons.explore_rounded),
-                  label: Text(context.t('Discovery')),
-                ),
-              )
-            else ...<Widget>[
-              _DetailsHero(item: item),
-              const SizedBox(height: AppSpacing.xxl),
-              _DetailsBody(item: item),
-            ],
+            AnimatedSwitcher(
+              duration: AppAnimations.duration(context, AppAnimations.medium),
+              switchInCurve: AppAnimations.emphasized,
+              switchOutCurve: AppAnimations.exit,
+              layoutBuilder:
+                  (Widget? currentChild, List<Widget> previousChildren) {
+                    return Stack(
+                      alignment: Alignment.topCenter,
+                      children: <Widget>[...previousChildren, ?currentChild],
+                    );
+                  },
+              transitionBuilder: (Widget child, Animation<double> animation) {
+                return FadeTransition(
+                  opacity: animation,
+                  child: SlideTransition(
+                    position: Tween<Offset>(
+                      begin: const Offset(0, 0.012),
+                      end: Offset.zero,
+                    ).animate(animation),
+                    child: child,
+                  ),
+                );
+              },
+              child: pageState,
+            ),
           ],
         ),
       ),

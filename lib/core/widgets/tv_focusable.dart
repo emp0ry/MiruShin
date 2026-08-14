@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../app/theme/app_animations.dart';
 import '../../app/theme/app_radius.dart';
 
 /// Wraps an interactive child with a prominent, D-pad-friendly focus indicator:
@@ -134,14 +135,18 @@ class _TvFocusableState extends State<TvFocusable> {
     final Color accent = Theme.of(context).colorScheme.primary;
     final BorderRadius radius =
         widget.borderRadius ?? AppRadius.all(AppRadius.lg);
+    final Duration motionDuration = AppAnimations.duration(
+      context,
+      AppAnimations.quick,
+    );
 
     Widget content = AnimatedScale(
-      duration: const Duration(milliseconds: 140),
-      curve: Curves.easeOutCubic,
+      duration: motionDuration,
+      curve: AppAnimations.standard,
       scale: _focused ? widget.scale : 1,
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 140),
-        curve: Curves.easeOutCubic,
+        duration: motionDuration,
+        curve: AppAnimations.standard,
         foregroundDecoration: BoxDecoration(
           borderRadius: radius,
           border: Border.all(

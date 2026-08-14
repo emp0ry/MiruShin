@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/localization/app_localizations.dart';
+import '../../app/theme/app_animations.dart';
 import '../../app/theme/app_colors.dart';
 import '../../app/theme/app_radius.dart';
 import '../../app/theme/app_spacing.dart';
@@ -41,11 +42,18 @@ class MediaPosterCard extends ConsumerStatefulWidget {
 
 class _MediaPosterCardState extends ConsumerState<MediaPosterCard> {
   bool _hovered = false;
+  bool _pressed = false;
 
   @override
   Widget build(BuildContext context) {
     final CatalogMode mode = ref.watch(catalogModeProvider);
     final MediaItem item = widget.item;
+    final Color accent = Theme.of(context).colorScheme.primary;
+    final Duration motionDuration = AppAnimations.duration(
+      context,
+      AppAnimations.quick,
+    );
+    final double scale = _pressed ? 0.985 : (_hovered ? 1.025 : 1);
     return TvFocusable(
       onTap: widget.onTap,
       // Holding the D-pad centre / Enter long-presses (e.g. opens the AniList
@@ -56,108 +64,143 @@ class _MediaPosterCardState extends ConsumerState<MediaPosterCard> {
       interactPointer: false,
       child: MouseRegion(
         onEnter: (_) => setState(() => _hovered = true),
-        onExit: (_) => setState(() => _hovered = false),
+        onExit: (_) => setState(() {
+          _hovered = false;
+          _pressed = false;
+        }),
         child: AnimatedScale(
-          duration: const Duration(milliseconds: 160),
-          curve: Curves.easeOutCubic,
-          scale: _hovered ? 1.025 : 1,
-          child: InkWell(
-            canRequestFocus: false,
-            borderRadius: AppRadius.all(AppRadius.lg),
-            onTap: widget.onTap,
-            onLongPress: widget.onLongPress,
-            onSecondaryTap: widget.onSecondaryTap,
-            child: ClipRRect(
+          duration: motionDuration,
+          curve: AppAnimations.emphasized,
+          scale: scale,
+          child: AnimatedContainer(
+            duration: motionDuration,
+            curve: AppAnimations.standard,
+            foregroundDecoration: BoxDecoration(
               borderRadius: AppRadius.all(AppRadius.lg),
-              child: Stack(
-                fit: StackFit.expand,
-                children: <Widget>[
-                  if (item.posterUrl.isEmpty)
-                    _PosterFallback(title: item.title)
-                  else
-                    CachedNetworkImage(
-                      imageUrl: item.posterUrl,
-                      fit: BoxFit.cover,
-                      placeholder: (BuildContext context, String url) =>
-                          const SkeletonBox(),
-                      errorWidget:
-                          (BuildContext context, String url, Object error) =>
-                              _PosterFallback(title: item.title),
-                    ),
-                  DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: <Color>[
-                          Colors.transparent,
-                          Colors.black.withValues(alpha: 0.24),
-                          Colors.black.withValues(alpha: 0.92),
-                        ],
+              border: Border.all(
+                color: _hovered
+                    ? accent.withValues(alpha: 0.52)
+                    : Colors.transparent,
+                width: 1.5,
+              ),
+            ),
+            decoration: BoxDecoration(
+              borderRadius: AppRadius.all(AppRadius.lg),
+              boxShadow: _hovered && !_pressed
+                  ? <BoxShadow>[
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.30),
+                        blurRadius: 24,
+                        offset: const Offset(0, 10),
                       ),
-                    ),
-                  ),
-                  if (widget.watchProgress != null)
-                    Positioned(
-                      left: 0,
-                      right: 0,
-                      bottom: 0,
-                      child: _ProgressBar(progress: widget.watchProgress!),
-                    ),
-                  if (widget.statusBadgeLabel?.trim().isNotEmpty == true)
-                    Positioned(
-                      left: AppSpacing.sm,
-                      top: AppSpacing.sm,
-                      child: _PosterStatusBadge(
-                        label: widget.statusBadgeLabel!.trim(),
+                      BoxShadow(
+                        color: accent.withValues(alpha: 0.13),
+                        blurRadius: 18,
                       ),
-                    ),
-                  Positioned(
-                    left: AppSpacing.md,
-                    right: AppSpacing.md,
-                    bottom: widget.watchProgress != null
-                        ? AppSpacing.md + 4
-                        : AppSpacing.md,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: <Widget>[
-                        Text(
-                          item.title,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.titleMedium
-                              ?.copyWith(color: Colors.white),
+                    ]
+                  : const <BoxShadow>[],
+            ),
+            child: InkWell(
+              canRequestFocus: false,
+              borderRadius: AppRadius.all(AppRadius.lg),
+              onTap: widget.onTap,
+              onLongPress: widget.onLongPress,
+              onSecondaryTap: widget.onSecondaryTap,
+              onHighlightChanged: (bool value) {
+                if (_pressed != value) setState(() => _pressed = value);
+              },
+              child: ClipRRect(
+                borderRadius: AppRadius.all(AppRadius.lg),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: <Widget>[
+                    if (item.posterUrl.isEmpty)
+                      _PosterFallback(title: item.title)
+                    else
+                      CachedNetworkImage(
+                        imageUrl: item.posterUrl,
+                        fit: BoxFit.cover,
+                        placeholder: (BuildContext context, String url) =>
+                            const SkeletonBox(),
+                        errorWidget:
+                            (BuildContext context, String url, Object error) =>
+                                _PosterFallback(title: item.title),
+                      ),
+                    DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: <Color>[
+                            Colors.transparent,
+                            Colors.black.withValues(alpha: 0.24),
+                            Colors.black.withValues(alpha: 0.92),
+                          ],
                         ),
-                        if (!widget.compact) ...<Widget>[
-                          const SizedBox(height: AppSpacing.sm),
-                          Wrap(
-                            spacing: AppSpacing.xs,
-                            runSpacing: AppSpacing.xs,
-                            children: <Widget>[
-                              MetadataChip(
-                                label: item.year.toString(),
-                                onImage: true,
-                              ),
-                              if (item.rating > 0 && item.rating <= 10)
-                                MetadataChip(
-                                  icon: Icons.star_rounded,
-                                  label: item.rating.toStringAsFixed(1),
-                                  color: AppColors.accentAmber,
-                                  onImage: true,
-                                ),
-                              if (mode != CatalogMode.anilist)
-                                MetadataChip(
-                                  label: context.t(item.type.labelKey),
-                                  onImage: true,
-                                ),
-                            ],
-                          ),
-                        ],
-                      ],
+                      ),
                     ),
-                  ),
-                ],
+                    if (widget.watchProgress != null)
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        child: _ProgressBar(progress: widget.watchProgress!),
+                      ),
+                    if (widget.statusBadgeLabel?.trim().isNotEmpty == true)
+                      Positioned(
+                        left: AppSpacing.sm,
+                        top: AppSpacing.sm,
+                        child: _PosterStatusBadge(
+                          label: widget.statusBadgeLabel!.trim(),
+                        ),
+                      ),
+                    Positioned(
+                      left: AppSpacing.md,
+                      right: AppSpacing.md,
+                      bottom: widget.watchProgress != null
+                          ? AppSpacing.md + 4
+                          : AppSpacing.md,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: <Widget>[
+                          Text(
+                            item.title,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.titleMedium
+                                ?.copyWith(color: Colors.white),
+                          ),
+                          if (!widget.compact) ...<Widget>[
+                            const SizedBox(height: AppSpacing.sm),
+                            Wrap(
+                              spacing: AppSpacing.xs,
+                              runSpacing: AppSpacing.xs,
+                              children: <Widget>[
+                                MetadataChip(
+                                  label: item.year.toString(),
+                                  onImage: true,
+                                ),
+                                if (item.rating > 0 && item.rating <= 10)
+                                  MetadataChip(
+                                    icon: Icons.star_rounded,
+                                    label: item.rating.toStringAsFixed(1),
+                                    color: AppColors.accentAmber,
+                                    onImage: true,
+                                  ),
+                                if (mode != CatalogMode.anilist)
+                                  MetadataChip(
+                                    label: context.t(item.type.labelKey),
+                                    onImage: true,
+                                  ),
+                              ],
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),

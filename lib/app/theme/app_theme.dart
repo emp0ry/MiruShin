@@ -125,6 +125,29 @@ abstract final class AppTheme {
           side: BorderSide(color: palette.borderColor),
         ),
       ),
+      dialogTheme: DialogThemeData(
+        backgroundColor: palette.surfaceColor,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: AppRadius.all(AppRadius.xl),
+          side: BorderSide(color: palette.borderColor),
+        ),
+      ),
+      snackBarTheme: SnackBarThemeData(
+        behavior: SnackBarBehavior.floating,
+        elevation: 0,
+        backgroundColor: colorScheme.inverseSurface,
+        contentTextStyle: TextStyle(
+          color: colorScheme.onInverseSurface,
+          fontWeight: FontWeight.w600,
+        ),
+        actionTextColor: colorScheme.primary,
+        insetPadding: const EdgeInsets.all(AppSpacing.lg),
+        shape: RoundedRectangleBorder(
+          borderRadius: AppRadius.all(AppRadius.md),
+        ),
+      ),
       iconButtonTheme: IconButtonThemeData(
         style: ButtonStyle(
           foregroundColor: WidgetStatePropertyAll<Color>(
@@ -308,6 +331,27 @@ abstract final class AppTheme {
         activeTrackColor: colorScheme.primary,
         inactiveTrackColor: palette.surfaceSoftColor,
         thumbColor: colorScheme.primary,
+      ),
+      progressIndicatorTheme: ProgressIndicatorThemeData(
+        color: colorScheme.primary,
+        linearTrackColor: palette.surfaceSoftColor,
+        circularTrackColor: palette.surfaceSoftColor,
+      ),
+      scrollbarTheme: ScrollbarThemeData(
+        radius: const Radius.circular(AppRadius.sm),
+        thickness: WidgetStateProperty.resolveWith<double?>((
+          Set<WidgetState> states,
+        ) {
+          return states.contains(WidgetState.hovered) ? 8 : 5;
+        }),
+        thumbColor: WidgetStateProperty.resolveWith<Color?>((
+          Set<WidgetState> states,
+        ) {
+          final double opacity = states.contains(WidgetState.hovered)
+              ? 0.56
+              : 0.30;
+          return palette.textMutedColor.withValues(alpha: opacity);
+        }),
       ),
       tooltipTheme: TooltipThemeData(
         decoration: BoxDecoration(
