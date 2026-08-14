@@ -593,6 +593,8 @@
   "Double-tap edges": "端をダブルタップ",
   "Hold": "長押し",
   "Horizontal swipe": "横スワイプ",
+  "Horizontal swipe seeking": "横スワイプでシーク",
+  "Drag horizontally across the player to seek.": "プレーヤー上を左右にスワイプしてシークします。",
   "Keyboard": "キーボード",
   "Keyboard shortcuts": "キーボードショートカット",
   "Keys & touch gestures": "キーとタッチ操作",

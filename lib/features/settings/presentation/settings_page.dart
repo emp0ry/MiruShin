@@ -1612,6 +1612,14 @@ class _PlayerEngineSection extends ConsumerWidget {
             },
           ),
         ),
+        SettingsRow(
+          title: context.t('Horizontal swipe seeking'),
+          subtitle: context.t('Drag horizontally across the player to seek.'),
+          trailing: Switch(
+            value: settings.horizontalSwipeSeekEnabled,
+            onChanged: controller.setHorizontalSwipeSeekEnabled,
+          ),
+        ),
       ],
     );
   }

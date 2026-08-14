@@ -14,6 +14,7 @@ class GestureOverlay extends ConsumerStatefulWidget {
     required this.seekInterval,
     required this.isMobile,
     required this.isZoomed,
+    required this.horizontalSwipeSeekEnabled,
     required this.onToggleFullscreen,
     required this.onTogglePlay,
     required this.onZoomChanged,
@@ -27,6 +28,7 @@ class GestureOverlay extends ConsumerStatefulWidget {
   final Duration seekInterval;
   final bool isMobile;
   final bool isZoomed;
+  final bool horizontalSwipeSeekEnabled;
   final VoidCallback onToggleFullscreen;
   final VoidCallback onTogglePlay;
   final ValueChanged<bool> onZoomChanged;
@@ -370,29 +372,35 @@ class _GestureOverlayState extends ConsumerState<GestureOverlay> {
         onLongPressEnd: controlsVisible ? null : (_) => _endTemporarySpeed(),
         onLongPressCancel: controlsVisible ? null : _endTemporarySpeed,
         onDoubleTap: widget.isMobile ? null : _handleDesktopDoubleTap,
-        onHorizontalDragStart: (_) {
-          if (_suppressPointerGestures) return;
-          _hAccum = 0;
-        },
-        onHorizontalDragUpdate: (DragUpdateDetails d) {
-          if (_suppressPointerGestures) return;
-          _hAccum += d.delta.dx;
-          final int secs = (_hAccum / 8).round() * 2;
-          _showChip(secs >= 0 ? '+${secs}s' : '${secs}s');
-        },
-        onHorizontalDragEnd: (_) {
-          if (_suppressPointerGestures) {
-            _hAccum = 0;
-            return;
-          }
-          final int secs = (_hAccum / 8).round() * 2;
-          if (secs != 0) {
-            ref
-                .read(playbackControllerProvider.notifier)
-                .seekBy(Duration(seconds: secs));
-          }
-          _hAccum = 0;
-        },
+        onHorizontalDragStart: widget.horizontalSwipeSeekEnabled
+            ? (_) {
+                if (_suppressPointerGestures) return;
+                _hAccum = 0;
+              }
+            : null,
+        onHorizontalDragUpdate: widget.horizontalSwipeSeekEnabled
+            ? (DragUpdateDetails d) {
+                if (_suppressPointerGestures) return;
+                _hAccum += d.delta.dx;
+                final int secs = (_hAccum / 8).round() * 2;
+                _showChip(secs >= 0 ? '+${secs}s' : '${secs}s');
+              }
+            : null,
+        onHorizontalDragEnd: widget.horizontalSwipeSeekEnabled
+            ? (_) {
+                if (_suppressPointerGestures) {
+                  _hAccum = 0;
+                  return;
+                }
+                final int secs = (_hAccum / 8).round() * 2;
+                if (secs != 0) {
+                  ref
+                      .read(playbackControllerProvider.notifier)
+                      .seekBy(Duration(seconds: secs));
+                }
+                _hAccum = 0;
+              }
+            : null,
         onVerticalDragStart: (DragStartDetails d) {
           if (_suppressPointerGestures) return;
           final double width = MediaQuery.sizeOf(context).width;

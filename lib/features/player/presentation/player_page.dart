@@ -1442,6 +1442,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
                           seekInterval: settings.seekInterval,
                           isMobile: _isMobile,
                           isZoomed: settings.verticalStretch,
+                          horizontalSwipeSeekEnabled:
+                              settings.horizontalSwipeSeekEnabled,
                           enableGestures: !_inPipMode,
                           onToggleFullscreen: _toggleFullscreen,
                           onTogglePlay: () => ref
@@ -4091,6 +4093,7 @@ class _PlayerSettingsTiles extends ConsumerWidget {
           onTap: () => _showMenuSheet(context, 'Player controls', <Widget>[
             PlayerShortcutsView(
               seekSeconds: settings.seekInterval.inSeconds,
+              horizontalSwipeSeekEnabled: settings.horizontalSwipeSeekEnabled,
               pipSupported:
                   NativePlayerService.isSupported ||
                   ref.read(pipControllerProvider).isSupported,
@@ -4242,6 +4245,17 @@ class _PlayerSettingsTiles extends ConsumerWidget {
                 .read(playerSettingsProvider.notifier)
                 .setAutoAnilistSync(value),
           ),
+        SwitchListTile(
+          value: settings.horizontalSwipeSeekEnabled,
+          secondary: const Icon(Icons.swipe_rounded),
+          title: Text(context.t('Horizontal swipe seeking')),
+          subtitle: Text(
+            context.t('Drag horizontally across the player to seek.'),
+          ),
+          onChanged: (bool value) => ref
+              .read(playerSettingsProvider.notifier)
+              .setHorizontalSwipeSeekEnabled(value),
+        ),
         ListTile(
           leading: const Icon(Icons.keyboard_double_arrow_right_rounded),
           title: Text(context.t('Seek interval')),

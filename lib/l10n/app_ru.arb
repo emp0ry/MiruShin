@@ -593,6 +593,8 @@
   "Double-tap edges": "Двойное касание по краям",
   "Hold": "Удерживать",
   "Horizontal swipe": "Свайп по горизонтали",
+  "Horizontal swipe seeking": "Перемотка горизонтальным свайпом",
+  "Drag horizontally across the player to seek.": "Проведите по плееру влево или вправо для перемотки.",
   "Keyboard": "Клавиатура",
   "Keyboard shortcuts": "Горячие клавиши",
   "Keys & touch gestures": "Клавиши и жесты",

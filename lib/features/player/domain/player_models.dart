@@ -275,6 +275,7 @@ class PlayerSettings {
     this.playbackSpeed = 1,
     this.volume = 1,
     this.verticalStretch = false,
+    this.horizontalSwipeSeekEnabled = true,
     this.preferredQuality = 'auto',
     this.preferredVoiceover = '',
     this.preferredSubtitleLanguage = '',
@@ -304,6 +305,7 @@ class PlayerSettings {
   final double playbackSpeed;
   final double volume;
   final bool verticalStretch;
+  final bool horizontalSwipeSeekEnabled;
   final String preferredQuality;
   final String preferredVoiceover;
   final String preferredSubtitleLanguage;
@@ -333,6 +335,7 @@ class PlayerSettings {
     double? playbackSpeed,
     double? volume,
     bool? verticalStretch,
+    bool? horizontalSwipeSeekEnabled,
     String? preferredQuality,
     String? preferredVoiceover,
     String? preferredSubtitleLanguage,
@@ -362,6 +365,8 @@ class PlayerSettings {
       playbackSpeed: playbackSpeed ?? this.playbackSpeed,
       volume: volume ?? this.volume,
       verticalStretch: verticalStretch ?? this.verticalStretch,
+      horizontalSwipeSeekEnabled:
+          horizontalSwipeSeekEnabled ?? this.horizontalSwipeSeekEnabled,
       preferredQuality: preferredQuality ?? this.preferredQuality,
       preferredVoiceover: preferredVoiceover ?? this.preferredVoiceover,
       preferredSubtitleLanguage:
@@ -398,6 +403,7 @@ class PlayerSettings {
     'playbackSpeed': playbackSpeed,
     'volume': volume,
     'verticalStretch': verticalStretch,
+    'horizontalSwipeSeekEnabled': horizontalSwipeSeekEnabled,
     'preferredQuality': preferredQuality,
     'preferredVoiceover': preferredVoiceover,
     'preferredSubtitleLanguage': preferredSubtitleLanguage,
@@ -434,6 +440,8 @@ class PlayerSettings {
           .clamp(0.0, 1.0)
           .toDouble(),
       verticalStretch: json['verticalStretch'] as bool? ?? false,
+      horizontalSwipeSeekEnabled:
+          json['horizontalSwipeSeekEnabled'] as bool? ?? true,
       preferredQuality: json['preferredQuality'] as String? ?? 'auto',
       preferredVoiceover: json['preferredVoiceover'] as String? ?? '',
       preferredSubtitleLanguage:

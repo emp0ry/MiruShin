@@ -10,6 +10,7 @@ class PlayerShortcutsView extends StatelessWidget {
   const PlayerShortcutsView({
     required this.seekSeconds,
     this.pipSupported = false,
+    this.horizontalSwipeSeekEnabled = true,
     super.key,
   });
 
@@ -18,6 +19,9 @@ class PlayerShortcutsView extends StatelessWidget {
 
   /// Whether this device can enter Picture-in-Picture (hides the P key if not).
   final bool pipSupported;
+
+  /// Whether horizontal swipe seeking is active in player settings.
+  final bool horizontalSwipeSeekEnabled;
 
   @override
   Widget build(BuildContext context) {
@@ -98,11 +102,12 @@ class PlayerShortcutsView extends StatelessWidget {
           gesture: context.t('Vertical swipe'),
           action: context.t('Volume'),
         ),
-        _GestureRow(
-          icon: Icons.swap_horiz_rounded,
-          gesture: context.t('Horizontal swipe'),
-          action: context.t('Seek'),
-        ),
+        if (horizontalSwipeSeekEnabled)
+          _GestureRow(
+            icon: Icons.swap_horiz_rounded,
+            gesture: context.t('Horizontal swipe'),
+            action: context.t('Seek'),
+          ),
         _GestureRow(
           icon: Icons.pinch_rounded,
           gesture: context.t('Pinch'),

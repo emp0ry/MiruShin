@@ -53,6 +53,11 @@ class PlayerSettingsController extends AsyncNotifier<PlayerSettings> {
     await _update(current.copyWith(verticalStretch: value));
   }
 
+  Future<void> setHorizontalSwipeSeekEnabled(bool value) async {
+    final PlayerSettings current = state.value ?? const PlayerSettings();
+    await _update(current.copyWith(horizontalSwipeSeekEnabled: value));
+  }
+
   Future<void> setSeekInterval(Duration interval) async {
     final PlayerSettings current = state.value ?? const PlayerSettings();
     await _update(current.copyWith(seekInterval: interval));
