@@ -70,7 +70,7 @@ jobs:
     needs: [select-draft-release, build-all]
     runs-on: ubuntu-latest
     permissions:
-      actions: read
+      actions: write
       contents: write
     steps:
       - name: Download bundled artifacts
@@ -86,6 +86,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ needs.select-draft-release.outputs.tag }}
           PUBLISH_AFTER_UPLOAD: ${{ inputs.publish_after_upload }}
+          SOURCE_REF: ${{ github.ref_name }}
         run: |
           set -euo pipefail
 
@@ -107,6 +108,9 @@ jobs:
           if [[ "$PUBLISH_AFTER_UPLOAD" == "true" ]]; then
             echo "Publishing $RELEASE_TAG after the successful upload."
             gh release edit "$RELEASE_TAG" --draft=false --latest
+            # Events created by GITHUB_TOKEN do not start other workflows, so
+            # explicitly refresh the AltStore-compatible source after publish.
+            gh workflow run altstore-source.yml --ref "$SOURCE_REF"
           fi
 
           {
@@ -115,6 +119,7 @@ jobs:
             echo "Uploaded ${#assets[@]} assets to \`$RELEASE_TAG\`."
             if [[ "$PUBLISH_AFTER_UPLOAD" == "true" ]]; then
               echo "Published \`$RELEASE_TAG\` after the upload completed."
+              echo "Triggered the AltStore source refresh."
             else
               echo "Left \`$RELEASE_TAG\` as a draft."
             fi
