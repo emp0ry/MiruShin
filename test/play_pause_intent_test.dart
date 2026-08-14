@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mirushin/features/library/application/local_library_provider.dart';
 import 'package:mirushin/features/player/application/playback_controller.dart';
+import 'package:mirushin/features/player/application/player_settings.dart';
 import 'package:mirushin/features/player/domain/player_models.dart';
 import 'package:mirushin/features/player/engine/player_engine.dart';
 import 'package:mirushin/shared/models/media_item.dart';
@@ -216,6 +217,25 @@ void main() {
       expect(progress?.positionSeconds, 252);
       expect(progress?.completed, isFalse);
     });
+
+    test('mobile playback controller keeps app-side volume at 100%', () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final ProviderContainer c = container();
+      await c.read(playerSettingsProvider.future);
+      final PlaybackController controller = c.read(
+        playbackControllerProvider.notifier,
+      );
+      final _FakePlayerEngine engine = _FakePlayerEngine(
+        const PlayerEngineState(isInitialized: true, volume: 0.25),
+      );
+      controller.debugSetPlaybackState(PlaybackState(engine: engine));
+
+      await controller.setVolume(0.2);
+
+      expect(engine.lastSetVolume, 1);
+      expect(c.read(playerSettingsProvider).value?.volume, 1);
+    });
   });
 }
 
@@ -247,6 +267,7 @@ class _FakePlayerEngine extends PlayerEngine {
   int pauseCalls = 0;
   int seekCalls = 0;
   int disposeCalls = 0;
+  double? lastSetVolume;
 
   @override
   ValueListenable<PlayerEngineState> get state => _state;
@@ -294,7 +315,10 @@ class _FakePlayerEngine extends PlayerEngine {
   Future<void> setPlaybackSpeed(double speed) async {}
 
   @override
-  Future<void> setVolume(double volume) async {}
+  Future<void> setVolume(double volume) async {
+    lastSetVolume = volume;
+    _state.value = _state.value.copyWith(volume: volume);
+  }
 
   @override
   Future<void> dispose() async {

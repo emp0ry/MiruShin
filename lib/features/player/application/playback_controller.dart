@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/localization/app_localizations.dart';
+import '../../../core/platform/tv_platform.dart';
 import '../../../shared/models/anilist_models.dart';
 import '../../../shared/models/media_item.dart';
 import '../../addons/data/anime_titles_service.dart';
@@ -22,6 +23,7 @@ import '../data/media_session_service.dart';
 import '../data/subtitle_loader.dart';
 import '../domain/offline_stall_recovery.dart';
 import '../domain/player_models.dart';
+import '../domain/player_volume_policy.dart';
 import '../domain/seek_settle.dart';
 import '../engine/local_hls_proxy.dart';
 import '../engine/player_engine.dart';
@@ -237,6 +239,12 @@ class PlaybackController extends Notifier<PlaybackState> {
   // stream ends. Auto-play mode advances immediately (no overlay), so this only
   // affects the button overlay.
   static const Duration _autoNextOverlayDelay = Duration(seconds: 2);
+
+  bool get _usesSystemVolumeOnly => usesSystemVolumeOnly(
+    isWeb: kIsWeb,
+    platform: defaultTargetPlatform,
+    isAndroidTv: TvPlatform.isAndroidTv,
+  );
 
   Timer? _progressTimer;
   Timer? _offlineStallTimer;
@@ -1025,7 +1033,12 @@ class PlaybackController extends Notifier<PlaybackState> {
       }
       final double targetPlaybackSpeed = _effectivePlaybackSpeed(settings);
       await engine.setPlaybackSpeed(targetPlaybackSpeed);
-      await engine.setVolume(settings.volume);
+      await engine.setVolume(
+        effectivePlayerOutputVolume(
+          configuredVolume: settings.volume,
+          systemVolumeOnly: _usesSystemVolumeOnly,
+        ),
+      );
       final bool effectiveAutoplay =
           autoplay && (!respectDesiredPlaying || state.desiredPlaying);
       if (effectiveAutoplay) await engine.play();
@@ -3196,9 +3209,12 @@ class PlaybackController extends Notifier<PlaybackState> {
   }
 
   Future<void> setVolume(double volume) async {
-    final double clamped = volume.clamp(0.0, 1.0).toDouble();
-    await state.engine?.setVolume(clamped);
-    await ref.read(playerSettingsProvider.notifier).setVolume(clamped);
+    final double effective = effectivePlayerOutputVolume(
+      configuredVolume: volume,
+      systemVolumeOnly: _usesSystemVolumeOnly,
+    );
+    await state.engine?.setVolume(effective);
+    await ref.read(playerSettingsProvider.notifier).setVolume(effective);
     state = state.copyWith();
   }
 

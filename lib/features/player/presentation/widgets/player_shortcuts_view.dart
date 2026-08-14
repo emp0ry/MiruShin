@@ -11,6 +11,7 @@ class PlayerShortcutsView extends StatelessWidget {
     required this.seekSeconds,
     this.pipSupported = false,
     this.horizontalSwipeSeekEnabled = true,
+    this.volumeControlsEnabled = true,
     super.key,
   });
 
@@ -22,6 +23,9 @@ class PlayerShortcutsView extends StatelessWidget {
 
   /// Whether horizontal swipe seeking is active in player settings.
   final bool horizontalSwipeSeekEnabled;
+
+  /// Whether MiruShin-side volume controls are available on this platform.
+  final bool volumeControlsEnabled;
 
   @override
   Widget build(BuildContext context) {
@@ -43,10 +47,12 @@ class PlayerShortcutsView extends StatelessWidget {
         ),
         const SizedBox(height: 18),
         // Arrow cluster laid out like a real keyboard d-pad.
-        Center(
-          child: _LabeledKey(glyph: '↑', label: context.t('Volume up')),
-        ),
-        const SizedBox(height: 10),
+        if (volumeControlsEnabled) ...<Widget>[
+          Center(
+            child: _LabeledKey(glyph: '↑', label: context.t('Volume up')),
+          ),
+          const SizedBox(height: 10),
+        ],
         Center(
           child: Row(
             mainAxisSize: MainAxisSize.min,
@@ -54,8 +60,10 @@ class PlayerShortcutsView extends StatelessWidget {
             children: <Widget>[
               _LabeledKey(glyph: '←', label: '−${step}s'),
               const SizedBox(width: 10),
-              _LabeledKey(glyph: '↓', label: context.t('Volume down')),
-              const SizedBox(width: 10),
+              if (volumeControlsEnabled) ...<Widget>[
+                _LabeledKey(glyph: '↓', label: context.t('Volume down')),
+                const SizedBox(width: 10),
+              ],
               _LabeledKey(glyph: '→', label: '+${step}s'),
             ],
           ),
@@ -68,7 +76,8 @@ class PlayerShortcutsView extends StatelessWidget {
           runSpacing: 16,
           children: <Widget>[
             _LabeledKey(glyph: 'F', label: context.t('Fullscreen')),
-            _LabeledKey(glyph: 'M', label: context.t('Mute')),
+            if (volumeControlsEnabled)
+              _LabeledKey(glyph: 'M', label: context.t('Mute')),
             _LabeledKey(glyph: 'C', label: context.t('Subtitles')),
             _LabeledKey(glyph: 'E', label: context.t('Episodes')),
             _LabeledKey(glyph: 'Q', label: context.t('Quality')),
@@ -96,11 +105,6 @@ class PlayerShortcutsView extends StatelessWidget {
           icon: Icons.fast_forward_rounded,
           gesture: context.t('Long-press'),
           action: context.t('Speed up'),
-        ),
-        _GestureRow(
-          icon: Icons.swap_vert_rounded,
-          gesture: context.t('Vertical swipe'),
-          action: context.t('Volume'),
         ),
         if (horizontalSwipeSeekEnabled)
           _GestureRow(

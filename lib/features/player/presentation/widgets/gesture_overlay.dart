@@ -4,7 +4,6 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../application/playback_controller.dart';
-import '../../engine/player_engine.dart';
 
 class GestureOverlay extends ConsumerStatefulWidget {
   const GestureOverlay({
@@ -34,8 +33,8 @@ class GestureOverlay extends ConsumerStatefulWidget {
   final ValueChanged<bool> onZoomChanged;
 
   /// When false (e.g. Windows mini-player PiP) all tap/drag/double-tap/seek/
-  /// volume gestures are disabled so the surface can be used purely to drag and
-  /// resize the small window.
+  /// gestures are disabled so the surface can be used purely to drag and resize
+  /// the small window.
   final bool enableGestures;
 
   @override
@@ -56,9 +55,6 @@ class _GestureOverlayState extends ConsumerState<GestureOverlay> {
   Timer? _pinchSuppressTimer;
   Duration _seekChipAccum = Duration.zero;
   double _hAccum = 0;
-  double _vAccum = 0;
-  double _vStartVolume = 1.0;
-  bool _vRight = false;
   bool _temporarySpeedActive = false;
   bool _temporarySpeedPressing = false;
   bool _pinchActive = false;
@@ -401,31 +397,6 @@ class _GestureOverlayState extends ConsumerState<GestureOverlay> {
                 _hAccum = 0;
               }
             : null,
-        onVerticalDragStart: (DragStartDetails d) {
-          if (_suppressPointerGestures) return;
-          final double width = MediaQuery.sizeOf(context).width;
-          _vRight = d.localPosition.dx > width / 2;
-          _vAccum = 0;
-          final PlayerEngine? ctrl = ref
-              .read(playbackControllerProvider)
-              .engine;
-          _vStartVolume = ctrl?.value.volume ?? 1.0;
-        },
-        onVerticalDragUpdate: (DragUpdateDetails d) {
-          if (_suppressPointerGestures || !_vRight) return;
-          _vAccum -= d.delta.dy;
-          final double height = MediaQuery.sizeOf(context).height;
-          final double newVol = (_vStartVolume + _vAccum / height * 3).clamp(
-            0.0,
-            1.0,
-          );
-          ref.read(playbackControllerProvider.notifier).setVolume(newVol);
-          _showChip('Vol ${(newVol * 100).round()}%');
-        },
-        onVerticalDragEnd: (_) {
-          _vAccum = 0;
-          _vRight = false;
-        },
         child: Stack(
           fit: StackFit.expand,
           children: <Widget>[

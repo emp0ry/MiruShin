@@ -55,7 +55,9 @@ void main() {
     expect(detector.onHorizontalDragStart, isNull);
     expect(detector.onHorizontalDragUpdate, isNull);
     expect(detector.onHorizontalDragEnd, isNull);
-    expect(detector.onVerticalDragUpdate, isNotNull);
+    expect(detector.onVerticalDragStart, isNull);
+    expect(detector.onVerticalDragUpdate, isNull);
+    expect(detector.onVerticalDragEnd, isNull);
     expect(detector.onTapUp, isNotNull);
   });
 
@@ -70,5 +72,20 @@ void main() {
     expect(detector.onHorizontalDragStart, isNotNull);
     expect(detector.onHorizontalDragUpdate, isNotNull);
     expect(detector.onHorizontalDragEnd, isNotNull);
+  });
+
+  testWidgets('never installs vertical volume drag recognizers', (
+    WidgetTester tester,
+  ) async {
+    final GestureDetector detector = await pumpOverlay(
+      tester,
+      horizontalSwipeSeekEnabled: true,
+    );
+
+    expect(detector.onVerticalDragStart, isNull);
+    expect(detector.onVerticalDragUpdate, isNull);
+    expect(detector.onVerticalDragEnd, isNull);
+    expect(detector.onHorizontalDragUpdate, isNotNull);
+    expect(detector.onTapUp, isNotNull);
   });
 }

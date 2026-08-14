@@ -24,6 +24,7 @@ import '../data/pip_controller.dart';
 import '../data/subtitle_loader.dart';
 import '../domain/auto_skip.dart';
 import '../domain/player_models.dart';
+import '../domain/player_volume_policy.dart';
 import '../engine/player_engine.dart';
 import 'widgets/auto_next_overlay.dart';
 import 'widgets/gesture_overlay.dart';
@@ -381,6 +382,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
 
   bool get _shouldStartFullscreen => _isMobile || widget.startInFullscreen;
 
+  bool get _usesSystemVolumeOnly => usesSystemVolumeOnly(
+    isWeb: kIsWeb,
+    platform: defaultTargetPlatform,
+    isAndroidTv: _isTv,
+  );
+
   KeyEventResult _handlePlayerShortcutEvent(KeyEvent event) {
     if (!mounted || _nativePipActive) return KeyEventResult.ignored;
     if (event is! KeyDownEvent &&
@@ -416,6 +423,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
   }
 
   bool _isPlayerShortcutKey(LogicalKeyboardKey key) {
+    if (_usesSystemVolumeOnly &&
+        (key == LogicalKeyboardKey.arrowUp ||
+            key == LogicalKeyboardKey.arrowDown ||
+            key == LogicalKeyboardKey.keyM)) {
+      return false;
+    }
     return key == LogicalKeyboardKey.space ||
         key == LogicalKeyboardKey.mediaPlayPause ||
         key == LogicalKeyboardKey.arrowLeft ||
@@ -1220,11 +1233,13 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
           backward: false,
         ),
       },
-      if (!_isTv) ...const <ShortcutActivator, Intent>{
+      if (!_isTv &&
+          !_usesSystemVolumeOnly) ...const <ShortcutActivator, Intent>{
         SingleActivator(LogicalKeyboardKey.arrowUp): _VolumeIntent(up: true),
         SingleActivator(LogicalKeyboardKey.arrowDown): _VolumeIntent(up: false),
       },
-      const SingleActivator(LogicalKeyboardKey.keyM): _MuteIntent(),
+      if (!_usesSystemVolumeOnly)
+        const SingleActivator(LogicalKeyboardKey.keyM): _MuteIntent(),
       const SingleActivator(LogicalKeyboardKey.keyC): _SubtitlesIntent(),
       const SingleActivator(LogicalKeyboardKey.keyE): _EpisodesIntent(),
       const SingleActivator(LogicalKeyboardKey.keyQ): _QualityIntent(),
@@ -1505,6 +1520,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
                                       child: _PlayerChrome(
                                         isFullscreen: _isFullscreen,
                                         isMobile: _isMobile,
+                                        volumeControlsEnabled:
+                                            !_usesSystemVolumeOnly,
                                         tvSeedFocusNode: _isTv
                                             ? _tvChromeSeedFocus
                                             : null,
@@ -2102,6 +2119,7 @@ class _PlayerChrome extends ConsumerWidget {
   const _PlayerChrome({
     required this.isFullscreen,
     required this.isMobile,
+    required this.volumeControlsEnabled,
     required this.onExit,
     required this.onToggleFullscreen,
     this.onSelectEpisode,
@@ -2111,6 +2129,7 @@ class _PlayerChrome extends ConsumerWidget {
 
   final bool isFullscreen;
   final bool isMobile;
+  final bool volumeControlsEnabled;
   final VoidCallback onExit;
   final VoidCallback onToggleFullscreen;
 
@@ -2270,7 +2289,11 @@ class _PlayerChrome extends ConsumerWidget {
                       _WatchPartyButton(party: ref.watch(watchPartyProvider)),
                       IconButton(
                         tooltip: 'Settings',
-                        onPressed: () => _showSettings(context, ref),
+                        onPressed: () => _showSettings(
+                          context,
+                          ref,
+                          volumeControlsEnabled: volumeControlsEnabled,
+                        ),
                         icon: const Icon(
                           Icons.settings_rounded,
                           color: Colors.white,
@@ -2337,6 +2360,7 @@ class _PlayerChrome extends ConsumerWidget {
                           _BottomLeftControls(
                             controller: controller,
                             isMobile: isMobile,
+                            volumeControlsEnabled: volumeControlsEnabled,
                           ),
                           const SizedBox(width: 18),
                           Expanded(
@@ -2606,10 +2630,15 @@ class _CenterPlayPauseButton extends ConsumerWidget {
 }
 
 class _BottomLeftControls extends StatelessWidget {
-  const _BottomLeftControls({required this.controller, this.isMobile = false});
+  const _BottomLeftControls({
+    required this.controller,
+    required this.volumeControlsEnabled,
+    this.isMobile = false,
+  });
 
   final PlayerEngine? controller;
   final bool isMobile;
+  final bool volumeControlsEnabled;
 
   @override
   Widget build(BuildContext context) {
@@ -2618,8 +2647,8 @@ class _BottomLeftControls extends StatelessWidget {
       children: <Widget>[
         if (!isMobile) _PlayPauseButton(controller: controller),
         if (!isMobile) const SizedBox(width: 8),
-        _InlineVolumeControl(controller: controller),
-        const SizedBox(width: 10),
+        if (volumeControlsEnabled) _InlineVolumeControl(controller: controller),
+        if (volumeControlsEnabled) const SizedBox(width: 10),
         _PositionLabel(
           controller: controller,
           style: const TextStyle(
@@ -4023,14 +4052,20 @@ Future<void> _showEpisodes(
   ]);
 }
 
-Future<void> _showSettings(BuildContext context, WidgetRef ref) async {
+Future<void> _showSettings(
+  BuildContext context,
+  WidgetRef ref, {
+  required bool volumeControlsEnabled,
+}) async {
   await _showMenuSheet(context, 'Player Settings', <Widget>[
-    const _PlayerSettingsTiles(),
+    _PlayerSettingsTiles(volumeControlsEnabled: volumeControlsEnabled),
   ]);
 }
 
 class _PlayerSettingsTiles extends ConsumerWidget {
-  const _PlayerSettingsTiles();
+  const _PlayerSettingsTiles({required this.volumeControlsEnabled});
+
+  final bool volumeControlsEnabled;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -4094,6 +4129,7 @@ class _PlayerSettingsTiles extends ConsumerWidget {
             PlayerShortcutsView(
               seekSeconds: settings.seekInterval.inSeconds,
               horizontalSwipeSeekEnabled: settings.horizontalSwipeSeekEnabled,
+              volumeControlsEnabled: volumeControlsEnabled,
               pipSupported:
                   NativePlayerService.isSupported ||
                   ref.read(pipControllerProvider).isSupported,
