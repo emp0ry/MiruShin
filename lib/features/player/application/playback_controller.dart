@@ -20,6 +20,7 @@ import '../../watch/domain/normalized_models.dart';
 import '../data/discord_rpc_service.dart';
 import '../data/media_session_service.dart';
 import '../data/subtitle_loader.dart';
+import '../domain/offline_stall_recovery.dart';
 import '../domain/player_models.dart';
 import '../domain/seek_settle.dart';
 import '../engine/local_hls_proxy.dart';
@@ -211,6 +212,8 @@ class PlaybackController extends Notifier<PlaybackState> {
   static const Duration _resumeRecoverySettleTimeout = Duration(
     milliseconds: 3200,
   );
+  static const Duration _offlineStallTick = Duration(milliseconds: 500);
+  static const Duration _offlineStallKickDelay = Duration(milliseconds: 90);
   static const Duration _engineOpenTimeout = Duration(seconds: 45);
   static const List<Duration> _startupSpeedReapplyDelays = <Duration>[
     Duration(milliseconds: 500),
@@ -236,6 +239,7 @@ class PlaybackController extends Notifier<PlaybackState> {
   static const Duration _autoNextOverlayDelay = Duration(seconds: 2);
 
   Timer? _progressTimer;
+  Timer? _offlineStallTimer;
   Timer? _undoTimer;
   // Pending appearance of the delayed next-episode button overlay (button mode).
   Timer? _autoNextOverlayTimer;
@@ -286,6 +290,10 @@ class PlaybackController extends Notifier<PlaybackState> {
   Completer<void>? _playPauseDrainCompleter;
   int _playPauseIntentEpoch = 0;
   int _resumeStabilizeEpoch = 0;
+  int _offlineStallWatchEpoch = 0;
+  bool _offlineStallRecoveryActive = false;
+  Duration _offlineStallObservedPosition = Duration.zero;
+  DateTime? _offlineStallObservedAt;
   Duration _lastStablePausePosition = Duration.zero;
   PlayerEngine? _engineForDispose;
   Future<void>? _finalProgressSaveBarrier;
@@ -502,6 +510,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       _playPauseIntentEpoch++;
       _resumeStabilizeEpoch++;
       _progressTimer?.cancel();
+      _stopOfflineStallWatch();
       _undoTimer?.cancel();
       _autoNextOverlayTimer?.cancel();
       _interactiveSeekTimer?.cancel();
@@ -729,6 +738,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       '[DEBUG] load: S${item.seasonNumber}E${item.episodeNumber} ignoreProgress=${item.ignoreProgress}',
     );
     await _waitForFinalProgressSaveBarrier();
+    _stopOfflineStallWatch();
     _progressTimer?.cancel();
     _undoTimer?.cancel();
     _autoNextOverlayTimer?.cancel();
@@ -927,6 +937,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     bool disableProxy = false,
     bool respectDesiredPlaying = false,
   }) async {
+    _stopOfflineStallWatch();
     if (!isAutoFallback) {
       _autoFallbackTriedServers.clear();
       _autoFallbackTriedQualities.clear();
@@ -1047,6 +1058,7 @@ class PlaybackController extends Notifier<PlaybackState> {
         proxyDisabled: disableProxy,
         allowSourceFallback: allowSourceFallback,
       );
+      _startOfflineStallWatch(item, server, engine, generation);
       if (_seekPreviewStreamEnabled) {
         _scheduleSeekPreviewWarmup(position);
       }
@@ -1574,6 +1586,182 @@ class PlaybackController extends Notifier<PlaybackState> {
     engine.addListener(listener);
   }
 
+  bool _isOfflineLocalServer(MediaServer server) {
+    if (server.id != 'offline') return false;
+    return Uri.tryParse(server.url)?.scheme.toLowerCase() == 'file';
+  }
+
+  void _startOfflineStallWatch(
+    MediaPlaybackItem item,
+    MediaServer server,
+    PlayerEngine engine,
+    int generation,
+  ) {
+    _stopOfflineStallWatch();
+    if (!_isOfflineLocalServer(server)) return;
+
+    final int watchEpoch = _offlineStallWatchEpoch;
+    _offlineStallObservedPosition = engine.state.value.position;
+    _offlineStallObservedAt = DateTime.now();
+    _offlineStallTimer = Timer.periodic(_offlineStallTick, (_) {
+      if (watchEpoch != _offlineStallWatchEpoch ||
+          generation != _playbackGeneration ||
+          state.engine != engine ||
+          state.item != item ||
+          state.server != server) {
+        _stopOfflineStallWatch();
+        return;
+      }
+      _checkOfflinePlaybackStall(item, server, engine, generation, watchEpoch);
+    });
+  }
+
+  void _stopOfflineStallWatch() {
+    _offlineStallWatchEpoch++;
+    _offlineStallTimer?.cancel();
+    _offlineStallTimer = null;
+    _offlineStallRecoveryActive = false;
+    _offlineStallObservedPosition = Duration.zero;
+    _offlineStallObservedAt = null;
+  }
+
+  void _checkOfflinePlaybackStall(
+    MediaPlaybackItem item,
+    MediaServer server,
+    PlayerEngine engine,
+    int generation,
+    int watchEpoch,
+  ) {
+    final DateTime now = DateTime.now();
+    final PlayerEngineState value = engine.state.value;
+    final DateTime observedAt = _offlineStallObservedAt ?? now;
+    final bool durationLooksReliable =
+        value.duration >= const Duration(seconds: 30);
+    final bool isNearEnd =
+        durationLooksReliable &&
+        value.position + const Duration(seconds: 2) >= value.duration;
+    final bool interactionInProgress =
+        _offlineStallRecoveryActive ||
+        state.loading ||
+        state.playPauseOperationInFlight ||
+        state.resumeStabilizing ||
+        _seekInFlight ||
+        _queuedSeekEngine == engine ||
+        _settlingSeekEngine == engine;
+    final OfflinePlaybackStallDecision decision = offlinePlaybackStallDecision(
+      desiredPlaying: state.desiredPlaying,
+      isInitialized: value.isInitialized,
+      isCompleted: value.isCompleted && durationLooksReliable,
+      hasError: value.hasError,
+      interactionInProgress: interactionInProgress,
+      isNearEnd: isNearEnd,
+      position: value.position,
+      observedPosition: _offlineStallObservedPosition,
+      stalledFor: now.difference(observedAt),
+    );
+
+    switch (decision) {
+      case OfflinePlaybackStallDecision.inactive:
+      case OfflinePlaybackStallDecision.progressed:
+        _offlineStallObservedPosition = value.position;
+        _offlineStallObservedAt = now;
+        return;
+      case OfflinePlaybackStallDecision.waiting:
+        _offlineStallObservedAt ??= now;
+        return;
+      case OfflinePlaybackStallDecision.recover:
+        _offlineStallObservedPosition = value.position;
+        _offlineStallObservedAt = now;
+        unawaited(
+          _kickOfflinePlayback(
+            item,
+            server,
+            engine,
+            generation,
+            watchEpoch,
+            value.position,
+          ),
+        );
+        return;
+    }
+  }
+
+  bool _isActiveOfflineStallRecovery(
+    MediaPlaybackItem item,
+    MediaServer server,
+    PlayerEngine engine,
+    int generation,
+    int watchEpoch,
+  ) {
+    return watchEpoch == _offlineStallWatchEpoch &&
+        generation == _playbackGeneration &&
+        state.item == item &&
+        state.server == server &&
+        state.engine == engine &&
+        state.desiredPlaying;
+  }
+
+  Future<void> _kickOfflinePlayback(
+    MediaPlaybackItem item,
+    MediaServer server,
+    PlayerEngine engine,
+    int generation,
+    int watchEpoch,
+    Duration stalledPosition,
+  ) async {
+    if (_offlineStallRecoveryActive ||
+        !_isActiveOfflineStallRecovery(
+          item,
+          server,
+          engine,
+          generation,
+          watchEpoch,
+        )) {
+      return;
+    }
+    _offlineStallRecoveryActive = true;
+    final int manualSeekEpoch = _manualSeekEpoch;
+    try {
+      debugPrint(
+        'Offline playback stalled at ${stalledPosition.inMilliseconds}ms; '
+        'kicking the local player.',
+      );
+      await engine.pause();
+      await Future<void>.delayed(_offlineStallKickDelay);
+      if (!_isActiveOfflineStallRecovery(
+        item,
+        server,
+        engine,
+        generation,
+        watchEpoch,
+      )) {
+        return;
+      }
+      await engine.play();
+      if (!_isActiveOfflineStallRecovery(
+        item,
+        server,
+        engine,
+        generation,
+        watchEpoch,
+      )) {
+        return;
+      }
+      if (manualSeekEpoch == _manualSeekEpoch) {
+        state = state.copyWith(resumeStabilizing: true);
+        _startResumeStabilityWatch(engine, stalledPosition);
+      }
+    } on Object catch (error) {
+      if (kDebugMode) {
+        debugPrint('Offline playback kick failed: $error');
+      }
+    } finally {
+      if (watchEpoch == _offlineStallWatchEpoch) {
+        _offlineStallRecoveryActive = false;
+      }
+    }
+  }
+
   Future<void> stop() async {
     unawaited(MediaSessionService.clearNowPlaying());
     unawaited(_ignorePlaybackTeardownErrors(DiscordRpcService.clearActivity()));
@@ -1600,6 +1788,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     _pendingDesiredPlaying = null;
     _temporarySpeedHolds = 0;
     _progressTimer?.cancel();
+    _stopOfflineStallWatch();
     _undoTimer?.cancel();
     _autoNextOverlayTimer?.cancel();
     _clearInteractiveSeek();
@@ -3324,10 +3513,17 @@ class PlaybackController extends Notifier<PlaybackState> {
   // before.
   bool _engineReportsCompletion(PlayerEngine engine) {
     final PlayerEngineState es = engine.state.value;
-    if (!es.isCompleted) return false;
-    final Duration dur = es.duration;
-    if (dur < const Duration(minutes: 2)) return true;
-    return _maxObservedPosition >= dur - _endProximityTolerance;
+    final MediaServer? server = state.server;
+    return playbackCompletionIsCredible(
+      isCompleted: es.isCompleted,
+      isOfflineLocalHls:
+          server != null &&
+          _isOfflineLocalServer(server) &&
+          server.streamType == StreamType.hls,
+      duration: es.duration,
+      maxObservedPosition: _maxObservedPosition,
+      endProximityTolerance: _endProximityTolerance,
+    );
   }
 
   void _evaluatePlaybackProgress(PlayerEngine engine) {

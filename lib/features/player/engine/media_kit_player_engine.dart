@@ -455,8 +455,10 @@ class MediaKitPlayerEngine extends PlayerEngine {
   bool _isTinyUnreliableDuration(Duration duration) {
     if (duration <= Duration.zero) return false;
     if (!_isHlsLikeSource(_currentSource)) return false;
-    final String url = _currentSource?.url ?? '';
-    if (!_isNetworkUrl(url)) return false;
+    // Local downloaded HLS can briefly expose only its first segment duration
+    // (commonly about 6-10 seconds) while MPV is still reading the rewritten
+    // playlist. Treat that pulse exactly like a network HLS duration so it
+    // cannot become a false end-of-stream and stall offline playback.
     return duration < _tinyHlsDurationLimit;
   }
 
@@ -1077,6 +1079,8 @@ class MediaKitPlayerEngine extends PlayerEngine {
     final bool initialized = _hasMedia && startupRequirementSatisfied;
     final bool hasError = _lastError != null;
     final double aspectRatio = _effectiveAspectRatio(_lastVideoSize);
+    final bool completionDurationReliable =
+        !_isHlsLikeSource(_currentSource) || duration >= _tinyHlsDurationLimit;
 
     _setState(
       PlayerEngineState(
@@ -1090,7 +1094,8 @@ class MediaKitPlayerEngine extends PlayerEngine {
         isInitialized: initialized,
         isPlaying: native.playing,
         isBuffering: !initialized || native.buffering,
-        isCompleted: native.completed && initialized,
+        isCompleted:
+            native.completed && initialized && completionDurationReliable,
         hasVideoSurface: hasVideoSize,
         hasError: hasError,
         errorDescription: _lastError,
