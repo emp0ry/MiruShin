@@ -12,6 +12,7 @@ import '../../../app/navigation_helpers.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_radius.dart';
 import '../../../app/theme/app_spacing.dart';
+import '../../../core/responsive/app_breakpoints.dart';
 import '../../../core/responsive/responsive_grid.dart';
 import '../../../core/widgets/adaptive_page.dart';
 import '../../../core/widgets/glass_card.dart';
@@ -37,6 +38,7 @@ import '../application/anilist_profile_export.dart';
 import '../application/anilist_profile_provider.dart';
 import '../application/anilist_user_settings_provider.dart';
 import '../domain/anilist_profile_models.dart';
+import 'widgets/profile_action_button.dart';
 
 class ProfilePage extends ConsumerWidget {
   const ProfilePage({super.key});
@@ -90,6 +92,12 @@ class ProfilePage extends ConsumerWidget {
     );
     final String displayName =
         profile?.name ?? settings.anilistViewerName ?? 'AniList User';
+    final bool compactProfileActions =
+        AppBreakpoints.classify(
+          MediaQuery.sizeOf(context).width,
+          forceCompact: settings.compactMode,
+        ) ==
+        WindowSizeClass.compact;
 
     return AdaptivePage(
       child: SingleChildScrollView(
@@ -115,21 +123,42 @@ class ProfilePage extends ConsumerWidget {
                   'Activities, favourites, social, statistics, exports, and AniList content settings.',
             ),
             const SizedBox(height: AppSpacing.lg),
-            ResponsiveGrid(
-              itemCount: _profileActions.length,
-              minItemWidth: 180,
-              maxColumns: 4,
-              childAspectRatio: 1.15,
-              itemBuilder: (BuildContext context, int index) {
-                final _ProfileAction action = _profileActions[index];
-                return _ProfileActionCard(
-                  title: action.title,
-                  subtitle: action.subtitle,
-                  icon: action.icon,
-                  onTap: () => context.push(action.route),
-                );
-              },
-            ),
+            if (compactProfileActions)
+              Column(
+                children: <Widget>[
+                  for (int index = 0; index < _profileActions.length; index++)
+                    Padding(
+                      padding: EdgeInsets.only(
+                        bottom: index == _profileActions.length - 1
+                            ? 0
+                            : AppSpacing.sm,
+                      ),
+                      child: ProfileActionButton(
+                        title: _profileActions[index].title,
+                        subtitle: _profileActions[index].subtitle,
+                        icon: _profileActions[index].icon,
+                        compact: true,
+                        onTap: () => context.push(_profileActions[index].route),
+                      ),
+                    ),
+                ],
+              )
+            else
+              ResponsiveGrid(
+                itemCount: _profileActions.length,
+                minItemWidth: 180,
+                maxColumns: 4,
+                childAspectRatio: 1.15,
+                itemBuilder: (BuildContext context, int index) {
+                  final _ProfileAction action = _profileActions[index];
+                  return ProfileActionButton(
+                    title: action.title,
+                    subtitle: action.subtitle,
+                    icon: action.icon,
+                    onTap: () => context.push(action.route),
+                  );
+                },
+              ),
             const SizedBox(height: AppSpacing.xl),
             SettingsSection(
               title: context.t('Export'),
@@ -2130,66 +2159,6 @@ class _MetricPill extends StatelessWidget {
           const SizedBox(width: AppSpacing.xs),
           Text(label, style: Theme.of(context).textTheme.bodySmall),
         ],
-      ),
-    );
-  }
-}
-
-class _ProfileActionCard extends StatelessWidget {
-  const _ProfileActionCard({
-    required this.title,
-    required this.subtitle,
-    required this.icon,
-    required this.onTap,
-  });
-
-  final String title;
-  final String subtitle;
-  final IconData icon;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: AppRadius.all(AppRadius.xl),
-      child: GlassCard(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                color: Theme.of(
-                  context,
-                ).colorScheme.primary.withValues(alpha: 0.14),
-                borderRadius: AppRadius.all(AppRadius.lg),
-              ),
-              child: Icon(icon, color: Theme.of(context).colorScheme.primary),
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            Text(
-              context.t(title),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(
-                context,
-              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: AppSpacing.xs),
-            Flexible(
-              child: Text(
-                context.t(subtitle),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(
-                  context,
-                ).textTheme.bodyMedium?.copyWith(color: AppColors.textMuted),
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }
