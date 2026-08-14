@@ -69,6 +69,7 @@ class PlayerShortcutsView extends StatelessWidget {
             _LabeledKey(glyph: 'E', label: context.t('Episodes')),
             _LabeledKey(glyph: 'Q', label: context.t('Quality')),
             _LabeledKey(glyph: 'V', label: context.t('Skip / Next')),
+            _LabeledKey(glyph: 'Z', label: context.t('Zoom')),
             if (pipSupported)
               _LabeledKey(glyph: 'P', label: context.t('Picture in Picture')),
             _LabeledKey(glyph: 'Esc', label: context.t('Back')),

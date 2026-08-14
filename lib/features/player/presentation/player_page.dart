@@ -426,6 +426,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
         key == LogicalKeyboardKey.keyC ||
         key == LogicalKeyboardKey.keyP ||
         key == LogicalKeyboardKey.keyV ||
+        key == LogicalKeyboardKey.keyZ ||
         key == LogicalKeyboardKey.keyE ||
         key == LogicalKeyboardKey.keyQ ||
         key == LogicalKeyboardKey.keyF ||
@@ -1019,6 +1020,15 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
           ? KeyEventResult.handled
           : KeyEventResult.ignored;
     }
+    if (key == LogicalKeyboardKey.keyZ) {
+      if (event is! KeyDownEvent) return KeyEventResult.handled;
+      unawaited(
+        ref
+            .read(playerSettingsProvider.notifier)
+            .setVerticalStretch(!settings.verticalStretch),
+      );
+      return KeyEventResult.handled;
+    }
     if (key == LogicalKeyboardKey.keyE) {
       if (event is! KeyDownEvent) return KeyEventResult.handled;
       _showEpisodes(
@@ -1223,6 +1233,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
           _PipIntent(),
       const SingleActivator(LogicalKeyboardKey.keyV, includeRepeats: false):
           _SkipOrNextIntent(),
+      const SingleActivator(LogicalKeyboardKey.keyZ, includeRepeats: false):
+          _ZoomIntent(),
       const SingleActivator(LogicalKeyboardKey.escape): _BackIntent(),
     };
 
@@ -1327,6 +1339,14 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
           _SkipOrNextIntent: CallbackAction<_SkipOrNextIntent>(
             onInvoke: (_) {
               _handleUniversalSkip();
+              return null;
+            },
+          ),
+          _ZoomIntent: CallbackAction<_ZoomIntent>(
+            onInvoke: (_) {
+              ref
+                  .read(playerSettingsProvider.notifier)
+                  .setVerticalStretch(!settings.verticalStretch);
               return null;
             },
           ),
@@ -4907,6 +4927,10 @@ class _PipIntent extends Intent {
 
 class _SkipOrNextIntent extends Intent {
   const _SkipOrNextIntent();
+}
+
+class _ZoomIntent extends Intent {
+  const _ZoomIntent();
 }
 
 class _NoopIntent extends Intent {
