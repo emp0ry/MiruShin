@@ -603,39 +603,25 @@ class _AniListInfoPanelState extends State<_AniListInfoPanel> {
           // Stats row: popularity + favorites
           if (_ext['anilist_popularity'] != null ||
               _ext['anilist_favourites'] != null) ...<Widget>[
-            Row(
+            Wrap(
+              spacing: AppSpacing.lg,
+              runSpacing: AppSpacing.sm,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: <Widget>[
-                if (_ext['anilist_popularity'] != null) ...<Widget>[
-                  Icon(
+                if (_ext['anilist_popularity'] != null)
+                  _AniListStat(
                     Icons.people_outline_rounded,
-                    size: 18,
-                    color: cs.primary,
+                    iconColor: cs.primary,
+                    value: _fmtNum(_ext['anilist_popularity']!),
+                    label: context.t('watching'),
                   ),
-                  const SizedBox(width: AppSpacing.xs),
-                  Text(
-                    _fmtNum(_ext['anilist_popularity']!),
-                    style: tt.titleMedium,
-                  ),
-                  const SizedBox(width: AppSpacing.xs),
-                  Text(context.t('watching'), style: tt.bodySmall),
-                ],
-                if (_ext['anilist_popularity'] != null &&
-                    _ext['anilist_favourites'] != null)
-                  const SizedBox(width: AppSpacing.xl),
-                if (_ext['anilist_favourites'] != null) ...<Widget>[
-                  Icon(
+                if (_ext['anilist_favourites'] != null)
+                  _AniListStat(
                     Icons.favorite_outline_rounded,
-                    size: 18,
-                    color: cs.error,
+                    iconColor: cs.error,
+                    value: _fmtNum(_ext['anilist_favourites']!),
+                    label: context.t('favorites'),
                   ),
-                  const SizedBox(width: AppSpacing.xs),
-                  Text(
-                    _fmtNum(_ext['anilist_favourites']!),
-                    style: tt.titleMedium,
-                  ),
-                  const SizedBox(width: AppSpacing.xs),
-                  Text(context.t('favorites'), style: tt.bodySmall),
-                ],
               ],
             ),
             const SizedBox(height: AppSpacing.lg),
@@ -777,6 +763,35 @@ class _AniListInfoPanelState extends State<_AniListInfoPanel> {
           ],
         ],
       ),
+    );
+  }
+}
+
+class _AniListStat extends StatelessWidget {
+  const _AniListStat(
+    this.icon, {
+    required this.iconColor,
+    required this.value,
+    required this.label,
+  });
+
+  final IconData icon;
+  final Color iconColor;
+  final String value;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final TextTheme textTheme = Theme.of(context).textTheme;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        Icon(icon, size: 18, color: iconColor),
+        const SizedBox(width: AppSpacing.xs),
+        Text(value, style: textTheme.titleMedium),
+        const SizedBox(width: AppSpacing.xs),
+        Text(label, style: textTheme.bodySmall),
+      ],
     );
   }
 }
@@ -1158,22 +1173,27 @@ class _ActionPanel extends ConsumerWidget {
         ? _findAniListEntry(ref, item)
         : null;
 
-    final List<Widget> actions = <Widget>[
+    final List<_DetailsActionButton> actions = <_DetailsActionButton>[
       if (canWatch)
-        FilledButton.icon(
+        _DetailsActionButton(
+          key: const ValueKey<String>('details-watch-action'),
           onPressed: () =>
               context.push(AppRoutes.watchPath(item.id), extra: item),
-          icon: const Icon(Icons.play_arrow_rounded),
-          label: Text(context.t(_isAniListManga(item) ? 'Read' : 'Watch')),
+          icon: Icons.play_arrow_rounded,
+          label: context.t(_isAniListManga(item) ? 'Read' : 'Watch'),
+          style: _DetailsActionStyle.primary,
         ),
       if (canPlayTrailer)
-        FilledButton.icon(
+        _DetailsActionButton(
+          key: const ValueKey<String>('details-trailer-action'),
           onPressed: () => _playTrailer(context, ref, item),
-          icon: const Icon(Icons.smart_display_rounded),
-          label: Text(context.t('Trailer')),
+          icon: Icons.smart_display_rounded,
+          label: context.t('Trailer'),
+          style: _DetailsActionStyle.trailer,
         ),
       if (mode == CatalogMode.anilist)
-        FilledButton.icon(
+        _DetailsActionButton(
+          key: const ValueKey<String>('details-edit-action'),
           onPressed: canAddToAniList
               ? () => _editAniListEntry(
                   context,
@@ -1182,11 +1202,13 @@ class _ActionPanel extends ConsumerWidget {
                   item: item,
                 )
               : null,
-          icon: const Icon(Icons.tune_rounded),
-          label: Text(context.t('Edit')),
+          icon: Icons.tune_rounded,
+          label: context.t('Edit'),
+          style: _DetailsActionStyle.utility,
         ),
       if (mode == CatalogMode.tmdb)
-        FilledButton.icon(
+        _DetailsActionButton(
+          key: const ValueKey<String>('details-edit-action'),
           onPressed: () async {
             final LocalLibraryEditResult? result = await showLocalLibraryEditor(
               context,
@@ -1210,102 +1232,399 @@ class _ActionPanel extends ConsumerWidget {
               }
             }
           },
-          icon: const Icon(Icons.tune_rounded),
-          label: Text(context.t('Edit')),
+          icon: Icons.tune_rounded,
+          label: context.t('Edit'),
+          style: _DetailsActionStyle.utility,
         ),
     ];
 
     return GlassCard(
       child: LayoutBuilder(
         builder: (BuildContext context, BoxConstraints constraints) {
-          final int columns = constraints.maxWidth >= 980
-              ? 4
-              : constraints.maxWidth >= 640
-              ? 3
-              : constraints.maxWidth >= 430
-              ? 2
-              : 1;
-          final double width =
-              (constraints.maxWidth - AppSpacing.md * (columns - 1)) / columns;
-          return Wrap(
-            spacing: AppSpacing.md,
-            runSpacing: AppSpacing.md,
-            alignment: WrapAlignment.center,
-            children: <Widget>[
-              for (final Widget action in actions)
-                SizedBox(width: width, height: 46, child: action),
-            ],
+          final int primaryIndex = actions.indexWhere(
+            (_DetailsActionButton action) =>
+                action.style == _DetailsActionStyle.primary,
+          );
+          final _DetailsActionButton? primary = primaryIndex < 0
+              ? null
+              : actions[primaryIndex];
+          final List<_DetailsActionButton> secondary = actions
+              .where(
+                (_DetailsActionButton action) =>
+                    action.style != _DetailsActionStyle.primary,
+              )
+              .toList(growable: false);
+
+          if (constraints.maxWidth < 600) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                if (primary != null) SizedBox(height: 58, child: primary),
+                if (primary != null && secondary.isNotEmpty)
+                  const SizedBox(height: AppSpacing.md),
+                if (secondary.length == 1)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: SizedBox(
+                      width: constraints.maxWidth > 420
+                          ? 210
+                          : (constraints.maxWidth - AppSpacing.md) / 2,
+                      height: 54,
+                      child: secondary.first,
+                    ),
+                  )
+                else if (secondary.isNotEmpty)
+                  Row(
+                    children: <Widget>[
+                      for (
+                        int index = 0;
+                        index < secondary.length;
+                        index++
+                      ) ...<Widget>[
+                        if (index > 0) const SizedBox(width: AppSpacing.md),
+                        Expanded(
+                          child: SizedBox(height: 54, child: secondary[index]),
+                        ),
+                      ],
+                    ],
+                  ),
+              ],
+            );
+          }
+
+          final double rowWidth = switch (actions.length) {
+            1 => 280,
+            2 => 560,
+            _ => 860,
+          };
+          return Align(
+            alignment: Alignment.centerLeft,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: rowWidth.clamp(0.0, constraints.maxWidth).toDouble(),
+              ),
+              child: Row(
+                children: <Widget>[
+                  for (
+                    int index = 0;
+                    index < actions.length;
+                    index++
+                  ) ...<Widget>[
+                    if (index > 0) const SizedBox(width: AppSpacing.md),
+                    Expanded(
+                      flex: switch (actions[index].style) {
+                        _DetailsActionStyle.primary => 5,
+                        _DetailsActionStyle.trailer => 4,
+                        _DetailsActionStyle.utility => 3,
+                      },
+                      child: SizedBox(height: 58, child: actions[index]),
+                    ),
+                  ],
+                ],
+              ),
+            ),
           );
         },
       ),
     );
   }
+}
 
-  Future<void> _playTrailer(
-    BuildContext context,
-    WidgetRef ref,
-    MediaItem item,
-  ) async {
-    try {
-      final MediaPlaybackItem playbackItem = await ref
-          .read(youtubeTrailerResolverProvider)
-          .resolve(item);
-      if (!context.mounted) {
-        return;
-      }
-      context.push(AppRoutes.watchPlay, extra: playbackItem);
-    } on Object {
-      if (context.mounted) {
-        _showSnack(context, context.t('Trailer unavailable'));
-      }
-    }
-  }
+enum _DetailsActionStyle { primary, trailer, utility }
 
-  Future<void> _editAniListEntry(
-    BuildContext context,
-    WidgetRef ref, {
-    required AniListAnimeListEntry? entry,
-    required MediaItem item,
-  }) async {
-    final AniListAnimeListEntry editableEntry =
-        entry ??
-        AniListAnimeListEntry(
-          id: 0,
-          status: AniListListStatus.planning,
-          progress: 0,
-          mediaItem: item,
-        );
-    final String scoreFormat = ref.read(aniListEffectiveScoreFormatProvider);
-    final AniListEntryEditDraft? draft = await showAniListEntryEditor(
+class _DetailsActionButton extends StatefulWidget {
+  const _DetailsActionButton({
+    required this.icon,
+    required this.label,
+    required this.onPressed,
+    required this.style,
+    super.key,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback? onPressed;
+  final _DetailsActionStyle style;
+
+  @override
+  State<_DetailsActionButton> createState() => _DetailsActionButtonState();
+}
+
+class _DetailsActionButtonState extends State<_DetailsActionButton> {
+  bool _hovered = false;
+  bool _focused = false;
+  bool _pressed = false;
+
+  bool get _enabled => widget.onPressed != null;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final ColorScheme scheme = theme.colorScheme;
+    final AppThemeExtension palette = AppThemeExtension.of(context);
+    final bool highlighted = _enabled && (_hovered || _focused);
+    final Duration duration = AppAnimations.duration(
       context,
-      ref: ref,
-      entry: editableEntry,
-      status: entry?.status,
-      progress: editableEntry.progress,
-      score: editableEntry.score,
-      notes: editableEntry.notes,
-      repeat: editableEntry.repeat,
-      scoreFormat: scoreFormat,
-      allowRemove: entry != null,
+      AppAnimations.quick,
     );
-    if (draft == null || !context.mounted) return;
-    if (draft.remove && entry != null) {
-      await deleteAniListEntry(context: context, ref: ref, entry: entry);
+
+    final Color foreground;
+    final Color iconColor;
+    final Color iconSurface;
+    final Color borderColor;
+    final Color baseColor;
+    final Gradient gradient;
+    final List<BoxShadow> shadows;
+
+    switch (widget.style) {
+      case _DetailsActionStyle.primary:
+        foreground = scheme.onPrimary;
+        iconColor = scheme.onPrimary;
+        iconSurface = scheme.onPrimary.withValues(
+          alpha: highlighted ? 0.22 : 0.15,
+        );
+        borderColor = scheme.onPrimary.withValues(alpha: 0.18);
+        baseColor = scheme.primary;
+        gradient = LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: <Color>[
+            Color.lerp(scheme.primary, Colors.white, highlighted ? 0.12 : 0)!,
+            Color.lerp(scheme.primary, scheme.secondary, 0.72)!,
+          ],
+        );
+        shadows = <BoxShadow>[
+          BoxShadow(
+            color: scheme.primary.withValues(alpha: highlighted ? 0.34 : 0.22),
+            blurRadius: highlighted ? 24 : 16,
+            offset: const Offset(0, 7),
+          ),
+        ];
+        break;
+      case _DetailsActionStyle.trailer:
+        foreground = palette.textPrimaryColor;
+        iconColor = AppColors.accentRose;
+        iconSurface = AppColors.accentRose.withValues(
+          alpha: highlighted ? 0.24 : 0.16,
+        );
+        borderColor = AppColors.accentRose.withValues(
+          alpha: highlighted ? 0.58 : 0.34,
+        );
+        baseColor = palette.glassStrongColor;
+        gradient = LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: <Color>[
+            AppColors.accentRose.withValues(alpha: highlighted ? 0.21 : 0.14),
+            scheme.secondary.withValues(alpha: highlighted ? 0.18 : 0.10),
+          ],
+        );
+        shadows = highlighted
+            ? <BoxShadow>[
+                BoxShadow(
+                  color: AppColors.accentRose.withValues(alpha: 0.16),
+                  blurRadius: 20,
+                  offset: const Offset(0, 6),
+                ),
+              ]
+            : const <BoxShadow>[];
+        break;
+      case _DetailsActionStyle.utility:
+        foreground = palette.textSecondaryColor;
+        iconColor = highlighted ? scheme.primary : palette.textSecondaryColor;
+        iconSurface = highlighted
+            ? scheme.primary.withValues(alpha: 0.15)
+            : palette.textSecondaryColor.withValues(alpha: 0.10);
+        borderColor = highlighted ? scheme.primary : palette.borderColor;
+        baseColor = palette.glassStrongColor;
+        gradient = LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: <Color>[
+            highlighted
+                ? scheme.primary.withValues(alpha: 0.11)
+                : palette.surfaceSoftColor.withValues(alpha: 0.72),
+            palette.glassStrongColor.withValues(alpha: 0.76),
+          ],
+        );
+        shadows = const <BoxShadow>[];
+        break;
+    }
+
+    final double scale = _pressed ? 0.975 : (highlighted ? 1.015 : 1);
+    final BorderRadius radius = AppRadius.all(AppRadius.md);
+
+    return Semantics(
+      button: true,
+      enabled: _enabled,
+      label: widget.label,
+      child: MouseRegion(
+        cursor: _enabled
+            ? SystemMouseCursors.click
+            : SystemMouseCursors.forbidden,
+        child: AnimatedScale(
+          scale: scale,
+          duration: duration,
+          curve: AppAnimations.emphasized,
+          child: AnimatedOpacity(
+            opacity: _enabled ? 1 : 0.46,
+            duration: duration,
+            child: Material(
+              color: Colors.transparent,
+              borderRadius: radius,
+              child: Ink(
+                decoration: BoxDecoration(
+                  color: baseColor,
+                  gradient: gradient,
+                  borderRadius: radius,
+                  border: Border.all(
+                    color: borderColor,
+                    width: _focused ? 1.8 : 1,
+                  ),
+                  boxShadow: shadows,
+                ),
+                child: InkWell(
+                  onTap: widget.onPressed,
+                  canRequestFocus: _enabled,
+                  borderRadius: radius,
+                  focusColor: Colors.transparent,
+                  hoverColor: Colors.transparent,
+                  highlightColor: Colors.transparent,
+                  splashColor: foreground.withValues(alpha: 0.13),
+                  onHover: (bool value) {
+                    if (_enabled && value != _hovered) {
+                      setState(() => _hovered = value);
+                    }
+                  },
+                  onFocusChange: (bool value) {
+                    if (value != _focused) setState(() => _focused = value);
+                  },
+                  onHighlightChanged: (bool value) {
+                    if (_enabled && value != _pressed) {
+                      setState(() => _pressed = value);
+                    }
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpacing.md,
+                      vertical: AppSpacing.sm,
+                    ),
+                    child: Row(
+                      children: <Widget>[
+                        AnimatedContainer(
+                          duration: duration,
+                          curve: AppAnimations.standard,
+                          width: 36,
+                          height: 36,
+                          decoration: BoxDecoration(
+                            color: iconSurface,
+                            borderRadius: AppRadius.all(AppRadius.sm),
+                          ),
+                          child: Icon(widget.icon, color: iconColor, size: 23),
+                        ),
+                        const SizedBox(width: AppSpacing.md),
+                        Expanded(
+                          child: Text(
+                            widget.label,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.labelLarge?.copyWith(
+                              color: foreground,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 0.15,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: AppSpacing.xs),
+                        AnimatedSlide(
+                          offset: highlighted
+                              ? Offset.zero
+                              : const Offset(-0.12, 0),
+                          duration: duration,
+                          curve: AppAnimations.emphasized,
+                          child: Icon(
+                            widget.style == _DetailsActionStyle.utility
+                                ? Icons.arrow_outward_rounded
+                                : Icons.arrow_forward_rounded,
+                            size: 18,
+                            color: foreground.withValues(alpha: 0.72),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+Future<void> _playTrailer(
+  BuildContext context,
+  WidgetRef ref,
+  MediaItem item,
+) async {
+  try {
+    final MediaPlaybackItem playbackItem = await ref
+        .read(youtubeTrailerResolverProvider)
+        .resolve(item);
+    if (!context.mounted) {
       return;
     }
-    await saveAniListEntryEdit(
-      context: context,
-      ref: ref,
-      entry: editableEntry,
-      draft: draft,
-    );
+    context.push(AppRoutes.watchPlay, extra: playbackItem);
+  } on Object {
+    if (context.mounted) {
+      _showSnack(context, context.t('Trailer unavailable'));
+    }
   }
+}
 
-  void _showSnack(BuildContext context, String message) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
+Future<void> _editAniListEntry(
+  BuildContext context,
+  WidgetRef ref, {
+  required AniListAnimeListEntry? entry,
+  required MediaItem item,
+}) async {
+  final AniListAnimeListEntry editableEntry =
+      entry ??
+      AniListAnimeListEntry(
+        id: 0,
+        status: AniListListStatus.planning,
+        progress: 0,
+        mediaItem: item,
+      );
+  final String scoreFormat = ref.read(aniListEffectiveScoreFormatProvider);
+  final AniListEntryEditDraft? draft = await showAniListEntryEditor(
+    context,
+    ref: ref,
+    entry: editableEntry,
+    status: entry?.status,
+    progress: editableEntry.progress,
+    score: editableEntry.score,
+    notes: editableEntry.notes,
+    repeat: editableEntry.repeat,
+    scoreFormat: scoreFormat,
+    allowRemove: entry != null,
+  );
+  if (draft == null || !context.mounted) return;
+  if (draft.remove && entry != null) {
+    await deleteAniListEntry(context: context, ref: ref, entry: entry);
+    return;
   }
+  await saveAniListEntryEdit(
+    context: context,
+    ref: ref,
+    entry: editableEntry,
+    draft: draft,
+  );
+}
+
+void _showSnack(BuildContext context, String message) {
+  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
 }
 
 // Seasons panel

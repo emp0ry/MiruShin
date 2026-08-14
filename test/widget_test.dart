@@ -209,6 +209,7 @@ void main() {
       externalIds: <String, String>{'tmdb': '1'},
       runtimeMinutes: 126,
       statusLabel: 'Released',
+      trailer: MediaTrailer(id: 'demo-trailer', site: 'YouTube'),
     );
 
     Future<void> pumpDetails(Size size) async {
@@ -234,6 +235,36 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('Edit'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey<String>('details-watch-action')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey<String>('details-trailer-action')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey<String>('details-edit-action')),
+        findsOneWidget,
+      );
+      final Size watchSize = tester.getSize(
+        find.byKey(const ValueKey<String>('details-watch-action')),
+      );
+      final Size trailerSize = tester.getSize(
+        find.byKey(const ValueKey<String>('details-trailer-action')),
+      );
+      final Size editSize = tester.getSize(
+        find.byKey(const ValueKey<String>('details-edit-action')),
+      );
+      expect(watchSize.height, 58);
+      expect(watchSize.width, greaterThan(trailerSize.width));
+      if (size.width < 600) {
+        expect(trailerSize.height, 54);
+        expect(editSize.height, 54);
+        expect(trailerSize.width, closeTo(editSize.width, 0.01));
+      } else {
+        expect(trailerSize.width, greaterThan(editSize.width));
+      }
       expect(tester.takeException(), isNull);
     }
 
@@ -241,5 +272,65 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     await pumpDetails(const Size(1280, 900));
     await pumpDetails(const Size(390, 844));
+  });
+
+  testWidgets('AniList stats wrap without overflowing narrow details cards', (
+    WidgetTester tester,
+  ) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'catalog.mode': 'anilist',
+      'settings.appLanguage': 'en',
+    });
+    tester.view.physicalSize = const Size(320, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    const MediaItem item = MediaItem(
+      id: 'anilist:1',
+      title: 'Narrow Anime',
+      originalTitle: 'Narrow Anime',
+      overview: 'Anime details used to verify the responsive statistics row.',
+      type: MediaType.anime,
+      year: 2026,
+      posterUrl: '',
+      backdropUrl: '',
+      rating: 8.2,
+      genres: <String>[],
+      sourceProvider: 'AniList',
+      externalIds: <String, String>{
+        'anilist': '1',
+        'anilist_type': 'ANIME',
+        'anilist_popularity': '142000',
+        'anilist_favourites': '4300',
+      },
+      statusLabel: 'Releasing',
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          locale: const Locale('en'),
+          theme: AppTheme.dark(),
+          supportedLocales: AppLocalizations.supportedLocales,
+          localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
+            AppLocalizations.delegate,
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+          home: const Scaffold(
+            body: MediaDetailsPage(id: 'anilist:1', initialItem: item),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('142K'), findsOneWidget);
+    expect(find.text('watching'), findsOneWidget);
+    expect(find.text('4.3K'), findsOneWidget);
+    expect(find.text('favorites'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 }
