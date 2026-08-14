@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
@@ -33,15 +34,22 @@ import '../../settings/application/settings_state.dart';
 import '../../tracking/application/anilist_library_provider.dart';
 import '../../tracking/presentation/anilist_entry_editor.dart';
 
-class BoardPage extends ConsumerWidget {
+class BoardPage extends ConsumerStatefulWidget {
   const BoardPage({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<BoardPage> createState() => _BoardPageState();
+}
+
+class _BoardPageState extends ConsumerState<BoardPage> {
+  late final int _heroSeed = Random().nextInt(1 << 31);
+
+  @override
+  Widget build(BuildContext context) {
     final BoardRails rails = ref
         .watch(boardRailsProvider)
         .maybeWhen(data: (BoardRails value) => value, orElse: BoardRails.empty);
-    final MediaItem? hero = rails.hero;
+    final MediaItem? hero = rails.heroForSeed(_heroSeed);
     final CatalogMode mode = ref.watch(catalogModeProvider);
     final List<AniListAnimeListFolder> anilistFolders =
         mode == CatalogMode.anilist

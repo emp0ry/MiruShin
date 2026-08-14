@@ -17,4 +17,16 @@ class BoardRails {
       recentMovies.firstOrNull ??
       recentSeries.firstOrNull ??
       topAnime.firstOrNull;
+
+  /// Selects a stable hero from the first [candidateLimit] Top Anime entries.
+  /// The caller owns the seed so normal widget rebuilds do not change artwork.
+  MediaItem? heroForSeed(int seed, {int candidateLimit = 20}) {
+    final List<MediaItem> source = topAnime.isNotEmpty
+        ? topAnime
+        : <MediaItem>[...recentMovies, ...recentSeries];
+    if (source.isEmpty) return null;
+
+    final int limit = candidateLimit.clamp(1, source.length);
+    return source[seed % limit];
+  }
 }
