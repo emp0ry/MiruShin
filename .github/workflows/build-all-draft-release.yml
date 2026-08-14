@@ -8,6 +8,11 @@ on:
         required: false
         type: string
         default: ""
+      publish_after_upload:
+        description: Publish the release after every build artifact uploads successfully.
+        required: true
+        type: boolean
+        default: true
 
 permissions: {}
 
@@ -80,6 +85,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ needs.select-draft-release.outputs.tag }}
+          PUBLISH_AFTER_UPLOAD: ${{ inputs.publish_after_upload }}
         run: |
           set -euo pipefail
 
@@ -98,8 +104,18 @@ jobs:
           echo "Uploading ${#assets[@]} assets to draft release $RELEASE_TAG."
           gh release upload "$RELEASE_TAG" "${assets[@]}"
 
+          if [[ "$PUBLISH_AFTER_UPLOAD" == "true" ]]; then
+            echo "Publishing $RELEASE_TAG after the successful upload."
+            gh release edit "$RELEASE_TAG" --draft=false --latest
+          fi
+
           {
             echo "### Draft release upload"
             echo
             echo "Uploaded ${#assets[@]} assets to \`$RELEASE_TAG\`."
+            if [[ "$PUBLISH_AFTER_UPLOAD" == "true" ]]; then
+              echo "Published \`$RELEASE_TAG\` after the upload completed."
+            else
+              echo "Left \`$RELEASE_TAG\` as a draft."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
