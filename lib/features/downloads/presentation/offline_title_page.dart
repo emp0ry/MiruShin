@@ -549,21 +549,20 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
     int season,
     List<DownloadedEpisode> seasonEpisodes,
   ) {
-    for (final MediaSeason s in media.seasons) {
-      if (s.seasonNumber == season && s.episodeCount > 0) {
-        return airedDownloadEpisodeTotal(media, s.episodeCount);
-      }
-    }
-    if (media.seasons.isEmpty && (media.episodeCount ?? 0) > 0 && season <= 1) {
-      return airedDownloadEpisodeTotal(media, media.episodeCount!);
-    }
-    // Fall back to the highest downloaded number so nothing is hidden.
     int maxNum = 0;
+    int availableLimit = 0;
     for (final DownloadedEpisode e in seasonEpisodes) {
       final int n = e.episodeNumber.round();
       if (n > maxNum) maxNum = n;
+      final int storedLimit = downloadedAvailableEpisodeLimit(e.media);
+      if (storedLimit > availableLimit) availableLimit = storedLimit;
     }
-    return maxNum;
+    return offlineSeasonEpisodeTotal(
+      media,
+      season,
+      highestDownloadedEpisode: maxNum,
+      sourceAvailableEpisodeLimit: availableLimit,
+    );
   }
 
   Widget _episodeTile(

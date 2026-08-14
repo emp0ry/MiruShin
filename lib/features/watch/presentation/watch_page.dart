@@ -2962,9 +2962,12 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
                         onPressed: singleStatus != null || _downloadBusy
                             ? null
                             : () => unawaited(
-                                _enqueueDownloads(<SoraEpisode>[
-                                  singleEnriched,
-                                ]),
+                                _enqueueDownloads(
+                                  <SoraEpisode>[singleEnriched],
+                                  availableEpisodes: <SoraEpisode>[
+                                    singleEnriched,
+                                  ],
+                                ),
                               ),
                         icon: _downloadBusy
                             ? const SizedBox.square(
@@ -3239,7 +3242,9 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
                             tmdbEpisodeMetadata.forNumber(e.number),
                           ),
                     ];
-                    unawaited(_enqueueDownloads(chosen));
+                    unawaited(
+                      _enqueueDownloads(chosen, availableEpisodes: episodes),
+                    );
                   },
             icon: _downloadBusy
                 ? SizedBox.square(
@@ -3270,7 +3275,10 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
     });
   }
 
-  Future<void> _enqueueDownloads(List<SoraEpisode> episodes) async {
+  Future<void> _enqueueDownloads(
+    List<SoraEpisode> episodes, {
+    required List<SoraEpisode> availableEpisodes,
+  }) async {
     if (episodes.isEmpty || _downloadBusy) return;
     setState(() => _downloadBusy = true);
     try {
@@ -3282,6 +3290,12 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
       final DownloadController notifier = ref.read(downloadsProvider.notifier);
       final List<SoraEpisode> queued = <SoraEpisode>[];
       final List<SoraEpisode> skipped = <SoraEpisode>[];
+      int availableEpisodeLimit = 0;
+      for (final SoraEpisode available in availableEpisodes) {
+        if (available.number <= 0) continue;
+        final int number = available.number.floor();
+        if (number > availableEpisodeLimit) availableEpisodeLimit = number;
+      }
 
       for (final SoraEpisode episode in episodes) {
         NormalizedStreamBundle bundle;
@@ -3308,6 +3322,7 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
           source: widget.source,
           episode: episode,
           seasonNumber: widget.seasonNumber,
+          availableEpisodeLimit: availableEpisodeLimit,
           streamPreference: choice.preference,
         );
         queued.add(episode);

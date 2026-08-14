@@ -13,6 +13,7 @@ import '../../watch/domain/normalized_models.dart';
 import '../data/download_engine.dart';
 import '../data/download_store.dart';
 import '../domain/download_models.dart';
+import 'download_episode_availability.dart';
 
 final downloadStoreProvider = Provider<DownloadStore>((Ref ref) {
   return DownloadStore();
@@ -120,6 +121,7 @@ class DownloadController extends Notifier<List<DownloadedEpisode>> {
     required SoraSearchResult source,
     required SoraEpisode episode,
     required int seasonNumber,
+    int? availableEpisodeLimit,
     DownloadStreamPreference streamPreference = DownloadStreamPreference.empty,
   }) async {
     await _ensureLoaded();
@@ -135,6 +137,16 @@ class DownloadController extends Notifier<List<DownloadedEpisode>> {
     // The actual resolved stream is sniffed in _process; queued records use a
     // harmless placeholder so unreliable module-level hints don't persist.
     const DownloadKind kind = DownloadKind.mp4;
+    final MediaItem storedItem =
+        availableEpisodeLimit != null && availableEpisodeLimit > 0
+        ? item.copyWith(
+            externalIds: <String, String>{
+              ...item.externalIds,
+              downloadAvailableEpisodeLimitKey: availableEpisodeLimit
+                  .toString(),
+            },
+          )
+        : item;
 
     final String relDir = _store.relDirFor(
       mediaId: item.id,
@@ -146,7 +158,7 @@ class DownloadController extends Notifier<List<DownloadedEpisode>> {
     final DownloadedEpisode record = DownloadedEpisode(
       id: id,
       mediaId: item.id,
-      media: item,
+      media: storedItem,
       addonId: source.addonId,
       addonName: addonName,
       episodeHref: episode.href,
