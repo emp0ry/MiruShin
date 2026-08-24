@@ -100,6 +100,11 @@ class TmdbMetadataProvider implements PagedDiscoveryProvider {
     };
   }
 
+  Future<List<MediaItem>> getRecentlyReleasedMovies({int page = 1}) {
+    _assertConfigured();
+    return _newReleases(MediaType.movie, page);
+  }
+
   @override
   Future<List<MediaItem>> getTrending({int page = 1}) async {
     _assertConfigured();

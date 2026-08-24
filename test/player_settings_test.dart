@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mirushin/features/player/domain/player_models.dart';
 
@@ -20,6 +21,42 @@ void main() {
       );
 
       expect(restored.horizontalSwipeSeekEnabled, isFalse);
+    });
+  });
+
+  group('PlayerSettings volume memory', () {
+    test('migrates an older audible volume into the unmute value', () {
+      final PlayerSettings settings = PlayerSettings.fromJson(
+        const <String, Object?>{'volume': 0.37},
+      );
+
+      expect(settings.volume, 0.37);
+      expect(settings.lastAudibleVolume, 0.37);
+    });
+
+    test('round-trips current and last audible volumes independently', () {
+      final PlayerSettings restored = PlayerSettings.fromJson(
+        const PlayerSettings(volume: 0, lastAudibleVolume: 0.42).toJson(),
+      );
+
+      expect(restored.volume, 0);
+      expect(restored.lastAudibleVolume, 0.42);
+    });
+  });
+
+  group('Player backend availability', () {
+    test('Linux hides MPV because this build does not support it there', () {
+      expect(
+        availablePlayerBackends(platform: TargetPlatform.linux),
+        const <PlayerBackend>[PlayerBackend.auto, PlayerBackend.fvp],
+      );
+    });
+
+    test('Windows keeps MPV available', () {
+      expect(
+        availablePlayerBackends(platform: TargetPlatform.windows),
+        PlayerBackend.values,
+      );
     });
   });
 }

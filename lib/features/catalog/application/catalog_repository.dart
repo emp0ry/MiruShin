@@ -66,7 +66,7 @@ class TmdbCatalogRepository implements CatalogRepository {
       fetch: () async {
         final List<List<MediaItem>> results =
             await Future.wait(<Future<List<MediaItem>>>[
-              tmdb.getPopular(MediaType.movie),
+              tmdb.getRecentlyReleasedMovies(),
               tmdb.getPopular(MediaType.series),
               tmdb.getPopular(MediaType.anime),
             ]);

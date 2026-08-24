@@ -215,7 +215,18 @@ class MediaKitPlayerEngine extends PlayerEngine {
         },
       ),
     );
-    final mkv.VideoController videoController = mkv.VideoController(player);
+    // media_kit's Direct3D/ANGLE texture can terminate the Windows process
+    // below Dart's error boundary on some GPU/driver combinations. Software
+    // output keeps MPV available as the first backend while ensuring a failed
+    // stream can reach the controller's MPV -> FVP fallback state machine.
+    final bool softwareVideoOutput = Platform.isWindows;
+    final mkv.VideoController videoController = mkv.VideoController(
+      player,
+      configuration: mkv.VideoControllerConfiguration(
+        hwdec: softwareVideoOutput ? 'no' : null,
+        enableHardwareAcceleration: !softwareVideoOutput,
+      ),
+    );
     _player = player;
     _videoController = videoController;
 
@@ -281,12 +292,15 @@ class MediaKitPlayerEngine extends PlayerEngine {
       // HLS playlist rewrites. Preview mode skips it to keep decoders cheap.
       final bool isNetwork = _isNetworkUrl(source.url);
       final bool isHls = _isHlsLikeSource(source);
+      final bool isDash = _isDashLikeSource(source);
       final bool isLocalHls = remoteUri.scheme == 'file' && isHls;
       final bool useProxy =
           !source.disableProxy &&
           !_previewMode &&
           (isNetwork || isInlineDash || isLocalHls);
-      if (source.disableProxy && !_previewMode && isNetwork) {
+      if (!_previewMode &&
+          ((source.disableProxy && isNetwork) ||
+              (useProxy && !source.allowDirectFallback))) {
         _requireVideoSurfaceDuringStartup = true;
       }
 
@@ -312,11 +326,16 @@ class MediaKitPlayerEngine extends PlayerEngine {
           await _proxy.start();
           playbackUrl = isHls
               ? _proxy.playlistUrl(remoteUri, headers: headers)
+              : isDash
+              ? _proxy.dashUrl(remoteUri, headers: headers)
               : _proxy.mediaUrl(remoteUri, headers: headers);
           _usingProxy = true;
           debugPrint('MediaKit open via proxy: $playbackUrl');
         } on Object catch (proxyErr) {
-          // Fall back to direct CDN access when the proxy cannot start.
+          if (!source.allowDirectFallback) {
+            debugPrint('MediaKit proxy start failed: $proxyErr');
+            rethrow;
+          }
           debugPrint(
             'MediaKit proxy start failed, falling back direct: $proxyErr',
           );
@@ -380,6 +399,13 @@ class MediaKitPlayerEngine extends PlayerEngine {
         lower.contains('.mp4:hls:');
   }
 
+  bool _isDashLikeSource(PlayerSource source) {
+    final String lower = source.url.toLowerCase();
+    return source.streamType == StreamType.dash ||
+        lower.endsWith('.mpd') ||
+        lower.contains('.mpd?');
+  }
+
   // Applies MPV buffer, cache, and network properties.
   //
   // All critical properties are awaited in parallel via Future.wait so they are
@@ -431,7 +457,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
       ('video-sync', 'audio'),
 
       // Hardware decoding
-      ('hwdec', 'auto-safe'),
+      ('hwdec', Platform.isWindows ? 'no' : 'auto-safe'),
     ];
 
     if (isNetwork) {
@@ -624,6 +650,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
     return _player == player &&
         _hasMedia &&
         _usingProxy &&
+        (_currentSource?.allowDirectFallback ?? true) &&
         !_directFallbackTried &&
         !_directFallbackInProgress &&
         !_requiresPinnedProxy(_directPlaybackUrl) &&
@@ -755,7 +782,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
       _proxyNoVideoStartedAt = null;
     }
 
-    if (!_canRetryDirectAfterProxy(player)) {
+    if (_lastError != null || !_usingProxy) {
       _proxyStallStartedAt = null;
       _lastProxyProgressPosition = position;
       return;
@@ -781,12 +808,17 @@ class MediaKitPlayerEngine extends PlayerEngine {
     _proxyStallStartedAt = startedAt;
     if (now.difference(startedAt) >= _proxyStallFallbackDelay) {
       _proxyStallStartedAt = null;
-      unawaited(
-        _retryDirectAfterProxyIssue(
-          player,
-          reason: 'proxy stalled while buffering',
-        ),
-      );
+      if (_canRetryDirectAfterProxy(player)) {
+        unawaited(
+          _retryDirectAfterProxyIssue(
+            player,
+            reason: 'proxy stalled while buffering',
+          ),
+        );
+      } else {
+        _lastError = 'Local proxy stalled while buffering.';
+        _syncState();
+      }
     }
   }
 

@@ -22,6 +22,7 @@ import '../data/discord_rpc_service.dart';
 import '../data/media_session_service.dart';
 import '../data/subtitle_loader.dart';
 import '../domain/offline_stall_recovery.dart';
+import '../domain/playback_attempt_plan.dart';
 import '../domain/player_models.dart';
 import '../domain/player_volume_policy.dart';
 import '../domain/seek_settle.dart';
@@ -109,6 +110,7 @@ class PlaybackState {
   PlaybackState copyWith({
     MediaPlaybackItem? item,
     PlayerEngine? engine,
+    bool clearEngine = false,
     MediaServer? server,
     StreamQuality? quality,
     VoiceOverTrack? voiceover,
@@ -137,7 +139,7 @@ class PlaybackState {
   }) {
     return PlaybackState(
       item: item ?? this.item,
-      engine: engine ?? this.engine,
+      engine: clearEngine ? null : engine ?? this.engine,
       server: server ?? this.server,
       quality: quality ?? this.quality,
       voiceover: voiceover ?? this.voiceover,
@@ -207,7 +209,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     milliseconds: 2500,
   );
   static const int _seekSettleRetryLimit = 10;
-  static const Duration _engineSeekTimeout = Duration(seconds: 4);
+  static const Duration _engineSeekTimeout = Duration(seconds: 30);
   static const Duration _resumeSeekRetryInterval = Duration(milliseconds: 650);
   static const Duration _resumeSeekRetryTimeout = Duration(seconds: 75);
   static const Duration _resumeStabilityTick = Duration(milliseconds: 260);
@@ -278,8 +280,6 @@ class PlaybackController extends Notifier<PlaybackState> {
   Timer? _seekSettleTimer;
   int _retryCount = 0;
   int _playbackGeneration = 0;
-  final Set<String> _autoFallbackTriedServers = <String>{};
-  final Set<String> _autoFallbackTriedQualities = <String>{};
   int _seekPreviewGeneration = 0;
   int _manualSeekEpoch = 0;
   Duration _resumeGuardPosition = Duration.zero;
@@ -939,17 +939,13 @@ class PlaybackController extends Notifier<PlaybackState> {
     VoiceOverTrack? voiceover,
     SubtitleTrack? subtitle,
     double? preserveAspectRatio,
-    bool isAutoFallback = false,
     PlayerBackend? backendOverride,
-    bool allowSourceFallback = true,
-    bool disableProxy = false,
+    List<PlaybackAttempt>? attemptPlan,
+    int attemptIndex = 0,
+    List<String> attemptFailures = const <String>[],
     bool respectDesiredPlaying = false,
   }) async {
     _stopOfflineStallWatch();
-    if (!isAutoFallback) {
-      _autoFallbackTriedServers.clear();
-      _autoFallbackTriedQualities.clear();
-    }
     _playPauseIntentEpoch++;
     _resumeStabilizeEpoch++;
     _progressTimer?.cancel();
@@ -963,8 +959,12 @@ class PlaybackController extends Notifier<PlaybackState> {
         ? DateTime.now().add(_resumeSeekRetryTimeout)
         : null;
     final PlayerEngine? previous = state.engine;
+    if (identical(_engineForDispose, previous)) {
+      _engineForDispose = null;
+    }
     state = state.copyWith(
       item: item,
+      clearEngine: true,
       server: server,
       quality: quality,
       voiceover: voiceover,
@@ -983,6 +983,13 @@ class PlaybackController extends Notifier<PlaybackState> {
       playPauseOperationInFlight: false,
       resumeStabilizing: false,
     );
+    // Never keep two native video outputs alive during a source/backend swap.
+    // Both MediaKit and FVP own native textures whose asynchronous teardown can
+    // otherwise overlap the next backend and terminate the process.
+    if (previous != null) {
+      await _ignorePlaybackTeardownErrors(previous.dispose());
+      if (generation != _playbackGeneration) return;
+    }
     if (subtitle == null) unawaited(_autoSelectSubtitle(server));
 
     final String url = quality.isAuto || quality.url.isEmpty
@@ -998,10 +1005,39 @@ class PlaybackController extends Notifier<PlaybackState> {
       playerSettingsProvider.future,
     );
     final bool youtubeEmbed = _isYoutubeTrailerServer(server);
-    final PlayerBackend backend = youtubeEmbed
-        ? PlayerBackend.auto
-        : backendOverride ?? settings.playerBackend;
+    final List<PlaybackAttempt> attempts = youtubeEmbed
+        ? const <PlaybackAttempt>[]
+        : attemptPlan ??
+              _buildPlaybackAttemptPlan(
+                preference: backendOverride ?? settings.playerBackend,
+                url: url,
+                streamType: streamType,
+              );
+    if (!youtubeEmbed &&
+        (attempts.isEmpty ||
+            attemptIndex < 0 ||
+            attemptIndex >= attempts.length)) {
+      state = state.copyWith(
+        loading: false,
+        error: const PlayerError(
+          title: 'Stream failed',
+          message: 'No compatible playback backend is available.',
+        ),
+      );
+      return;
+    }
+    final PlaybackAttempt? attempt = youtubeEmbed
+        ? null
+        : attempts[attemptIndex];
+    final PlayerBackend backend = attempt?.backend ?? PlayerBackend.auto;
     final PlayerBackend engineBackend = resolvePlayerEngineBackend(backend);
+    final bool disableProxy = attempt?.disableProxy ?? false;
+    if (attempt != null) {
+      debugPrint(
+        'Playback attempt ${attemptIndex + 1}/${attempts.length}: '
+        '${attempt.label} for ${server.name}.',
+      );
+    }
     final String trailerBackLabel = youtubeEmbed
         ? await _localizedText('Back')
         : 'Back';
@@ -1022,6 +1058,7 @@ class PlaybackController extends Notifier<PlaybackState> {
                   : server.headers,
               streamType: streamType,
               disableProxy: disableProxy,
+              allowDirectFallback: youtubeEmbed,
             ),
             startAt: position,
             autoplay: false,
@@ -1047,7 +1084,6 @@ class PlaybackController extends Notifier<PlaybackState> {
         await engine.dispose();
         return;
       }
-      await previous?.dispose();
       _engineForDispose = engine;
       state = state.copyWith(
         engine: engine,
@@ -1062,14 +1098,16 @@ class PlaybackController extends Notifier<PlaybackState> {
       _startProgressSaver();
       _watchPlaybackProgress(engine, generation);
       _reinforcePlaybackSpeed(engine, generation);
-      _reinforceInitialSeek(engine, position, generation, _manualSeekEpoch);
+      if (!engine.managesInitialPosition) {
+        _reinforceInitialSeek(engine, position, generation, _manualSeekEpoch);
+      }
       _guardFreshStart(engine, position, generation, _manualSeekEpoch);
       _watchEngineErrors(
         engine,
         generation,
-        engineBackend,
-        proxyDisabled: disableProxy,
-        allowSourceFallback: allowSourceFallback,
+        attempts,
+        attemptIndex,
+        attemptFailures,
       );
       _startOfflineStallWatch(item, server, engine, generation);
       if (_seekPreviewStreamEnabled) {
@@ -1090,9 +1128,8 @@ class PlaybackController extends Notifier<PlaybackState> {
       if (generation != _playbackGeneration) return;
       if (youtubeEmbed) {
         debugPrint('YouTube trailer WebView open failed: $error');
-        _engineForDispose = previous;
         state = state.copyWith(
-          engine: previous,
+          clearEngine: true,
           loading: false,
           error: PlayerError(
             title: 'Trailer failed',
@@ -1102,44 +1139,30 @@ class PlaybackController extends Notifier<PlaybackState> {
         );
         return;
       }
-      if (_tryDirectAfterProxyFallback(
-        failedBackend: engineBackend,
-        proxyDisabled: disableProxy,
+      final List<String> failures = _appendPlaybackFailure(
+        attemptFailures,
+        attempts[attemptIndex],
+        error,
+      );
+      if (_tryNextPlaybackAttempt(
+        attempts: attempts,
+        failedAttemptIndex: attemptIndex,
+        failures: failures,
         position: fallbackPosition,
         autoplay: fallbackAutoplay,
         preserveAspectRatio: fallbackAspectRatio ?? preserveAspectRatio,
-        allowSourceFallback: allowSourceFallback,
       )) {
-        return;
-      }
-      if (_tryAutoBackendFallback(
-        failedBackend: engineBackend,
-        position: fallbackPosition,
-        autoplay: fallbackAutoplay,
-        preserveAspectRatio: fallbackAspectRatio ?? preserveAspectRatio,
-        allowSourceFallback: allowSourceFallback,
-      )) {
-        return;
-      }
-      if (_tryAutoFallbackQuality(
-        position: fallbackPosition,
-        autoplay: fallbackAutoplay,
-        preserveAspectRatio: fallbackAspectRatio ?? preserveAspectRatio,
-        backendOverride: engineBackend,
-        allowSourceFallback: allowSourceFallback,
-      )) {
-        return;
-      }
-      if (allowSourceFallback &&
-          _tryAutoFallbackServer(requestedPosition: fallbackPosition)) {
         return;
       }
       state = state.copyWith(
-        engine: previous,
+        clearEngine: true,
         loading: false,
-        error: PlayerError(title: 'Stream failed', message: error.toString()),
+        error: PlayerError(
+          title: 'Stream failed',
+          message: _playbackFailureMessage(failures),
+        ),
       );
-      _engineForDispose = previous;
+      _engineForDispose = null;
     }
   }
 
@@ -1199,6 +1222,10 @@ class PlaybackController extends Notifier<PlaybackState> {
 
       final PlayerEngineState value = engine.state.value;
       if (!value.isInitialized) continue;
+      // One seek has already selected the target fragment. Reissuing the same
+      // request while that fragment is buffering causes native seek/download
+      // storms on long-segment DASH-to-HLS streams.
+      if (attemptedSeek && value.isBuffering) continue;
 
       try {
         await _seekEngineTo(engine, position, reason: 'Resume seek');
@@ -1340,72 +1367,85 @@ class PlaybackController extends Notifier<PlaybackState> {
     return position;
   }
 
-  bool _tryDirectAfterProxyFallback({
-    required PlayerBackend failedBackend,
-    required bool proxyDisabled,
-    required Duration position,
-    required bool autoplay,
-    required bool allowSourceFallback,
-    double? preserveAspectRatio,
+  List<PlaybackAttempt> _buildPlaybackAttemptPlan({
+    required PlayerBackend preference,
+    required String url,
+    required StreamType streamType,
   }) {
-    if (proxyDisabled) return false;
-
-    final MediaPlaybackItem? item = state.item;
-    final MediaServer? server = state.server;
-    final StreamQuality? quality = state.quality;
-    if (item == null || server == null || quality == null) return false;
-    if (_isYoutubeTrailerServer(server)) return false;
-
-    final String url = _effectiveQualityUrl(server, quality);
     final Uri? uri = Uri.tryParse(url);
     final String scheme = uri?.scheme.toLowerCase() ?? '';
-    if (scheme != 'http' && scheme != 'https') return false;
+    final bool inlineDash = LocalHlsProxy.isInlineDashUrl(url);
+    final bool network = scheme == 'http' || scheme == 'https';
+    final bool localHls = scheme == 'file' && streamType == StreamType.hls;
+    final bool proxyEligible =
+        !usesBrowserPlayerEngine && (network || inlineDash || localHls);
+    final bool directEligible = !inlineDash;
 
-    debugPrint(
-      'Playback proxy fallback: ${failedBackend.name.toUpperCase()} proxy failed; '
-      'trying ${failedBackend.name.toUpperCase()} direct for ${server.name}.',
-    );
-    unawaited(
-      _open(
-        item: item,
-        server: server,
-        quality: quality,
-        position: position,
-        autoplay: autoplay,
-        voiceover: state.voiceover,
-        subtitle: state.subtitle,
-        preserveAspectRatio: preserveAspectRatio,
-        isAutoFallback: true,
-        backendOverride: failedBackend,
-        allowSourceFallback: allowSourceFallback,
-        disableProxy: true,
+    return buildPlaybackAttemptPlan(
+      preference: preference,
+      mpvAvailable: isPlayerEngineBackendAvailable(
+        PlayerBackend.mpv,
+        streamType: streamType,
       ),
+      fvpAvailable: isPlayerEngineBackendAvailable(
+        PlayerBackend.fvp,
+        streamType: streamType,
+      ),
+      proxyEligible: proxyEligible,
+      // An inline DASH value contains the manifest itself, not a directly
+      // playable URL, so only its local-proxy route is valid.
+      directEligible: directEligible,
+      mpvProxyEligible:
+          proxyEligible &&
+          isPlayerEngineRouteAvailable(
+            PlayerBackend.mpv,
+            PlaybackRoute.localProxy,
+            streamType: streamType,
+          ),
+      mpvDirectEligible:
+          directEligible &&
+          isPlayerEngineRouteAvailable(
+            PlayerBackend.mpv,
+            PlaybackRoute.direct,
+            streamType: streamType,
+          ),
+      fvpProxyEligible:
+          proxyEligible &&
+          isPlayerEngineRouteAvailable(
+            PlayerBackend.fvp,
+            PlaybackRoute.localProxy,
+            streamType: streamType,
+          ),
+      fvpDirectEligible:
+          directEligible &&
+          isPlayerEngineRouteAvailable(
+            PlayerBackend.fvp,
+            PlaybackRoute.direct,
+            streamType: streamType,
+          ),
+      usesBrowserBackend: usesBrowserPlayerEngine,
     );
-    return true;
   }
 
-  bool _tryAutoBackendFallback({
-    required PlayerBackend failedBackend,
+  bool _tryNextPlaybackAttempt({
+    required List<PlaybackAttempt> attempts,
+    required int failedAttemptIndex,
+    required List<String> failures,
     required Duration position,
     required bool autoplay,
-    required bool allowSourceFallback,
     double? preserveAspectRatio,
   }) {
-    final PlayerSettings settings =
-        ref.read(playerSettingsProvider).value ?? const PlayerSettings();
-    if (settings.playerBackend != PlayerBackend.auto ||
-        failedBackend != PlayerBackend.mpv) {
-      return false;
-    }
+    final int nextIndex = failedAttemptIndex + 1;
+    if (nextIndex >= attempts.length) return false;
 
     final MediaPlaybackItem? item = state.item;
     final MediaServer? server = state.server;
     final StreamQuality? quality = state.quality;
     if (item == null || server == null || quality == null) return false;
-    if (_isYoutubeTrailerServer(server)) return false;
 
     debugPrint(
-      'Playback auto backend fallback: MPV failed; trying FVP for ${server.name}.',
+      'Playback fallback: ${attempts[failedAttemptIndex].label} failed; '
+      'trying ${attempts[nextIndex].label} for ${server.name}.',
     );
     unawaited(
       _open(
@@ -1417,126 +1457,43 @@ class PlaybackController extends Notifier<PlaybackState> {
         voiceover: state.voiceover,
         subtitle: state.subtitle,
         preserveAspectRatio: preserveAspectRatio,
-        isAutoFallback: true,
-        backendOverride: PlayerBackend.fvp,
-        allowSourceFallback: allowSourceFallback,
+        attemptPlan: attempts,
+        attemptIndex: nextIndex,
+        attemptFailures: failures,
       ),
     );
     return true;
   }
 
-  bool _tryAutoFallbackQuality({
-    required Duration position,
-    required bool autoplay,
-    double? preserveAspectRatio,
-    PlayerBackend? backendOverride,
-    bool allowSourceFallback = false,
-  }) {
-    final MediaPlaybackItem? item = state.item;
-    final MediaServer? server = state.server;
-    final StreamQuality? current = state.quality;
-    if (item == null || server == null || current == null) return false;
-    if (_isYoutubeTrailerServer(server)) return false;
-    if (server.qualities.length <= 1) return false;
-
-    final String currentUrl = _effectiveQualityUrl(server, current);
-    _autoFallbackTriedQualities.add(_qualityFallbackKey(server, current));
-
-    final List<StreamQuality> explicitCandidates = <StreamQuality>[];
-    final List<StreamQuality> autoCandidates = <StreamQuality>[];
-    for (final StreamQuality quality in server.qualities) {
-      final String url = _effectiveQualityUrl(server, quality);
-      if (url.isEmpty || url == currentUrl) continue;
-      if (_autoFallbackTriedQualities.contains(
-        _qualityFallbackKey(server, quality),
-      )) {
-        continue;
-      }
-      if (quality.isAuto) {
-        autoCandidates.add(quality);
-      } else {
-        explicitCandidates.add(quality);
-      }
+  List<String> _appendPlaybackFailure(
+    List<String> failures,
+    PlaybackAttempt attempt,
+    Object error,
+  ) {
+    String description = error
+        .toString()
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    if (description.length > 320) {
+      description = '${description.substring(0, 317)}...';
     }
-
-    final List<StreamQuality> candidates = <StreamQuality>[
-      ...explicitCandidates,
-      ...autoCandidates,
-    ];
-    if (candidates.isEmpty) return false;
-
-    final StreamQuality next = candidates.first;
-    debugPrint(
-      'Playback quality fallback: ${current.label} failed; trying ${next.label} for ${server.name}.',
-    );
-    unawaited(
-      _open(
-        item: item,
-        server: server,
-        quality: next,
-        position: position,
-        autoplay: autoplay,
-        voiceover: state.voiceover,
-        subtitle: state.subtitle,
-        preserveAspectRatio: preserveAspectRatio,
-        isAutoFallback: true,
-        backendOverride: backendOverride,
-        allowSourceFallback: allowSourceFallback,
-      ),
-    );
-    return true;
+    final String failure = '${attempt.label}: $description';
+    debugPrint('Playback attempt failed: $failure');
+    return <String>[...failures, failure];
   }
 
-  String _effectiveQualityUrl(MediaServer server, StreamQuality quality) {
-    if (quality.isAuto || quality.url.trim().isEmpty) {
-      return server.url.trim();
-    }
-    return quality.url.trim();
-  }
-
-  bool _isMissingVideoSurfaceError(String? description) {
-    return description?.toLowerCase().contains('video surface') ?? false;
-  }
-
-  String _qualityFallbackKey(MediaServer server, StreamQuality quality) {
-    return '${server.id}|${quality.id}|${_effectiveQualityUrl(server, quality)}';
-  }
-
-  bool _tryAutoFallbackServer({Duration requestedPosition = Duration.zero}) {
-    final MediaPlaybackItem? item = state.item;
-    final MediaServer? current = state.server;
-    if (item == null || current == null) return false;
-    if (_isYoutubeTrailerServer(current)) return false;
-    _autoFallbackTriedServers.add(current.id);
-    final Iterable<MediaServer> untried = item.servers.where(
-      (MediaServer s) => !_autoFallbackTriedServers.contains(s.id),
-    );
-    if (untried.isEmpty) return false;
-    final MediaServer next = untried.first;
-    unawaited(
-      _open(
-        item: item,
-        server: next,
-        quality: _initialQuality(next),
-        position: _fallbackPositionFor(
-          state.engine,
-          requestedPosition: requestedPosition,
-        ),
-        autoplay: true,
-        subtitle: state.subtitle,
-        isAutoFallback: true,
-      ),
-    );
-    return true;
+  String _playbackFailureMessage(List<String> failures) {
+    if (failures.isEmpty) return 'All compatible playback attempts failed.';
+    return 'All compatible playback attempts failed.\n${failures.join('\n')}';
   }
 
   void _watchEngineErrors(
     PlayerEngine engine,
     int generation,
-    PlayerBackend engineBackend, {
-    required bool proxyDisabled,
-    required bool allowSourceFallback,
-  }) {
+    List<PlaybackAttempt> attempts,
+    int attemptIndex,
+    List<String> attemptFailures,
+  ) {
     late void Function() listener;
     listener = () {
       if (generation != _playbackGeneration ||
@@ -1547,53 +1504,47 @@ class PlaybackController extends Notifier<PlaybackState> {
       if (engine.state.value.hasError && state.error == null) {
         engine.removeListener(listener);
         final String? errorDescription = engine.state.value.errorDescription;
-        final bool missingVideoSurface = _isMissingVideoSurfaceError(
-          errorDescription,
+        if (attempts.isEmpty) {
+          state = state.copyWith(
+            error: PlayerError(
+              title: 'Trailer failed',
+              message: errorDescription ?? 'The trailer failed to load.',
+              canRetry: true,
+            ),
+          );
+          return;
+        }
+
+        final List<String> failures = _appendPlaybackFailure(
+          attemptFailures,
+          attempts[attemptIndex],
+          errorDescription ?? 'The stream failed to load.',
         );
-        if (!missingVideoSurface &&
-            _tryDirectAfterProxyFallback(
-              failedBackend: engineBackend,
-              proxyDisabled: proxyDisabled,
-              position: _fallbackPositionFor(engine),
-              autoplay: state.desiredPlaying || engine.state.value.isPlaying,
-              preserveAspectRatio: engine.state.value.aspectRatio,
-              allowSourceFallback: allowSourceFallback,
-            )) {
-          return;
-        }
-        if (_tryAutoBackendFallback(
-          failedBackend: engineBackend,
+        if (_tryNextPlaybackAttempt(
+          attempts: attempts,
+          failedAttemptIndex: attemptIndex,
+          failures: failures,
           position: _fallbackPositionFor(engine),
           autoplay: state.desiredPlaying || engine.state.value.isPlaying,
           preserveAspectRatio: engine.state.value.aspectRatio,
-          allowSourceFallback: allowSourceFallback,
         )) {
           return;
         }
-        if (_tryAutoFallbackQuality(
-          position: _fallbackPositionFor(engine),
-          autoplay: state.desiredPlaying || engine.state.value.isPlaying,
-          preserveAspectRatio: engine.state.value.aspectRatio,
-          backendOverride: engineBackend,
-          allowSourceFallback: allowSourceFallback,
-        )) {
-          return;
-        }
-        if (allowSourceFallback &&
-            _tryAutoFallbackServer(
-              requestedPosition: _fallbackPositionFor(engine),
-            )) {
-          return;
+
+        _playbackGeneration++;
+        if (identical(_engineForDispose, engine)) {
+          _engineForDispose = null;
         }
         state = state.copyWith(
+          clearEngine: true,
+          loading: false,
           error: PlayerError(
             title: 'Playback error',
-            message:
-                engine.state.value.errorDescription ??
-                'The stream failed to load.',
+            message: _playbackFailureMessage(failures),
             canRetry: true,
           ),
         );
+        unawaited(_ignorePlaybackTeardownErrors(engine.dispose()));
       }
     };
     engine.addListener(listener);
@@ -2153,7 +2104,6 @@ class PlaybackController extends Notifier<PlaybackState> {
       voiceover: state.voiceover,
       subtitle: state.subtitle,
       preserveAspectRatio: aspectRatio,
-      allowSourceFallback: true,
       respectDesiredPlaying: true,
     );
   }
@@ -2879,13 +2829,14 @@ class PlaybackController extends Notifier<PlaybackState> {
     return position;
   }
 
-  Future<void> _seekEngineTo(
+  Future<bool> _seekEngineTo(
     PlayerEngine engine,
     Duration target, {
     String reason = 'seek',
   }) async {
     try {
       await engine.seekTo(target).timeout(_engineSeekTimeout);
+      return true;
     } on TimeoutException catch (error) {
       if (kDebugMode) {
         debugPrint(
@@ -2893,6 +2844,7 @@ class PlaybackController extends Notifier<PlaybackState> {
           '(target=${target.inMilliseconds}ms): $error',
         );
       }
+      return false;
     }
   }
 
@@ -3007,7 +2959,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     final bool canClearRememberedBuffer =
         !hasRememberedBuffer || !nativeStillBuffering;
 
-    if (!settled && !timedOut) {
+    if (!settled && !timedOut && !nativeStillBuffering) {
       _maybeRetrySettlingSeek(engine, target, now);
     }
 
@@ -3218,6 +3170,16 @@ class PlaybackController extends Notifier<PlaybackState> {
     state = state.copyWith();
   }
 
+  Future<void> toggleMute() async {
+    final PlayerSettings settings = await ref.read(
+      playerSettingsProvider.future,
+    );
+    final double current = (state.engine?.value.volume ?? settings.volume)
+        .clamp(0.0, 1.0)
+        .toDouble();
+    await setVolume(current > 0 ? 0 : settings.lastAudibleVolume);
+  }
+
   bool _autoplayForSourceChange(PlayerEngine? current) {
     return state.desiredPlaying || (current?.state.value.isPlaying ?? true);
   }
@@ -3385,10 +3347,10 @@ class PlaybackController extends Notifier<PlaybackState> {
     );
   }
 
-  Future<void> skipTo(Duration target) async {
-    if (_suppressSeekControl) return;
+  Future<bool> skipTo(Duration target) async {
+    if (_suppressSeekControl) return false;
     final PlayerEngine? engine = state.engine;
-    if (engine == null) return;
+    if (engine == null) return false;
     final Duration from = _currentPositionFor(engine);
     final Duration duration = engine.state.value.duration;
     final Duration clampedTarget = _clampSeekPosition(target, duration);
@@ -3398,17 +3360,28 @@ class PlaybackController extends Notifier<PlaybackState> {
     // Skip jumps (notably the auto ED-skip, which lands on the episode end) must
     // feed completion detection like slider and gesture seeks do. Otherwise, jumping
     // past the end leaves the episode unwatched and never triggers auto-next.
+    _setSeekPreview(engine, clampedTarget);
+    bool seekCompleted = false;
+    try {
+      seekCompleted = await _seekEngineTo(
+        engine,
+        clampedTarget,
+        reason: 'Skip seek',
+      );
+    } on Object catch (error) {
+      // Native backends may reject stale skip targets during stream changes.
+      if (kDebugMode) debugPrint('Skip seek failed: $error');
+    }
+    if (!seekCompleted || state.engine != engine) {
+      if (state.engine == engine &&
+          state.seekPreviewPosition == clampedTarget) {
+        state = state.copyWith(clearSeekPreviewPosition: true);
+      }
+      return false;
+    }
     _noteManualSeekTarget(clampedTarget, duration);
     _notePausedResumeTarget(engine, clampedTarget);
-    _setSeekPreview(engine, clampedTarget);
-    try {
-      await _seekEngineTo(engine, clampedTarget, reason: 'Skip seek');
-    } on Object {
-      // Native backends may reject stale skip targets during stream changes.
-    }
-    if (state.engine == engine) {
-      _beginSeekSettle(engine, clampedTarget, from: from);
-    }
+    _beginSeekSettle(engine, clampedTarget, from: from);
     state = state.copyWith(lastSkippedFrom: from);
     _undoTimer?.cancel();
     _undoTimer = Timer(
@@ -3416,6 +3389,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       () => state = state.copyWith(clearLastSkippedFrom: true),
     );
     _broadcastSeek(clampedTarget);
+    return true;
   }
 
   Future<void> undoSkip() async {
@@ -3434,14 +3408,20 @@ class PlaybackController extends Notifier<PlaybackState> {
     _clearInteractiveSeek();
     _notePausedResumeTarget(engine, target);
     _setSeekPreview(engine, target);
+    bool seekCompleted = false;
     try {
-      await _seekEngineTo(engine, target, reason: 'Undo seek');
-    } on Object {
+      seekCompleted = await _seekEngineTo(engine, target, reason: 'Undo seek');
+    } on Object catch (error) {
       // Ignore stale undo seeks while the player is being replaced.
+      if (kDebugMode) debugPrint('Undo seek failed: $error');
     }
-    if (state.engine == engine) {
-      _beginSeekSettle(engine, target, from: fromPosition);
+    if (!seekCompleted || state.engine != engine) {
+      if (state.engine == engine && state.seekPreviewPosition == target) {
+        state = state.copyWith(clearSeekPreviewPosition: true);
+      }
+      return;
     }
+    _beginSeekSettle(engine, target, from: fromPosition);
     state = state.copyWith(clearLastSkippedFrom: true);
     _broadcastSeek(target);
   }

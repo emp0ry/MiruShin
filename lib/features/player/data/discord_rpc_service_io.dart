@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import '../../../core/constants/app_constants.dart';
+import '../../../core/utils/serial_async_executor.dart';
 import '../../../shared/models/media_item.dart';
 import 'discord_rpc_models.dart';
 
@@ -15,6 +16,7 @@ class DiscordRpcService {
 
   static const Duration _connectCooldown = Duration(seconds: 8);
 
+  static final SerialAsyncExecutor _operations = SerialAsyncExecutor();
   static _DiscordIpcClient? _client;
   static DiscordRpcPresence? _lastPresence;
   static DateTime? _lastConnectFailureAt;
@@ -27,23 +29,31 @@ class DiscordRpcService {
   static Future<void> configure({
     required bool appEnabled,
     required bool playerEnabled,
-  }) async {
-    _appEnabled = appEnabled;
-    _playerEnabled = playerEnabled;
+  }) {
+    return _operations.run(() async {
+      _appEnabled = appEnabled;
+      _playerEnabled = playerEnabled;
 
-    if (!_effectiveEnabled) {
-      await clearActivity();
-      return;
-    }
+      if (!_effectiveEnabled) {
+        await _clearActivity();
+        return;
+      }
 
-    final DiscordRpcPresence? lastPresence = _lastPresence;
-    if (lastPresence != null) {
-      await updatePresence(lastPresence);
-    }
+      final DiscordRpcPresence? lastPresence = _lastPresence;
+      if (lastPresence != null) {
+        await _updatePresence(lastPresence);
+      }
+    });
   }
 
-  static Future<void> updatePresence(DiscordRpcPresence presence) async {
-    _lastPresence = presence;
+  static Future<void> updatePresence(DiscordRpcPresence presence) {
+    return _operations.run(() async {
+      _lastPresence = presence;
+      await _updatePresence(presence);
+    });
+  }
+
+  static Future<void> _updatePresence(DiscordRpcPresence presence) async {
     if (!isSupported || !_effectiveEnabled) {
       return;
     }
@@ -61,7 +71,11 @@ class DiscordRpcService {
     }
   }
 
-  static Future<void> clearActivity() async {
+  static Future<void> clearActivity() {
+    return _operations.run(_clearActivity);
+  }
+
+  static Future<void> _clearActivity() async {
     _lastPresence = null;
     final _DiscordIpcClient? client = _client;
     if (client != null) {
@@ -74,11 +88,13 @@ class DiscordRpcService {
     await _closeClient();
   }
 
-  static Future<void> dispose() async {
-    _lastPresence = null;
-    _appEnabled = true;
-    _playerEnabled = true;
-    await _closeClient();
+  static Future<void> dispose() {
+    return _operations.run(() async {
+      _lastPresence = null;
+      _appEnabled = true;
+      _playerEnabled = true;
+      await _closeClient();
+    });
   }
 
   static bool get _effectiveEnabled => _appEnabled && _playerEnabled;
@@ -99,11 +115,18 @@ class DiscordRpcService {
       return false;
     }
 
-    final _DiscordIpcClient client = _DiscordIpcClient(
+    late final _DiscordIpcClient client;
+    client = _DiscordIpcClient(
       applicationId: AppConstants.discordRpcApplicationId,
       onClosed: () {
-        _lastConnectFailureAt = DateTime.now();
-        _client = null;
+        unawaited(
+          _operations.run(() async {
+            if (identical(_client, client)) {
+              _lastConnectFailureAt = DateTime.now();
+              _client = null;
+            }
+          }),
+        );
       },
     );
 
@@ -250,6 +273,7 @@ class _DiscordIpcClient {
   _DiscordTransport? _transport;
   StreamSubscription<_DiscordFrame>? _subscription;
   bool _closed = false;
+  Future<void>? _closeFuture;
 
   bool get isConnected => _transport != null && !_closed;
 
@@ -277,10 +301,16 @@ class _DiscordIpcClient {
     });
   }
 
-  Future<void> close() async {
-    if (_closed) {
-      return;
-    }
+  Future<void> close() {
+    final Future<void>? existing = _closeFuture;
+    if (existing != null) return existing;
+
+    final Future<void> future = _close();
+    _closeFuture = future;
+    return future;
+  }
+
+  Future<void> _close() async {
     _closed = true;
     await _subscription?.cancel();
     _subscription = null;
@@ -448,7 +478,9 @@ abstract class _DiscordTransport {
 }
 
 class _DiscordUnixTransport extends _DiscordTransport {
+  final SerialAsyncExecutor _ioOperations = SerialAsyncExecutor();
   Socket? _socket;
+  Future<void>? _closeFuture;
 
   @override
   Future<void> connect() async {
@@ -471,27 +503,40 @@ class _DiscordUnixTransport extends _DiscordTransport {
     Map<String, Object?> payload, {
     required _DiscordOpcode opcode,
     Map<String, Object?> extra = const <String, Object?>{},
-  }) async {
+  }) {
     final Socket? socket = _socket;
     if (socket == null) {
-      throw StateError('Discord IPC socket is closed.');
+      return Future<void>.error(StateError('Discord IPC socket is closed.'));
     }
-    socket.add(encode(opcode, <String, Object?>{...payload, ...extra}));
-    await socket.flush();
+    final Uint8List frame = encode(opcode, <String, Object?>{
+      ...payload,
+      ...extra,
+    });
+    return _ioOperations.run(() async {
+      socket.add(frame);
+      await socket.flush();
+    });
   }
 
   @override
-  Future<void> close() async {
+  Future<void> close() {
+    final Future<void>? existing = _closeFuture;
+    if (existing != null) return existing;
+
     final Socket? socket = _socket;
     _socket = null;
-    try {
-      socket?.add(encode(_DiscordOpcode.close, const <String, Object?>{}));
-      await socket?.flush();
-    } on Object {
-      // Ignore close errors.
-    }
-    await socket?.close();
-    finish();
+    final Future<void> future = _ioOperations.run(() async {
+      try {
+        socket?.add(encode(_DiscordOpcode.close, const <String, Object?>{}));
+        await socket?.flush();
+      } on Object {
+        // Discord may already have closed its socket.
+      }
+      await socket?.close();
+      finish();
+    });
+    _closeFuture = future;
+    return future;
   }
 
   Future<Socket?> _openSocket() async {
@@ -527,7 +572,9 @@ class _DiscordUnixTransport extends _DiscordTransport {
 }
 
 class _DiscordWindowsTransport extends _DiscordTransport {
+  final SerialAsyncExecutor _ioOperations = SerialAsyncExecutor();
   RandomAccessFile? _file;
+  Future<void>? _closeFuture;
 
   @override
   Future<void> connect() async {
@@ -546,31 +593,40 @@ class _DiscordWindowsTransport extends _DiscordTransport {
     Map<String, Object?> payload, {
     required _DiscordOpcode opcode,
     Map<String, Object?> extra = const <String, Object?>{},
-  }) async {
+  }) {
     final RandomAccessFile? file = _file;
     if (file == null) {
-      throw StateError('Discord IPC pipe is closed.');
+      return Future<void>.error(StateError('Discord IPC pipe is closed.'));
     }
-    await file.writeFrom(
-      encode(opcode, <String, Object?>{...payload, ...extra}),
-    );
+    final Uint8List frame = encode(opcode, <String, Object?>{
+      ...payload,
+      ...extra,
+    });
+    return _ioOperations.run(() => file.writeFrom(frame));
   }
 
   @override
-  Future<void> close() async {
+  Future<void> close() {
+    final Future<void>? existing = _closeFuture;
+    if (existing != null) return existing;
+
     final RandomAccessFile? file = _file;
     _file = null;
-    try {
-      if (file != null) {
-        await file.writeFrom(
-          encode(_DiscordOpcode.close, const <String, Object?>{}),
-        );
+    final Future<void> future = _ioOperations.run(() async {
+      try {
+        if (file != null) {
+          await file.writeFrom(
+            encode(_DiscordOpcode.close, const <String, Object?>{}),
+          );
+        }
+      } on Object {
+        // Discord may already have closed its named pipe.
       }
-    } on Object {
-      // Ignore close errors.
-    }
-    await file?.close();
-    finish();
+      await file?.close();
+      finish();
+    });
+    _closeFuture = future;
+    return future;
   }
 
   Future<RandomAccessFile?> _openPipe() async {

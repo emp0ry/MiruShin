@@ -22,6 +22,15 @@ void main() {
       expect(rails.heroForSeed(1)?.id, 'anime:41');
     });
 
+    test('can prefer recent movies for a TMDB hero', () {
+      final BoardRails rails = BoardRails(
+        recentMovies: <MediaItem>[_movie(40), _movie(41)],
+        topAnime: <MediaItem>[_anime(0), _anime(1)],
+      );
+
+      expect(rails.heroForSeed(1, preferRecentMovies: true)?.id, 'movie:41');
+    });
+
     test('returns null for an empty board', () {
       expect(BoardRails.empty().heroForSeed(3), isNull);
     });
@@ -35,6 +44,24 @@ MediaItem _anime(int index) {
     originalTitle: 'Anime $index',
     overview: '',
     type: MediaType.anime,
+    year: 2026,
+    posterUrl: '',
+    backdropUrl: '',
+    rating: 0,
+    genres: const <String>[],
+    sourceProvider: 'test',
+    externalIds: const <String, String>{},
+    statusLabel: '',
+  );
+}
+
+MediaItem _movie(int index) {
+  return MediaItem(
+    id: 'movie:$index',
+    title: 'Movie $index',
+    originalTitle: 'Movie $index',
+    overview: '',
+    type: MediaType.movie,
     year: 2026,
     posterUrl: '',
     backdropUrl: '',

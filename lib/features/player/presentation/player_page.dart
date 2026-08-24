@@ -1009,8 +1009,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.keyM) {
-      final double current = state.engine?.value.volume ?? 1.0;
-      unawaited(notifier.setVolume(current > 0 ? 0 : 1.0));
+      unawaited(notifier.toggleMute());
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.keyC) {
@@ -1293,10 +1292,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
           ),
           _MuteIntent: CallbackAction<_MuteIntent>(
             onInvoke: (_) {
-              final double current = state.engine?.value.volume ?? 1.0;
-              ref
-                  .read(playbackControllerProvider.notifier)
-                  .setVolume(current > 0 ? 0 : 1.0);
+              ref.read(playbackControllerProvider.notifier).toggleMute();
               return null;
             },
           ),
@@ -2029,21 +2025,26 @@ class _AutoSkipWorkerState extends ConsumerState<_AutoSkipWorker> {
     final String key =
         '$_itemKey|$kind|${rangeStart.inMilliseconds}|${rangeEnd.inMilliseconds}';
     if (_skippedRanges.contains(key)) return false;
-    _skippedRanges.add(key);
     _skipInFlight = true;
     debugPrint(
       '[DEBUG] auto-skip ($kind): position=$position -> target=$target range=$rangeStart-$rangeEnd',
     );
-    unawaited(_skipTo(target));
+    unawaited(_skipTo(target, key));
     return true;
   }
 
-  Future<void> _skipTo(Duration target) async {
+  Future<void> _skipTo(Duration target, String key) async {
     try {
-      await ref.read(playbackControllerProvider.notifier).skipTo(target);
+      final bool completed = await ref
+          .read(playbackControllerProvider.notifier)
+          .skipTo(target);
+      if (completed && mounted) {
+        _skippedRanges.add(key);
+      }
     } finally {
       if (mounted) {
         _skipInFlight = false;
+        WidgetsBinding.instance.addPostFrameCallback((_) => _evaluate());
       }
     }
   }
@@ -2060,7 +2061,11 @@ class _PlayerLoadingIndicator extends StatelessWidget {
     return const SizedBox(
       width: 36,
       height: 36,
-      child: CircularProgressIndicator(strokeWidth: 4, color: Colors.white),
+      child: CircularProgressIndicator(
+        strokeWidth: 4,
+        color: Colors.white,
+        backgroundColor: Colors.transparent,
+      ),
     );
   }
 }
@@ -2758,9 +2763,8 @@ class _InlineVolumeControlState extends ConsumerState<_InlineVolumeControl> {
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints.tightFor(width: 32, height: 36),
             color: Colors.white,
-            onPressed: () => ref
-                .read(playbackControllerProvider.notifier)
-                .setVolume(volume > 0 ? 0 : 1),
+            onPressed: () =>
+                ref.read(playbackControllerProvider.notifier).toggleMute(),
             icon: Icon(icon),
           ),
           // While collapsed (width 0) the slider is invisible but would still
@@ -3718,7 +3722,7 @@ class _PlayerErrorOverlay extends ConsumerWidget {
                                     .switchServer(servers[next]);
                               },
                               icon: const Icon(Icons.dns_rounded),
-                              label: Text(context.t('Try next')),
+                              label: Text(context.t('Try next source')),
                             ),
                           if (error.canRetry)
                             FilledButton.icon(

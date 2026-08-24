@@ -7,6 +7,8 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
+import 'dash_hls_manifest.dart';
+
 // The per-request timeout detects failures while allowing slow HLS CDNs that
 // send a chunk only every few seconds.
 const Duration _kConnectTimeout = Duration(seconds: 10);
@@ -70,7 +72,10 @@ class LocalHlsProxy {
   final Map<String, String> _inlineDashManifests = <String, String>{};
   final Map<String, Map<String, String>> _inlineDashHeaders =
       <String, Map<String, String>>{};
+  final Map<String, DashHlsPresentation> _dashHlsPresentations =
+      <String, DashHlsPresentation>{};
   int _inlineDashCounter = 0;
+  int _dashHlsCounter = 0;
   bool _stopping = false;
 
   bool get isRunning => _server != null;
@@ -103,6 +108,7 @@ class LocalHlsProxy {
     _localRoots.clear();
     _inlineDashManifests.clear();
     _inlineDashHeaders.clear();
+    _dashHlsPresentations.clear();
     _lastRequestAt = null;
     try {
       await s?.close(force: true);
@@ -149,6 +155,63 @@ class LocalHlsProxy {
     return '$_base/media?u=$u&h=$h';
   }
 
+  /// Returns a proxied remote DASH manifest URL.
+  ///
+  /// A remote MPD cannot be served through [mediaUrl] unchanged: relative
+  /// SegmentTemplate paths would resolve against localhost and never reach the
+  /// CDN. This endpoint rewrites DASH resource attributes to individual
+  /// `/media` URLs while preserving MPD template variables.
+  String dashUrl(
+    Uri remoteUrl, {
+    Map<String, String> headers = const <String, String>{},
+  }) {
+    final String u = Uri.encodeQueryComponent(remoteUrl.toString());
+    if (headers.isEmpty) {
+      return '$_base/mpd?u=$u';
+    }
+    final String h = Uri.encodeQueryComponent(jsonEncode(headers));
+    return '$_base/mpd?u=$u&h=$h';
+  }
+
+  /// Converts a static MPEG-DASH MPD to HLS metadata for FVP on Windows.
+  ///
+  /// The media is not transcoded or remuxed. Generated HLS playlists point at
+  /// the MPD's original fragmented-MP4 initialization and media segments,
+  /// either directly or through a streaming relay. Building eagerly makes
+  /// malformed/unsupported MPDs fail as a normal Dart exception instead of
+  /// becoming an opaque native `MediaStatus(+invalid)` several seconds later.
+  Future<String> dashHlsUrl(
+    Uri remoteUrl, {
+    Map<String, String> headers = const <String, String>{},
+    bool proxyMedia = true,
+  }) async {
+    if (remoteUrl.scheme != 'http' && remoteUrl.scheme != 'https') {
+      throw ArgumentError.value(remoteUrl, 'remoteUrl', 'Must be HTTP(S).');
+    }
+    for (final MapEntry<String, String> header in headers.entries) {
+      _putForwardHeader(header.key, header.value, overwrite: true);
+    }
+    debugPrint('HlsProxy DASH→HLS manifest ← $remoteUrl');
+    final String manifest = await _fetchPlaylist(remoteUrl);
+    return _registerDashHlsPresentation(
+      manifest: manifest,
+      manifestUri: remoteUrl,
+      headers: Map<String, String>.from(_forwardHeaders),
+      proxyMedia: proxyMedia,
+    );
+  }
+
+  String inlineDashHlsUrl(
+    String manifest, {
+    Map<String, String> headers = const <String, String>{},
+  }) {
+    return _registerDashHlsPresentation(
+      manifest: manifest,
+      manifestUri: _base.resolve('/inline.mpd'),
+      headers: headers,
+    );
+  }
+
   String inlineDashUrl(
     String manifest, {
     Map<String, String> headers = const <String, String>{},
@@ -171,8 +234,20 @@ class LocalHlsProxy {
           await _serveSegment(req);
         case '/media':
           await _serveSegment(req, preserveContentType: true);
+        case '/dash-media':
+          await _serveSegment(
+            req,
+            preserveContentType: true,
+            forceStreaming: true,
+          );
+        case '/mpd':
+          await _serveRemoteDash(req);
         case '/dash':
           await _serveInlineDash(req);
+        case '/dash-hls-master':
+          await _serveDashHlsMaster(req);
+        case '/dash-hls-media':
+          await _serveDashHlsMedia(req);
         default:
           req.response.statusCode = HttpStatus.notFound;
           await req.response.close();
@@ -201,6 +276,180 @@ class LocalHlsProxy {
       ..headers.set(HttpHeaders.cacheControlHeader, 'no-cache');
     req.response.write(rewritten);
     return req.response.close();
+  }
+
+  String _registerDashHlsPresentation({
+    required String manifest,
+    required Uri manifestUri,
+    required Map<String, String> headers,
+    bool proxyMedia = true,
+  }) {
+    final String id =
+        '${DateTime.now().microsecondsSinceEpoch}-${_dashHlsCounter++}';
+    final DashHlsPresentation presentation = buildDashHlsPresentation(
+      manifest: manifest,
+      manifestUri: manifestUri,
+      // FVP already receives the source HTTP headers through avio.headers. For
+      // remote MPDs it is considerably faster and more reliable to keep only
+      // the compatibility playlists local and let the native HTTP stack fetch
+      // the large fMP4 fragments directly. Inline manifests retain the relay
+      // route because their media/header provenance is not otherwise visible
+      // to the native player.
+      mediaUrlFor: (Uri mediaUri) => proxyMedia
+          ? _streamingMediaUrl(mediaUri, headers: headers)
+          : mediaUri.toString(),
+      mediaPlaylistUrlFor: (String playlistId) =>
+          '$_base/dash-hls-media?id=${Uri.encodeQueryComponent(id)}'
+          '&track=${Uri.encodeQueryComponent(playlistId)}',
+    );
+    _dashHlsPresentations[id] = presentation;
+    debugPrint(
+      'HlsProxy DASH→HLS ready: '
+      '${presentation.mediaPlaylists.length} media playlist(s), '
+      'media=${proxyMedia ? 'relayed' : 'direct'}',
+    );
+    return '$_base/dash-hls-master?id=${Uri.encodeQueryComponent(id)}';
+  }
+
+  String _streamingMediaUrl(
+    Uri remoteUrl, {
+    Map<String, String> headers = const <String, String>{},
+  }) {
+    final String u = Uri.encodeQueryComponent(remoteUrl.toString());
+    if (headers.isEmpty) return '$_base/dash-media?u=$u';
+    final String h = Uri.encodeQueryComponent(jsonEncode(headers));
+    return '$_base/dash-media?u=$u&h=$h';
+  }
+
+  Future<void> _serveDashHlsMaster(HttpRequest req) async {
+    final String? id = req.uri.queryParameters['id'];
+    final DashHlsPresentation? presentation = id == null
+        ? null
+        : _dashHlsPresentations[id];
+    if (presentation == null) {
+      req.response.statusCode = HttpStatus.notFound;
+      return req.response.close();
+    }
+    req.response
+      ..statusCode = HttpStatus.ok
+      ..headers.set(
+        HttpHeaders.contentTypeHeader,
+        'application/vnd.apple.mpegurl',
+      )
+      ..headers.set(HttpHeaders.cacheControlHeader, 'no-cache')
+      ..write(presentation.masterPlaylist);
+    return req.response.close();
+  }
+
+  Future<void> _serveDashHlsMedia(HttpRequest req) async {
+    final String? id = req.uri.queryParameters['id'];
+    final String? track = req.uri.queryParameters['track'];
+    final String? playlist = id == null || track == null
+        ? null
+        : _dashHlsPresentations[id]?.mediaPlaylists[track];
+    if (playlist == null) {
+      req.response.statusCode = HttpStatus.notFound;
+      return req.response.close();
+    }
+    req.response
+      ..statusCode = HttpStatus.ok
+      ..headers.set(
+        HttpHeaders.contentTypeHeader,
+        'application/vnd.apple.mpegurl',
+      )
+      ..headers.set(HttpHeaders.cacheControlHeader, 'no-cache')
+      ..write(playlist);
+    return req.response.close();
+  }
+
+  Future<void> _serveRemoteDash(HttpRequest req) async {
+    final String? rawUrl = req.uri.queryParameters['u'];
+    if (rawUrl == null) {
+      req.response.statusCode = HttpStatus.badRequest;
+      return req.response.close();
+    }
+
+    _absorbQueryHeaders(req.uri.queryParameters['h']);
+    _absorbInboundHeaders(req.headers);
+    final Uri source = Uri.parse(rawUrl);
+    if (source.scheme != 'http' && source.scheme != 'https') {
+      req.response.statusCode = HttpStatus.badRequest;
+      return req.response.close();
+    }
+
+    debugPrint('HlsProxy DASH manifest ← $source');
+    try {
+      final String manifest = await _fetchPlaylist(source);
+      if (!RegExp(r'<MPD(?:\s|>)', caseSensitive: false).hasMatch(manifest)) {
+        throw const FormatException('Upstream response is not a DASH MPD.');
+      }
+      final String rewritten = _rewriteRemoteDashResources(
+        manifest,
+        source,
+        Map<String, String>.from(_forwardHeaders),
+      );
+      req.response
+        ..statusCode = HttpStatus.ok
+        ..headers.set(HttpHeaders.contentTypeHeader, 'application/dash+xml')
+        ..headers.set(HttpHeaders.cacheControlHeader, 'no-cache')
+        ..write(rewritten);
+      debugPrint(
+        'HlsProxy DASH manifest OK '
+        '(${manifest.length} -> ${rewritten.length} bytes)',
+      );
+      return req.response.close();
+    } on Object catch (error) {
+      debugPrint('HlsProxy DASH manifest FAIL $source -> $error');
+      req.response.statusCode = HttpStatus.badGateway;
+      req.response.headers.set(HttpHeaders.contentTypeHeader, 'text/plain');
+      req.response.write('DASH proxy error: $error');
+      return req.response.close();
+    }
+  }
+
+  String _rewriteRemoteDashResources(
+    String manifest,
+    Uri manifestUrl,
+    Map<String, String> headers,
+  ) {
+    return manifest.replaceAllMapped(
+      RegExp(
+        r'\b(initialization|media|sourceURL|index)="([^"]+)"',
+        caseSensitive: false,
+      ),
+      (Match match) {
+        final String attribute = match.group(1) ?? '';
+        final String raw = _xmlUnescape(match.group(2) ?? '').trim();
+        if (raw.isEmpty || raw.startsWith('data:')) {
+          return match.group(0) ?? '';
+        }
+        final String proxied = _dashTemplateMediaUrl(manifestUrl, raw, headers);
+        return '$attribute="${_xmlEscape(proxied)}"';
+      },
+    );
+  }
+
+  String _dashTemplateMediaUrl(
+    Uri manifestUrl,
+    String raw,
+    Map<String, String> headers,
+  ) {
+    final Map<String, String> templates = <String, String>{};
+    int templateIndex = 0;
+    final String protected = raw.replaceAllMapped(RegExp(r'\$[^$]+\$'), (
+      Match match,
+    ) {
+      final String marker = '__MIRUSHIN_DASH_$templateIndex';
+      templateIndex++;
+      templates[marker] = match.group(0) ?? '';
+      return marker;
+    });
+    final Uri resolved = manifestUrl.resolve(protected);
+    String proxied = mediaUrl(resolved, headers: headers);
+    templates.forEach((String marker, String template) {
+      proxied = proxied.replaceAll(marker, template);
+    });
+    return proxied;
   }
 
   String _rewriteDashBaseUrls(String manifest, Map<String, String> headers) {
@@ -352,6 +601,7 @@ class LocalHlsProxy {
   Future<void> _serveSegment(
     HttpRequest req, {
     bool preserveContentType = true,
+    bool forceStreaming = false,
   }) async {
     final String? rawUrl = req.uri.queryParameters['u'];
     if (rawUrl == null) {
@@ -377,7 +627,7 @@ class LocalHlsProxy {
       );
     }
 
-    if (req.method != 'HEAD') {
+    if (!forceStreaming && req.method != 'HEAD') {
       return _serveBufferedSegment(
         req,
         uri,

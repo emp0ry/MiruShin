@@ -9,7 +9,8 @@ import '../domain/player_models.dart';
 import 'local_hls_proxy.dart';
 import 'player_engine.dart';
 
-const mdk.SeekFlag _vodSeekFlag = mdk.SeekFlag(
+const mdk.SeekFlag _networkVodSeekFlag = mdk.SeekFlag(mdk.SeekFlag.fromStart);
+const mdk.SeekFlag _cachedVodSeekFlag = mdk.SeekFlag(
   mdk.SeekFlag.fromStart | mdk.SeekFlag.inCache,
 );
 const mdk.SeekFlag _previewSeekFlag = mdk.SeekFlag(
@@ -35,6 +36,21 @@ const List<Duration> _speedStartupReapplyDelays = <Duration>[
   Duration(milliseconds: 1600),
   Duration(milliseconds: 3000),
 ];
+
+class _NativeSeekRequest {
+  _NativeSeekRequest({
+    required this.player,
+    required this.openGeneration,
+    required this.targetMs,
+    required this.flag,
+  });
+
+  final mdk.Player player;
+  final int openGeneration;
+  final int targetMs;
+  final mdk.SeekFlag flag;
+  final Completer<int> completion = Completer<int>();
+}
 
 /// Pure FVP/MDK implementation of MiruShin's PlayerEngine.
 ///
@@ -84,6 +100,9 @@ class FvpPlayerEngine extends PlayerEngine {
   List<PlayerBufferedRange> _lastBufferedRanges = const <PlayerBufferedRange>[];
   DateTime? _invalidSince;
   bool _reportedInvalid = false;
+  _NativeSeekRequest? _activeNativeSeek;
+  _NativeSeekRequest? _pendingNativeSeek;
+  int? _nativeSeekLoopGeneration;
   static int? _cachedMdkRuntimeVersion;
 
   @override
@@ -94,6 +113,9 @@ class FvpPlayerEngine extends PlayerEngine {
 
   @override
   Map<String, String> get nativePlaybackHeaders => _nativePlaybackHeaders;
+
+  @override
+  bool get managesInitialPosition => true;
 
   @override
   void addListener(VoidCallback listener) => _state.addListener(listener);
@@ -197,28 +219,57 @@ class FvpPlayerEngine extends PlayerEngine {
           : Uri.parse(source.url);
       final bool isNetwork = _isNetworkUrl(source.url);
       final bool isHls = _isHlsLikeSource(source);
+      final bool isDash = _isDashLikeSource(source);
       final bool isLocalHls = remoteUri.scheme == 'file' && isHls;
       final bool useProxy =
           !source.disableProxy &&
           !_previewMode &&
           (isNetwork || isInlineDash || isLocalHls);
+      if (isDash && Platform.isWindows && !useProxy) {
+        throw UnsupportedError(
+          'FVP direct MPEG-DASH is unavailable on Windows because its bundled '
+          'FFmpeg does not include the MPD demuxer. Use the local DASH '
+          'compatibility proxy.',
+        );
+      }
       _requireVideoSurfaceDuringStartup = !_previewMode && isNetwork;
       String playbackUrl = remoteUri.toString();
       if (useProxy && isInlineDash) {
         await _proxy.stop();
         await _proxy.start();
-        playbackUrl = _proxy.inlineDashUrl(
-          inlineDashManifest,
-          headers: source.headers,
+        playbackUrl = Platform.isWindows
+            ? _proxy.inlineDashHlsUrl(
+                inlineDashManifest,
+                headers: source.headers,
+              )
+            : _proxy.inlineDashUrl(inlineDashManifest, headers: source.headers);
+        debugPrint(
+          Platform.isWindows
+              ? 'FVP open inline DASH via HLS compatibility proxy: $playbackUrl'
+              : 'FVP open inline DASH via proxy: $playbackUrl',
         );
-        debugPrint('FVP open inline DASH via proxy: $playbackUrl');
       } else if (useProxy) {
         await _proxy.stop();
         await _proxy.start();
         playbackUrl = isHls
             ? _proxy.playlistUrl(remoteUri, headers: source.headers)
+            : isDash
+            ? Platform.isWindows
+                  ? await _proxy.dashHlsUrl(
+                      remoteUri,
+                      headers: source.headers,
+                      // The local endpoint supplies only HLS metadata. Sending
+                      // every multi-megabyte fMP4 fragment through Dart adds a
+                      // second socket and makes slow CDN seeks much worse.
+                      proxyMedia: false,
+                    )
+                  : _proxy.dashUrl(remoteUri, headers: source.headers)
             : _proxy.mediaUrl(remoteUri, headers: source.headers);
-        debugPrint('FVP open via proxy: $playbackUrl');
+        debugPrint(
+          isDash && Platform.isWindows
+              ? 'FVP open DASH via HLS compatibility proxy: $playbackUrl'
+              : 'FVP open via proxy: $playbackUrl',
+        );
       } else {
         unawaited(_proxy.stop());
         debugPrint(
@@ -540,10 +591,42 @@ class FvpPlayerEngine extends PlayerEngine {
     final mdk.Player? player = _player;
     if (player == null) return;
     final int targetMs = position.inMilliseconds.clamp(0, 1 << 62).toInt();
+
+    // A network seek may remain pending while the selected HLS/fMP4 fragment is
+    // downloaded. Keep exactly one native operation active and make every
+    // duplicate caller await that same operation. This preserves seekTo's
+    // completion contract without creating overlapping native callbacks.
+    if (!_previewMode) {
+      _publishPendingSeek(Duration(milliseconds: targetMs));
+      final mdk.SeekFlag flag = _seekFlagFor(position);
+      final int resultMs = await _queueNativeSeek(player, targetMs, flag: flag);
+      if (resultMs < 0) {
+        throw StateError(
+          'FVP native seek failed at ${position.inMilliseconds}ms '
+          '(result=$resultMs).',
+        );
+      }
+      if (player != _player || _disposed || !_hasMedia) return;
+      _syncState();
+      if ((resultMs - targetMs).abs() >
+          _seekAcceptanceTolerance.inMilliseconds) {
+        throw StateError(
+          'FVP seek completed at ${resultMs}ms instead of ${targetMs}ms.',
+        );
+      }
+      if (kDebugMode) {
+        debugPrint(
+          'FVP seek complete: target=${targetMs}ms result=${resultMs}ms '
+          'mode=${flag.rawValue == _cachedVodSeekFlag.rawValue ? 'cache' : 'network'}',
+        );
+      }
+      return;
+    }
+
     final bool accepted = await _seekWithVerification(
       player,
       targetMs,
-      flag: _previewMode ? _previewSeekFlag : _vodSeekFlag,
+      flag: _previewSeekFlag,
       attempts: 4,
       verificationDelay: _seekVerificationDelay,
     );
@@ -555,33 +638,144 @@ class FvpPlayerEngine extends PlayerEngine {
     _syncState();
   }
 
+  void _publishPendingSeek(Duration target) {
+    final PlayerEngineState current = _state.value;
+    final bool buffered = _isPositionBuffered(
+      current.buffered,
+      target,
+      current.duration,
+    );
+    _setState(current.copyWith(isBuffering: buffered ? false : true));
+  }
+
+  mdk.SeekFlag _seekFlagFor(Duration target) {
+    final PlayerEngineState current = _state.value;
+    return target > current.position &&
+            _isPositionBuffered(current.buffered, target, current.duration)
+        ? _cachedVodSeekFlag
+        : _networkVodSeekFlag;
+  }
+
+  Future<int> _queueNativeSeek(
+    mdk.Player player,
+    int targetMs, {
+    required mdk.SeekFlag flag,
+  }) {
+    if (_disposed || player != _player || !_hasMedia) {
+      return Future<int>.value(-3);
+    }
+    final int generation = _openGeneration;
+    final _NativeSeekRequest? active = _activeNativeSeek;
+    if (active != null &&
+        active.player == player &&
+        active.openGeneration == generation &&
+        active.targetMs == targetMs) {
+      return active.completion.future;
+    }
+    final _NativeSeekRequest? pending = _pendingNativeSeek;
+    if (pending != null &&
+        pending.player == player &&
+        pending.openGeneration == generation &&
+        pending.targetMs == targetMs) {
+      return pending.completion.future;
+    }
+    if (pending != null && !pending.completion.isCompleted) {
+      pending.completion.complete(-2);
+    }
+
+    final _NativeSeekRequest request = _NativeSeekRequest(
+      player: player,
+      openGeneration: generation,
+      targetMs: targetMs,
+      flag: flag,
+    );
+    _pendingNativeSeek = request;
+    if (_nativeSeekLoopGeneration == generation) {
+      return request.completion.future;
+    }
+    _nativeSeekLoopGeneration = generation;
+    unawaited(_drainNativeSeekQueue(generation));
+    return request.completion.future;
+  }
+
+  Future<void> _drainNativeSeekQueue(int generation) async {
+    try {
+      while (!_disposed) {
+        final request = _pendingNativeSeek;
+        if (request == null || request.openGeneration != generation) return;
+        _pendingNativeSeek = null;
+        if (request.player != _player ||
+            request.openGeneration != _openGeneration ||
+            !_hasMedia) {
+          continue;
+        }
+
+        _activeNativeSeek = request;
+        try {
+          final int result = await request.player.seek(
+            position: request.targetMs,
+            flags: request.flag,
+          );
+          if (!request.completion.isCompleted) {
+            request.completion.complete(result);
+          }
+        } on Object catch (error, stackTrace) {
+          if (!request.completion.isCompleted) {
+            request.completion.completeError(error, stackTrace);
+          }
+          if (request.player == _player &&
+              request.openGeneration == _openGeneration &&
+              !_disposed) {
+            debugPrint(
+              'FVP native seek failed at ${request.targetMs}ms: $error',
+            );
+          }
+        } finally {
+          if (identical(_activeNativeSeek, request)) {
+            _activeNativeSeek = null;
+          }
+        }
+        if (request.player == _player &&
+            request.openGeneration == _openGeneration &&
+            !_disposed) {
+          _syncState();
+        }
+      }
+    } finally {
+      if (_nativeSeekLoopGeneration == generation) {
+        _nativeSeekLoopGeneration = null;
+      }
+      final pending = _pendingNativeSeek;
+      if (pending != null && !_disposed) {
+        final int pendingGeneration = pending.openGeneration;
+        if (_nativeSeekLoopGeneration != pendingGeneration) {
+          _nativeSeekLoopGeneration = pendingGeneration;
+          unawaited(_drainNativeSeekQueue(pendingGeneration));
+        }
+      }
+    }
+  }
+
   Future<void> _seekAfterOpen(Duration position) async {
     // MDK/FVP often reports the player as usable before HLS metadata and
     // keyframes are actually ready. A single early seek can be ignored, which
     // makes resume always start from 0:00. Keep retrying for a short window and
     // stop as soon as the native player accepts the resume position.
-    final int targetMs = position.inMilliseconds;
-
     for (int attempt = 0; attempt < 40; attempt += 1) {
       await Future<void>.delayed(const Duration(milliseconds: 250));
 
       final mdk.Player? player = _player;
       if (player == null || !_hasMedia) return;
 
-      try {
-        if (await _seekWithVerification(
-          player,
-          targetMs,
-          flag: _vodSeekFlag,
-          attempts: 1,
-          verificationDelay: const Duration(milliseconds: 120),
-        )) {
-          return;
+      // Submit exactly once after metadata becomes usable. FVP owns startAt, so
+      // PlaybackController does not submit a second startup-resume seek.
+      if (_hasStartupContent(player)) {
+        try {
+          await seekTo(position);
+        } on Object catch (error) {
+          debugPrint('FVP initial seek failed: $error');
         }
-      } on Object catch (error) {
-        if (attempt == 39) {
-          debugPrint('FVP initial seek ignored after retries: $error');
-        }
+        return;
       }
     }
   }
@@ -642,13 +836,7 @@ class FvpPlayerEngine extends PlayerEngine {
     if (active == null || active != player || !_hasMedia) return;
 
     try {
-      await _seekWithVerification(
-        active,
-        position.inMilliseconds,
-        flag: _vodSeekFlag,
-        attempts: 3,
-        verificationDelay: _seekVerificationDelay,
-      );
+      await seekTo(position);
     } on Object catch (error) {
       debugPrint('FVP fragile HLS delayed seek failed: $error');
     }
@@ -695,7 +883,8 @@ class FvpPlayerEngine extends PlayerEngine {
         ),
       );
 
-      await active.seek(position: targetMs, flags: flag);
+      final int resultMs = await active.seek(position: targetMs, flags: flag);
+      if (resultMs < 0) return false;
       await Future<void>.delayed(verificationDelay);
 
       final mdk.Player? verifyPlayer = _player;
@@ -704,7 +893,7 @@ class FvpPlayerEngine extends PlayerEngine {
       }
 
       _syncState();
-      final int actualMs = verifyPlayer.position.clamp(0, 1 << 62).toInt();
+      final int actualMs = resultMs;
       if (_seekWasAccepted(
         beforeMs: beforeMs,
         actualMs: actualMs,
@@ -919,6 +1108,13 @@ class FvpPlayerEngine extends PlayerEngine {
         lower.contains('.mp4:hls:');
   }
 
+  bool _isDashLikeSource(PlayerSource source) {
+    final String lower = source.url.toLowerCase();
+    return source.streamType == StreamType.dash ||
+        lower.endsWith('.mpd') ||
+        lower.contains('.mpd?');
+  }
+
   ({int min, int max, String ranges}) _bufferConfigFor({
     required bool previewMode,
     required bool isHls,
@@ -973,6 +1169,8 @@ class FvpPlayerEngine extends PlayerEngine {
         url.startsWith('https://');
     final bool isHls =
         source.streamType == StreamType.hls ||
+        // On Windows DASH is exposed to MDK as generated HLS metadata.
+        (Platform.isWindows && _isDashLikeSource(source)) ||
         url.contains('.m3u8') ||
         url.contains(':hls:');
     final config = _bufferConfigFor(
@@ -1290,6 +1488,16 @@ class FvpPlayerEngine extends PlayerEngine {
 
   Future<void> _disposePlayerOnly() async {
     _openGeneration += 1;
+    final _NativeSeekRequest? pendingSeek = _pendingNativeSeek;
+    if (pendingSeek != null && !pendingSeek.completion.isCompleted) {
+      pendingSeek.completion.complete(-3);
+    }
+    _pendingNativeSeek = null;
+    final _NativeSeekRequest? activeSeek = _activeNativeSeek;
+    if (activeSeek != null && !activeSeek.completion.isCompleted) {
+      activeSeek.completion.complete(-3);
+    }
+    _activeNativeSeek = null;
     _positionTimer?.cancel();
     _positionTimer = null;
     _openTimeoutTimer?.cancel();

@@ -23,6 +23,7 @@ void main() {
 
         final BoardRails initial = await firstLaunch.boardRails();
         expect(initial.recentMovies, hasLength(20));
+        expect(initial.recentMovies.first.title, 'cached-recent-movie 0');
         expect(initial.recentSeries, hasLength(20));
         expect(initial.topAnime, hasLength(20));
         expect(initial.topAnime.first.title, 'cached-anime 0');
@@ -37,6 +38,7 @@ void main() {
 
         expect(shown.topAnime.first.title, 'cached-anime 0');
         expect(refreshProvider.callCount, 3);
+        expect(refreshProvider.recentMoviesRequested, isTrue);
 
         refreshProvider.complete('fresh');
         await refreshWritten.timeout(const Duration(seconds: 1));
@@ -147,6 +149,11 @@ class _ImmediateTmdbProvider extends TmdbMetadataProvider {
   final String prefix;
 
   @override
+  Future<List<MediaItem>> getRecentlyReleasedMovies({int page = 1}) async {
+    return _items('$prefix-recent-movie', MediaType.movie);
+  }
+
+  @override
   Future<List<MediaItem>> getPopular(MediaType type, {int page = 1}) async {
     return _items('$prefix-${type.name}', type);
   }
@@ -161,6 +168,14 @@ class _BlockingTmdbProvider extends TmdbMetadataProvider {
           type: Completer<List<MediaItem>>(),
       };
   int callCount = 0;
+  bool recentMoviesRequested = false;
+
+  @override
+  Future<List<MediaItem>> getRecentlyReleasedMovies({int page = 1}) {
+    callCount += 1;
+    recentMoviesRequested = true;
+    return _requests[MediaType.movie]!.future;
+  }
 
   @override
   Future<List<MediaItem>> getPopular(MediaType type, {int page = 1}) {

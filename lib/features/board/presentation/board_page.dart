@@ -49,8 +49,11 @@ class _BoardPageState extends ConsumerState<BoardPage> {
     final BoardRails rails = ref
         .watch(boardRailsProvider)
         .maybeWhen(data: (BoardRails value) => value, orElse: BoardRails.empty);
-    final MediaItem? hero = rails.heroForSeed(_heroSeed);
     final CatalogMode mode = ref.watch(catalogModeProvider);
+    final MediaItem? hero = rails.heroForSeed(
+      _heroSeed,
+      preferRecentMovies: mode == CatalogMode.tmdb,
+    );
     final List<AniListAnimeListFolder> anilistFolders =
         mode == CatalogMode.anilist
         ? ref

@@ -18,12 +18,21 @@ class BoardRails {
       recentSeries.firstOrNull ??
       topAnime.firstOrNull;
 
-  /// Selects a stable hero from the first [candidateLimit] Top Anime entries.
-  /// The caller owns the seed so normal widget rebuilds do not change artwork.
-  MediaItem? heroForSeed(int seed, {int candidateLimit = 20}) {
-    final List<MediaItem> source = topAnime.isNotEmpty
-        ? topAnime
-        : <MediaItem>[...recentMovies, ...recentSeries];
+  /// Selects a stable hero from the first [candidateLimit] entries of the
+  /// catalog's primary rail. AniList uses Top Anime; TMDB can prefer recently
+  /// released movies. The caller owns the seed so rebuilds keep the same hero.
+  MediaItem? heroForSeed(
+    int seed, {
+    int candidateLimit = 20,
+    bool preferRecentMovies = false,
+  }) {
+    final List<MediaItem> source = preferRecentMovies
+        ? (recentMovies.isNotEmpty
+              ? recentMovies
+              : <MediaItem>[...recentSeries, ...topAnime])
+        : (topAnime.isNotEmpty
+              ? topAnime
+              : <MediaItem>[...recentMovies, ...recentSeries]);
     if (source.isEmpty) return null;
 
     final int limit = candidateLimit.clamp(1, source.length);

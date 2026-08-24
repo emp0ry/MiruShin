@@ -218,6 +218,66 @@ void main() {
       expect(progress?.completed, isFalse);
     });
 
+    test('skip is committed only after the native seek completes', () async {
+      final ProviderContainer c = container();
+      final PlaybackController controller = c.read(
+        playbackControllerProvider.notifier,
+      );
+      final Completer<void> seekGate = Completer<void>();
+      final _FakePlayerEngine engine = _FakePlayerEngine(
+        const PlayerEngineState(
+          isInitialized: true,
+          isPlaying: true,
+          position: Duration(seconds: 77),
+          duration: Duration(minutes: 24),
+        ),
+        onSeek: (_) => seekGate.future,
+      );
+      controller.debugSetPlaybackState(
+        PlaybackState(engine: engine, desiredPlaying: true),
+      );
+
+      final Future<bool> skip = controller.skipTo(const Duration(seconds: 166));
+      await Future<void>.delayed(Duration.zero);
+
+      expect(engine.seekCalls, 1);
+      expect(c.read(playbackControllerProvider).lastSkippedFrom, isNull);
+      expect(
+        c.read(playbackControllerProvider).seekPreviewPosition,
+        const Duration(seconds: 166),
+      );
+
+      seekGate.complete();
+      expect(await skip, isTrue);
+      expect(
+        c.read(playbackControllerProvider).lastSkippedFrom,
+        const Duration(seconds: 77),
+      );
+    });
+
+    test('failed skip is not marked completed and clears preview', () async {
+      final ProviderContainer c = container();
+      final PlaybackController controller = c.read(
+        playbackControllerProvider.notifier,
+      );
+      final _FakePlayerEngine engine = _FakePlayerEngine(
+        const PlayerEngineState(
+          isInitialized: true,
+          isPlaying: true,
+          position: Duration(seconds: 77),
+          duration: Duration(minutes: 24),
+        ),
+        onSeek: (_) => Future<void>.error(StateError('native seek failed')),
+      );
+      controller.debugSetPlaybackState(
+        PlaybackState(engine: engine, desiredPlaying: true),
+      );
+
+      expect(await controller.skipTo(const Duration(seconds: 166)), isFalse);
+      expect(c.read(playbackControllerProvider).lastSkippedFrom, isNull);
+      expect(c.read(playbackControllerProvider).seekPreviewPosition, isNull);
+    });
+
     test('mobile playback controller keeps app-side volume at 100%', () async {
       debugDefaultTargetPlatformOverride = TargetPlatform.android;
       addTearDown(() => debugDefaultTargetPlatformOverride = null);
@@ -235,6 +295,33 @@ void main() {
 
       expect(engine.lastSetVolume, 1);
       expect(c.read(playerSettingsProvider).value?.volume, 1);
+    });
+
+    test('unmute restores the last audible volume', () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final ProviderContainer c = container();
+      await c.read(playerSettingsProvider.future);
+      final PlaybackController controller = c.read(
+        playbackControllerProvider.notifier,
+      );
+      final _FakePlayerEngine engine = _FakePlayerEngine(
+        const PlayerEngineState(isInitialized: true, volume: 0.37),
+      );
+      controller.debugSetPlaybackState(PlaybackState(engine: engine));
+      await controller.setVolume(0.37);
+
+      await controller.toggleMute();
+
+      expect(engine.lastSetVolume, 0);
+      expect(c.read(playerSettingsProvider).value?.volume, 0);
+      expect(c.read(playerSettingsProvider).value?.lastAudibleVolume, 0.37);
+
+      await controller.toggleMute();
+
+      expect(engine.lastSetVolume, 0.37);
+      expect(c.read(playerSettingsProvider).value?.volume, 0.37);
+      expect(c.read(playerSettingsProvider).value?.lastAudibleVolume, 0.37);
     });
   });
 }
@@ -257,11 +344,12 @@ MediaPlaybackItem _testPlaybackItem(String id) {
 }
 
 class _FakePlayerEngine extends PlayerEngine {
-  _FakePlayerEngine(this.initialState, {this.onPlay})
+  _FakePlayerEngine(this.initialState, {this.onPlay, this.onSeek})
     : _state = ValueNotifier<PlayerEngineState>(initialState);
 
   final PlayerEngineState initialState;
   final Future<void> Function()? onPlay;
+  final Future<void> Function(Duration position)? onSeek;
   final ValueNotifier<PlayerEngineState> _state;
   int playCalls = 0;
   int pauseCalls = 0;
@@ -304,6 +392,7 @@ class _FakePlayerEngine extends PlayerEngine {
   @override
   Future<void> seekTo(Duration position) async {
     seekCalls += 1;
+    await onSeek?.call(position);
     _state.value = _state.value.copyWith(position: position);
   }
 

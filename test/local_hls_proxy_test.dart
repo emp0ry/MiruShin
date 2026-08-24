@@ -260,4 +260,259 @@ void main() {
       await dir.delete(recursive: true);
     }
   });
+
+  test(
+    'remote DASH rewrites relative templates through the media proxy',
+    () async {
+      final HttpServer upstream = await HttpServer.bind(
+        InternetAddress.loopbackIPv4,
+        0,
+      );
+      final String origin =
+          'http://${upstream.address.address}:${upstream.port}';
+      final List<({String path, String? referer, String? origin})> seen =
+          <({String path, String? referer, String? origin})>[];
+      final StreamSubscription<HttpRequest> upstreamSub = upstream.listen((
+        HttpRequest request,
+      ) {
+        seen.add((
+          path: request.uri.path,
+          referer: request.headers.value(HttpHeaders.refererHeader),
+          origin: request.headers.value('origin'),
+        ));
+        switch (request.uri.path) {
+          case '/video/stream.mpd':
+            request.response
+              ..statusCode = HttpStatus.ok
+              ..headers.contentType = ContentType('application', 'dash+xml')
+              ..write(
+                '<?xml version="1.0"?>'
+                '<MPD><Period><AdaptationSet><Representation id="0">'
+                '<SegmentTemplate '
+                'initialization="init-stream\$RepresentationID\$.m4s" '
+                'media="chunk-stream\$RepresentationID\$-'
+                '\$Number%05d\$.m4s" />'
+                '</Representation></AdaptationSet></Period></MPD>',
+              );
+          case '/video/init-stream0.m4s':
+            request.response
+              ..statusCode = HttpStatus.ok
+              ..headers.contentType = ContentType('video', 'mp4')
+              ..write('init');
+          case '/video/chunk-stream0-00001.m4s':
+            request.response
+              ..statusCode = HttpStatus.ok
+              ..headers.contentType = ContentType('video', 'mp4')
+              ..write('segment');
+          default:
+            request.response.statusCode = HttpStatus.notFound;
+        }
+        unawaited(request.response.close());
+      });
+
+      final LocalHlsProxy proxy = LocalHlsProxy();
+      final HttpClient client = HttpClient();
+
+      Future<String> read(Uri uri) async {
+        final HttpClientResponse response = await (await client.getUrl(
+          uri,
+        )).close();
+        expect(response.statusCode, HttpStatus.ok);
+        return response.transform(utf8.decoder).join();
+      }
+
+      try {
+        await proxy.start();
+        final String manifest = await read(
+          Uri.parse(
+            proxy.dashUrl(
+              Uri.parse('$origin/video/stream.mpd'),
+              headers: const <String, String>{
+                'Referer': 'https://provider.example/watch',
+                'Origin': 'https://provider.example',
+              },
+            ),
+          ),
+        );
+        final Match initialization = RegExp(
+          r'initialization="([^"]+)"',
+        ).firstMatch(manifest)!;
+        final Match media = RegExp(r'media="([^"]+)"').firstMatch(manifest)!;
+        final String initializationUrl = initialization
+            .group(1)!
+            .replaceAll('&amp;', '&')
+            .replaceAll(r'$RepresentationID$', '0');
+        final String mediaUrl = media
+            .group(1)!
+            .replaceAll('&amp;', '&')
+            .replaceAll(r'$RepresentationID$', '0')
+            .replaceAll(r'$Number%05d$', '00001');
+
+        expect(await read(Uri.parse(initializationUrl)), 'init');
+        expect(await read(Uri.parse(mediaUrl)), 'segment');
+
+        final initRequest = seen.singleWhere(
+          (request) => request.path == '/video/init-stream0.m4s',
+        );
+        final segmentRequest = seen.singleWhere(
+          (request) => request.path == '/video/chunk-stream0-00001.m4s',
+        );
+        expect(initRequest.referer, 'https://provider.example/watch');
+        expect(initRequest.origin, 'https://provider.example');
+        expect(segmentRequest.referer, 'https://provider.example/watch');
+        expect(segmentRequest.origin, 'https://provider.example');
+      } finally {
+        client.close(force: true);
+        await proxy.stop();
+        await upstreamSub.cancel();
+        await upstream.close(force: true);
+      }
+    },
+  );
+
+  test('DASH HLS bridge serves concrete fMP4 tracks with headers', () async {
+    final HttpServer upstream = await HttpServer.bind(
+      InternetAddress.loopbackIPv4,
+      0,
+    );
+    final String origin = 'http://${upstream.address.address}:${upstream.port}';
+    final List<({String path, String? referer})> seen =
+        <({String path, String? referer})>[];
+    final StreamSubscription<HttpRequest> upstreamSub = upstream.listen((
+      HttpRequest request,
+    ) {
+      seen.add((
+        path: request.uri.path,
+        referer: request.headers.value(HttpHeaders.refererHeader),
+      ));
+      if (request.uri.path == '/video/stream.mpd') {
+        request.response
+          ..statusCode = HttpStatus.ok
+          ..headers.contentType = ContentType('application', 'dash+xml')
+          ..write(r'''<MPD type="static" mediaPresentationDuration="PT4S">
+<Period>
+  <AdaptationSet contentType="video">
+    <Representation id="0" codecs="avc1.4d4028" bandwidth="900000"
+        width="1280" height="720">
+      <SegmentTemplate timescale="1000"
+          initialization="init-stream$RepresentationID$.m4s"
+          media="chunk-stream$RepresentationID$-$Number%05d$.m4s">
+        <SegmentTimeline><S d="2000" r="1" /></SegmentTimeline>
+      </SegmentTemplate>
+    </Representation>
+  </AdaptationSet>
+  <AdaptationSet contentType="audio" lang="ru">
+    <Representation id="1" codecs="mp4a.40.2" bandwidth="128000">
+      <SegmentTemplate timescale="1000"
+          initialization="init-stream$RepresentationID$.m4s"
+          media="chunk-stream$RepresentationID$-$Number%05d$.m4s">
+        <SegmentTimeline><S d="2000" r="1" /></SegmentTimeline>
+      </SegmentTemplate>
+    </Representation>
+  </AdaptationSet>
+</Period>
+</MPD>''');
+      } else if (request.uri.path.endsWith('.m4s')) {
+        request.response
+          ..statusCode = HttpStatus.ok
+          ..headers.contentType = ContentType('video', 'mp4')
+          ..write(request.uri.path);
+      } else {
+        request.response.statusCode = HttpStatus.notFound;
+      }
+      unawaited(request.response.close());
+    });
+
+    final LocalHlsProxy proxy = LocalHlsProxy();
+    final HttpClient client = HttpClient();
+
+    Future<String> read(String url) async {
+      final HttpClientResponse response = await (await client.getUrl(
+        Uri.parse(url.replaceAll('&amp;', '&')),
+      )).close();
+      expect(response.statusCode, HttpStatus.ok);
+      return response.transform(utf8.decoder).join();
+    }
+
+    String mapUrl(String playlist) {
+      return RegExp(
+        r'#EXT-X-MAP:URI="([^"]+)"',
+      ).firstMatch(playlist)!.group(1)!;
+    }
+
+    String firstSegmentUrl(String playlist) {
+      return const LineSplitter()
+          .convert(playlist)
+          .firstWhere((String line) => line.startsWith('http://127.0.0.1'));
+    }
+
+    String firstRemoteSegmentUrl(String playlist) {
+      return const LineSplitter()
+          .convert(playlist)
+          .firstWhere(
+            (String line) =>
+                line.startsWith('http://') && line.contains('/video/'),
+          );
+    }
+
+    try {
+      await proxy.start();
+      final String masterUrl = await proxy.dashHlsUrl(
+        Uri.parse('$origin/video/stream.mpd'),
+        headers: const <String, String>{
+          'Referer': 'https://provider.example/watch',
+        },
+      );
+      final String master = await read(masterUrl);
+      final String audioPlaylistUrl = RegExp(
+        r'#EXT-X-MEDIA:[^\n]*URI="([^"]+)"',
+      ).firstMatch(master)!.group(1)!;
+      final String videoPlaylistUrl = const LineSplitter()
+          .convert(master)
+          .firstWhere((String line) => line.startsWith('http://127.0.0.1'));
+
+      final String video = await read(videoPlaylistUrl);
+      final String audio = await read(audioPlaylistUrl);
+      expect(video, contains('#EXT-X-MAP'));
+      expect(audio, contains('#EXT-X-MAP'));
+
+      expect(await read(mapUrl(video)), '/video/init-stream0.m4s');
+      expect(
+        await read(firstSegmentUrl(video)),
+        '/video/chunk-stream0-00001.m4s',
+      );
+      expect(await read(mapUrl(audio)), '/video/init-stream1.m4s');
+      expect(
+        await read(firstSegmentUrl(audio)),
+        '/video/chunk-stream1-00001.m4s',
+      );
+
+      final String directMasterUrl = await proxy.dashHlsUrl(
+        Uri.parse('$origin/video/stream.mpd'),
+        headers: const <String, String>{
+          'Referer': 'https://provider.example/watch',
+        },
+        proxyMedia: false,
+      );
+      final String directMaster = await read(directMasterUrl);
+      final String directVideoPlaylistUrl = const LineSplitter()
+          .convert(directMaster)
+          .firstWhere((String line) => line.startsWith('http://127.0.0.1'));
+      final String directVideo = await read(directVideoPlaylistUrl);
+      expect(mapUrl(directVideo), '$origin/video/init-stream0.m4s');
+      expect(
+        firstRemoteSegmentUrl(directVideo),
+        '$origin/video/chunk-stream0-00001.m4s',
+      );
+
+      for (final ({String path, String? referer}) request in seen) {
+        expect(request.referer, 'https://provider.example/watch');
+      }
+    } finally {
+      client.close(force: true);
+      await proxy.stop();
+      await upstreamSub.cancel();
+      await upstream.close(force: true);
+    }
+  });
 }

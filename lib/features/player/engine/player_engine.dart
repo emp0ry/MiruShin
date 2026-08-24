@@ -16,6 +16,7 @@ class PlayerSource {
     this.headers = const <String, String>{},
     this.streamType = StreamType.unknown,
     this.disableProxy = false,
+    this.allowDirectFallback = true,
   });
 
   final String url;
@@ -26,6 +27,11 @@ class PlayerSource {
   /// it through the local HLS/media proxy. Used as a playback fallback after a
   /// proxied attempt fails.
   final bool disableProxy;
+
+  /// Lets an engine retry the original URL internally after a proxied attempt.
+  /// The playback controller disables this when it owns the ordered backend
+  /// attempt plan, preventing hidden or duplicate fallback transitions.
+  final bool allowDirectFallback;
 }
 
 class PlayerBufferedRange {
@@ -119,6 +125,12 @@ abstract class PlayerEngine implements Listenable {
       const Stream<PlayerEngineUiCommand>.empty();
 
   bool get rendersOwnTrailerControls => false;
+
+  /// Whether [open] owns applying its [startAt] value through completion.
+  ///
+  /// Engines that return true must not receive an independent startup-seek
+  /// reinforcement from the playback controller.
+  bool get managesInitialPosition => false;
 
   Future<void> setHostFullscreen(bool fullscreen) async {}
 

@@ -8,9 +8,10 @@ enum StreamType { mp4, hls, dash, unknown }
 
 /// Native playback engine used by PlayerEngineFactory.
 ///
-/// Auto uses FVP on Linux so libmpv is not loaded into the process. Other
-/// native platforms use MediaKit first, retry direct when the local proxy
-/// fails, then fall back to FVP before trying the next source.
+/// Auto uses FVP on Linux and for process-unsafe Windows DASH playback. Other
+/// native source/platform combinations use MediaKit first, retry direct when
+/// the local proxy fails, then fall back to FVP through the same proxy/direct
+/// sequence.
 enum PlayerBackend { auto, mpv, fvp }
 
 List<PlayerBackend> availablePlayerBackends({
@@ -51,7 +52,7 @@ extension PlayerBackendLabel on PlayerBackend {
   String get description {
     switch (this) {
       case PlayerBackend.auto:
-        return 'Recommended. Uses FVP on Linux; elsewhere tries MPV with proxy, MPV direct, then FVP.';
+        return 'Recommended. Uses FVP on Linux and Windows DASH; elsewhere tries MPV with proxy, MPV direct, FVP with proxy, then FVP direct.';
       case PlayerBackend.mpv:
         return 'MPV-like backend. Best for HLS, buffering, subtitles and speed.';
       case PlayerBackend.fvp:
@@ -274,6 +275,7 @@ class PlayerSettings {
     this.seekInterval = const Duration(seconds: 10),
     this.playbackSpeed = 1,
     this.volume = 1,
+    this.lastAudibleVolume = 1,
     this.verticalStretch = false,
     this.horizontalSwipeSeekEnabled = true,
     this.preferredQuality = 'auto',
@@ -304,6 +306,10 @@ class PlayerSettings {
   final Duration seekInterval;
   final double playbackSpeed;
   final double volume;
+
+  /// Most recent non-muted volume, persisted so unmute can restore it even
+  /// after a player/backend restart.
+  final double lastAudibleVolume;
   final bool verticalStretch;
   final bool horizontalSwipeSeekEnabled;
   final String preferredQuality;
@@ -334,6 +340,7 @@ class PlayerSettings {
     Duration? seekInterval,
     double? playbackSpeed,
     double? volume,
+    double? lastAudibleVolume,
     bool? verticalStretch,
     bool? horizontalSwipeSeekEnabled,
     String? preferredQuality,
@@ -364,6 +371,7 @@ class PlayerSettings {
       seekInterval: seekInterval ?? this.seekInterval,
       playbackSpeed: playbackSpeed ?? this.playbackSpeed,
       volume: volume ?? this.volume,
+      lastAudibleVolume: lastAudibleVolume ?? this.lastAudibleVolume,
       verticalStretch: verticalStretch ?? this.verticalStretch,
       horizontalSwipeSeekEnabled:
           horizontalSwipeSeekEnabled ?? this.horizontalSwipeSeekEnabled,
@@ -402,6 +410,7 @@ class PlayerSettings {
     'seekInterval': seekInterval.inSeconds,
     'playbackSpeed': playbackSpeed,
     'volume': volume,
+    'lastAudibleVolume': lastAudibleVolume,
     'verticalStretch': verticalStretch,
     'horizontalSwipeSeekEnabled': horizontalSwipeSeekEnabled,
     'preferredQuality': preferredQuality,
@@ -431,14 +440,21 @@ class PlayerSettings {
 
   factory PlayerSettings.fromJson(Map<String, Object?> json) {
     final bool legacyShowSkipButtons = json['showSkipButtons'] as bool? ?? true;
+    final double volume = ((json['volume'] as num?)?.toDouble() ?? 1)
+        .clamp(0.0, 1.0)
+        .toDouble();
+    final double lastAudibleVolume =
+        ((json['lastAudibleVolume'] as num?)?.toDouble() ??
+                (volume > 0 ? volume : 1))
+            .clamp(0.0, 1.0)
+            .toDouble();
     return PlayerSettings(
       seekInterval: Duration(
         seconds: (json['seekInterval'] as num?)?.toInt() ?? 10,
       ),
       playbackSpeed: (json['playbackSpeed'] as num?)?.toDouble() ?? 1,
-      volume: ((json['volume'] as num?)?.toDouble() ?? 1)
-          .clamp(0.0, 1.0)
-          .toDouble(),
+      volume: volume,
+      lastAudibleVolume: lastAudibleVolume > 0 ? lastAudibleVolume : 1,
       verticalStretch: json['verticalStretch'] as bool? ?? false,
       horizontalSwipeSeekEnabled:
           json['horizontalSwipeSeekEnabled'] as bool? ?? true,

@@ -40,7 +40,15 @@ class PlayerSettingsController extends AsyncNotifier<PlayerSettings> {
 
   Future<void> setVolume(double volume) async {
     final PlayerSettings current = state.value ?? const PlayerSettings();
-    await _update(current.copyWith(volume: volume.clamp(0.0, 1.0).toDouble()));
+    final double normalized = volume.clamp(0.0, 1.0).toDouble();
+    await _update(
+      current.copyWith(
+        volume: normalized,
+        lastAudibleVolume: normalized > 0
+            ? normalized
+            : current.lastAudibleVolume,
+      ),
+    );
   }
 
   Future<void> setPlayerBackend(PlayerBackend backend) async {
