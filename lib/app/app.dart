@@ -13,6 +13,7 @@ import '../core/constants/app_constants.dart';
 import '../core/platform/tv_platform.dart';
 import '../features/addons/application/cloudflare_challenge_service.dart';
 import '../features/addons/application/sora_addons_provider.dart';
+import '../features/addons/data/sora_js_runtime.dart';
 import '../features/addons/presentation/cloudflare_challenge_page.dart';
 import '../features/player/application/playback_controller.dart';
 import '../features/profile/application/anilist_user_settings_provider.dart';
@@ -38,17 +39,19 @@ class _MiruShinAppState extends ConsumerState<MiruShinApp> {
   late final GoRouter _router;
   late final AppLifecycleListener _lifecycleListener;
   late final PlaybackController _playbackController;
-  Future<void>? _exitPlaybackCleanup;
+  late final SoraJsRuntime _soraRuntime;
+  Future<void>? _exitCleanup;
 
   @override
   void initState() {
     super.initState();
     _playbackController = ref.read(playbackControllerProvider.notifier);
+    _soraRuntime = ref.read(soraJsRuntimeProvider);
     _router = buildAppRouter(widget.initialRoute);
     _lifecycleListener = AppLifecycleListener(
-      onDetach: () => unawaited(_cleanupPlaybackForExit()),
+      onDetach: () => unawaited(_cleanupForExit()),
       onExitRequested: () async {
-        await _cleanupPlaybackForExit();
+        await _cleanupForExit();
         return AppExitResponse.exit;
       },
     );
@@ -62,21 +65,28 @@ class _MiruShinAppState extends ConsumerState<MiruShinApp> {
   @override
   void dispose() {
     _lifecycleListener.dispose();
-    unawaited(_cleanupPlaybackForExit());
+    unawaited(_cleanupForExit());
     CloudflareChallengeService.instance.registerSolver(null);
     super.dispose();
   }
 
-  Future<void> _cleanupPlaybackForExit() {
-    final Future<void>? cleanup = _exitPlaybackCleanup;
+  Future<void> _cleanupForExit() {
+    final Future<void>? cleanup = _exitCleanup;
     if (cleanup != null) return cleanup;
 
-    return _exitPlaybackCleanup = _playbackController
-        .stop()
-        .timeout(_exitPlaybackCleanupTimeout)
-        .catchError((_) {
-          // During process teardown the native player may already be half gone.
-        });
+    return _exitCleanup = Future.wait<void>(<Future<void>>[
+      _playbackController
+          .stop()
+          .timeout(_exitPlaybackCleanupTimeout)
+          .catchError((_) {
+            // During process teardown the player may already be half gone.
+          }),
+      _soraRuntime.shutdown().timeout(_exitPlaybackCleanupTimeout).catchError((
+        _,
+      ) {
+        // Native WebView teardown is best-effort during process exit.
+      }),
+    ]);
   }
 
   @override

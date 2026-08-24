@@ -61,6 +61,22 @@ add_subdirectory("runner")
 # them to the application.
 include(flutter/generated_plugins.cmake)
 
+# flutter_webrtc 1.6.0 does not release its event channel before Flutter begins
+# destroying the plugin registrar, and it declares its Windows TaskRunner after
+# FlutterWebRTC. Both orders leave Flutter-facing objects alive beyond their
+# dependencies and can crash during exit. Replace only the affected plugin
+# entrypoint with MiruShin's orderly-shutdown equivalent; all other upstream
+# sources and platform implementations remain unchanged.
+if(TARGET flutter_webrtc_plugin)
+  get_target_property(_mirushin_webrtc_sources flutter_webrtc_plugin SOURCES)
+  list(FILTER _mirushin_webrtc_sources EXCLUDE REGEX
+    "(^|[/\\\\])flutter_webrtc_plugin\\.cc$")
+  list(APPEND _mirushin_webrtc_sources
+    "${CMAKE_CURRENT_SOURCE_DIR}/runner/flutter_webrtc_plugin_lifetime_fix.cc")
+  set_property(TARGET flutter_webrtc_plugin PROPERTY SOURCES
+    "${_mirushin_webrtc_sources}")
+endif()
+
 # ── Desktop PiP: reuse the mdk-sdk downloaded by the fvp plugin ────────────
 # fvp_setup_deps() downloads mdk-sdk into the fvp plugin's windows/ source
 # directory during CMake configure.  The path is always the same relative to

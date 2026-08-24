@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform;
+import 'dart:ui' show Size;
 
 import 'package:dio/dio.dart';
+import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:flutter_js/flutter_js.dart';
 
 import '../application/cloudflare_challenge_service.dart';
@@ -36,6 +38,8 @@ class SoraJsRuntime {
   final SoraAddonStore _store;
   final Dio _dio;
   final CloudflareChallengeService _cf = CloudflareChallengeService.instance;
+  final Map<String, _WindowsCloudflareWebViewSession>
+  _windowsCloudflareSessions = <String, _WindowsCloudflareWebViewSession>{};
   final Map<String, _LoadedSoraModule> _loaded = <String, _LoadedSoraModule>{};
   final List<String> _loadOrder = <String>[];
   Future<void> _jsTail = Future<void>.value();
@@ -235,7 +239,29 @@ class SoraJsRuntime {
   }
 
   void invalidateAll() {
-    unawaited(_serialized<void>(() async => _removeAllModules()));
+    unawaited(
+      _serialized<void>(() async {
+        _removeAllModules();
+        await _disposeWindowsSessions(waitForRequests: true);
+      }),
+    );
+  }
+
+  /// Releases native browser resources before the Flutter engine is detached.
+  /// This intentionally does not queue behind an addon call, which may itself
+  /// be waiting for a browser request during application shutdown.
+  Future<void> shutdown() async {
+    cancelActiveSearches();
+    await _disposeWindowsSessions(waitForRequests: false);
+  }
+
+  Future<void> _disposeWindowsSessions({required bool waitForRequests}) async {
+    final List<_WindowsCloudflareWebViewSession> sessions =
+        _windowsCloudflareSessions.values.toList(growable: false);
+    _windowsCloudflareSessions.clear();
+    for (final _WindowsCloudflareWebViewSession session in sessions) {
+      await session.dispose(waitForRequests: waitForRequests);
+    }
   }
 
   void cancelActiveSearches() {
@@ -814,30 +840,99 @@ class SoraJsRuntime {
   }
 
   /// Runs [send] and, if the response is a Cloudflare challenge, presents the
-  /// interactive solver and retries once with the freshly captured clearance.
-  /// If the retry is still walled the captured cookie is dropped, so the next
-  /// attempt solves afresh instead of replaying a bad cookie. [userAgent] is the
-  /// UA the first attempt used (informational; the solver captures the WebView's
-  /// own UA for replay).
+  /// interactive solver and retries with the freshly captured clearance.
+  ///
+  /// On Windows a clearance cookie is not always enough for a separate Dart
+  /// HTTP stack: browser verification can also be bound to the WebView2 client
+  /// fingerprint. Protected retries therefore stay inside a reusable headless
+  /// WebView2 session after the visible challenge has succeeded. Other
+  /// platforms deliberately retain the existing HTTP retry behavior.
   Future<Response<String>> _sendWithCloudflare(
-    Uri uri,
+    _CloudflareBrowserRequest request,
     String userAgent,
-    Future<Response<String>> Function() send,
+    Future<Response<String>> Function(Uri requestUri) send,
   ) async {
-    Response<String> response = await send();
+    final Uri uri = request.uri;
+    Response<String> response = await send(uri);
     if (!_isCloudflareChallenge(response)) return response;
 
+    // Dart deliberately does not forward sensitive headers such as Cookie to a
+    // different host during an automatic redirect. WebView2 can solve on the
+    // redirected/canonical host, so Windows must replay directly against the
+    // effective response URI. Other platforms retain their existing URI flow.
+    final Uri challengeUri =
+        Platform.isWindows && response.realUri.host.isNotEmpty
+        ? response.realUri
+        : uri;
+
+    if (Platform.isWindows) {
+      final String? existing = await _cf.cookies.cookieFor(challengeUri);
+      if (existing != null && existing.isNotEmpty) {
+        final Response<String>? browserResponse = await _sendWithWindowsWebView(
+          request.withUri(challengeUri),
+        );
+        if (browserResponse != null) {
+          response = browserResponse;
+          if (!_isCloudflareChallenge(response)) return response;
+          await _cf.cookies.clear(challengeUri);
+        } else {
+          // Unit-test environments and installations without WebView2 still
+          // get the legacy cookie retry rather than failing the request.
+          response = await send(challengeUri);
+          if (!_isCloudflareChallenge(response)) return response;
+          await _cf.cookies.clear(challengeUri);
+        }
+      }
+    }
+
     final CloudflareSolveResult? solved = await _cf.solve(
-      url: uri,
+      url: challengeUri,
       userAgent: userAgent,
     );
     if (solved == null || solved.cookies.trim().isEmpty) return response;
 
-    response = await send();
+    if (Platform.isWindows) {
+      final Response<String>? browserResponse = await _sendWithWindowsWebView(
+        request.withUri(challengeUri),
+      );
+      if (browserResponse != null) {
+        if (_isCloudflareChallenge(browserResponse)) {
+          await _cf.cookies.clear(challengeUri);
+        }
+        return browserResponse;
+      }
+    }
+
+    response = await send(challengeUri);
     if (_isCloudflareChallenge(response)) {
-      await _cf.cookies.clear(uri);
+      await _cf.cookies.clear(challengeUri);
     }
     return response;
+  }
+
+  Future<Response<String>?> _sendWithWindowsWebView(
+    _CloudflareBrowserRequest request,
+  ) async {
+    if (!Platform.isWindows) return null;
+    final Uri origin = Uri(
+      scheme: request.uri.scheme,
+      host: request.uri.host,
+      port: request.uri.hasPort ? request.uri.port : null,
+      path: '/',
+    );
+    final String key = origin.toString();
+    final _WindowsCloudflareWebViewSession session = _windowsCloudflareSessions
+        .putIfAbsent(key, () => _WindowsCloudflareWebViewSession(origin));
+    try {
+      return await session.send(
+        request,
+        cookieHeader: await _cf.cookies.cookieFor(request.uri),
+      );
+    } catch (_) {
+      _windowsCloudflareSessions.remove(key);
+      unawaited(session.dispose());
+      return null;
+    }
   }
 
   Future<String> _httpFetchBody(
@@ -870,16 +965,16 @@ class SoraJsRuntime {
       final _LoadedSoraModule? module = _loaded[addon.id];
       final bool searchCall = module?.isSearchCall ?? false;
 
-      Future<Response<String>> send() async {
+      Future<Response<String>> send(Uri requestUri) async {
         final Map<String, String> headers = await _applyCloudflareCookies(
-          uri,
+          requestUri,
           Map<String, String>.of(baseHeaders),
         );
         final CancelToken cancelToken = CancelToken();
         module?.registerCancelToken(cancelToken);
         try {
           return await _dio.requestUri<String>(
-            uri,
+            requestUri,
             data: body,
             options: Options(
               method: method,
@@ -899,7 +994,12 @@ class SoraJsRuntime {
       }
 
       final Response<String> response = await _sendWithCloudflare(
-        uri,
+        _CloudflareBrowserRequest(
+          uri: uri,
+          method: method,
+          headers: baseHeaders,
+          body: body?.toString(),
+        ),
         reqUserAgent,
         send,
       );
@@ -951,16 +1051,16 @@ class SoraJsRuntime {
         final String reqUserAgent = baseHeaders['User-Agent'] ?? _userAgent;
         final _LoadedSoraModule? module = _loaded[addon.id];
 
-        Future<Response<String>> send() async {
+        Future<Response<String>> send(Uri requestUri) async {
           final Map<String, String> headers = await _applyCloudflareCookies(
-            uri,
+            requestUri,
             Map<String, String>.of(baseHeaders),
           );
           final CancelToken cancelToken = CancelToken();
           module?.registerCancelToken(cancelToken);
           try {
             return await _dio.requestUri<String>(
-              uri,
+              requestUri,
               options: Options(
                 method: 'GET',
                 responseType: ResponseType.plain,
@@ -977,11 +1077,19 @@ class SoraJsRuntime {
         }
 
         final Response<String> response = await _sendWithCloudflare(
-          uri,
+          _CloudflareBrowserRequest(
+            uri: uri,
+            method: 'GET',
+            headers: baseHeaders,
+          ),
           reqUserAgent,
           send,
         );
-        capturedCookies = await _cf.cookies.cookieFor(uri);
+        final Uri cookieUri =
+            Platform.isWindows && response.realUri.host.isNotEmpty
+            ? response.realUri
+            : uri;
+        capturedCookies = await _cf.cookies.cookieFor(cookieUri);
         responseUri = response.realUri;
         requests.add(responseUri.toString());
         body = response.data ?? '';
@@ -1449,13 +1557,13 @@ class SoraJsRuntime {
     final Map<String, String> baseHeaders = _defaultEpisodeHeaders(addon);
     final String reqUserAgent = baseHeaders['User-Agent'] ?? _userAgent;
 
-    Future<Response<String>> send() async {
+    Future<Response<String>> send(Uri requestUri) async {
       final Map<String, String> headers = await _applyCloudflareCookies(
-        uri,
+        requestUri,
         Map<String, String>.of(baseHeaders),
       );
       return _dio.getUri<String>(
-        uri,
+        requestUri,
         options: Options(
           responseType: ResponseType.plain,
           headers: headers,
@@ -1467,7 +1575,7 @@ class SoraJsRuntime {
     }
 
     final Response<String> response = await _sendWithCloudflare(
-      uri,
+      _CloudflareBrowserRequest(uri: uri, method: 'GET', headers: baseHeaders),
       reqUserAgent,
       send,
     );
@@ -1565,6 +1673,265 @@ class SoraJsRuntime {
       return int.tryParse(value.trim()) ?? fallback;
     }
     return fallback;
+  }
+}
+
+class _CloudflareBrowserRequest {
+  const _CloudflareBrowserRequest({
+    required this.uri,
+    required this.method,
+    required this.headers,
+    this.body,
+  });
+
+  final Uri uri;
+  final String method;
+  final Map<String, String> headers;
+  final String? body;
+
+  _CloudflareBrowserRequest withUri(Uri nextUri) {
+    return _CloudflareBrowserRequest(
+      uri: nextUri,
+      method: method,
+      headers: headers,
+      body: body,
+    );
+  }
+}
+
+/// A same-origin browser transport used only after Windows has encountered a
+/// challenge. It shares WebView2's default profile with the visible solver, so
+/// cookies and the browser fingerprint remain together for protected retries.
+class _WindowsCloudflareWebViewSession {
+  _WindowsCloudflareWebViewSession(this.origin);
+
+  static const Duration _startupTimeout = Duration(seconds: 20);
+  static const Duration _requestTimeout = Duration(seconds: 30);
+  static const Set<String> _forbiddenHeaders = <String>{
+    'accept-charset',
+    'accept-encoding',
+    'access-control-request-headers',
+    'access-control-request-method',
+    'connection',
+    'content-length',
+    'cookie',
+    'date',
+    'dnt',
+    'expect',
+    'host',
+    'keep-alive',
+    'origin',
+    'permissions-policy',
+    'referer',
+    'te',
+    'trailer',
+    'transfer-encoding',
+    'upgrade',
+    'user-agent',
+    'via',
+  };
+
+  final Uri origin;
+  HeadlessInAppWebView? _headless;
+  InAppWebViewController? _controller;
+  Future<void> _tail = Future<void>.value();
+  bool _disposed = false;
+
+  Future<Response<String>> send(
+    _CloudflareBrowserRequest request, {
+    String? cookieHeader,
+  }) async {
+    final Future<void> previous = _tail;
+    final Completer<void> gate = Completer<void>();
+    _tail = gate.future;
+    try {
+      await previous.catchError((Object _) {});
+      if (_disposed) {
+        throw StateError('The Windows browser session has been disposed.');
+      }
+      await _ensureReady();
+      await _syncCookies(request.uri, cookieHeader);
+      return await _fetch(request);
+    } finally {
+      if (!gate.isCompleted) gate.complete();
+    }
+  }
+
+  Future<void> _ensureReady() async {
+    final HeadlessInAppWebView? current = _headless;
+    if (current != null && current.isRunning() && _controller != null) return;
+
+    final Completer<void> loaded = Completer<void>();
+    final HeadlessInAppWebView headless = HeadlessInAppWebView(
+      initialSize: const Size(1024, 768),
+      initialUrlRequest: URLRequest(url: WebUri(origin.toString())),
+      initialSettings: InAppWebViewSettings(
+        javaScriptEnabled: true,
+        thirdPartyCookiesEnabled: true,
+      ),
+      onWebViewCreated: (InAppWebViewController controller) {
+        _controller = controller;
+      },
+      onLoadStop: (InAppWebViewController controller, WebUri? url) {
+        if (!loaded.isCompleted) loaded.complete();
+      },
+    );
+    _headless = headless;
+    await headless.run().timeout(_startupTimeout);
+    await loaded.future.timeout(_startupTimeout);
+    _controller ??= headless.webViewController;
+    if (_controller == null) {
+      throw StateError('Windows WebView2 did not create a controller.');
+    }
+  }
+
+  Future<void> _syncCookies(Uri uri, String? cookieHeader) async {
+    final InAppWebViewController? controller = _controller;
+    if (controller == null || cookieHeader == null) return;
+    final WebUri cookieUri = WebUri(uri.toString());
+    for (final String pair in cookieHeader.split(';')) {
+      final int separator = pair.indexOf('=');
+      if (separator <= 0) continue;
+      final String name = pair.substring(0, separator).trim();
+      final String value = pair.substring(separator + 1).trim();
+      if (name.isEmpty || value.isEmpty) continue;
+      try {
+        await CookieManager.instance()
+            .setCookie(
+              url: cookieUri,
+              name: name,
+              value: value,
+              path: '/',
+              isSecure: uri.scheme == 'https',
+              webViewController: controller,
+            )
+            .timeout(const Duration(seconds: 2));
+      } catch (_) {
+        // The visible and headless WebViews normally share the same profile;
+        // explicit syncing is only a reliability fallback.
+      }
+    }
+  }
+
+  Future<Response<String>> _fetch(_CloudflareBrowserRequest request) async {
+    final InAppWebViewController controller = _controller!;
+    final Map<String, String> safeHeaders =
+        Map<String, String>.of(request.headers)
+          ..removeWhere((String name, String _) {
+            final String lower = name.toLowerCase();
+            return _forbiddenHeaders.contains(lower) ||
+                lower.startsWith('proxy-') ||
+                lower.startsWith('sec-');
+          });
+    final CallAsyncJavaScriptResult? result = await controller
+        .callAsyncJavaScript(
+          functionBody: r'''
+const options = {
+  method: method,
+  credentials: 'include',
+  redirect: 'follow',
+  headers: headers
+};
+if (body !== null && method !== 'GET' && method !== 'HEAD') {
+  options.body = body;
+}
+const response = await fetch(url, options);
+const responseHeaders = {};
+response.headers.forEach((value, name) => {
+  responseHeaders[name] = value;
+});
+return {
+  status: response.status,
+  statusText: response.statusText,
+  url: response.url,
+  headers: responseHeaders,
+  body: await response.text()
+};
+''',
+          arguments: <String, dynamic>{
+            'url': request.uri.toString(),
+            'method': request.method,
+            'headers': safeHeaders,
+            'body': request.body,
+          },
+        )
+        .timeout(_requestTimeout);
+    final String error = result?.error?.trim() ?? '';
+    if (error.isNotEmpty) {
+      throw StateError('Windows WebView2 request failed: $error');
+    }
+    final Map<String, dynamic> value = _asMap(result?.value);
+    if (value.isEmpty) {
+      throw StateError('Windows WebView2 returned no request result.');
+    }
+
+    final Map<String, List<String>> responseHeaders = <String, List<String>>{};
+    final Object? rawHeaders = value['headers'];
+    if (rawHeaders is Map) {
+      for (final MapEntry<Object?, Object?> entry in rawHeaders.entries) {
+        final String name = entry.key.toString();
+        final Object? rawValue = entry.value;
+        responseHeaders[name] = rawValue is List
+            ? rawValue.map((Object? item) => item.toString()).toList()
+            : <String>[rawValue?.toString() ?? ''];
+      }
+    }
+
+    final Uri finalUri = Uri.tryParse('${value['url'] ?? ''}') ?? request.uri;
+    final List<RedirectRecord> redirects = finalUri == request.uri
+        ? const <RedirectRecord>[]
+        : <RedirectRecord>[RedirectRecord(302, request.method, finalUri)];
+    return Response<String>(
+      requestOptions: RequestOptions(
+        path: request.uri.toString(),
+        method: request.method,
+        headers: request.headers,
+        data: request.body,
+      ),
+      data: value['body']?.toString() ?? '',
+      statusCode: _asInt(value['status']),
+      statusMessage: value['statusText']?.toString(),
+      headers: Headers.fromMap(responseHeaders),
+      redirects: redirects,
+    );
+  }
+
+  Map<String, dynamic> _asMap(Object? value) {
+    if (value is Map<String, dynamic>) return value;
+    if (value is Map) {
+      return value.map(
+        (Object? key, Object? item) =>
+            MapEntry<String, dynamic>(key.toString(), item),
+      );
+    }
+    if (value is String) {
+      try {
+        return _asMap(jsonDecode(value));
+      } on FormatException {
+        return <String, dynamic>{};
+      }
+    }
+    return <String, dynamic>{};
+  }
+
+  int? _asInt(Object? value) {
+    if (value is num) return value.toInt();
+    return int.tryParse(value?.toString() ?? '');
+  }
+
+  Future<void> dispose({bool waitForRequests = true}) async {
+    if (_disposed) return;
+    _disposed = true;
+    if (waitForRequests) {
+      await _tail.catchError((Object _) {});
+    }
+    final HeadlessInAppWebView? headless = _headless;
+    _headless = null;
+    _controller = null;
+    if (headless == null) return;
+    try {
+      await headless.dispose().timeout(const Duration(seconds: 5));
+    } catch (_) {}
   }
 }
 

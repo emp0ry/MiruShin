@@ -164,6 +164,8 @@ class SoraJsRuntime {
     unawaited(_serialized<void>(() async => _disposeAll()));
   }
 
+  Future<void> shutdown() => _serialized<void>(() async => _disposeAll());
+
   void cancelActiveSearches() {
     // Browser fetches cannot be force-cancelled from here without an
     // AbortController per request. The provider epoch still makes queued

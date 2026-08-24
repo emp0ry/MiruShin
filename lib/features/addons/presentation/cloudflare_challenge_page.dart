@@ -1,14 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import '../../../app/localization/app_localizations.dart';
 import '../application/cloudflare_challenge_service.dart';
-import '../data/cloudflare_challenge.dart';
 
 /// Interactive Cloudflare challenge solver.
 ///
@@ -60,11 +58,13 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
   static const int _maxConsecutiveErrors = 5;
 
   /// Number of consecutive polls a fresh `cf_clearance` must persist before we
-  /// accept it even if [_stillOnChallenge] keeps reporting true (a Windows/
-  /// WebView2 stale-title workaround). At [_pollInterval] this is ~8 seconds.
-  static const int _windowsClearanceConfirmPolls = 12;
-  static const Duration _windowsClearanceIdleDelay = Duration(seconds: 2);
-  static const Duration _windowsVerificationCooldown = Duration(seconds: 3);
+  /// accept it after the document no longer reports a challenge. WebView2 can
+  /// expose a cookie just before its final navigation settles, so require a few
+  /// stable observations without delaying the source request for several seconds.
+  static const int _windowsClearanceConfirmPolls = 3;
+  static const Duration _windowsClearanceIdleDelay = Duration(
+    milliseconds: 500,
+  );
 
   final CookieManager _cookies = CookieManager.instance();
   InAppWebViewController? _controller;
@@ -78,8 +78,6 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
   int _clearanceSeen = 0;
   DateTime? _clearanceFirstSeenAt;
   DateTime _lastWebViewActivityAt = DateTime.now();
-  bool _verificationInFlight = false;
-  DateTime? _lastVerificationAt;
   bool _completed = false;
   bool _loading = true;
   // Becomes true once the pre-navigation cookie flush is done (or timed out).
@@ -220,6 +218,12 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
     } catch (_) {}
 
     final List<String> urls = await _devToolsCookieUrls(controller);
+    final Set<String> allowedHosts = urls
+        .map(Uri.tryParse)
+        .whereType<Uri>()
+        .map((Uri uri) => uri.host.toLowerCase())
+        .where((String host) => host.isNotEmpty)
+        .toSet();
     cookies.addAll(
       await _readDevToolsCookieMethod(
         controller,
@@ -241,7 +245,9 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
     );
 
     final Map<String, Cookie> merged = <String, Cookie>{};
-    for (final Cookie cookie in cookies.where(_cookieMatchesRootHost)) {
+    for (final Cookie cookie in cookies.where(
+      (Cookie cookie) => _cookieMatchesAnyHost(cookie, allowedHosts),
+    )) {
       _mergeCookie(merged, cookie);
     }
     return merged.values.toList(growable: false);
@@ -257,6 +263,11 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
         onTimeout: () => null,
       );
       if (current != null && current.host == _rootUri.host) {
+        urls.add(current.toString());
+      } else if (current != null && current.host.isNotEmpty) {
+        // WebView2 may finish a challenge on a redirected/canonical host. Its
+        // clearance cookie is correctly scoped to that host, not the original
+        // URL, so include the current URL in the DevTools query and filter.
         urls.add(current.toString());
       }
     } catch (_) {}
@@ -342,15 +353,16 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
     );
   }
 
-  bool _cookieMatchesRootHost(Cookie cookie) {
-    final String host = _rootUri.host.toLowerCase();
+  bool _cookieMatchesAnyHost(Cookie cookie, Set<String> allowedHosts) {
     final String? rawDomain = cookie.domain;
     if (rawDomain == null || rawDomain.isEmpty) return true;
     final String domain = rawDomain.toLowerCase().replaceFirst(
       RegExp(r'^\.+'),
       '',
     );
-    return host == domain || host.endsWith('.$domain');
+    return allowedHosts.any(
+      (String host) => host == domain || host.endsWith('.$domain'),
+    );
   }
 
   String _cookieValue(Cookie cookie) {
@@ -405,13 +417,6 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
       // cf_clearance is bound to the user agent that solved it. Capture the
       // WebView's user agent so the runtime can replay subsequent requests.
       final String userAgent = await _readUserAgent();
-      if (_isWindows &&
-          !await _verifyWindowsClearance(
-            cookies: header,
-            userAgent: userAgent,
-          )) {
-        return;
-      }
       _finish((cookies: header, userAgent: userAgent));
     } catch (error) {
       if (_completed) return;
@@ -455,110 +460,6 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
       );
     }
     return settled;
-  }
-
-  Future<bool> _verifyWindowsClearance({
-    required String cookies,
-    required String userAgent,
-  }) async {
-    if (!_isWindows) return true;
-    if (cookies.trim().isEmpty || userAgent.trim().isEmpty) {
-      if (kDebugMode) {
-        debugPrint(
-          '[Cloudflare] Windows clearance verify waiting: '
-          'cookies=${cookies.trim().isNotEmpty}, ua=${userAgent.trim().isNotEmpty}',
-        );
-      }
-      return false;
-    }
-    if (_verificationInFlight) return false;
-
-    final DateTime now = DateTime.now();
-    final DateTime? lastVerification = _lastVerificationAt;
-    if (lastVerification != null &&
-        now.difference(lastVerification) < _windowsVerificationCooldown) {
-      return false;
-    }
-
-    _lastVerificationAt = now;
-    _verificationInFlight = true;
-    try {
-      final Response<String> response =
-          await Dio(
-            BaseOptions(
-              connectTimeout: const Duration(seconds: 10),
-              receiveTimeout: const Duration(seconds: 15),
-              followRedirects: true,
-              validateStatus: (_) => true,
-              responseType: ResponseType.plain,
-            ),
-          ).getUri<String>(
-            Uri.parse(_rootUri.toString()),
-            options: Options(
-              responseType: ResponseType.plain,
-              headers: <String, String>{
-                'User-Agent': userAgent,
-                'Cookie': cookies,
-                'Accept':
-                    'text/html,application/xhtml+xml,application/json,text/plain,*/*',
-              },
-            ),
-          );
-      final Map<String, dynamic> headers = _responseHeaderMap(response);
-      final String body = response.data ?? '';
-      final bool challenged =
-          CloudflareChallenge.isChallenge(response.statusCode, headers, body) ||
-          _headersShowChallenge(headers) ||
-          _bodyShowsChallenge(body);
-
-      if (kDebugMode) {
-        debugPrint(
-          '[Cloudflare] Windows clearance verify: '
-          'status=${response.statusCode} challenged=$challenged '
-          'url=${response.realUri}',
-        );
-      }
-      return !challenged;
-    } catch (error) {
-      if (kDebugMode) {
-        debugPrint('[Cloudflare] Windows clearance verify failed: $error');
-      }
-      return false;
-    } finally {
-      _verificationInFlight = false;
-    }
-  }
-
-  Map<String, dynamic> _responseHeaderMap(Response<dynamic> response) {
-    final Map<String, dynamic> map = <String, dynamic>{};
-    response.headers.forEach((String name, List<String> values) {
-      if (values.isEmpty) return;
-      map[name] = values.length == 1 ? values.first : values;
-    });
-    return map;
-  }
-
-  bool _headersShowChallenge(Map<String, dynamic> headers) {
-    return _headerValue(
-      headers,
-      'cf-mitigated',
-    ).toLowerCase().contains('challenge');
-  }
-
-  String _headerValue(Map<String, dynamic> headers, String name) {
-    final String target = name.toLowerCase();
-    for (final MapEntry<String, dynamic> entry in headers.entries) {
-      if (entry.key.toLowerCase() != target) continue;
-      final Object? value = entry.value;
-      if (value is List) return value.join(', ');
-      return value?.toString() ?? '';
-    }
-    return '';
-  }
-
-  bool _bodyShowsChallenge(String body) {
-    final String haystack = body.toLowerCase();
-    return _windowsChallengeMarkers.any(haystack.contains);
   }
 
   void _markWebViewActivity() {

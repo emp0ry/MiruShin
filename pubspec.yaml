@@ -18,7 +18,10 @@ dependencies:
   flutter_file_dialog: ^3.0.3
   # Used only for the Cloudflare challenge solver: unlike webview_flutter it can
   # read HttpOnly cookies (cf_clearance) and covers Android/iOS/macOS/Windows.
-  flutter_inappwebview: ^6.1.5
+  # The stable Windows backend (0.6.0) cannot read WebView2 cookies and can
+  # access a disposed WebView environment during shutdown. 6.2.0-beta.3 ships
+  # the upstream fixes for both Windows-only failures.
+  flutter_inappwebview: ^6.2.0-beta.3
   flutter_js: ^0.8.7
   flutter_local_notifications: ^21.0.0
   flutter_localizations:
@@ -27,7 +30,10 @@ dependencies:
   flutter_secure_storage: ^10.0.0
   # Watch-party synchronized playback: P2P sync over WebRTC DataChannel, with QR
   # code pairing (generate + scan) as a fallback to manual room codes.
-  flutter_webrtc: ^1.4.0
+  # Keep this aligned with windows/runner/flutter_webrtc_plugin_lifetime_fix.cc.
+  # The Windows entrypoint is rebuilt locally to release Flutter channels while
+  # the engine and its HWND task runner are still alive.
+  flutter_webrtc: 1.6.0
   fvp: ^0.36.2
   go_router: ^17.2.2
   intl: ^0.20.2

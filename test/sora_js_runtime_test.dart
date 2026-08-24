@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mirushin/features/addons/application/cloudflare_challenge_service.dart';
 import 'package:mirushin/features/addons/data/sora_addon_store.dart';
 import 'package:mirushin/features/addons/data/sora_js_runtime.dart';
 import 'package:mirushin/features/addons/domain/sora_models.dart';
@@ -257,6 +258,110 @@ async function extractDetails(url) {
       expect(completedRequests, contains(logUrl));
     },
   );
+
+  test(
+    'Windows replays Cloudflare clearance on the effective redirected host',
+    () async {
+      final Directory temp = await Directory.systemTemp.createTemp('sora_js_');
+      addTearDown(() => temp.delete(recursive: true));
+
+      final Uri originalUri = Uri.parse(
+        'https://origin.example.test/search?q=demo',
+      );
+      final Uri effectiveUri = Uri.parse(
+        'https://effective.example.test/search?q=demo',
+      );
+      final _CloudflareRedirectAdapter adapter = _CloudflareRedirectAdapter(
+        originalUri: originalUri,
+        effectiveUri: effectiveUri,
+      );
+      final Dio dio = Dio()..httpClientAdapter = adapter;
+      int solverCalls = 0;
+      Uri? solvedUri;
+      CloudflareChallengeService.instance.registerSolver(({
+        required Uri url,
+        required String userAgent,
+      }) async {
+        solverCalls++;
+        solvedUri = url;
+        return (
+          cookies: 'cf_clearance=windows-test-token',
+          userAgent: 'Windows WebView Test UA',
+        );
+      });
+      addTearDown(() async {
+        CloudflareChallengeService.instance.registerSolver(null);
+        await CloudflareChallengeService.instance.cookies.clear(effectiveUri);
+      });
+
+      final File script = File('${temp.path}/module.js');
+      await script.writeAsString('''
+async function searchResults(keyword) {
+  const response = await fetchv2(${jsonEncode(originalUri.toString())}, {});
+  return JSON.stringify(await response.json());
+}
+''');
+      final SoraInstalledAddon addon = SoraInstalledAddon(
+        id: 'windows-cloudflare-redirect',
+        manifestUrl: 'https://manifest.example.test/addon.json',
+        manifest: SoraAddonManifest.fromJson(<String, dynamic>{
+          'sourceName': 'Redirect Test',
+          'iconUrl': 'https://manifest.example.test/icon.png',
+          'author': <String, dynamic>{'name': 'Tester'},
+          'version': '1.0.0',
+          'language': 'en',
+          'streamType': 'HLS',
+          'quality': '1080p',
+          'baseUrl': 'https://origin.example.test',
+          'searchBaseUrl': originalUri.toString(),
+          'scriptUrl': 'https://manifest.example.test/module.js',
+          'type': 'anime',
+          'downloadSupport': false,
+        }),
+        manifestPath: '${temp.path}/manifest.json',
+        scriptPath: script.path,
+        enabled: true,
+        installedAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+        lastCheckedAt: DateTime.now(),
+        lastError: null,
+        order: 0,
+      );
+      final SoraAddonStore store = SoraAddonStore(
+        supportDirectoryProvider: () async => temp,
+      );
+      final SoraJsRuntime runtime = SoraJsRuntime(store: store, dio: dio);
+      addTearDown(runtime.invalidateAll);
+
+      final List<SoraSearchResult> first = await runtime.searchResults(
+        addon: addon,
+        keyword: 'Demo',
+        languageCode: 'en',
+        titleVariants: const <SoraTitleVariant>[
+          SoraTitleVariant(languageCode: 'en', title: 'Demo'),
+        ],
+      );
+      final List<SoraSearchResult> second = await runtime.searchResults(
+        addon: addon,
+        keyword: 'Demo',
+        languageCode: 'en',
+        titleVariants: const <SoraTitleVariant>[
+          SoraTitleVariant(languageCode: 'en', title: 'Demo'),
+        ],
+      );
+
+      expect(first.single.title, 'Redirected Result');
+      expect(second.single.title, 'Redirected Result');
+      expect(solverCalls, 1);
+      expect(solvedUri, effectiveUri);
+      expect(adapter.effectiveRequests, hasLength(2));
+      for (final RequestOptions request in adapter.effectiveRequests) {
+        expect(request.headers['Cookie'], contains('cf_clearance='));
+        expect(request.headers['User-Agent'], 'Windows WebView Test UA');
+      }
+    },
+    skip: !Platform.isWindows,
+  );
 }
 
 class _FakeAdapter implements HttpClientAdapter {
@@ -285,6 +390,62 @@ class _FakeAdapter implements HttpClientAdapter {
         Headers.contentTypeHeader: <String>['application/json'],
       },
     );
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
+
+class _CloudflareRedirectAdapter implements HttpClientAdapter {
+  _CloudflareRedirectAdapter({
+    required this.originalUri,
+    required this.effectiveUri,
+  });
+
+  final Uri originalUri;
+  final Uri effectiveUri;
+  final List<RequestOptions> effectiveRequests = <RequestOptions>[];
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    if (options.uri == effectiveUri) {
+      effectiveRequests.add(options);
+      final String cookie = '${options.headers['Cookie'] ?? ''}';
+      if (cookie.contains('cf_clearance=')) {
+        return ResponseBody.fromString(
+          jsonEncode(<Map<String, String>>[
+            <String, String>{
+              'title': 'Redirected Result',
+              'image': 'poster.jpg',
+              'href': '/title',
+            },
+          ]),
+          200,
+          headers: <String, List<String>>{
+            Headers.contentTypeHeader: <String>['application/json'],
+          },
+        );
+      }
+    }
+
+    final ResponseBody challenged = ResponseBody.fromString(
+      '<script src="/cdn-cgi/challenge-platform/test.js"></script>',
+      403,
+      headers: <String, List<String>>{
+        Headers.contentTypeHeader: <String>['text/html'],
+        'server': <String>['cloudflare'],
+      },
+    );
+    if (options.uri == originalUri) {
+      challenged.redirects = <RedirectRecord>[
+        RedirectRecord(301, 'GET', effectiveUri),
+      ];
+    }
+    return challenged;
   }
 
   @override

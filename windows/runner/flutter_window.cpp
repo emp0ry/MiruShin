@@ -7,6 +7,11 @@
 #include "flutter/generated_plugin_registrant.h"
 #include "window_geometry.h"
 
+// MiruShin's pinned flutter_webrtc Windows entrypoint exports this orderly
+// shutdown hook. It must run before FlutterViewController destroys the engine.
+extern "C" __declspec(dllimport) void
+FlutterWebRTCPluginPrepareForShutdown();
+
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
 
@@ -385,6 +390,7 @@ void FlutterWindow::OnDestroy() {
   if (pip_player_) { pip_player_->Close(); pip_player_ = nullptr; }
   window_channel_ = nullptr;
   if (flutter_controller_) {
+    FlutterWebRTCPluginPrepareForShutdown();
     flutter_controller_ = nullptr;
   }
 
