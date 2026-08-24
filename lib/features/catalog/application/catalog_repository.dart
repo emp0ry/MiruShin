@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import '../../../core/cache/metadata_cache_store.dart';
 import '../../../shared/models/calendar_item.dart';
 import '../../../shared/models/media_item.dart';
@@ -56,11 +58,9 @@ class TmdbCatalogRepository implements CatalogRepository {
 
   @override
   Future<BoardRails> boardRails() {
-    return _networkFirst(
+    return _cachedBoardThenRefreshForNextLaunch(
       cache: cache,
       key: '$cacheScope.board',
-      operation: 'board',
-      fallback: BoardRails.empty(),
       onOffline: onOffline,
       onOnline: onOnline,
       fetch: () async {
@@ -70,14 +70,14 @@ class TmdbCatalogRepository implements CatalogRepository {
               tmdb.getPopular(MediaType.series),
               tmdb.getPopular(MediaType.anime),
             ]);
-        return BoardRails(
-          recentMovies: results[0],
-          recentSeries: results[1],
-          topAnime: results[2],
+        return _limitBoardRails(
+          BoardRails(
+            recentMovies: results[0],
+            recentSeries: results[1],
+            topAnime: results[2],
+          ),
         );
       },
-      decode: _boardFromJson,
-      encode: _boardToJson,
     );
   }
 
@@ -179,11 +179,9 @@ class AniListCatalogRepository implements CatalogRepository {
 
   @override
   Future<BoardRails> boardRails() {
-    return _networkFirst(
+    return _cachedBoardThenRefreshForNextLaunch(
       cache: cache,
       key: '$cacheScope.board.${viewerId ?? 'public'}',
-      operation: 'board',
-      fallback: BoardRails.empty(),
       onOffline: onOffline,
       onOnline: onOnline,
       fetch: () async {
@@ -205,14 +203,14 @@ class AniListCatalogRepository implements CatalogRepository {
             recentMovies = <MediaItem>[enriched, ...recentMovies.skip(1)];
           }
         }
-        return BoardRails(
-          recentMovies: recentMovies,
-          recentSeries: results[1],
-          topAnime: results[2],
+        return _limitBoardRails(
+          BoardRails(
+            recentMovies: recentMovies,
+            recentSeries: results[1],
+            topAnime: results[2],
+          ),
         );
       },
-      decode: _boardFromJson,
-      encode: _boardToJson,
     );
   }
 
@@ -323,6 +321,75 @@ class AniListCatalogRepository implements CatalogRepository {
   }
 }
 
+/// Returns the previous complete board snapshot immediately, then replaces the
+/// stored snapshot in the background for the next app launch.
+///
+/// A cold cache remains network-first so first-time users still receive live
+/// board data. Refresh failures are contained because this work is unawaited.
+Future<BoardRails> _cachedBoardThenRefreshForNextLaunch({
+  required MetadataCacheStore cache,
+  required String key,
+  required Future<BoardRails> Function() fetch,
+  CatalogOfflineCallback? onOffline,
+  CatalogOnlineCallback? onOnline,
+}) async {
+  final Map<String, dynamic>? cachedJson = await cache.read(key);
+  if (cachedJson != null) {
+    try {
+      final BoardRails cached = _limitBoardRails(_boardFromJson(cachedJson));
+      unawaited(
+        _refreshBoardCache(
+          cache: cache,
+          key: key,
+          fetch: fetch,
+          onOffline: onOffline,
+          onOnline: onOnline,
+        ),
+      );
+      return cached;
+    } catch (_) {
+      // Treat an invalid snapshot as a cold cache and replace it from network.
+    }
+  }
+
+  return _networkFirst(
+    cache: cache,
+    key: key,
+    operation: 'board',
+    fallback: BoardRails.empty(),
+    onOffline: onOffline,
+    onOnline: onOnline,
+    fetch: fetch,
+    decode: (Map<String, dynamic> json) =>
+        _limitBoardRails(_boardFromJson(json)),
+    encode: (BoardRails value) => _boardToJson(_limitBoardRails(value)),
+  );
+}
+
+Future<void> _refreshBoardCache({
+  required MetadataCacheStore cache,
+  required String key,
+  required Future<BoardRails> Function() fetch,
+  CatalogOfflineCallback? onOffline,
+  CatalogOnlineCallback? onOnline,
+}) async {
+  try {
+    final BoardRails fresh = _limitBoardRails(await fetch());
+    await cache.write(key, _boardToJson(fresh));
+    try {
+      onOnline?.call(operation: 'board');
+    } catch (_) {
+      // The provider may have been disposed while this refresh was running.
+    }
+  } catch (error) {
+    try {
+      onOffline?.call(error, operation: 'board', usingCache: true);
+    } catch (_) {
+      // Keep background refresh errors from escaping as unhandled futures.
+    }
+  }
+}
+
 Future<T> _networkFirst<T>({
   required MetadataCacheStore cache,
   required String key,
@@ -351,24 +418,41 @@ Future<T> _networkFirst<T>({
 }
 
 Map<String, dynamic> _boardToJson(BoardRails rails) {
+  final BoardRails limited = _limitBoardRails(rails);
   return <String, dynamic>{
-    'recentMovies': rails.recentMovies
+    'recentMovies': limited.recentMovies
         .map((MediaItem item) => item.toJson())
         .toList(growable: false),
-    'recentSeries': rails.recentSeries
+    'recentSeries': limited.recentSeries
         .map((MediaItem item) => item.toJson())
         .toList(growable: false),
-    'topAnime': rails.topAnime
+    'topAnime': limited.topAnime
         .map((MediaItem item) => item.toJson())
         .toList(growable: false),
   };
 }
 
 BoardRails _boardFromJson(Map<String, dynamic> json) {
+  return _limitBoardRails(
+    BoardRails(
+      recentMovies: _mediaList(json['recentMovies']),
+      recentSeries: _mediaList(json['recentSeries']),
+      topAnime: _mediaList(json['topAnime']),
+    ),
+  );
+}
+
+const int _boardCacheItemLimit = 20;
+
+BoardRails _limitBoardRails(BoardRails rails) {
   return BoardRails(
-    recentMovies: _mediaList(json['recentMovies']),
-    recentSeries: _mediaList(json['recentSeries']),
-    topAnime: _mediaList(json['topAnime']),
+    recentMovies: rails.recentMovies
+        .take(_boardCacheItemLimit)
+        .toList(growable: false),
+    recentSeries: rails.recentSeries
+        .take(_boardCacheItemLimit)
+        .toList(growable: false),
+    topAnime: rails.topAnime.take(_boardCacheItemLimit).toList(growable: false),
   );
 }
 
