@@ -585,11 +585,35 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-android, build-linux, build-windows, build-macos-ios]
     steps:
-      - name: Download all artifacts
+      - name: Download Android artifacts
         uses: actions/download-artifact@v8
         with:
+          name: MiruShin-android
           path: dist
-          merge-multiple: true
+
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: MiruShin-linux
+          path: dist
+
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: MiruShin-windows
+          path: dist
+
+      - name: Download iOS artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: MiruShin-ios
+          path: dist
+
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: MiruShin-macos
+          path: dist
 
       - name: Show bundled files
         shell: bash
