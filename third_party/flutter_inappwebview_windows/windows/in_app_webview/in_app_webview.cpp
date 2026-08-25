@@ -10,6 +10,7 @@
 #include "../types/web_resource_error.h"
 #include "../types/web_resource_request.h"
 #include "../utils/base64.h"
+#include "../utils/com_apartment.h"
 #include "../utils/log.h"
 #include "../utils/map.h"
 #include "../utils/strconv.h"
@@ -62,6 +63,13 @@ namespace flutter_inappwebview_plugin
     wil::com_ptr<ICoreWebView2Controller> webViewController,
     wil::com_ptr<ICoreWebView2CompositionController> webViewCompositionController)> completionHandler)
   {
+    const HRESULT comResult = ensureThreadComApartment();
+    if (FAILED(comResult)) {
+      failedLog(comResult);
+      completionHandler(nullptr, nullptr, nullptr);
+      return;
+    }
+
     auto callback = [parentWindow, willBeSurface, completionHandler, initialSettings](HRESULT result, wil::com_ptr<ICoreWebView2Environment> env) -> HRESULT
       {
         if (failedAndLog(result) || !env) {

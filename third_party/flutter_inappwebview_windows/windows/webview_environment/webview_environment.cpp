@@ -1,6 +1,7 @@
 #include <WebView2EnvironmentOptions.h>
 #include <wil/wrl.h>
 
+#include "../utils/com_apartment.h"
 #include "../utils/log.h"
 #include "webview_environment.h"
 
@@ -17,6 +18,15 @@ namespace flutter_inappwebview_plugin
 
   void WebViewEnvironment::create(const std::unique_ptr<WebViewEnvironmentSettings> settings, const std::function<void(HRESULT)> completionHandler)
   {
+    const HRESULT comResult = ensureThreadComApartment();
+    if (FAILED(comResult)) {
+      failedLog(comResult);
+      if (completionHandler) {
+        completionHandler(comResult);
+      }
+      return;
+    }
+
     if (!plugin) {
       if (completionHandler) {
         completionHandler(E_FAIL);

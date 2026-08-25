@@ -57,6 +57,7 @@ RoHelper::RoHelper(RO_INIT_TYPE init_type)
       mFpRoInitialize(nullptr),
       mFpRoUninitialize(nullptr),
       mWinRtAvailable(false),
+      mRoInitialized(false),
       mComBaseModule(nullptr),
       mCoreMessagingModule(nullptr) {
 #ifdef WINUWP
@@ -118,7 +119,12 @@ RoHelper::RoHelper(RO_INIT_TYPE init_type)
 
   auto result = RoInitialize(init_type);
 
-  if (SUCCEEDED(result) || result == S_FALSE || result == RPC_E_CHANGED_MODE) {
+  if (SUCCEEDED(result)) {
+    mWinRtAvailable = true;
+    mRoInitialized = true;
+  } else if (result == RPC_E_CHANGED_MODE) {
+    // WinRT is already available through the thread's existing apartment, but
+    // this failed call must not be paired with RoUninitialize().
     mWinRtAvailable = true;
   }
 #endif
@@ -126,7 +132,7 @@ RoHelper::RoHelper(RO_INIT_TYPE init_type)
 
 RoHelper::~RoHelper() {
 #ifndef WINUWP
-  if (mWinRtAvailable) {
+  if (mRoInitialized) {
     RoUninitialize();
   }
 

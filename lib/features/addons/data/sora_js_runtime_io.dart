@@ -917,10 +917,8 @@ class SoraJsRuntime {
   /// The standard Cloudflare path used by Android, iOS, and macOS.
   ///
   /// Keep this isolated from Windows browser transport: after the interactive
-  /// WebView stores the clearance cookie and matching user agent, the original
-  /// request is retried through Dio on the effective host. Using the effective
-  /// host is essential when the challenge WebView follows a canonical-domain
-  /// redirect and creates `cf_clearance` there.
+  /// WebView stores the clearance cookie and matching user agent, retry the
+  /// original request exactly as 2.5.0 did.
   Future<Response<String>> _sendWithStableCloudflare(
     Uri uri,
     String userAgent,
@@ -929,26 +927,17 @@ class SoraJsRuntime {
     Response<String> response = await send(uri);
     if (!_isCloudflareChallenge(response)) return response;
 
-    final Uri challengeUri = response.realUri.host.isNotEmpty
-        ? response.realUri
-        : uri;
-    final String? existing = await _cf.cookies.cookieFor(challengeUri);
-    if (existing != null && existing.isNotEmpty) {
-      response = await send(challengeUri);
-      if (!_isCloudflareChallenge(response)) return response;
-      await _cf.cookies.clear(challengeUri);
-    }
-
     final CloudflareSolveResult? solved = await _cf.solve(
-      url: challengeUri,
+      url: uri,
       userAgent: userAgent,
     );
     if (solved == null || solved.cookies.trim().isEmpty) return response;
-    final Uri replayUri = _cloudflareReplayUri(solved, challengeUri);
 
-    response = await send(replayUri);
+    // Preserve 2.5.0 behavior on Android/iOS/macOS: replay the same request.
+    // Redirected-host/browser-context transport is Windows-only above.
+    response = await send(uri);
     if (_isCloudflareChallenge(response)) {
-      await _cf.cookies.clear(replayUri);
+      await _cf.cookies.clear(uri);
     }
     return response;
   }

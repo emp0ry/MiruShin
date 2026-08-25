@@ -13,6 +13,15 @@ MiruShin carries Windows bridge fixes:
   without invoking an incompatible native variant accessor.
 - The hidden platform-view window class uses `CS_NOCLOSE`, matching the upstream
   guard against the OS unexpectedly closing a WebView window.
+- WebView2 environment and controller creation retain a thread-local STA COM
+  apartment for the full asynchronous lifetime. This prevents
+  `CO_E_NOTINITIALIZED` when a platform call is dispatched on a different
+  thread or another native component unbalances the runner's COM reference.
+- WinRT cleanup calls `RoUninitialize` only when this plugin successfully
+  initialized WinRT, never after `RPC_E_CHANGED_MODE`.
+- Platform-view creation no longer force-unwraps a missing texture ID. Native
+  startup failures complete the creation/disposal lifecycle safely instead of
+  escaping as an uncaught asynchronous exception.
 
 Android, iOS, and macOS continue to use the unmodified stable packages resolved
 from pub.dev.

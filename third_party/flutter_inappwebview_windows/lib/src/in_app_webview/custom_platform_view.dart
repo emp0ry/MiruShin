@@ -100,6 +100,7 @@ class CustomPlatformViewController
     extends ValueNotifier<CustomFlutterViewControllerValue> {
   Completer<void> _creatingCompleter = Completer<void>();
   int _textureId = 0;
+  bool _platformViewCreated = false;
   bool _isDisposed = false;
 
   Future<void> get ready => _creatingCompleter.future;
@@ -121,45 +122,79 @@ class CustomPlatformViewController
   Future<void> initialize(
       {Function(int id)? onPlatformViewCreated, dynamic arguments}) async {
     if (_isDisposed) {
+      if (!_creatingCompleter.isCompleted) {
+        _creatingCompleter.complete();
+      }
       return;
     }
-    _textureId = (await _pluginChannel.invokeMethod<int>(
-        'createInAppWebView', arguments))!;
-
-    _methodChannel =
-        MethodChannel('com.pichillilorenzo/custom_platform_view_$_textureId');
-    _eventChannel = EventChannel(
-        'com.pichillilorenzo/custom_platform_view_${_textureId}_events');
-    _eventStreamSubscription =
-        _eventChannel.receiveBroadcastStream().listen((event) {
-      final map = event as Map<dynamic, dynamic>;
-      switch (map['type']) {
-        case 'cursorChanged':
-          _cursorStreamController.add(_getCursorByName(map['value']));
-          break;
+    try {
+      final int? textureId = await _pluginChannel.invokeMethod<int>(
+          'createInAppWebView', arguments);
+      if (textureId == null) {
+        throw PlatformException(
+          code: 'webview_creation_failed',
+          message: 'The Windows WebView plugin returned no texture ID.',
+        );
       }
-    });
+      _textureId = textureId;
+      _platformViewCreated = true;
 
-    _methodChannel.setMethodCallHandler((call) {
-      throw MissingPluginException('Unknown method ${call.method}');
-    });
+      if (_isDisposed) {
+        await _disposePlatformView();
+        return;
+      }
 
-    value = value.copyWith(isInitialized: true);
+      _methodChannel =
+          MethodChannel('com.pichillilorenzo/custom_platform_view_$_textureId');
+      _eventChannel = EventChannel(
+          'com.pichillilorenzo/custom_platform_view_${_textureId}_events');
+      _eventStreamSubscription =
+          _eventChannel.receiveBroadcastStream().listen((event) {
+        final map = event as Map<dynamic, dynamic>;
+        switch (map['type']) {
+          case 'cursorChanged':
+            _cursorStreamController.add(_getCursorByName(map['value']));
+            break;
+        }
+      });
 
-    _creatingCompleter.complete();
+      _methodChannel.setMethodCallHandler((call) {
+        throw MissingPluginException('Unknown method ${call.method}');
+      });
 
-    onPlatformViewCreated?.call(_textureId);
+      value = value.copyWith(isInitialized: true);
+      onPlatformViewCreated?.call(_textureId);
+    } catch (error) {
+      debugPrint('Windows platform WebView creation failed safely: $error');
+    } finally {
+      if (!_creatingCompleter.isCompleted) {
+        _creatingCompleter.complete();
+      }
+    }
   }
 
   @override
   Future<void> dispose() async {
-    await _creatingCompleter.future;
-    if (!_isDisposed) {
-      _isDisposed = true;
-      await _eventStreamSubscription?.cancel();
-      await _pluginChannel.invokeMethod('dispose', {"id": _textureId});
+    if (_isDisposed) {
+      return;
     }
+    _isDisposed = true;
+    await _creatingCompleter.future;
+    await _disposePlatformView();
     super.dispose();
+  }
+
+  Future<void> _disposePlatformView() async {
+    await _eventStreamSubscription?.cancel();
+    _eventStreamSubscription = null;
+    if (_platformViewCreated) {
+      _platformViewCreated = false;
+      try {
+        await _pluginChannel.invokeMethod('dispose', {"id": _textureId});
+      } catch (error) {
+        debugPrint('Windows platform WebView disposal failed safely: $error');
+      }
+    }
   }
 
   /// Limits the number of frames per second to the given value.
@@ -414,6 +449,7 @@ class _CustomPlatformViewState extends State<CustomPlatformView> {
     final box = _key.currentContext?.findRenderObject() as RenderBox?;
     if (box != null) {
       await _controller.ready;
+      if (!_controller.value.isInitialized) return;
       unawaited(_controller._setSize(
           box.size, widget.scaleFactor ?? window.devicePixelRatio));
     }
@@ -423,6 +459,7 @@ class _CustomPlatformViewState extends State<CustomPlatformView> {
     final box = _key.currentContext?.findRenderObject() as RenderBox?;
     if (box != null) {
       await _controller.ready;
+      if (!_controller.value.isInitialized) return;
       final position = box.localToGlobal(Offset.zero);
       unawaited(_controller._setPosition(
           position, widget.scaleFactor ?? window.devicePixelRatio));

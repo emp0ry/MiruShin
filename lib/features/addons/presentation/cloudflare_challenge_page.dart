@@ -163,8 +163,7 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
     }
   }
 
-  /// Reads cookies for the requested and current WebView hosts, merging the
-  /// available sources.
+  /// Reads cookies for the challenge host, merging the available sources.
   ///
   /// On Windows/WebView2, CookieManager reads through the plugin's hidden
   /// default environment, while the visible controller can expose newer cookies
@@ -173,19 +172,10 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
   /// that worked there.
   Future<List<Cookie>> _readCookies() async {
     if (!_isWindows) {
-      final Map<String, Cookie> merged = <String, Cookie>{};
-      final InAppWebViewController? controller = _controller;
-      if (controller == null) return const <Cookie>[];
-      final List<String> urls = await _cookieUrls(controller);
-      for (final String url in urls) {
-        for (final Cookie cookie in await _safeGetCookies(
-          withController: true,
-          url: WebUri(url),
-        )) {
-          _mergeCookie(merged, cookie);
-        }
-      }
-      return merged.values.toList(growable: false);
+      // This is the proven 2.5.0 Android/iOS/macOS path. Do one
+      // controller-scoped read for the root URL; redirected-host merging is a
+      // WebView2 workaround and must not change WKWebView/Android behavior.
+      return _safeGetCookies(withController: true);
     }
 
     final Map<String, Cookie> merged = <String, Cookie>{};
@@ -453,7 +443,7 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
       // cf_clearance is bound to the user agent that solved it. Capture the
       // WebView's user agent so the runtime can replay subsequent requests.
       final String userAgent = await _readUserAgent();
-      final Uri effectiveUri = await _effectiveUri();
+      final Uri effectiveUri = _isWindows ? await _effectiveUri() : widget.url;
       if (_completed || (_isWindows && _finishRequested)) return;
       _finish((
         cookies: header,

@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
+
 import '../data/cloudflare_cookie_store.dart';
 
 /// Result of solving a Cloudflare challenge in the interactive WebView.
@@ -60,11 +62,13 @@ class CloudflareChallengeService {
           userAgent: userAgent,
         );
         if (result != null && result.cookies.trim().isNotEmpty) {
-          await cookies.save(
-            result.effectiveUri,
-            result.cookies,
-            result.userAgent,
-          );
+          // Android/iOS/macOS keep the proven 2.5.0 host association. Only
+          // WebView2 needs to persist against the browser's redirected host.
+          final Uri storageUri =
+              !kIsWeb && defaultTargetPlatform == TargetPlatform.windows
+              ? result.effectiveUri
+              : url;
+          await cookies.save(storageUri, result.cookies, result.userAgent);
         }
         return result;
       } finally {

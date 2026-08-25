@@ -260,7 +260,7 @@ async function extractDetails(url) {
   );
 
   test(
-    'standard flow replays Cloudflare clearance on the redirected host',
+    'standard Android/iOS/macOS flow preserves the 2.5.0 original-host replay',
     () async {
       final TargetPlatform? previousPlatform =
           debugDefaultTargetPlatformOverride;
@@ -299,6 +299,7 @@ async function extractDetails(url) {
       });
       addTearDown(() async {
         CloudflareChallengeService.instance.registerSolver(null);
+        await CloudflareChallengeService.instance.cookies.clear(originalUri);
         await CloudflareChallengeService.instance.cookies.clear(effectiveUri);
       });
 
@@ -352,14 +353,14 @@ async function searchResults(keyword) {
 
       expect(results.single.title, 'Redirected Result');
       expect(solverCalls, 1);
-      expect(solvedUri, effectiveUri);
-      expect(adapter.effectiveRequests, hasLength(1));
+      expect(solvedUri, originalUri);
+      expect(adapter.originalRequests, hasLength(2));
       expect(
-        adapter.effectiveRequests.single.headers['Cookie'],
+        adapter.originalRequests.last.headers['Cookie'],
         contains('cf_clearance=stable-v250-token'),
       );
       expect(
-        adapter.effectiveRequests.single.headers['User-Agent'],
+        adapter.originalRequests.last.headers['User-Agent'],
         'Stable WebView Test UA',
       );
     },
@@ -518,6 +519,7 @@ class _CloudflareRedirectAdapter implements HttpClientAdapter {
 
   final Uri originalUri;
   final Uri effectiveUri;
+  final List<RequestOptions> originalRequests = <RequestOptions>[];
   final List<RequestOptions> effectiveRequests = <RequestOptions>[];
 
   @override
@@ -526,6 +528,25 @@ class _CloudflareRedirectAdapter implements HttpClientAdapter {
     Stream<Uint8List>? requestStream,
     Future<void>? cancelFuture,
   ) async {
+    if (options.uri == originalUri) {
+      originalRequests.add(options);
+      final String cookie = '${options.headers['Cookie'] ?? ''}';
+      if (cookie.contains('cf_clearance=')) {
+        return ResponseBody.fromString(
+          jsonEncode(<Map<String, String>>[
+            <String, String>{
+              'title': 'Redirected Result',
+              'image': 'poster.jpg',
+              'href': '/title',
+            },
+          ]),
+          200,
+          headers: <String, List<String>>{
+            Headers.contentTypeHeader: <String>['application/json'],
+          },
+        );
+      }
+    }
     if (options.uri == effectiveUri) {
       effectiveRequests.add(options);
       final String cookie = '${options.headers['Cookie'] ?? ''}';
