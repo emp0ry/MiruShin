@@ -25,6 +25,7 @@ import '../../player/domain/player_models.dart';
 import '../../watch/domain/normalized_models.dart';
 import '../application/download_episode_availability.dart';
 import '../application/download_episode_display.dart';
+import '../application/download_settings.dart';
 import '../application/downloads_provider.dart';
 import '../application/offline_playback.dart';
 import '../domain/download_models.dart';
@@ -75,6 +76,7 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
   @override
   Widget build(BuildContext context) {
     final List<DownloadedEpisode> downloads = ref.watch(downloadsProvider);
+    ref.watch(downloadSettingsProvider);
     _scheduleWakelockUpdate(
       downloads.any((DownloadedEpisode episode) => episode.isActive),
     );
@@ -763,11 +765,34 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
       moduleEpisodes: moduleEpisodes,
     );
     unawaited(
-      context.push(AppRoutes.watchPlay, extra: item).then((Object? result) {
+      context.push(AppRoutes.watchPlay, extra: item).then((
+        Object? result,
+      ) async {
+        if (!mounted) return;
+        await _deleteWatchedDownloadIfEnabled(ep);
         if (!mounted) return;
         _handlePlayerResult(result, ep, moduleEpisodes);
       }),
     );
+  }
+
+  Future<void> _deleteWatchedDownloadIfEnabled(
+    DownloadedEpisode episode,
+  ) async {
+    try {
+      final bool enabled = await ref.read(downloadSettingsProvider.future);
+      if (!enabled || !mounted) return;
+      final EpisodeProgress? progress = _localProgress(episode);
+      if (!shouldAutoDeleteWatchedEpisode(
+        enabled: enabled,
+        isWatched: progress?.isWatched == true,
+      )) {
+        return;
+      }
+      await ref.read(downloadsProvider.notifier).delete(episode.id);
+    } catch (_) {
+      // A preference/filesystem failure must never block next-episode routing.
+    }
   }
 
   void _handlePlayerResult(

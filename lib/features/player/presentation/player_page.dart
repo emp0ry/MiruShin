@@ -743,7 +743,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
             voiceoverLabel: playbackState.voiceover?.label,
           )
         : null;
-    unawaited(_stopPlayback());
+    // Wait for the final progress save before returning to the caller. The
+    // downloads page uses the persisted watched state to decide whether an
+    // offline episode should be auto-deleted.
+    await _stopPlayback();
 
     setState(() {
       _allowRoutePop = true;

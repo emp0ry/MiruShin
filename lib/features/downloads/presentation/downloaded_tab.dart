@@ -7,9 +7,11 @@ import '../../../app/localization/app_localizations.dart';
 import '../../../app/theme/app_radius.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../app/theme/app_theme_extension.dart';
+import '../../../core/widgets/glass_card.dart';
 import '../../../core/widgets/neutral_placeholder.dart';
 import '../../catalog/application/catalog_mode.dart';
 import '../application/download_episode_display.dart';
+import '../application/download_settings.dart';
 import '../application/downloads_provider.dart';
 import '../domain/download_models.dart';
 import 'downloaded_artwork_image.dart';
@@ -28,34 +30,69 @@ class DownloadedTab extends ConsumerWidget {
         .read(downloadsProvider.notifier)
         .titlesForCatalog(catalog);
     final String? rootPath = ref.read(downloadsProvider.notifier).rootPath;
+    final AsyncValue<bool> autoDelete = ref.watch(downloadSettingsProvider);
+    final bool autoDeleteEnabled = autoDelete.value ?? false;
 
-    if (titles.isEmpty) {
-      return NeutralPlaceholder(
-        title: context.t('No downloads yet'),
-        message: context.t(
-          'Download episodes from a title to watch them offline.',
+    return Column(
+      children: <Widget>[
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            AppSpacing.lg,
+            AppSpacing.sm,
+            AppSpacing.lg,
+            AppSpacing.sm,
+          ),
+          child: GlassCard(
+            padding: EdgeInsets.zero,
+            child: SwitchListTile.adaptive(
+              secondary: const Icon(Icons.auto_delete_outlined),
+              title: Text(context.t('Auto-delete watched episodes')),
+              subtitle: Text(
+                context.t(
+                  'Delete a downloaded episode after it is watched and the player closes.',
+                ),
+              ),
+              value: autoDeleteEnabled,
+              onChanged: autoDelete.isLoading
+                  ? null
+                  : (bool enabled) => ref
+                        .read(downloadSettingsProvider.notifier)
+                        .setAutoDeleteWatchedEpisodes(enabled),
+            ),
+          ),
         ),
-        icon: Icons.download_done_rounded,
-        height: 300,
-      );
-    }
-
-    return GridView.builder(
-      padding: const EdgeInsets.fromLTRB(
-        AppSpacing.lg,
-        AppSpacing.sm,
-        AppSpacing.lg,
-        AppSpacing.xl,
-      ),
-      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 160,
-        childAspectRatio: 0.65,
-        crossAxisSpacing: AppSpacing.sm,
-        mainAxisSpacing: AppSpacing.sm,
-      ),
-      itemCount: titles.length,
-      itemBuilder: (BuildContext context, int index) =>
-          _DownloadedTitleCell(title: titles[index], rootPath: rootPath),
+        Expanded(
+          child: titles.isEmpty
+              ? NeutralPlaceholder(
+                  title: context.t('No downloads yet'),
+                  message: context.t(
+                    'Download episodes from a title to watch them offline.',
+                  ),
+                  icon: Icons.download_done_rounded,
+                  height: 300,
+                )
+              : GridView.builder(
+                  padding: const EdgeInsets.fromLTRB(
+                    AppSpacing.lg,
+                    AppSpacing.sm,
+                    AppSpacing.lg,
+                    AppSpacing.xl,
+                  ),
+                  gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                    maxCrossAxisExtent: 160,
+                    childAspectRatio: 0.65,
+                    crossAxisSpacing: AppSpacing.sm,
+                    mainAxisSpacing: AppSpacing.sm,
+                  ),
+                  itemCount: titles.length,
+                  itemBuilder: (BuildContext context, int index) =>
+                      _DownloadedTitleCell(
+                        title: titles[index],
+                        rootPath: rootPath,
+                      ),
+                ),
+        ),
+      ],
     );
   }
 }
