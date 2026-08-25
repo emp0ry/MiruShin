@@ -460,16 +460,52 @@ class DownloadController extends Notifier<List<DownloadedEpisode>> {
           streams,
           streamType: addon.manifest.streamType,
         );
-        final List<DownloadStreamCandidate> refreshedCandidates =
+        final List<DownloadStreamCandidate> parsedRefreshedCandidates =
             buildDownloadStreamCandidates(
               refreshedBundle,
               item.streamPreference,
             );
+        final Map<String, String> descriptorReplacements =
+            parsedRefreshedCandidates.isEmpty
+            ? const <String, String>{}
+            : await _engine.discoverMediaUrlReplacements(
+                descriptorUrl: refreshed.source.href,
+                failedMediaUrls: parsedRefreshedCandidates.map(
+                  (DownloadStreamCandidate candidate) => candidate.url,
+                ),
+                headers: parsedRefreshedCandidates.first.headers,
+                cancelToken: token,
+              );
+        if (descriptorReplacements.isNotEmpty && kDebugMode) {
+          debugPrint(
+            '[Download] recovered ${descriptorReplacements.length} current '
+            'media URL(s) from the refreshed source descriptor.',
+          );
+        }
+        final List<DownloadStreamCandidate> refreshedCandidates =
+            parsedRefreshedCandidates
+                .map(
+                  (
+                    DownloadStreamCandidate candidate,
+                  ) => DownloadStreamCandidate(
+                    key: candidate.key,
+                    url: descriptorReplacements[candidate.url] ?? candidate.url,
+                    headers: candidate.headers,
+                    qualityLabel: candidate.qualityLabel,
+                  ),
+                )
+                .toList(growable: false);
         if (refreshedCandidates.isEmpty ||
             refreshedCandidates.every(
               (DownloadStreamCandidate candidate) =>
                   attemptedUrls.contains(candidate.url),
             )) {
+          if (kDebugMode) {
+            debugPrint(
+              '[Download] descriptor refresh returned no new media URLs; '
+              'stopping without repeating failed requests.',
+            );
+          }
           break;
         }
 

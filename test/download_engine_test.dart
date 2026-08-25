@@ -6,6 +6,36 @@ import 'package:mirushin/features/downloads/data/download_engine.dart';
 import 'package:mirushin/features/downloads/domain/download_models.dart';
 
 void main() {
+  test('finds richer current URLs in an arbitrary source descriptor', () {
+    const String failed = 'https://media.invalid/show/episode.m3u8?region=one';
+    const String current =
+        'https://media.invalid/show/episode.m3u8?region=one&mode=full';
+    final Map<String, String> replacements = findMediaUrlReplacements(
+      <String, Object?>{
+        'unrelated': 'https://media.invalid/poster.jpg',
+        'nested': <Object?>[
+          <String, String>{'anything': current},
+        ],
+      },
+      const <String>[failed],
+    );
+
+    expect(replacements, <String, String>{failed: current});
+  });
+
+  test('does not replace media with a different authority or path', () {
+    const String failed = 'https://media.invalid/show/episode.m3u8?token=old';
+    final Map<String, String> replacements = findMediaUrlReplacements(
+      const <String, Object?>{
+        'otherAuthority': 'https://other.invalid/show/episode.m3u8?token=new',
+        'otherPath': 'https://media.invalid/show/replacement.m3u8?token=new',
+      },
+      const <String>[failed],
+    );
+
+    expect(replacements, isEmpty);
+  });
+
   test('switching download quality clears only incompatible media', () async {
     final Directory output = await Directory.systemTemp.createTemp(
       'mirushin-download-attempt-',
@@ -99,6 +129,83 @@ void main() {
     );
     expect(
       File('${output.path}${Platform.pathSeparator}seg_00001.ts').existsSync(),
+      isTrue,
+    );
+  });
+
+  test('HLS segment downloads follow redirects with safe headers', () async {
+    final Directory output = await Directory.systemTemp.createTemp(
+      'mirushin-download-redirect-',
+    );
+    final HttpServer sourceServer = await HttpServer.bind(
+      InternetAddress.loopbackIPv4,
+      0,
+    );
+    final HttpServer mediaServer = await HttpServer.bind(
+      InternetAddress.loopbackIPv4,
+      0,
+    );
+    addTearDown(() async {
+      await sourceServer.close(force: true);
+      await mediaServer.close(force: true);
+      if (output.existsSync()) await output.delete(recursive: true);
+    });
+
+    HttpHeaders? redirectedHeaders;
+    mediaServer.listen((HttpRequest request) async {
+      redirectedHeaders = request.headers;
+      request.response
+        ..statusCode = HttpStatus.ok
+        ..add(<int>[0x47, 1, 2, 3]);
+      await request.response.close();
+    });
+    sourceServer.listen((HttpRequest request) async {
+      if (request.uri.path == '/index.m3u8') {
+        request.response
+          ..statusCode = HttpStatus.ok
+          ..write(
+            '#EXTM3U\n'
+            '#EXT-X-TARGETDURATION:4\n'
+            '#EXTINF:4,\n'
+            'segment.ts\n'
+            '#EXT-X-ENDLIST\n',
+          );
+        await request.response.close();
+      } else if (request.uri.path == '/segment.ts') {
+        await request.response.redirect(
+          Uri.parse(
+            'http://${mediaServer.address.address}:${mediaServer.port}/bytes',
+          ),
+        );
+      } else {
+        request.response.statusCode = HttpStatus.notFound;
+        await request.response.close();
+      }
+    });
+
+    await DownloadEngine().downloadHls(
+      playlistUrl:
+          'http://${sourceServer.address.address}:${sourceServer.port}'
+          '/index.m3u8',
+      headers: const <String, String>{
+        'X-Media-Token': 'keep-me',
+        'Referer': 'https://page.invalid/watch',
+        'Authorization': 'remove-me',
+        'Cookie': 'remove-me',
+      },
+      dirPath: output.path,
+      cancelToken: CancelToken(),
+    );
+
+    expect(redirectedHeaders?.value('x-media-token'), 'keep-me');
+    expect(
+      redirectedHeaders?.value(HttpHeaders.refererHeader),
+      'https://page.invalid/watch',
+    );
+    expect(redirectedHeaders?.value(HttpHeaders.authorizationHeader), isNull);
+    expect(redirectedHeaders?.value(HttpHeaders.cookieHeader), isNull);
+    expect(
+      File('${output.path}${Platform.pathSeparator}index.m3u8').existsSync(),
       isTrue,
     );
   });

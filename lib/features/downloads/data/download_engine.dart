@@ -36,6 +36,7 @@ class DownloadEngine {
 
   static const int _hlsConcurrency = 5;
   static const int _networkAttempts = 4;
+  static const int _maxResourceRedirects = 5;
   static const int _retryBackoffBaseMs = 180;
   static const String _mediaSourceMarker = '.media-source';
 
@@ -119,6 +120,66 @@ class DownloadEngine {
       },
     );
     return dio;
+  }
+
+  /// Recovers fresh forms of media URLs from the source descriptor itself.
+  ///
+  /// Some modules correctly discover a current media URL, then accidentally
+  /// discard required query data while converting their episode response into
+  /// a stream result. After a terminal response, this generic pass reads the
+  /// stable source descriptor and recursively matches URLs by authority/path.
+  /// It contains no knowledge of a module, host, JSON field, or query key.
+  Future<Map<String, String>> discoverMediaUrlReplacements({
+    required String descriptorUrl,
+    required Iterable<String> failedMediaUrls,
+    required Map<String, String> headers,
+    required CancelToken cancelToken,
+  }) async {
+    final Uri? descriptorUri = Uri.tryParse(descriptorUrl.trim());
+    if (descriptorUri == null ||
+        (descriptorUri.scheme != 'http' && descriptorUri.scheme != 'https')) {
+      return const <String, String>{};
+    }
+
+    final Map<String, String> requestHeaders = <String, String>{...headers}
+      ..removeWhere((String key, String _) => key.toLowerCase() == 'range')
+      ..[HttpHeaders.acceptHeader] = 'application/json,text/plain,*/*';
+    try {
+      final Response<String> response =
+          await _withNetworkRetry<Response<String>>(
+            descriptorUri,
+            cancelToken,
+            () => _dio.getUri<String>(
+              descriptorUri,
+              options: Options(
+                responseType: ResponseType.plain,
+                headers: requestHeaders,
+                validateStatus: (int? status) =>
+                    status != null && status >= 200 && status < 300,
+              ),
+              cancelToken: cancelToken,
+            ),
+          );
+      final String text = response.data ?? '';
+      if (text.isEmpty || text.length > 8 * 1024 * 1024) {
+        return const <String, String>{};
+      }
+      Object? decoded = jsonDecode(text);
+      if (decoded is String) {
+        final String nested = decoded.trim();
+        if (nested.startsWith('{') || nested.startsWith('[')) {
+          decoded = jsonDecode(nested);
+        }
+      }
+      return findMediaUrlReplacements(decoded, failedMediaUrls);
+    } on DioException catch (error) {
+      if (CancelToken.isCancel(error) || cancelToken.isCancelled) {
+        throw const DownloadCancelledException();
+      }
+      return const <String, String>{};
+    } on FormatException {
+      return const <String, String>{};
+    }
   }
 
   Future<DownloadKind?> sniffKind({
@@ -304,7 +365,13 @@ class DownloadEngine {
 
     // Resolve master -> variant if needed.
     Uri mediaUri = Uri.parse(playlistUrl);
-    String playlistText = await _fetchText(mediaUri, headers, cancelToken);
+    String playlistText;
+    try {
+      playlistText = await _fetchText(mediaUri, headers, cancelToken);
+    } on DioException catch (error) {
+      _logHlsHttpFailure('playlist', error);
+      rethrow;
+    }
     _ensureHlsPlaylist(playlistText);
     if (playlistText.contains('#EXT-X-STREAM-INF')) {
       final _VariantPick? pick = _pickBestVariant(playlistText, mediaUri);
@@ -335,7 +402,12 @@ class DownloadEngine {
         return;
       }
       mediaUri = pick.uri;
-      playlistText = await _fetchText(mediaUri, headers, cancelToken);
+      try {
+        playlistText = await _fetchText(mediaUri, headers, cancelToken);
+      } on DioException catch (error) {
+        _logHlsHttpFailure('variant playlist', error);
+        rethrow;
+      }
       _ensureHlsPlaylist(playlistText);
     }
 
@@ -389,11 +461,13 @@ class DownloadEngine {
           onProgress?.call(done, segments.length, receivedBytes);
           continue;
         }
-        final Uint8List bytes = await _fetchBytes(
-          seg.uri,
-          headers,
-          cancelToken,
-        );
+        final Uint8List bytes;
+        try {
+          bytes = await _fetchBytes(seg.uri, headers, cancelToken);
+        } on DioException catch (error) {
+          _logHlsHttpFailure('segment ${seg.fileName}', error);
+          rethrow;
+        }
         await file.writeAsBytes(bytes, flush: true);
         done += 1;
         receivedBytes += bytes.length;
@@ -767,16 +841,22 @@ class DownloadEngine {
     CancelToken cancelToken,
   ) async {
     return _withNetworkRetry<String>(uri, cancelToken, () async {
-      final Response<String> response = await _dio.getUri<String>(
-        uri,
-        options: Options(
-          responseType: ResponseType.plain,
-          headers: headers.isEmpty ? null : headers,
-        ),
+      final Response<String> response = await _getWithRedirects<String>(
+        uri: uri,
+        headers: headers,
+        responseType: ResponseType.plain,
         cancelToken: cancelToken,
       );
       return response.data ?? '';
     });
+  }
+
+  void _logHlsHttpFailure(String stage, DioException error) {
+    if (!kDebugMode) return;
+    debugPrint(
+      '[Download] HLS $stage request failed '
+      '(status=${error.response?.statusCode ?? 'none'}).',
+    );
   }
 
   Future<Uint8List> _fetchBytes(
@@ -785,16 +865,74 @@ class DownloadEngine {
     CancelToken cancelToken,
   ) async {
     return _withNetworkRetry<Uint8List>(uri, cancelToken, () async {
-      final Response<List<int>> response = await _dio.getUri<List<int>>(
-        uri,
-        options: Options(
-          responseType: ResponseType.bytes,
-          headers: headers.isEmpty ? null : headers,
-        ),
+      final Response<List<int>> response = await _getWithRedirects<List<int>>(
+        uri: uri,
+        headers: headers,
+        responseType: ResponseType.bytes,
         cancelToken: cancelToken,
       );
       return Uint8List.fromList(response.data ?? const <int>[]);
     });
+  }
+
+  Future<Response<T>> _getWithRedirects<T>({
+    required Uri uri,
+    required Map<String, String> headers,
+    required ResponseType responseType,
+    required CancelToken cancelToken,
+  }) async {
+    Uri current = uri;
+    Map<String, String> currentHeaders = <String, String>{...headers};
+    for (int redirect = 0; ; redirect += 1) {
+      if (cancelToken.isCancelled) throw const DownloadCancelledException();
+      final Response<T> response = await _dio.getUri<T>(
+        current,
+        options: Options(
+          responseType: responseType,
+          headers: currentHeaders.isEmpty ? null : currentHeaders,
+          followRedirects: false,
+          validateStatus: (int? status) =>
+              status != null && status >= 200 && status < 400,
+        ),
+        cancelToken: cancelToken,
+      );
+      final int status = response.statusCode ?? 0;
+      if (status < 300) return response;
+
+      final String location =
+          response.headers.value(HttpHeaders.locationHeader)?.trim() ?? '';
+      if (location.isEmpty || redirect >= _maxResourceRedirects) {
+        throw DioException(
+          requestOptions: response.requestOptions,
+          response: response,
+          type: DioExceptionType.badResponse,
+          message: location.isEmpty
+              ? 'Redirect response did not include a destination.'
+              : 'Media resource exceeded the redirect limit.',
+        );
+      }
+      final Uri next = current.resolve(location);
+      if (next.scheme != 'http' && next.scheme != 'https') {
+        throw DownloadUnsupportedException(
+          'Media resource redirected to unsupported scheme ${next.scheme}.',
+        );
+      }
+      if (next.authority.toLowerCase() != current.authority.toLowerCase()) {
+        currentHeaders = _headersForCrossAuthorityRedirect(currentHeaders);
+      }
+      current = next;
+    }
+  }
+
+  Map<String, String> _headersForCrossAuthorityRedirect(
+    Map<String, String> headers,
+  ) {
+    return <String, String>{...headers}..removeWhere(
+      (String key, String _) => switch (key.toLowerCase()) {
+        'authorization' || 'cookie' || 'proxy-authorization' => true,
+        _ => false,
+      },
+    );
   }
 
   Future<T> _withNetworkRetry<T>(
@@ -848,6 +986,73 @@ class DownloadEngine {
         error.type == DioExceptionType.connectionError ||
         error.type == DioExceptionType.unknown;
   }
+}
+
+/// Finds fresher URLs in arbitrary decoded JSON without relying on its schema.
+/// Candidate resources are matched with scheme, authority, and path; query and
+/// fragment data may rotate independently.
+@visibleForTesting
+Map<String, String> findMediaUrlReplacements(
+  Object? descriptor,
+  Iterable<String> failedMediaUrls,
+) {
+  final Map<String, List<String>> failedByResource = <String, List<String>>{};
+  for (final String failed in failedMediaUrls) {
+    final Uri? uri = Uri.tryParse(failed.trim());
+    final String? key = uri == null ? null : _mediaResourceKey(uri);
+    if (key == null) continue;
+    failedByResource.putIfAbsent(key, () => <String>[]).add(failed);
+  }
+  if (failedByResource.isEmpty) return const <String, String>{};
+
+  final Map<String, String> replacements = <String, String>{};
+  void inspect(Object? value) {
+    if (value is Map) {
+      for (final Object? nested in value.values) {
+        inspect(nested);
+      }
+      return;
+    }
+    if (value is Iterable) {
+      for (final Object? nested in value) {
+        inspect(nested);
+      }
+      return;
+    }
+    if (value is! String) return;
+
+    final String discovered = value.trim();
+    final Uri? uri = Uri.tryParse(discovered);
+    final String? key = uri == null ? null : _mediaResourceKey(uri);
+    if (key == null) return;
+    final List<String>? failed = failedByResource[key];
+    if (failed == null) return;
+    for (final String original in failed) {
+      if (original == discovered) continue;
+      final String? current = replacements[original];
+      if (current == null ||
+          _urlFreshnessScore(discovered) > _urlFreshnessScore(current)) {
+        replacements[original] = discovered;
+      }
+    }
+  }
+
+  inspect(descriptor);
+  return replacements;
+}
+
+String? _mediaResourceKey(Uri uri) {
+  final String scheme = uri.scheme.toLowerCase();
+  if ((scheme != 'http' && scheme != 'https') || uri.host.isEmpty) {
+    return null;
+  }
+  return '$scheme://${uri.authority.toLowerCase()}${uri.path}';
+}
+
+int _urlFreshnessScore(String value) {
+  final Uri? uri = Uri.tryParse(value);
+  if (uri == null) return 0;
+  return uri.queryParametersAll.length * 1000 + uri.query.length;
 }
 
 class _PendingSegment {
