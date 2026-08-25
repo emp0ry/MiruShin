@@ -1,0 +1,45 @@
+diff --git a/flutter_inappwebview_linux/linux/CMakeLists.txt b/flutter_inappwebview_linux/linux/CMakeLists.txt
+--- a/flutter_inappwebview_linux/linux/CMakeLists.txt
++++ b/flutter_inappwebview_linux/linux/CMakeLists.txt
+@@ -47,14 +47,17 @@ message(STATUS "flutter_inappwebview_linux: Using WPE WebKit backend")
+ pkg_check_modules(WPE_WEBKIT QUIET IMPORTED_TARGET wpe-webkit-2.0)
+ if(NOT WPE_WEBKIT_FOUND)
+   pkg_check_modules(WPE_WEBKIT QUIET IMPORTED_TARGET wpe-webkit-1.1)
+   if(WPE_WEBKIT_FOUND)
++    set(WPE_WEBKIT_LIBRARY_BASENAME "libWPEWebKit-1.1")
+     message(STATUS "flutter_inappwebview_linux: Found wpe-webkit-1.1 (${WPE_WEBKIT_VERSION})")
+   else()
+     pkg_check_modules(WPE_WEBKIT QUIET IMPORTED_TARGET wpe-webkit-1.0)
+     if(WPE_WEBKIT_FOUND)
++      set(WPE_WEBKIT_LIBRARY_BASENAME "libWPEWebKit-1.0")
+       message(STATUS "flutter_inappwebview_linux: Found wpe-webkit-1.0 (${WPE_WEBKIT_VERSION})")
+     endif()
+   endif()
+ else()
++  set(WPE_WEBKIT_LIBRARY_BASENAME "libWPEWebKit-2.0")
+   message(STATUS "flutter_inappwebview_linux: Found wpe-webkit-2.0 (${WPE_WEBKIT_VERSION})")
+ endif()
+@@ -163,8 +166,12 @@ FetchContent_Declare(
+ # Don't build tests/examples
+ set(JSON_BuildTests OFF CACHE INTERNAL "")
+ FetchContent_MakeAvailable(nlohmann_json)
+-# Suppress deprecated literal operator warnings from nlohmann_json
+-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-deprecated-literal-operator")
++# Clang added -Wdeprecated-literal-operator in version 17. Older versions emit
++# an unknown-warning-option diagnostic, which Flutter promotes to an error.
++if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND
++   CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 17)
++  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-deprecated-literal-operator")
++endif()
+ message(STATUS "flutter_inappwebview_linux: nlohmann/json ${NLOHMANN_JSON_VERSION} configured")
+ 
+ # Plugin source files
+@@ -344,7 +351,7 @@ list(APPEND WPE_LIB_DIRS
+ list(REMOVE_DUPLICATES WPE_LIB_DIRS)
+ 
+ # Find WPE WebKit library
+-find_and_add_library("libWPEWebKit-2.0" "${WPE_LIB_DIRS}" WPE_BUNDLED_LIBS)
++find_and_add_library("${WPE_WEBKIT_LIBRARY_BASENAME}" "${WPE_LIB_DIRS}" WPE_BUNDLED_LIBS)
+ 
+ # Find libwpe library  
+ find_and_add_library("libwpe-1.0" "${WPE_LIB_DIRS}" WPE_BUNDLED_LIBS)
