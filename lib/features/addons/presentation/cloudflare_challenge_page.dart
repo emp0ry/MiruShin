@@ -163,7 +163,8 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
     }
   }
 
-  /// Reads cookies for the root host, merging the available sources.
+  /// Reads cookies for the requested and current WebView hosts, merging the
+  /// available sources.
   ///
   /// On Windows/WebView2, CookieManager reads through the plugin's hidden
   /// default environment, while the visible controller can expose newer cookies
@@ -172,7 +173,19 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
   /// that worked there.
   Future<List<Cookie>> _readCookies() async {
     if (!_isWindows) {
-      return _safeGetCookies(withController: true);
+      final Map<String, Cookie> merged = <String, Cookie>{};
+      final InAppWebViewController? controller = _controller;
+      if (controller == null) return const <Cookie>[];
+      final List<String> urls = await _cookieUrls(controller);
+      for (final String url in urls) {
+        for (final Cookie cookie in await _safeGetCookies(
+          withController: true,
+          url: WebUri(url),
+        )) {
+          _mergeCookie(merged, cookie);
+        }
+      }
+      return merged.values.toList(growable: false);
     }
 
     final Map<String, Cookie> merged = <String, Cookie>{};
@@ -204,11 +217,14 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
   }
 
   /// A single getCookies call guarded by a timeout so it cannot hang the poll.
-  Future<List<Cookie>> _safeGetCookies({required bool withController}) async {
+  Future<List<Cookie>> _safeGetCookies({
+    required bool withController,
+    WebUri? url,
+  }) async {
     try {
       return await _cookies
           .getCookies(
-            url: _rootUri,
+            url: url ?? _rootUri,
             webViewController: withController ? _controller : null,
           )
           .timeout(
@@ -232,7 +248,7 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
           .timeout(const Duration(milliseconds: 1000), onTimeout: () => null);
     } catch (_) {}
 
-    final List<String> urls = await _devToolsCookieUrls(controller);
+    final List<String> urls = await _cookieUrls(controller);
     final Set<String> allowedHosts = urls
         .map(Uri.tryParse)
         .whereType<Uri>()
@@ -268,9 +284,7 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
     return merged.values.toList(growable: false);
   }
 
-  Future<List<String>> _devToolsCookieUrls(
-    InAppWebViewController controller,
-  ) async {
+  Future<List<String>> _cookieUrls(InAppWebViewController controller) async {
     final Set<String> urls = <String>{_rootUri.toString()};
     try {
       final WebUri? current = await controller.getUrl().timeout(
@@ -439,8 +453,13 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
       // cf_clearance is bound to the user agent that solved it. Capture the
       // WebView's user agent so the runtime can replay subsequent requests.
       final String userAgent = await _readUserAgent();
+      final Uri effectiveUri = await _effectiveUri();
       if (_completed || (_isWindows && _finishRequested)) return;
-      _finish((cookies: header, userAgent: userAgent));
+      _finish((
+        cookies: header,
+        effectiveUri: effectiveUri,
+        userAgent: userAgent,
+      ));
     } catch (error) {
       if (_completed || (_isWindows && _finishRequested)) return;
       _consecutiveErrors++;
@@ -517,6 +536,25 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
       }
     } catch (_) {}
     return '';
+  }
+
+  Future<Uri> _effectiveUri() async {
+    final InAppWebViewController? controller = _controller;
+    if (controller != null) {
+      try {
+        final WebUri? current = await controller.getUrl().timeout(
+          const Duration(milliseconds: 1000),
+          onTimeout: () => null,
+        );
+        final Uri? uri = Uri.tryParse(current?.toString() ?? '');
+        if (uri != null &&
+            uri.host.isNotEmpty &&
+            (uri.scheme == 'http' || uri.scheme == 'https')) {
+          return uri;
+        }
+      } catch (_) {}
+    }
+    return Uri.parse(_rootUri.toString());
   }
 
   String _normalizeUserAgent(Object? raw) {

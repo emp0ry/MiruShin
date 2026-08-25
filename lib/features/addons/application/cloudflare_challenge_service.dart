@@ -3,7 +3,11 @@ import 'dart:async';
 import '../data/cloudflare_cookie_store.dart';
 
 /// Result of solving a Cloudflare challenge in the interactive WebView.
-typedef CloudflareSolveResult = ({String cookies, String userAgent});
+typedef CloudflareSolveResult = ({
+  String cookies,
+  Uri effectiveUri,
+  String userAgent,
+});
 
 /// Presents the interactive challenge WebView and returns the captured cookies,
 /// or null if the user cancelled / no solver is available (e.g. on Linux).
@@ -56,7 +60,11 @@ class CloudflareChallengeService {
           userAgent: userAgent,
         );
         if (result != null && result.cookies.trim().isNotEmpty) {
-          await cookies.save(url, result.cookies, result.userAgent);
+          await cookies.save(
+            result.effectiveUri,
+            result.cookies,
+            result.userAgent,
+          );
         }
         return result;
       } finally {

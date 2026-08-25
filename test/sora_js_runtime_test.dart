@@ -260,7 +260,7 @@ async function extractDetails(url) {
   );
 
   test(
-    'stable 2.5.0 flow replays Cloudflare clearance on the original host',
+    'standard flow replays Cloudflare clearance on the redirected host',
     () async {
       final TargetPlatform? previousPlatform =
           debugDefaultTargetPlatformOverride;
@@ -272,10 +272,16 @@ async function extractDetails(url) {
       final Directory temp = await Directory.systemTemp.createTemp('sora_js_');
       addTearDown(() => temp.delete(recursive: true));
 
-      final Uri uri = Uri.parse(
-        'https://stable-v250.example.test/search?q=demo',
+      final Uri originalUri = Uri.parse(
+        'https://stable-origin.example.test/search?q=demo',
       );
-      final _StableCloudflareAdapter adapter = _StableCloudflareAdapter(uri);
+      final Uri effectiveUri = Uri.parse(
+        'https://stable-effective.example.test/search?q=demo',
+      );
+      final _CloudflareRedirectAdapter adapter = _CloudflareRedirectAdapter(
+        originalUri: originalUri,
+        effectiveUri: effectiveUri,
+      );
       final Dio dio = Dio()..httpClientAdapter = adapter;
       int solverCalls = 0;
       Uri? solvedUri;
@@ -287,18 +293,19 @@ async function extractDetails(url) {
         solvedUri = url;
         return (
           cookies: 'cf_clearance=stable-v250-token',
+          effectiveUri: url,
           userAgent: 'Stable WebView Test UA',
         );
       });
       addTearDown(() async {
         CloudflareChallengeService.instance.registerSolver(null);
-        await CloudflareChallengeService.instance.cookies.clear(uri);
+        await CloudflareChallengeService.instance.cookies.clear(effectiveUri);
       });
 
       final File script = File('${temp.path}/module.js');
       await script.writeAsString('''
 async function searchResults(keyword) {
-  const response = await fetchv2(${jsonEncode(uri.toString())}, {});
+  const response = await fetchv2(${jsonEncode(originalUri.toString())}, {});
   return JSON.stringify(await response.json());
 }
 ''');
@@ -313,8 +320,8 @@ async function searchResults(keyword) {
           'language': 'en',
           'streamType': 'HLS',
           'quality': '1080p',
-          'baseUrl': 'https://stable-v250.example.test',
-          'searchBaseUrl': uri.toString(),
+          'baseUrl': 'https://stable-origin.example.test',
+          'searchBaseUrl': originalUri.toString(),
           'scriptUrl': 'https://manifest.example.test/module.js',
           'type': 'anime',
           'downloadSupport': false,
@@ -343,17 +350,16 @@ async function searchResults(keyword) {
         ],
       );
 
-      expect(results.single.title, 'Stable Result');
+      expect(results.single.title, 'Redirected Result');
       expect(solverCalls, 1);
-      expect(solvedUri, uri);
-      expect(adapter.requests, hasLength(2));
-      expect(adapter.requests.first.headers['Cookie'], isNull);
+      expect(solvedUri, effectiveUri);
+      expect(adapter.effectiveRequests, hasLength(1));
       expect(
-        adapter.requests.last.headers['Cookie'],
+        adapter.effectiveRequests.single.headers['Cookie'],
         contains('cf_clearance=stable-v250-token'),
       );
       expect(
-        adapter.requests.last.headers['User-Agent'],
+        adapter.effectiveRequests.single.headers['User-Agent'],
         'Stable WebView Test UA',
       );
     },
@@ -393,6 +399,7 @@ async function searchResults(keyword) {
         solvedUri = url;
         return (
           cookies: 'cf_clearance=windows-test-token',
+          effectiveUri: url,
           userAgent: 'Windows WebView Test UA',
         );
       });
@@ -553,51 +560,6 @@ class _CloudflareRedirectAdapter implements HttpClientAdapter {
       ];
     }
     return challenged;
-  }
-
-  @override
-  void close({bool force = false}) {}
-}
-
-class _StableCloudflareAdapter implements HttpClientAdapter {
-  _StableCloudflareAdapter(this.uri);
-
-  final Uri uri;
-  final List<RequestOptions> requests = <RequestOptions>[];
-
-  @override
-  Future<ResponseBody> fetch(
-    RequestOptions options,
-    Stream<Uint8List>? requestStream,
-    Future<void>? cancelFuture,
-  ) async {
-    requests.add(options);
-    final String cookie = '${options.headers['Cookie'] ?? ''}';
-    if (options.uri == uri &&
-        cookie.contains('cf_clearance=stable-v250-token')) {
-      return ResponseBody.fromString(
-        jsonEncode(<Map<String, String>>[
-          <String, String>{
-            'title': 'Stable Result',
-            'image': 'poster.jpg',
-            'href': '/title',
-          },
-        ]),
-        200,
-        headers: <String, List<String>>{
-          Headers.contentTypeHeader: <String>['application/json'],
-        },
-      );
-    }
-
-    return ResponseBody.fromString(
-      '<script src="/cdn-cgi/challenge-platform/test.js"></script>',
-      403,
-      headers: <String, List<String>>{
-        Headers.contentTypeHeader: <String>['text/html'],
-        'server': <String>['cloudflare'],
-      },
-    );
   }
 
   @override

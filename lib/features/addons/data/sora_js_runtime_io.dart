@@ -895,29 +895,32 @@ class SoraJsRuntime {
       userAgent: userAgent,
     );
     if (solved == null || solved.cookies.trim().isEmpty) return response;
+    final Uri replayUri = _cloudflareReplayUri(solved, challengeUri);
 
     final Response<String>? browserResponse = await _sendWithWindowsWebView(
-      request.withUri(challengeUri),
+      request.withUri(replayUri),
     );
     if (browserResponse != null) {
       if (_isCloudflareChallenge(browserResponse)) {
-        await _cf.cookies.clear(challengeUri);
+        await _cf.cookies.clear(replayUri);
       }
       return browserResponse;
     }
 
-    response = await send(challengeUri);
+    response = await send(replayUri);
     if (_isCloudflareChallenge(response)) {
-      await _cf.cookies.clear(challengeUri);
+      await _cf.cookies.clear(replayUri);
     }
     return response;
   }
 
-  /// The stable 2.5.0 Cloudflare path used by Android, iOS, and macOS.
+  /// The standard Cloudflare path used by Android, iOS, and macOS.
   ///
   /// Keep this isolated from Windows browser transport: after the interactive
   /// WebView stores the clearance cookie and matching user agent, the original
-  /// request is retried once through Dio exactly as it was in 2.5.0.
+  /// request is retried through Dio on the effective host. Using the effective
+  /// host is essential when the challenge WebView follows a canonical-domain
+  /// redirect and creates `cf_clearance` there.
   Future<Response<String>> _sendWithStableCloudflare(
     Uri uri,
     String userAgent,
@@ -926,17 +929,36 @@ class SoraJsRuntime {
     Response<String> response = await send(uri);
     if (!_isCloudflareChallenge(response)) return response;
 
+    final Uri challengeUri = response.realUri.host.isNotEmpty
+        ? response.realUri
+        : uri;
+    final String? existing = await _cf.cookies.cookieFor(challengeUri);
+    if (existing != null && existing.isNotEmpty) {
+      response = await send(challengeUri);
+      if (!_isCloudflareChallenge(response)) return response;
+      await _cf.cookies.clear(challengeUri);
+    }
+
     final CloudflareSolveResult? solved = await _cf.solve(
-      url: uri,
+      url: challengeUri,
       userAgent: userAgent,
     );
     if (solved == null || solved.cookies.trim().isEmpty) return response;
+    final Uri replayUri = _cloudflareReplayUri(solved, challengeUri);
 
-    response = await send(uri);
+    response = await send(replayUri);
     if (_isCloudflareChallenge(response)) {
-      await _cf.cookies.clear(uri);
+      await _cf.cookies.clear(replayUri);
     }
     return response;
+  }
+
+  Uri _cloudflareReplayUri(CloudflareSolveResult solved, Uri fallback) {
+    final Uri uri = solved.effectiveUri;
+    if (uri.host.isEmpty || (uri.scheme != 'http' && uri.scheme != 'https')) {
+      return fallback;
+    }
+    return uri;
   }
 
   Future<Response<String>?> _sendWithWindowsWebView(
