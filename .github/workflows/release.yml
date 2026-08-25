@@ -1,0 +1,218 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      whats_new:
+        description: Paste only the new Markdown bullets. Newlines or literal \n are accepted.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirushin-release
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  prepare-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      previous_tag: ${{ steps.metadata.outputs.previous_tag }}
+      tag: ${{ steps.version.outputs.tag }}
+      title: ${{ steps.version.outputs.title }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@v5
+
+      - name: Read and validate pubspec version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version_line="$(awk '/^version:[[:space:]]*/ { print $2; exit }' pubspec.yaml)"
+          version="${version_line%%+*}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid or missing pubspec version: $version_line"
+            exit 1
+          fi
+
+          tag="v$version"
+          title="MiruShin $tag"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "title=$title" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch latest published release notes
+        id: metadata
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists. Bump pubspec.yaml before releasing."
+            exit 1
+          fi
+
+          gh api "repos/$GH_REPO/releases/latest" > latest-release.json
+          previous_tag="$(jq -r '.tag_name // empty' latest-release.json)"
+          if [[ -z "$previous_tag" ]]; then
+            echo "The latest published release has no tag."
+            exit 1
+          fi
+          jq -r '.body // ""' latest-release.json > latest-release.md
+          if [[ ! -s latest-release.md ]]; then
+            echo "The latest published release has no Markdown body."
+            exit 1
+          fi
+
+          echo "previous_tag=$previous_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Generate release Markdown
+        shell: bash
+        env:
+          PREVIOUS_TAG: ${{ steps.metadata.outputs.previous_tag }}
+          WHATS_NEW: ${{ inputs.whats_new }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/prepare-release-notes.py \
+            --latest-body latest-release.md \
+            --previous-tag "$PREVIOUS_TAG" \
+            --whats-new "$WHATS_NEW" \
+            --output release-body.md
+
+      - name: Show release summary
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          PREVIOUS_TAG: ${{ steps.metadata.outputs.previous_tag }}
+        run: |
+          {
+            echo "### Release prepared"
+            echo
+            echo "- New release: \`$RELEASE_TAG\`"
+            echo "- Previous release moved into changelog: \`$PREVIOUS_TAG\`"
+            echo
+            sed -n '1,40p' release-body.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload release metadata
+        uses: actions/upload-artifact@v6
+        with:
+          name: MiruShin-release-metadata
+          path: release-body.md
+          if-no-files-found: error
+          retention-days: 1
+
+  build-all:
+    needs: prepare-release
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build-all.yml
+    secrets: inherit
+
+  publish-release:
+    needs: [prepare-release, build-all]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: write
+    steps:
+      - name: Download bundled builds
+        uses: actions/download-artifact@v8
+        with:
+          name: MiruShin-all
+          path: dist
+
+      - name: Download release Markdown
+        uses: actions/download-artifact@v8
+        with:
+          name: MiruShin-release-metadata
+          path: release-metadata
+
+      - name: Verify release inputs
+        id: assets
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.prepare-release.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          notes="release-metadata/release-body.md"
+          if [[ ! -s "$notes" ]]; then
+            echo "Generated release body is missing."
+            exit 1
+          fi
+
+          mapfile -t assets < <(find dist -maxdepth 1 -type f -print | sort)
+          if (( ${#assets[@]} == 0 )); then
+            echo "No release artifacts were downloaded."
+            exit 1
+          fi
+
+          for asset in "${assets[@]}"; do
+            if [[ "$(basename "$asset")" != *"v$RELEASE_VERSION"* ]]; then
+              echo "Artifact version does not match pubspec: $asset"
+              exit 1
+            fi
+          done
+
+          printf '%s\n' "${assets[@]}"
+          echo "count=${#assets[@]}" >> "$GITHUB_OUTPUT"
+
+      - name: Create draft, upload every build, and publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.prepare-release.outputs.tag }}
+          RELEASE_TITLE: ${{ needs.prepare-release.outputs.title }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          notes="release-metadata/release-body.md"
+          mapfile -t assets < <(find dist -maxdepth 1 -type f -print | sort)
+
+          # The release remains a recoverable draft if any upload fails. It is
+          # published only after every platform artifact is present.
+          gh release create "$RELEASE_TAG" \
+            --draft \
+            --target "$SOURCE_SHA" \
+            --title "$RELEASE_TITLE" \
+            --notes-file "$notes"
+          gh release upload "$RELEASE_TAG" "${assets[@]}"
+          gh release edit "$RELEASE_TAG" --draft=false --latest
+
+      - name: Refresh AltStore-compatible source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SOURCE_REF: ${{ github.ref_name }}
+        run: gh workflow run altstore-source.yml --ref "$SOURCE_REF"
+
+      - name: Write release summary
+        shell: bash
+        env:
+          ASSET_COUNT: ${{ steps.assets.outputs.count }}
+          RELEASE_TAG: ${{ needs.prepare-release.outputs.tag }}
+        run: |
+          {
+            echo "### Release published"
+            echo
+            echo "Published \`$RELEASE_TAG\` with $ASSET_COUNT artifacts."
+            echo "Triggered the AltStore source refresh."
+          } >> "$GITHUB_STEP_SUMMARY"
