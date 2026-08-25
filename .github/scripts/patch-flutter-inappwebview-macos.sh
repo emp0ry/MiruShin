@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly PACKAGE_VERSION="1.2.0-beta.3"
+readonly PACKAGE_VERSION="1.1.2"
 readonly PACKAGE_ROOT="${PUB_CACHE:-$HOME/.pub-cache}/hosted/pub.dev/flutter_inappwebview_macos-${PACKAGE_VERSION}"
-readonly SOURCE_RELATIVE="macos/flutter_inappwebview_macos/Sources/flutter_inappwebview_macos/WebAuthenticationSession/WebAuthenticationSession.swift"
+readonly SOURCE_RELATIVE="macos/Classes/WebAuthenticationSession/WebAuthenticationSession.swift"
 readonly SOURCE_FILE="${PACKAGE_ROOT}/${SOURCE_RELATIVE}"
 readonly PATCH_MARKER="private class WebAuthenticationPresentationContextProviding"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

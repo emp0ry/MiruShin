@@ -1,7 +1,7 @@
-diff --git a/flutter_inappwebview_macos/macos/flutter_inappwebview_macos/Sources/flutter_inappwebview_macos/WebAuthenticationSession/WebAuthenticationSession.swift b/flutter_inappwebview_macos/macos/flutter_inappwebview_macos/Sources/flutter_inappwebview_macos/WebAuthenticationSession/WebAuthenticationSession.swift
+diff --git a/flutter_inappwebview_macos/macos/Classes/WebAuthenticationSession/WebAuthenticationSession.swift b/flutter_inappwebview_macos/macos/Classes/WebAuthenticationSession/WebAuthenticationSession.swift
 index c314423bf8..e939b79723 100644
---- a/flutter_inappwebview_macos/macos/flutter_inappwebview_macos/Sources/flutter_inappwebview_macos/WebAuthenticationSession/WebAuthenticationSession.swift
-+++ b/flutter_inappwebview_macos/macos/flutter_inappwebview_macos/Sources/flutter_inappwebview_macos/WebAuthenticationSession/WebAuthenticationSession.swift
+--- a/flutter_inappwebview_macos/macos/Classes/WebAuthenticationSession/WebAuthenticationSession.swift
++++ b/flutter_inappwebview_macos/macos/Classes/WebAuthenticationSession/WebAuthenticationSession.swift
 @@ -10,7 +10,15 @@ import AuthenticationServices
  import SafariServices
  import FlutterMacOS
