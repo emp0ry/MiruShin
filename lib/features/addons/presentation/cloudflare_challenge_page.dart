@@ -389,21 +389,18 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
   }
 
   Future<void> _checkForClearance() async {
-    // Timer ticks and WebView load events can arrive together. Keep exactly one
-    // controller transaction active: removing a WebView while an older cookie
-    // or JavaScript call is still awaiting its native callback can otherwise
-    // race the plugin teardown on any platform.
-    if (_completed ||
-        _finishRequested ||
-        _clearanceCheckInFlight ||
-        _controller == null) {
-      return;
+    if (_completed || _controller == null) return;
+    if (_isWindows) {
+      // Timer ticks and WebView load events can arrive together on WebView2.
+      // Keep exactly one controller transaction active so view removal cannot
+      // race an older native callback. Other platforms retain the 2.5.0 flow.
+      if (_finishRequested || _clearanceCheckInFlight) return;
+      _clearanceCheckInFlight = true;
     }
-    _clearanceCheckInFlight = true;
     try {
       final List<Cookie> cookies = await _readCookies();
       // Re-check after the await: dispose may have run while we were waiting.
-      if (_completed || _finishRequested) return;
+      if (_completed || (_isWindows && _finishRequested)) return;
       _consecutiveErrors = 0;
       final bool cleared = cookies.any(
         (Cookie c) => c.name == 'cf_clearance' && _cookieValue(c).isNotEmpty,
@@ -442,10 +439,10 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
       // cf_clearance is bound to the user agent that solved it. Capture the
       // WebView's user agent so the runtime can replay subsequent requests.
       final String userAgent = await _readUserAgent();
-      if (_completed || _finishRequested) return;
+      if (_completed || (_isWindows && _finishRequested)) return;
       _finish((cookies: header, userAgent: userAgent));
     } catch (error) {
-      if (_completed || _finishRequested) return;
+      if (_completed || (_isWindows && _finishRequested)) return;
       _consecutiveErrors++;
       if (kDebugMode && _consecutiveErrors == 1) {
         debugPrint('[Cloudflare] cookie poll failed: $error');
@@ -464,9 +461,11 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
         _finish(null);
       }
     } finally {
-      _clearanceCheckInFlight = false;
-      if (_finishRequested && !_completed) {
-        _completeFinish(_pendingFinishResult);
+      if (_isWindows) {
+        _clearanceCheckInFlight = false;
+        if (_finishRequested && !_completed) {
+          _completeFinish(_pendingFinishResult);
+        }
       }
     }
   }
@@ -678,6 +677,18 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
   }
 
   void _finish(CloudflareSolveResult? result) {
+    if (!_isWindows) {
+      // Preserve the proven 2.5.0 mobile/Apple behavior: report the clearance
+      // immediately after the controller-backed cookie read completes.
+      if (_completed) return;
+      _completed = true;
+      _pollTimer?.cancel();
+      _timeoutTimer?.cancel();
+      _loadingFallbackTimer?.cancel();
+      widget.onResult(result);
+      return;
+    }
+
     if (_completed || _finishRequested) return;
     _finishRequested = true;
     _pendingFinishResult = result;

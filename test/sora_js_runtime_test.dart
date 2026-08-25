@@ -1,8 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mirushin/features/addons/application/cloudflare_challenge_service.dart';
 import 'package:mirushin/features/addons/data/sora_addon_store.dart';
@@ -260,8 +260,115 @@ async function extractDetails(url) {
   );
 
   test(
+    'stable 2.5.0 flow replays Cloudflare clearance on the original host',
+    () async {
+      final TargetPlatform? previousPlatform =
+          debugDefaultTargetPlatformOverride;
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      addTearDown(() {
+        debugDefaultTargetPlatformOverride = previousPlatform;
+      });
+
+      final Directory temp = await Directory.systemTemp.createTemp('sora_js_');
+      addTearDown(() => temp.delete(recursive: true));
+
+      final Uri uri = Uri.parse(
+        'https://stable-v250.example.test/search?q=demo',
+      );
+      final _StableCloudflareAdapter adapter = _StableCloudflareAdapter(uri);
+      final Dio dio = Dio()..httpClientAdapter = adapter;
+      int solverCalls = 0;
+      Uri? solvedUri;
+      CloudflareChallengeService.instance.registerSolver(({
+        required Uri url,
+        required String userAgent,
+      }) async {
+        solverCalls++;
+        solvedUri = url;
+        return (
+          cookies: 'cf_clearance=stable-v250-token',
+          userAgent: 'Stable WebView Test UA',
+        );
+      });
+      addTearDown(() async {
+        CloudflareChallengeService.instance.registerSolver(null);
+        await CloudflareChallengeService.instance.cookies.clear(uri);
+      });
+
+      final File script = File('${temp.path}/module.js');
+      await script.writeAsString('''
+async function searchResults(keyword) {
+  const response = await fetchv2(${jsonEncode(uri.toString())}, {});
+  return JSON.stringify(await response.json());
+}
+''');
+      final SoraInstalledAddon addon = SoraInstalledAddon(
+        id: 'stable-v250-cloudflare',
+        manifestUrl: 'https://manifest.example.test/addon.json',
+        manifest: SoraAddonManifest.fromJson(<String, dynamic>{
+          'sourceName': 'Stable Cloudflare Test',
+          'iconUrl': 'https://manifest.example.test/icon.png',
+          'author': <String, dynamic>{'name': 'Tester'},
+          'version': '1.0.0',
+          'language': 'en',
+          'streamType': 'HLS',
+          'quality': '1080p',
+          'baseUrl': 'https://stable-v250.example.test',
+          'searchBaseUrl': uri.toString(),
+          'scriptUrl': 'https://manifest.example.test/module.js',
+          'type': 'anime',
+          'downloadSupport': false,
+        }),
+        manifestPath: '${temp.path}/manifest.json',
+        scriptPath: script.path,
+        enabled: true,
+        installedAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+        lastCheckedAt: DateTime.now(),
+        lastError: null,
+        order: 0,
+      );
+      final SoraAddonStore store = SoraAddonStore(
+        supportDirectoryProvider: () async => temp,
+      );
+      final SoraJsRuntime runtime = SoraJsRuntime(store: store, dio: dio);
+      addTearDown(runtime.invalidateAll);
+
+      final List<SoraSearchResult> results = await runtime.searchResults(
+        addon: addon,
+        keyword: 'Demo',
+        languageCode: 'en',
+        titleVariants: const <SoraTitleVariant>[
+          SoraTitleVariant(languageCode: 'en', title: 'Demo'),
+        ],
+      );
+
+      expect(results.single.title, 'Stable Result');
+      expect(solverCalls, 1);
+      expect(solvedUri, uri);
+      expect(adapter.requests, hasLength(2));
+      expect(adapter.requests.first.headers['Cookie'], isNull);
+      expect(
+        adapter.requests.last.headers['Cookie'],
+        contains('cf_clearance=stable-v250-token'),
+      );
+      expect(
+        adapter.requests.last.headers['User-Agent'],
+        'Stable WebView Test UA',
+      );
+    },
+  );
+
+  test(
     'Windows replays Cloudflare clearance on the effective redirected host',
     () async {
+      final TargetPlatform? previousPlatform =
+          debugDefaultTargetPlatformOverride;
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      addTearDown(() {
+        debugDefaultTargetPlatformOverride = previousPlatform;
+      });
+
       final Directory temp = await Directory.systemTemp.createTemp('sora_js_');
       addTearDown(() => temp.delete(recursive: true));
 
@@ -446,6 +553,51 @@ class _CloudflareRedirectAdapter implements HttpClientAdapter {
       ];
     }
     return challenged;
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
+
+class _StableCloudflareAdapter implements HttpClientAdapter {
+  _StableCloudflareAdapter(this.uri);
+
+  final Uri uri;
+  final List<RequestOptions> requests = <RequestOptions>[];
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    requests.add(options);
+    final String cookie = '${options.headers['Cookie'] ?? ''}';
+    if (options.uri == uri &&
+        cookie.contains('cf_clearance=stable-v250-token')) {
+      return ResponseBody.fromString(
+        jsonEncode(<Map<String, String>>[
+          <String, String>{
+            'title': 'Stable Result',
+            'image': 'poster.jpg',
+            'href': '/title',
+          },
+        ]),
+        200,
+        headers: <String, List<String>>{
+          Headers.contentTypeHeader: <String>['application/json'],
+        },
+      );
+    }
+
+    return ResponseBody.fromString(
+      '<script src="/cdn-cgi/challenge-platform/test.js"></script>',
+      403,
+      headers: <String, List<String>>{
+        Headers.contentTypeHeader: <String>['text/html'],
+        'server': <String>['cloudflare'],
+      },
+    );
   }
 
   @override
