@@ -203,12 +203,10 @@ class PlaybackController extends Notifier<PlaybackState> {
   static const Duration _seekSettleTick = Duration(milliseconds: 80);
   static const Duration _seekSettleMinHold = Duration(milliseconds: 700);
   static const Duration _seekSettleTimeout = Duration(seconds: 12);
-  static const Duration _seekSettleRetryInterval = Duration(milliseconds: 700);
   static const Duration _seekSettleTolerance = Duration(milliseconds: 1200);
   static const Duration _seekSettleForwardTolerance = Duration(
     milliseconds: 2500,
   );
-  static const int _seekSettleRetryLimit = 10;
   static const Duration _engineSeekTimeout = Duration(seconds: 30);
   static const Duration _resumeSeekRetryInterval = Duration(milliseconds: 650);
   static const Duration _resumeSeekRetryTimeout = Duration(seconds: 75);
@@ -311,9 +309,6 @@ class PlaybackController extends Notifier<PlaybackState> {
   Duration? _settlingSeekFrom;
   DateTime? _settlingSeekUntil;
   DateTime? _settlingSeekEarliestClear;
-  DateTime? _settlingSeekNextRetryAt;
-  int _settlingSeekRetryCount = 0;
-  bool _settlingSeekRetryInFlight = false;
   int _temporarySpeedHolds = 0;
   final Set<String> _syncedToAnilist = <String>{};
 
@@ -1101,7 +1096,6 @@ class PlaybackController extends Notifier<PlaybackState> {
       if (!engine.managesInitialPosition) {
         _reinforceInitialSeek(engine, position, generation, _manualSeekEpoch);
       }
-      _guardFreshStart(engine, position, generation, _manualSeekEpoch);
       _watchEngineErrors(
         engine,
         generation,
@@ -1292,61 +1286,6 @@ class PlaybackController extends Notifier<PlaybackState> {
     }
   }
 
-  void _guardFreshStart(
-    PlayerEngine engine,
-    Duration requestedPosition,
-    int generation,
-    int manualSeekEpoch,
-  ) {
-    if (requestedPosition > const Duration(seconds: 1)) return;
-    unawaited(
-      _guardFreshStartFromInheritedPosition(
-        engine,
-        generation,
-        manualSeekEpoch,
-      ),
-    );
-  }
-
-  Future<void> _guardFreshStartFromInheritedPosition(
-    PlayerEngine engine,
-    int generation,
-    int manualSeekEpoch,
-  ) async {
-    for (final Duration delay in const <Duration>[
-      Duration(milliseconds: 250),
-      Duration(milliseconds: 900),
-      Duration(milliseconds: 1600),
-    ]) {
-      await Future<void>.delayed(delay);
-      if (generation != _playbackGeneration ||
-          manualSeekEpoch != _manualSeekEpoch ||
-          state.engine != engine) {
-        return;
-      }
-
-      final PlayerEngineState value = engine.state.value;
-      if (!value.isInitialized) continue;
-
-      final Duration position = value.position;
-      if (position > const Duration(seconds: 5) &&
-          position < const Duration(seconds: 30)) {
-        try {
-          await _seekEngineTo(
-            engine,
-            Duration.zero,
-            reason: 'Fresh-start seek',
-          );
-          state = state.copyWith();
-        } on Object {
-          // Startup guard should never break playback if the backend rejects
-          // a defensive seek-to-zero.
-        }
-        return;
-      }
-    }
-  }
-
   Duration _fallbackPositionFor(
     PlayerEngine? engine, {
     Duration requestedPosition = Duration.zero,
@@ -1376,17 +1315,27 @@ class PlaybackController extends Notifier<PlaybackState> {
     final String scheme = uri?.scheme.toLowerCase() ?? '';
     final bool inlineDash = LocalHlsProxy.isInlineDashUrl(url);
     final bool network = scheme == 'http' || scheme == 'https';
-    final bool localHls = scheme == 'file' && streamType == StreamType.hls;
+    final bool localSegmentedMedia =
+        scheme == 'file' && url.toLowerCase().contains('.m3u8');
+    // Local media has no remote headers, TLS, or CDN requests for the proxy to
+    // repair. Direct file access also avoids pauses at segment boundaries.
     final bool proxyEligible =
-        !usesBrowserPlayerEngine && (network || inlineDash || localHls);
+        !usesBrowserPlayerEngine && (network || inlineDash);
     final bool directEligible = !inlineDash;
 
     return buildPlaybackAttemptPlan(
       preference: preference,
-      mpvAvailable: isPlayerEngineBackendAvailable(
-        PlayerBackend.mpv,
-        streamType: streamType,
-      ),
+      // Some stored segmented media retain non-zero or discontinuous source
+      // timestamps. libmpv can then expose only the first segment as the
+      // duration and reject every seek outside it. FVP resolves the rewritten
+      // local playlist as a complete timeline, so use it for all stored HLS.
+      // Network streams keep the normal MPV -> FVP attempt order.
+      mpvAvailable:
+          !localSegmentedMedia &&
+          isPlayerEngineBackendAvailable(
+            PlayerBackend.mpv,
+            streamType: streamType,
+          ),
       fvpAvailable: isPlayerEngineBackendAvailable(
         PlayerBackend.fvp,
         streamType: streamType,
@@ -1401,6 +1350,7 @@ class PlaybackController extends Notifier<PlaybackState> {
             PlayerBackend.mpv,
             PlaybackRoute.localProxy,
             streamType: streamType,
+            dashUsesHlsContainer: localSegmentedMedia,
           ),
       mpvDirectEligible:
           directEligible &&
@@ -1408,6 +1358,7 @@ class PlaybackController extends Notifier<PlaybackState> {
             PlayerBackend.mpv,
             PlaybackRoute.direct,
             streamType: streamType,
+            dashUsesHlsContainer: localSegmentedMedia,
           ),
       fvpProxyEligible:
           proxyEligible &&
@@ -1415,6 +1366,7 @@ class PlaybackController extends Notifier<PlaybackState> {
             PlayerBackend.fvp,
             PlaybackRoute.localProxy,
             streamType: streamType,
+            dashUsesHlsContainer: localSegmentedMedia,
           ),
       fvpDirectEligible:
           directEligible &&
@@ -1422,6 +1374,7 @@ class PlaybackController extends Notifier<PlaybackState> {
             PlayerBackend.fvp,
             PlaybackRoute.direct,
             streamType: streamType,
+            dashUsesHlsContainer: localSegmentedMedia,
           ),
       usesBrowserBackend: usesBrowserPlayerEngine,
     );
@@ -2756,6 +2709,13 @@ class PlaybackController extends Notifier<PlaybackState> {
 
   StreamType _streamTypeForUrl(String url, StreamType fallback) {
     if (LocalHlsProxy.isInlineDashUrl(url)) return StreamType.dash;
+    final Uri? uri = Uri.tryParse(url);
+    // Offline DASH is intentionally stored as generated HLS metadata. Preserve
+    // the persisted source type so backend selection does not mistake it for
+    // an ordinary HLS download.
+    if (uri?.scheme.toLowerCase() == 'file' && fallback == StreamType.dash) {
+      return StreamType.dash;
+    }
     final String lower = url.toLowerCase();
     if (lower.contains('.m3u8')) return StreamType.hls;
     if (lower.contains('.mpd')) return StreamType.dash;
@@ -2917,9 +2877,6 @@ class PlaybackController extends Notifier<PlaybackState> {
     final DateTime now = DateTime.now();
     _settlingSeekUntil = now.add(_seekSettleTimeout);
     _settlingSeekEarliestClear = now.add(_seekSettleMinHold);
-    _settlingSeekNextRetryAt = now.add(_seekSettleRetryInterval);
-    _settlingSeekRetryCount = 0;
-    _settlingSeekRetryInFlight = false;
     _setSeekPreview(engine, target, preserveBufferedEnd: true);
     _settleSeekPreview();
     _seekSettleTimer = Timer.periodic(
@@ -2959,10 +2916,6 @@ class PlaybackController extends Notifier<PlaybackState> {
     final bool canClearRememberedBuffer =
         !hasRememberedBuffer || !nativeStillBuffering;
 
-    if (!settled && !timedOut && !nativeStillBuffering) {
-      _maybeRetrySettlingSeek(engine, target, now);
-    }
-
     if (timedOut && !settled) {
       if (kDebugMode) {
         debugPrint(
@@ -2984,51 +2937,6 @@ class PlaybackController extends Notifier<PlaybackState> {
     _cancelSeekSettle(clearPreview: false);
     if (shouldClear && state.engine == engine) {
       state = state.copyWith(clearSeekPreviewPosition: true);
-    }
-  }
-
-  void _maybeRetrySettlingSeek(
-    PlayerEngine engine,
-    Duration target,
-    DateTime now,
-  ) {
-    if (_settlingSeekRetryInFlight) return;
-    if (_settlingSeekRetryCount >= _seekSettleRetryLimit) return;
-    final DateTime? nextRetryAt = _settlingSeekNextRetryAt;
-    if (nextRetryAt != null && now.isBefore(nextRetryAt)) return;
-
-    _settlingSeekRetryCount += 1;
-    _settlingSeekNextRetryAt = now.add(_seekSettleRetryInterval);
-    unawaited(_retrySettlingSeek(engine, target));
-  }
-
-  Future<void> _retrySettlingSeek(PlayerEngine engine, Duration target) async {
-    if (_settlingSeekRetryInFlight) return;
-    if (_seekInFlight) return;
-    if (state.engine != engine ||
-        _settlingSeekEngine != engine ||
-        _settlingSeekTarget != target) {
-      return;
-    }
-
-    _seekInFlight = true;
-    _settlingSeekRetryInFlight = true;
-    try {
-      await _seekEngineTo(engine, target, reason: 'Manual seek retry');
-    } on Object catch (error) {
-      if (kDebugMode) {
-        debugPrint('Manual seek retry ignored: $error');
-      }
-    } finally {
-      _settlingSeekRetryInFlight = false;
-      _seekInFlight = false;
-      if (_queuedSeekTarget != null) {
-        unawaited(_flushInteractiveSeek());
-      } else if (state.engine == engine &&
-          _settlingSeekEngine == engine &&
-          _settlingSeekTarget == target) {
-        _settlingSeekNextRetryAt = DateTime.now().add(_seekSettleRetryInterval);
-      }
     }
   }
 
@@ -3054,9 +2962,6 @@ class PlaybackController extends Notifier<PlaybackState> {
     _settlingSeekFrom = null;
     _settlingSeekUntil = null;
     _settlingSeekEarliestClear = null;
-    _settlingSeekNextRetryAt = null;
-    _settlingSeekRetryCount = 0;
-    _settlingSeekRetryInFlight = false;
     if (clearPreview && state.seekPreviewPosition != null) {
       state = state.copyWith(clearSeekPreviewPosition: true);
     }
@@ -3512,10 +3417,11 @@ class PlaybackController extends Notifier<PlaybackState> {
     final MediaServer? server = state.server;
     return playbackCompletionIsCredible(
       isCompleted: es.isCompleted,
-      isOfflineLocalHls:
+      isOfflineLocalSegmentedMedia:
           server != null &&
           _isOfflineLocalServer(server) &&
-          server.streamType == StreamType.hls,
+          (server.streamType == StreamType.hls ||
+              server.streamType == StreamType.dash),
       duration: es.duration,
       maxObservedPosition: _maxObservedPosition,
       endProximityTolerance: _endProximityTolerance,

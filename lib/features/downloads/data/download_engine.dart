@@ -2,10 +2,13 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
+import 'package:dio/io.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
+import '../../player/engine/local_hls_proxy.dart';
 import '../domain/download_models.dart';
 
 /// Thrown when a download is stopped by the user (pause/cancel) rather than by a
@@ -27,21 +30,96 @@ class DownloadUnsupportedException implements Exception {
 /// Pure IO downloader: resumable single-file (MP4) and full HLS (segments + AES
 /// key + a rewritten local playlist). Holds no app state.
 class DownloadEngine {
-  DownloadEngine({Dio? dio})
-    : _dio =
-          dio ??
-          Dio(
-            BaseOptions(
-              connectTimeout: const Duration(seconds: 20),
-              receiveTimeout: const Duration(seconds: 60),
-              followRedirects: true,
-              maxRedirects: 5,
-            ),
-          );
+  DownloadEngine({Dio? dio}) : _dio = dio ?? _createDownloadDio();
 
   final Dio _dio;
 
   static const int _hlsConcurrency = 5;
+  static const int _networkAttempts = 4;
+  static const int _retryBackoffBaseMs = 180;
+  static const String _mediaSourceMarker = '.media-source';
+
+  /// Preserves resumable files only when they belong to the same logical
+  /// quality. Switching to a fallback quality first removes incompatible
+  /// segments so identically named files can never be mixed across manifests.
+  Future<void> prepareMediaAttempt({
+    required String dirPath,
+    required String candidateKey,
+  }) async {
+    final Directory directory = Directory(dirPath);
+    await directory.create(recursive: true);
+    final File marker = File(p.join(dirPath, _mediaSourceMarker));
+    final String fingerprint = sha256
+        .convert(utf8.encode(candidateKey))
+        .toString();
+    String existing = '';
+    try {
+      if (await marker.exists()) {
+        existing = (await marker.readAsString()).trim();
+      }
+    } on Object {
+      existing = '';
+    }
+
+    if (existing != fingerprint) {
+      await _clearMediaArtifacts(directory);
+      await marker.writeAsString(fingerprint, flush: true);
+    }
+  }
+
+  Future<void> _clearMediaArtifacts(Directory directory) async {
+    if (!await directory.exists()) return;
+    await for (final FileSystemEntity entity in directory.list()) {
+      final String name = p.basename(entity.path).toLowerCase();
+      final bool generatedFile =
+          entity is File &&
+          (name == 'video.mp4' ||
+              name == 'video.mp4.part' ||
+              name == 'index.m3u8' ||
+              name == 'key.bin' ||
+              name.startsWith('seg_') ||
+              name.startsWith('init.'));
+      final bool generatedDirectory =
+          entity is Directory && (name == 'video' || name == 'audio');
+      if (generatedFile || generatedDirectory) {
+        await entity.delete(recursive: entity is Directory);
+      }
+    }
+  }
+
+  static Dio _createDownloadDio() {
+    final Dio dio = Dio(
+      BaseOptions(
+        connectTimeout: const Duration(seconds: 20),
+        receiveTimeout: const Duration(seconds: 60),
+        followRedirects: true,
+        maxRedirects: 5,
+        headers: const <String, String>{
+          HttpHeaders.acceptHeader: '*/*',
+          HttpHeaders.userAgentHeader:
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+              'AppleWebKit/537.36 (KHTML, like Gecko) '
+              'Chrome/126.0 Safari/537.36',
+        },
+      ),
+    );
+    dio.httpClientAdapter = IOHttpClientAdapter(
+      createHttpClient: () {
+        final HttpClient client = HttpClient()
+          ..idleTimeout = const Duration(seconds: 20)
+          ..maxConnectionsPerHost = 12
+          ..autoUncompress = true;
+        // This client is isolated to user-requested media downloads. Stream
+        // hosts frequently serve incomplete certificate chains even while the
+        // same media works in native players, so downloads accept the upstream
+        // certificate without weakening API/authentication clients elsewhere.
+        client.badCertificateCallback = (X509Certificate _, String _, int _) =>
+            true;
+        return client;
+      },
+    );
+    return dio;
+  }
 
   Future<DownloadKind?> sniffKind({
     required String url,
@@ -54,7 +132,7 @@ class DownloadEngine {
     if (uri != null) {
       final String pathAndQuery = '${uri.path}?${uri.query}'.toLowerCase();
       if (pathAndQuery.contains('.m3u8')) return DownloadKind.hls;
-      if (pathAndQuery.contains('.mpd')) return null;
+      if (pathAndQuery.contains('.mpd')) return DownloadKind.dash;
 
       final String path = uri.path.toLowerCase();
       for (final String ext in const <String>[
@@ -84,24 +162,39 @@ class DownloadEngine {
       final Uint8List bytes = Uint8List.fromList(
         response.data ?? const <int>[],
       );
-      final Uint8List headBytes = bytes.length > 64
-          ? bytes.sublist(0, 64)
+      final Uint8List headBytes = bytes.length > 2048
+          ? bytes.sublist(0, 2048)
           : bytes;
       final String head = utf8
           .decode(headBytes, allowMalformed: true)
           .trimLeft();
-      return head.startsWith('#EXTM3U') ? DownloadKind.hls : DownloadKind.mp4;
+      final String contentType =
+          response.headers
+              .value(HttpHeaders.contentTypeHeader)
+              ?.toLowerCase() ??
+          '';
+      if (contentType.contains('dash+xml')) return DownloadKind.dash;
+      if (contentType.contains('mpegurl')) return DownloadKind.hls;
+      if (head.startsWith('#EXTM3U')) return DownloadKind.hls;
+      if (RegExp(r'<MPD(?:\s|>)', caseSensitive: false).hasMatch(head)) {
+        return DownloadKind.dash;
+      }
+      return DownloadKind.mp4;
     } on DioException catch (e) {
       if (CancelToken.isCancel(e)) throw const DownloadCancelledException();
-      return streamTypeHint.trim().toUpperCase() == 'HLS'
-          ? DownloadKind.hls
-          : DownloadKind.mp4;
+      return _kindFromHint(streamTypeHint);
     } catch (_) {
       if (cancelToken.isCancelled) throw const DownloadCancelledException();
-      return streamTypeHint.trim().toUpperCase() == 'HLS'
-          ? DownloadKind.hls
-          : DownloadKind.mp4;
+      return _kindFromHint(streamTypeHint);
     }
+  }
+
+  DownloadKind _kindFromHint(String hint) {
+    return switch (hint.trim().toUpperCase()) {
+      'HLS' => DownloadKind.hls,
+      'DASH' => DownloadKind.dash,
+      _ => DownloadKind.mp4,
+    };
   }
 
   // Single-file MP4 and MKV downloads support HTTP range requests.
@@ -220,6 +313,27 @@ class DownloadEngine {
           'HLS master playlist had no playable variant.',
         );
       }
+      final _AudioPick? audio = pick.audioGroupId == null
+          ? null
+          : _pickAudioRendition(playlistText, mediaUri, pick.audioGroupId!);
+      if (pick.audioGroupId != null && audio == null) {
+        throw const DownloadUnsupportedException(
+          'HLS master references an unavailable audio rendition.',
+        );
+      }
+      if (audio != null) {
+        await _downloadHlsWithExternalAudio(
+          video: pick,
+          audio: audio,
+          headers: headers,
+          dirPath: dirPath,
+          finalPlaylist: finalPlaylist,
+          cancelToken: cancelToken,
+          onPlaylistParsed: onPlaylistParsed,
+          onProgress: onProgress,
+        );
+        return;
+      }
       mediaUri = pick.uri;
       playlistText = await _fetchText(mediaUri, headers, cancelToken);
       _ensureHlsPlaylist(playlistText);
@@ -305,10 +419,147 @@ class DownloadEngine {
     await finalPlaylist.writeAsString('${outLines.join('\n')}\n', flush: true);
   }
 
+  Future<void> downloadDash({
+    required String manifestUrl,
+    required Map<String, String> headers,
+    required String dirPath,
+    String playlistFileName = 'index.m3u8',
+    required CancelToken cancelToken,
+    void Function(int totalSegments)? onPlaylistParsed,
+    void Function(int doneSegments, int totalSegments, int receivedBytes)?
+    onProgress,
+  }) async {
+    final Uri? manifestUri = Uri.tryParse(manifestUrl.trim());
+    if (manifestUri == null ||
+        (manifestUri.scheme != 'http' && manifestUri.scheme != 'https')) {
+      throw const DownloadUnsupportedException(
+        'DASH download requires an HTTP(S) manifest.',
+      );
+    }
+
+    final LocalHlsProxy bridge = LocalHlsProxy();
+    await bridge.start();
+    try {
+      if (cancelToken.isCancelled) {
+        throw const DownloadCancelledException();
+      }
+      final String localHlsUrl = await bridge.dashHlsUrl(
+        manifestUri,
+        headers: headers,
+        proxyMedia: true,
+      );
+      if (cancelToken.isCancelled) {
+        throw const DownloadCancelledException();
+      }
+      await downloadHls(
+        playlistUrl: localHlsUrl,
+        headers: const <String, String>{},
+        dirPath: dirPath,
+        playlistFileName: playlistFileName,
+        cancelToken: cancelToken,
+        onPlaylistParsed: onPlaylistParsed,
+        onProgress: onProgress,
+      );
+    } on UnsupportedError catch (error) {
+      throw DownloadUnsupportedException(
+        'Unsupported DASH presentation: ${error.message ?? error}',
+      );
+    } on FormatException catch (error) {
+      throw DownloadUnsupportedException(
+        'Invalid DASH presentation: ${error.message}',
+      );
+    } finally {
+      await bridge.stop();
+    }
+  }
+
+  Future<void> _downloadHlsWithExternalAudio({
+    required _VariantPick video,
+    required _AudioPick audio,
+    required Map<String, String> headers,
+    required String dirPath,
+    required File finalPlaylist,
+    required CancelToken cancelToken,
+    void Function(int totalSegments)? onPlaylistParsed,
+    void Function(int doneSegments, int totalSegments, int receivedBytes)?
+    onProgress,
+  }) async {
+    final Directory videoDir = Directory(p.join(dirPath, 'video'));
+    final Directory audioDir = Directory(p.join(dirPath, 'audio'));
+    await Future.wait(<Future<Directory>>[
+      videoDir.create(recursive: true),
+      audioDir.create(recursive: true),
+    ]);
+
+    int videoTotal = 0;
+    int audioTotal = 0;
+    int videoDone = 0;
+    int audioDone = 0;
+    int videoBytes = 0;
+    int audioBytes = 0;
+
+    void reportTotal() => onPlaylistParsed?.call(videoTotal + audioTotal);
+    void reportProgress() => onProgress?.call(
+      videoDone + audioDone,
+      videoTotal + audioTotal,
+      videoBytes + audioBytes,
+    );
+
+    await Future.wait(<Future<void>>[
+      downloadHls(
+        playlistUrl: video.uri.toString(),
+        headers: headers,
+        dirPath: videoDir.path,
+        cancelToken: cancelToken,
+        onPlaylistParsed: (int total) {
+          videoTotal = total;
+          reportTotal();
+        },
+        onProgress: (int done, int _, int bytes) {
+          videoDone = done;
+          videoBytes = bytes;
+          reportProgress();
+        },
+      ),
+      downloadHls(
+        playlistUrl: audio.uri.toString(),
+        headers: headers,
+        dirPath: audioDir.path,
+        cancelToken: cancelToken,
+        onPlaylistParsed: (int total) {
+          audioTotal = total;
+          reportTotal();
+        },
+        onProgress: (int done, int _, int bytes) {
+          audioDone = done;
+          audioBytes = bytes;
+          reportProgress();
+        },
+      ),
+    ]);
+    if (cancelToken.isCancelled) throw const DownloadCancelledException();
+
+    final String localAudioLine = audio.mediaLine.replaceFirst(
+      RegExp(r'URI="[^"]+"', caseSensitive: false),
+      'URI="audio/index.m3u8"',
+    );
+    await finalPlaylist.writeAsString(
+      '#EXTM3U\n'
+      '#EXT-X-VERSION:7\n'
+      '#EXT-X-INDEPENDENT-SEGMENTS\n'
+      '$localAudioLine\n'
+      '${video.streamInfoLine}\n'
+      'video/index.m3u8\n',
+      flush: true,
+    );
+  }
+
   _VariantPick? _pickBestVariant(String masterText, Uri masterUri) {
     final List<String> lines = const LineSplitter().convert(masterText);
     int bestBandwidth = -1;
     Uri? bestUri;
+    String? bestStreamInfoLine;
+    String? bestAudioGroupId;
     for (int i = 0; i < lines.length; i++) {
       final String line = lines[i].trim();
       if (!line.startsWith('#EXT-X-STREAM-INF')) continue;
@@ -321,11 +572,52 @@ class DownloadEngine {
         if (bandwidth > bestBandwidth) {
           bestBandwidth = bandwidth;
           bestUri = masterUri.resolve(candidate);
+          bestStreamInfoLine = line;
+          bestAudioGroupId = _hlsAttribute(line, 'AUDIO');
         }
         break;
       }
     }
-    return bestUri == null ? null : _VariantPick(bestUri);
+    return bestUri == null || bestStreamInfoLine == null
+        ? null
+        : _VariantPick(
+            uri: bestUri,
+            streamInfoLine: bestStreamInfoLine,
+            audioGroupId: bestAudioGroupId,
+          );
+  }
+
+  _AudioPick? _pickAudioRendition(
+    String masterText,
+    Uri masterUri,
+    String groupId,
+  ) {
+    _AudioPick? fallback;
+    for (final String rawLine in const LineSplitter().convert(masterText)) {
+      final String line = rawLine.trim();
+      if (!line.startsWith('#EXT-X-MEDIA') ||
+          _hlsAttribute(line, 'TYPE')?.toUpperCase() != 'AUDIO' ||
+          _hlsAttribute(line, 'GROUP-ID') != groupId) {
+        continue;
+      }
+      final String? rawUri = _hlsAttribute(line, 'URI');
+      if (rawUri == null || rawUri.isEmpty) continue;
+      final _AudioPick pick = _AudioPick(
+        uri: masterUri.resolve(rawUri),
+        mediaLine: line,
+      );
+      fallback ??= pick;
+      if (_hlsAttribute(line, 'DEFAULT')?.toUpperCase() == 'YES') return pick;
+    }
+    return fallback;
+  }
+
+  String? _hlsAttribute(String line, String name) {
+    final RegExpMatch? match = RegExp(
+      '${RegExp.escape(name)}=(?:"([^"]*)"|([^,]*))',
+      caseSensitive: false,
+    ).firstMatch(line);
+    return (match?.group(1) ?? match?.group(2))?.trim();
   }
 
   void _ensureHlsPlaylist(String playlistText) {
@@ -375,9 +667,12 @@ class DownloadEngine {
   }
 
   String _segmentExtension(Uri uri) {
-    final String path = uri.path.toLowerCase();
+    // Relayed/signed media URLs often hide the original filename in a query
+    // parameter, so inspect the complete resource reference instead of only
+    // the outer endpoint path.
+    final String path = '${uri.path}?${uri.query}'.toLowerCase();
     for (final String ext in const <String>['.ts', '.m4s', '.mp4', '.aac']) {
-      if (path.endsWith(ext)) return ext;
+      if (path.contains(ext)) return ext;
     }
     return '.ts';
   }
@@ -471,7 +766,7 @@ class DownloadEngine {
     Map<String, String> headers,
     CancelToken cancelToken,
   ) async {
-    try {
+    return _withNetworkRetry<String>(uri, cancelToken, () async {
       final Response<String> response = await _dio.getUri<String>(
         uri,
         options: Options(
@@ -481,10 +776,7 @@ class DownloadEngine {
         cancelToken: cancelToken,
       );
       return response.data ?? '';
-    } on DioException catch (e) {
-      if (CancelToken.isCancel(e)) throw const DownloadCancelledException();
-      rethrow;
-    }
+    });
   }
 
   Future<Uint8List> _fetchBytes(
@@ -492,7 +784,7 @@ class DownloadEngine {
     Map<String, String> headers,
     CancelToken cancelToken,
   ) async {
-    try {
+    return _withNetworkRetry<Uint8List>(uri, cancelToken, () async {
       final Response<List<int>> response = await _dio.getUri<List<int>>(
         uri,
         options: Options(
@@ -502,10 +794,59 @@ class DownloadEngine {
         cancelToken: cancelToken,
       );
       return Uint8List.fromList(response.data ?? const <int>[]);
-    } on DioException catch (e) {
-      if (CancelToken.isCancel(e)) throw const DownloadCancelledException();
-      rethrow;
+    });
+  }
+
+  Future<T> _withNetworkRetry<T>(
+    Uri uri,
+    CancelToken cancelToken,
+    Future<T> Function() request,
+  ) async {
+    Object? lastError;
+    StackTrace? lastStackTrace;
+    for (int attempt = 1; attempt <= _networkAttempts; attempt++) {
+      if (cancelToken.isCancelled) {
+        throw const DownloadCancelledException();
+      }
+      try {
+        return await request();
+      } on DioException catch (error, stackTrace) {
+        if (CancelToken.isCancel(error) || cancelToken.isCancelled) {
+          throw const DownloadCancelledException();
+        }
+        lastError = error;
+        lastStackTrace = stackTrace;
+        if (attempt == _networkAttempts || !_isRetryable(error)) rethrow;
+      }
+
+      debugPrint(
+        '[Download] retrying ${uri.host} '
+        '(attempt ${attempt + 1}/$_networkAttempts)',
+      );
+      await Future.any<void>(<Future<void>>[
+        Future<void>.delayed(
+          Duration(milliseconds: _retryBackoffBaseMs * attempt),
+        ),
+        cancelToken.whenCancel.then<void>((_) {}),
+      ]);
     }
+    Error.throwWithStackTrace(lastError!, lastStackTrace!);
+  }
+
+  bool _isRetryable(DioException error) {
+    if (error.error is HandshakeException) return false;
+    if (error.type == DioExceptionType.badResponse) {
+      final int? status = error.response?.statusCode;
+      return status == 408 ||
+          status == 425 ||
+          status == 429 ||
+          (status != null && status >= 500);
+    }
+    return error.type == DioExceptionType.connectionTimeout ||
+        error.type == DioExceptionType.sendTimeout ||
+        error.type == DioExceptionType.receiveTimeout ||
+        error.type == DioExceptionType.connectionError ||
+        error.type == DioExceptionType.unknown;
   }
 }
 
@@ -516,6 +857,20 @@ class _PendingSegment {
 }
 
 class _VariantPick {
-  const _VariantPick(this.uri);
+  const _VariantPick({
+    required this.uri,
+    required this.streamInfoLine,
+    required this.audioGroupId,
+  });
+
   final Uri uri;
+  final String streamInfoLine;
+  final String? audioGroupId;
+}
+
+class _AudioPick {
+  const _AudioPick({required this.uri, required this.mediaLine});
+
+  final Uri uri;
+  final String mediaLine;
 }

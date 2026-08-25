@@ -7,8 +7,11 @@ import 'package:media_kit/media_kit.dart' as mk;
 import 'package:media_kit_video/media_kit_video.dart' as mkv;
 
 import '../domain/player_models.dart';
+import 'local_hls_metadata.dart';
 import 'local_hls_proxy.dart';
 import 'player_engine.dart';
+import 'startup_seek.dart';
+import 'stream_url_policy.dart';
 
 const Duration _openTimeout = Duration(seconds: 90);
 const Duration _stateTick = Duration(milliseconds: 120);
@@ -140,9 +143,12 @@ class MediaKitPlayerEngine extends PlayerEngine {
   DateTime? _proxyStallStartedAt;
   DateTime? _proxyNoVideoStartedAt;
   int _openGeneration = 0;
+  int _seekEpoch = 0;
+  bool _initialPositionSettled = true;
   bool _disposed = false;
   Size _lastVideoSize = Size.zero;
   Duration _lastReliableDuration = Duration.zero;
+  Duration _knownSourceDuration = Duration.zero;
   List<PlayerBufferedRange> _lastBufferedRanges = const <PlayerBufferedRange>[];
 
   // Post-startup proxy error throttling. mpv can emit the same decode error
@@ -162,6 +168,12 @@ class MediaKitPlayerEngine extends PlayerEngine {
 
   @override
   Map<String, String> get nativePlaybackHeaders => _nativePlaybackHeaders;
+
+  @override
+  bool get managesInitialPosition => true;
+
+  @override
+  bool get initialPositionSettled => _initialPositionSettled;
 
   @override
   void addListener(VoidCallback listener) => _state.addListener(listener);
@@ -201,6 +213,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
     _lastVideoSize = Size.zero;
     _lastBufferedRanges = const <PlayerBufferedRange>[];
     _lastReliableDuration = Duration.zero;
+    _knownSourceDuration = Duration.zero;
 
     _ensureMediaKitInitialized();
 
@@ -248,6 +261,8 @@ class MediaKitPlayerEngine extends PlayerEngine {
 
       final double targetPlaybackSpeed = _playbackSpeed;
       _currentRequestedStartAt = startAt ?? Duration.zero;
+      final int startupSeekEpoch = ++_seekEpoch;
+      _initialPositionSettled = _currentRequestedStartAt <= Duration.zero;
       _currentTargetPlaybackSpeed = targetPlaybackSpeed;
       _currentAutoplay = autoplay;
       _directFallbackTried = false;
@@ -294,6 +309,9 @@ class MediaKitPlayerEngine extends PlayerEngine {
       final bool isHls = _isHlsLikeSource(source);
       final bool isDash = _isDashLikeSource(source);
       final bool isLocalHls = remoteUri.scheme == 'file' && isHls;
+      _knownSourceDuration = isLocalHls
+          ? await readLocalHlsDuration(remoteUri)
+          : Duration.zero;
       final bool useProxy =
           !source.disableProxy &&
           !_previewMode &&
@@ -363,6 +381,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
           player,
           openGeneration,
           requestedStartAt: startAt ?? Duration.zero,
+          startupSeekEpoch: startupSeekEpoch,
         ),
       );
 
@@ -495,12 +514,11 @@ class MediaKitPlayerEngine extends PlayerEngine {
   }
 
   Duration _publicDuration(Duration nativeDuration) {
+    Duration candidate = _knownSourceDuration;
     if (_isReliableDuration(nativeDuration)) {
-      if (nativeDuration > _lastReliableDuration) {
-        _lastReliableDuration = nativeDuration;
-      }
-      return nativeDuration;
+      if (nativeDuration > candidate) candidate = nativeDuration;
     }
+    if (candidate > _lastReliableDuration) _lastReliableDuration = candidate;
     return _lastReliableDuration;
   }
 
@@ -521,6 +539,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
     mk.Player player,
     int generation, {
     required Duration requestedStartAt,
+    required int startupSeekEpoch,
   }) async {
     // If we can still bail to direct, only wait the short proxy window so a
     // segment-level proxy failure does not cost the full settle timeout.
@@ -570,6 +589,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
           debugPrint('MediaKit speed apply (no-settle) failed: $e');
         }
       }
+      _markInitialPositionSettled(player, generation, startupSeekEpoch);
       return;
     }
 
@@ -579,12 +599,19 @@ class MediaKitPlayerEngine extends PlayerEngine {
     }
     await Future<void>.delayed(_startupActionDelay);
     if (!_isActivePlayer(player, generation)) return;
+    if (startupSeekEpoch != _seekEpoch) return;
 
-    if (requestedStartAt > Duration.zero) {
+    if (startupSeekNeeded(
+      requested: requestedStartAt,
+      current: player.state.position,
+    )) {
       await _safeStartupSeek(player, requestedStartAt);
       if (!_isActivePlayer(player, generation)) return;
+      if (startupSeekEpoch != _seekEpoch) return;
       await Future<void>.delayed(_startupActionDelay);
     }
+
+    _markInitialPositionSettled(player, generation, startupSeekEpoch);
 
     if (!_isActivePlayer(player, generation)) return;
     final double requestedSpeed = _currentTargetPlaybackSpeed;
@@ -596,6 +623,19 @@ class MediaKitPlayerEngine extends PlayerEngine {
       }
     }
 
+    _syncState();
+  }
+
+  void _markInitialPositionSettled(
+    mk.Player player,
+    int generation,
+    int startupSeekEpoch,
+  ) {
+    if (!_isActivePlayer(player, generation) ||
+        startupSeekEpoch != _seekEpoch) {
+      return;
+    }
+    _initialPositionSettled = true;
     _syncState();
   }
 
@@ -653,7 +693,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
         (_currentSource?.allowDirectFallback ?? true) &&
         !_directFallbackTried &&
         !_directFallbackInProgress &&
-        !_requiresPinnedProxy(_directPlaybackUrl) &&
+        !mediaUrlRequiresPinnedProxy(_directPlaybackUrl) &&
         (_directPlaybackUrl?.isNotEmpty ?? false);
   }
 
@@ -727,6 +767,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
           player,
           generation,
           requestedStartAt: requestedStartAt,
+          startupSeekEpoch: _seekEpoch,
         ),
       );
       _syncState();
@@ -935,13 +976,20 @@ class MediaKitPlayerEngine extends PlayerEngine {
   Future<void> seekTo(Duration position) async {
     final mk.Player? player = _player;
     if (player == null) return;
-    final bool accepted = await _seekWithVerification(player, position);
-    if (!accepted) {
-      throw StateError(
-        'MediaKit seek did not settle at ${position.inMilliseconds}ms.',
-      );
+    _seekEpoch += 1;
+    try {
+      final bool accepted = await _seekWithVerification(player, position);
+      if (!accepted) {
+        throw StateError(
+          'MediaKit seek did not settle at ${position.inMilliseconds}ms.',
+        );
+      }
+    } finally {
+      if (_player == player && _hasMedia) {
+        _initialPositionSettled = true;
+        _syncState();
+      }
     }
-    _syncState();
   }
 
   Future<bool> _seekWithVerification(
@@ -1180,11 +1228,6 @@ class MediaKitPlayerEngine extends PlayerEngine {
     );
     headers.putIfAbsent(HttpHeaders.acceptHeader, () => '*/*');
 
-    if (_isOkCdnHost(uri.host) || _isGoogleVideoHost(uri.host)) {
-      headers.remove('Origin');
-      return headers;
-    }
-
     final String? referer = headers[HttpHeaders.refererHeader];
     if (referer != null &&
         referer.isNotEmpty &&
@@ -1196,26 +1239,6 @@ class MediaKitPlayerEngine extends PlayerEngine {
     }
 
     return headers;
-  }
-
-  bool _requiresPinnedProxy(String? url) {
-    if (url == null || url.isEmpty) return false;
-    final Uri? uri = Uri.tryParse(url);
-    if (uri == null || !_isOkCdnHost(uri.host)) return false;
-    return (uri.queryParameters['urls']?.trim().isNotEmpty ?? false);
-  }
-
-  bool _isOkCdnHost(String host) {
-    final String lower = host.toLowerCase();
-    return lower == 'okcdn.ru' ||
-        lower.endsWith('.okcdn.ru') ||
-        lower == 'mycdn.me' ||
-        lower.endsWith('.mycdn.me');
-  }
-
-  bool _isGoogleVideoHost(String host) {
-    final String lower = host.toLowerCase();
-    return lower == 'googlevideo.com' || lower.endsWith('.googlevideo.com');
   }
 
   String _canonicalHeaderName(String name) {
@@ -1271,6 +1294,8 @@ class MediaKitPlayerEngine extends PlayerEngine {
     _directPlaybackUrl = null;
     _currentOpenHeaders = const <String, String>{};
     _currentRequestedStartAt = Duration.zero;
+    _seekEpoch += 1;
+    _initialPositionSettled = true;
     _currentTargetPlaybackSpeed = 1;
     _currentAutoplay = true;
     _usingProxy = false;
@@ -1283,6 +1308,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
     _lastBufferedRanges = const <PlayerBufferedRange>[];
     _lastVideoSize = Size.zero;
     _lastReliableDuration = Duration.zero;
+    _knownSourceDuration = Duration.zero;
 
     for (final StreamSubscription<dynamic> subscription in _subscriptions) {
       await subscription.cancel();

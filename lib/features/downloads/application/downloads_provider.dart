@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../shared/models/media_item.dart';
 import '../../addons/application/sora_addons_provider.dart';
+import '../../addons/application/sora_source_providers.dart';
 import '../../addons/domain/sora_models.dart';
 import '../../addons/domain/sora_parsers.dart';
 import '../../catalog/application/catalog_mode.dart';
@@ -14,6 +15,7 @@ import '../data/download_engine.dart';
 import '../data/download_store.dart';
 import '../domain/download_models.dart';
 import 'download_episode_availability.dart';
+import 'download_stream_candidates.dart';
 
 final downloadStoreProvider = Provider<DownloadStore>((Ref ref) {
   return DownloadStore();
@@ -169,9 +171,9 @@ class DownloadController extends Notifier<List<DownloadedEpisode>> {
       qualityLabel: '',
       kind: kind,
       relDir: relDir,
-      videoFileName: kind == DownloadKind.hls ? 'index.m3u8' : 'video.mp4',
+      videoFileName: kind == DownloadKind.mp4 ? 'video.mp4' : 'index.m3u8',
       streamPreference: streamPreference,
-      episodeData: _episodeToMap(episode),
+      episodeData: _episodeToMap(episode, source: source),
       openingStart: episode.openingStart,
       openingEnd: episode.openingEnd,
       endingStart: episode.endingStart,
@@ -288,108 +290,220 @@ class DownloadController extends Notifier<List<DownloadedEpisode>> {
         throw Exception('Module “${item.addonName}” is not installed.');
       }
 
-      final SoraEpisode episode = _episodeFromMap(item.episodeData, item);
-      final SoraResolvedStreams streams = await ref
+      SoraEpisode episode = _episodeFromMap(item.episodeData, item);
+      SoraSearchResult? source = _sourceFromEpisodeMap(item.episodeData);
+      SoraResolvedStreams streams = await ref
           .read(soraJsRuntimeProvider)
           .extractStreams(addon: addon, episode: episode, voiceover: null);
       if (token.isCancelled) throw const DownloadCancelledException();
 
-      final NormalizedStreamBundle bundle = parseSoraStreamBundle(
+      NormalizedStreamBundle bundle = parseSoraStreamBundle(
         streams,
         streamType: addon.manifest.streamType,
       );
-      if (bundle.availableServers.isEmpty) {
-        throw Exception('No downloadable stream was returned.');
+      List<DownloadStreamCandidate> candidates = buildDownloadStreamCandidates(
+        bundle,
+        item.streamPreference,
+      );
+      final DownloadedEpisode current = _byId(item.id) ?? item;
+      final dir = await _store.ensureEpisodeDir(rootPath, current);
+
+      void onPlaylistParsed(int total) {
+        _updateById(
+          item.id,
+          (DownloadedEpisode e) => e.copyWith(totalSegments: total),
+        );
       }
 
-      final _StreamPick? pick = item.streamPreference.isEmpty
-          ? _pickHighest(bundle)
-          : _pickPreferred(bundle, item.streamPreference);
+      void onSegmentProgress(int done, int total, int bytes) {
+        _updateById(
+          item.id,
+          (DownloadedEpisode e) => e.copyWith(
+            doneSegments: done,
+            totalSegments: total,
+            receivedBytes: bytes,
+          ),
+        );
+        _schedulePersist();
+      }
+
+      DownloadStreamCandidate? pick;
+      Object? lastCandidateError;
+      final List<Object> candidateErrors = <Object>[];
+      final Set<String> attemptedUrls = <String>{};
+      for (
+        int resolutionRound = 0;
+        resolutionRound < 2 && pick == null;
+        resolutionRound += 1
+      ) {
+        for (int index = 0; index < candidates.length; index += 1) {
+          final DownloadStreamCandidate candidate = candidates[index];
+          attemptedUrls.add(candidate.url);
+          try {
+            await _engine.prepareMediaAttempt(
+              dirPath: dir.path,
+              // The marker is hashed by DownloadEngine. Including the resolved
+              // URL prevents partial files from an expired descriptor being
+              // mixed with segments returned by its refreshed replacement.
+              candidateKey: stableDownloadCandidateKey(candidate),
+            );
+            final DownloadKind? kind = await _engine.sniffKind(
+              url: candidate.url,
+              headers: candidate.headers,
+              streamTypeHint: bundle.streamType,
+              cancelToken: token,
+            );
+            if (kind == null) {
+              throw const DownloadUnsupportedException(
+                'This stream format cannot be downloaded.',
+              );
+            }
+            final String videoFileName = kind == DownloadKind.mp4
+                ? 'video.mp4'
+                : 'index.m3u8';
+            _updateById(
+              item.id,
+              (DownloadedEpisode e) => e.copyWith(
+                kind: kind,
+                qualityLabel: candidate.qualityLabel,
+                videoFileName: videoFileName,
+                totalBytes: 0,
+                receivedBytes: 0,
+                totalSegments: 0,
+                doneSegments: 0,
+              ),
+            );
+            debugPrint(
+              '[Download] episode=${item.displayNumber} '
+              'resolution=${resolutionRound + 1}/2 '
+              'attempt=${index + 1}/${candidates.length} kind=${kind.name}',
+            );
+
+            switch (kind) {
+              case DownloadKind.mp4:
+                await _engine.downloadFile(
+                  url: candidate.url,
+                  headers: candidate.headers,
+                  dirPath: dir.path,
+                  fileName: videoFileName,
+                  cancelToken: token,
+                  onProgress: (int received, int total) {
+                    _updateById(
+                      item.id,
+                      (DownloadedEpisode e) => e.copyWith(
+                        receivedBytes: received,
+                        totalBytes: total,
+                      ),
+                    );
+                    _schedulePersist();
+                  },
+                );
+              case DownloadKind.hls:
+                await _engine.downloadHls(
+                  playlistUrl: candidate.url,
+                  headers: candidate.headers,
+                  dirPath: dir.path,
+                  cancelToken: token,
+                  onPlaylistParsed: onPlaylistParsed,
+                  onProgress: onSegmentProgress,
+                );
+              case DownloadKind.dash:
+                await _engine.downloadDash(
+                  manifestUrl: candidate.url,
+                  headers: candidate.headers,
+                  dirPath: dir.path,
+                  cancelToken: token,
+                  onPlaylistParsed: onPlaylistParsed,
+                  onProgress: onSegmentProgress,
+                );
+            }
+            pick = candidate;
+            break;
+          } on DownloadCancelledException {
+            rethrow;
+          } on Object catch (error) {
+            lastCandidateError = error;
+            candidateErrors.add(error);
+            if (kDebugMode) {
+              debugPrint(
+                '[Download] media attempt ${index + 1}/${candidates.length} '
+                'failed: $error',
+              );
+            }
+          }
+        }
+
+        if (pick != null || resolutionRound > 0) break;
+        final bool descriptorMayBeStale =
+            candidates.isEmpty || candidateErrors.any(_isStaleStreamFailure);
+        if (!descriptorMayBeStale) break;
+
+        final ({SoraEpisode episode, SoraSearchResult source})? refreshed =
+            await _refreshDownloadEpisode(
+              item: item,
+              addon: addon,
+              savedSource: source,
+              cancelToken: token,
+            );
+        if (refreshed == null) break;
+        if (token.isCancelled) throw const DownloadCancelledException();
+
+        streams = await ref
+            .read(soraJsRuntimeProvider)
+            .extractStreams(
+              addon: addon,
+              episode: refreshed.episode,
+              voiceover: null,
+            );
+        if (token.isCancelled) throw const DownloadCancelledException();
+        final NormalizedStreamBundle refreshedBundle = parseSoraStreamBundle(
+          streams,
+          streamType: addon.manifest.streamType,
+        );
+        final List<DownloadStreamCandidate> refreshedCandidates =
+            buildDownloadStreamCandidates(
+              refreshedBundle,
+              item.streamPreference,
+            );
+        if (refreshedCandidates.isEmpty ||
+            refreshedCandidates.every(
+              (DownloadStreamCandidate candidate) =>
+                  attemptedUrls.contains(candidate.url),
+            )) {
+          break;
+        }
+
+        episode = refreshed.episode;
+        source = refreshed.source;
+        bundle = refreshedBundle;
+        candidates = refreshedCandidates;
+        _updateById(
+          item.id,
+          (DownloadedEpisode e) =>
+              e.copyWith(episodeData: _episodeToMap(episode, source: source)),
+        );
+        await _persist();
+        debugPrint(
+          '[Download] refreshed the episode descriptor after terminal '
+          'stream responses; retrying newly resolved qualities.',
+        );
+      }
       if (pick == null) {
-        if (item.streamPreference.isEmpty) {
+        if (candidates.isEmpty && item.streamPreference.isEmpty) {
           throw const DownloadUnsupportedException(
             "This module's stream can't be downloaded directly "
             '(in-app playback only). Try a different module.',
           );
         }
-        throw const DownloadUnsupportedException(
-          'Selected stream is not available for this episode. '
-          'Choose another stream.',
-        );
-      }
-      final DownloadKind? kind = await _engine.sniffKind(
-        url: pick.url,
-        headers: pick.headers,
-        streamTypeHint: bundle.streamType,
-        cancelToken: token,
-      );
-      if (kind == null) {
-        throw const DownloadUnsupportedException(
-          'This stream format cannot be downloaded.',
-        );
-      }
-      final String videoFileName = kind == DownloadKind.hls
-          ? 'index.m3u8'
-          : 'video.mp4';
-      _updateById(
-        item.id,
-        (DownloadedEpisode e) => e.copyWith(
-          kind: kind,
-          qualityLabel: pick.qualityLabel,
-          videoFileName: videoFileName,
-          totalBytes: 0,
-          receivedBytes: 0,
-          totalSegments: 0,
-          doneSegments: 0,
-        ),
-      );
-      debugPrint(
-        '[Download] addon=${item.addonId} episode=${item.displayNumber} '
-        'kind=${kind.name} url=${pick.url}',
-      );
-
-      final DownloadedEpisode current = _byId(item.id) ?? item;
-      final dir = await _store.ensureEpisodeDir(rootPath, current);
-
-      if (kind == DownloadKind.mp4) {
-        await _engine.downloadFile(
-          url: pick.url,
-          headers: pick.headers,
-          dirPath: dir.path,
-          fileName: videoFileName,
-          cancelToken: token,
-          onProgress: (int received, int total) {
-            _updateById(
-              item.id,
-              (DownloadedEpisode e) =>
-                  e.copyWith(receivedBytes: received, totalBytes: total),
-            );
-            _schedulePersist();
-          },
-        );
-      } else {
-        await _engine.downloadHls(
-          playlistUrl: pick.url,
-          headers: pick.headers,
-          dirPath: dir.path,
-          cancelToken: token,
-          onPlaylistParsed: (int total) {
-            _updateById(
-              item.id,
-              (DownloadedEpisode e) => e.copyWith(totalSegments: total),
-            );
-          },
-          onProgress: (int done, int total, int bytes) {
-            _updateById(
-              item.id,
-              (DownloadedEpisode e) => e.copyWith(
-                doneSegments: done,
-                totalSegments: total,
-                receivedBytes: bytes,
-              ),
-            );
-            _schedulePersist();
-          },
+        if (candidates.isEmpty) {
+          throw const DownloadUnsupportedException(
+            'Selected stream is not available for this episode. '
+            'Choose another stream.',
+          );
+        }
+        throw DownloadUnsupportedException(
+          'All available stream qualities failed. '
+          '${lastCandidateError ?? 'No compatible media was returned.'}',
         );
       }
       if (token.isCancelled) throw const DownloadCancelledException();
@@ -447,6 +561,156 @@ class DownloadController extends Notifier<List<DownloadedEpisode>> {
       _tokens.remove(item.id);
       await _persist();
     }
+  }
+
+  bool _isStaleStreamFailure(Object error) {
+    if (error is! DioException || error.type != DioExceptionType.badResponse) {
+      return false;
+    }
+    return switch (error.response?.statusCode) {
+      400 || 401 || 403 || 404 || 410 => true,
+      _ => false,
+    };
+  }
+
+  Future<({SoraEpisode episode, SoraSearchResult source})?>
+  _refreshDownloadEpisode({
+    required DownloadedEpisode item,
+    required SoraInstalledAddon addon,
+    required SoraSearchResult? savedSource,
+    required CancelToken cancelToken,
+  }) async {
+    final runtime = ref.read(soraJsRuntimeProvider);
+
+    Future<SoraEpisode?> episodeFor(SoraSearchResult result) async {
+      if (cancelToken.isCancelled) {
+        throw const DownloadCancelledException();
+      }
+      try {
+        final List<SoraEpisode> episodes = await runtime.extractEpisodes(
+          addon: addon,
+          result: result,
+        );
+        return _matchingDownloadEpisode(episodes, item);
+      } on Object catch (error) {
+        if (cancelToken.isCancelled) {
+          throw const DownloadCancelledException();
+        }
+        if (kDebugMode) {
+          debugPrint('[Download] episode descriptor refresh failed: $error');
+        }
+        return null;
+      }
+    }
+
+    // New queue records retain the stable search result separately from the
+    // episode descriptor. Re-extracting its episode list is the cheapest and
+    // most accurate way to replace embedded, short-lived media data.
+    if (savedSource != null) {
+      final SoraEpisode? refreshed = await episodeFor(savedSource);
+      if (refreshed != null) {
+        return (episode: refreshed, source: savedSource);
+      }
+    }
+
+    // Older persisted records do not contain their search result. Re-discover
+    // it generically from the stored media titles, then match the same season
+    // and episode number. No server or host knowledge is involved.
+    final Set<String> titles = <String>{};
+    void addTitle(String value) {
+      final String title = value.trim();
+      if (title.isNotEmpty) titles.add(title);
+    }
+
+    addTitle(savedSource?.query ?? '');
+    addTitle(savedSource?.title ?? '');
+    addTitle(item.media.title);
+    addTitle(item.media.originalTitle);
+    for (final String alias in item.media.aliases) {
+      addTitle(alias);
+    }
+    addTitle(item.media.externalIds['sora_season_name'] ?? '');
+    addTitle(item.media.externalIds['sora_season_original_name'] ?? '');
+    for (final String alias
+        in (item.media.externalIds['sora_season_aliases'] ?? '').split('\n')) {
+      addTitle(alias);
+    }
+    if (titles.isEmpty) return null;
+
+    final List<String> configuredLanguages = ref.read(
+      soraSourceLanguagesProvider,
+    );
+    final List<String> languages = configuredLanguages.isEmpty
+        ? SoraSearchLanguage.defaultPriority
+        : configuredLanguages;
+    final List<SoraTitleVariant> variants = <SoraTitleVariant>[
+      for (final String language in languages)
+        for (final String title in titles)
+          SoraTitleVariant(
+            languageCode: language,
+            title: title,
+            source: 'download-refresh',
+          ),
+    ];
+    final Map<String, SoraSearchResult> results = <String, SoraSearchResult>{};
+    for (final String query in titles.take(6)) {
+      if (cancelToken.isCancelled) {
+        throw const DownloadCancelledException();
+      }
+      try {
+        final List<SoraSearchResult> found = await runtime.searchResults(
+          addon: addon,
+          keyword: query,
+          languageCode: languages.first,
+          titleVariants: variants,
+          shouldCancel: () => cancelToken.isCancelled,
+        );
+        for (final SoraSearchResult result in found) {
+          final SoraSearchResult? previous = results[result.href];
+          if (previous == null || result.score > previous.score) {
+            results[result.href] = result;
+          }
+        }
+      } on Object catch (error) {
+        if (cancelToken.isCancelled) {
+          throw const DownloadCancelledException();
+        }
+        if (kDebugMode) {
+          debugPrint('[Download] source refresh search failed: $error');
+        }
+      }
+    }
+
+    final List<SoraSearchResult> ordered = results.values.toList()
+      ..sort(
+        (SoraSearchResult a, SoraSearchResult b) => b.score.compareTo(a.score),
+      );
+    for (final SoraSearchResult result in ordered.take(6)) {
+      final SoraEpisode? refreshed = await episodeFor(result);
+      if (refreshed != null) {
+        return (episode: refreshed, source: result);
+      }
+    }
+    return null;
+  }
+
+  SoraEpisode? _matchingDownloadEpisode(
+    List<SoraEpisode> episodes,
+    DownloadedEpisode item,
+  ) {
+    final List<SoraEpisode> numbered = episodes
+        .where(
+          (SoraEpisode episode) =>
+              (episode.number - item.episodeNumber).abs() < 0.001,
+        )
+        .toList(growable: false);
+    if (numbered.isEmpty) return null;
+    if (item.seasonNumber > 0) {
+      for (final SoraEpisode episode in numbered) {
+        if (episode.season == item.seasonNumber) return episode;
+      }
+    }
+    return numbered.first;
   }
 
   // Helpers
@@ -614,128 +878,15 @@ class DownloadController extends Notifier<List<DownloadedEpisode>> {
     await _store.save(state);
   }
 
-  /// Picks the best directly-downloadable (http/https) stream. Embed-aggregator
-  /// modules return non-HTTP descriptors that neither mpv nor the download
-  /// engine can open. These return null so the caller fails cleanly instead of
-  /// crashing on `Uri.parse`.
-  _StreamPick? _pickHighest(NormalizedStreamBundle bundle) {
-    // Prefer the player's default server, then any other server.
-    final List<NormalizedServer> servers = <NormalizedServer>[
-      bundle.selectedServer,
-      ...bundle.availableServers.where(
-        (NormalizedServer s) => s.id != bundle.selectedServer.id,
-      ),
-    ];
-
-    for (final NormalizedServer server in servers) {
-      NormalizedQuality? best;
-      int bestHeight = -1;
-      for (final NormalizedQuality q in server.qualities) {
-        if (!_isHttpUrl(q.streamUrl)) continue;
-        final int h = _heightFromLabel(q.label);
-        if (h > bestHeight) {
-          bestHeight = h;
-          best = q;
-        }
-      }
-      if (best != null) {
-        return _StreamPick(
-          url: best.streamUrl,
-          headers: _headersFor(bundle, server, best.headers),
-          qualityLabel: best.label,
-        );
-      }
-      if (_isHttpUrl(server.streamUrl)) {
-        return _StreamPick(
-          url: server.streamUrl,
-          headers: _headersFor(bundle, server, const <String, String>{}),
-          qualityLabel: bundle.selectedQuality?.label ?? '',
-        );
-      }
-    }
-    return null;
-  }
-
-  _StreamPick? _pickPreferred(
-    NormalizedStreamBundle bundle,
-    DownloadStreamPreference preference,
-  ) {
-    final NormalizedServer? server = _preferredServer(bundle, preference);
-    if (server == null) return null;
-
-    final String qualityLabel = preference.qualityLabel.trim().toLowerCase();
-    if (qualityLabel.isNotEmpty) {
-      for (final NormalizedQuality quality in server.qualities) {
-        if (quality.label.trim().toLowerCase() != qualityLabel) continue;
-        if (!_isHttpUrl(quality.streamUrl)) return null;
-        return _StreamPick(
-          url: quality.streamUrl,
-          headers: _headersFor(bundle, server, quality.headers),
-          qualityLabel: quality.label,
-        );
-      }
-      return null;
-    }
-
-    if (_isHttpUrl(server.streamUrl)) {
-      return _StreamPick(
-        url: server.streamUrl,
-        headers: _headersFor(bundle, server, const <String, String>{}),
-        qualityLabel: server.qualities.isNotEmpty
-            ? server.qualities.first.label
-            : '',
-      );
-    }
-    return null;
-  }
-
-  NormalizedServer? _preferredServer(
-    NormalizedStreamBundle bundle,
-    DownloadStreamPreference preference,
-  ) {
-    final String serverTitle = preference.serverTitle.trim().toLowerCase();
-    if (serverTitle.isNotEmpty) {
-      for (final NormalizedServer server in bundle.availableServers) {
-        if (server.title.trim().toLowerCase() == serverTitle) return server;
-      }
-    }
-
-    final String serverId = preference.serverId.trim();
-    if (serverId.isNotEmpty) {
-      for (final NormalizedServer server in bundle.availableServers) {
-        if (server.id == serverId) return server;
-      }
-    }
-    return null;
-  }
-
-  Map<String, String> _headersFor(
-    NormalizedStreamBundle bundle,
-    NormalizedServer server,
-    Map<String, String> primary,
-  ) {
-    if (primary.isNotEmpty) return primary;
-    if (server.headers.isNotEmpty) return server.headers;
-    return bundle.headers;
-  }
-
   bool _isHttpUrl(String url) {
     final Uri? uri = Uri.tryParse(url.trim());
     return uri != null && (uri.scheme == 'http' || uri.scheme == 'https');
   }
 
-  int _heightFromLabel(String label) {
-    final String l = label.toLowerCase();
-    if (l.contains('4k') || l.contains('2160')) return 2160;
-    if (l.contains('1440') || l == '2k') return 1440;
-    final RegExpMatch? m = RegExp(r'(\d{3,4})').firstMatch(l);
-    if (m != null) return int.tryParse(m.group(1)!) ?? 0;
-    if (l.contains('fhd')) return 1080;
-    if (l.contains('hd')) return 720;
-    return 0;
-  }
-
-  Map<String, dynamic> _episodeToMap(SoraEpisode e) => <String, dynamic>{
+  Map<String, dynamic> _episodeToMap(
+    SoraEpisode e, {
+    SoraSearchResult? source,
+  }) => <String, dynamic>{
     'number': e.number,
     'href': e.href,
     'title': e.title,
@@ -750,7 +901,42 @@ class DownloadController extends Notifier<List<DownloadedEpisode>> {
     'metadataImage': e.metadataImage,
     'tvdbTitle': e.tvdbTitle,
     'raw': e.raw,
+    if (source != null) '_downloadSource': _searchResultToMap(source),
   };
+
+  Map<String, dynamic> _searchResultToMap(SoraSearchResult result) =>
+      <String, dynamic>{
+        'addonId': result.addonId,
+        'addonName': result.addonName,
+        'title': result.title,
+        'image': result.image,
+        'href': result.href,
+        'languageCode': result.languageCode,
+        'query': result.query,
+        'score': result.score,
+        'raw': result.raw,
+      };
+
+  SoraSearchResult? _sourceFromEpisodeMap(Map<String, dynamic> episodeData) {
+    final Object? rawSource = episodeData['_downloadSource'];
+    if (rawSource is! Map) return null;
+    final Map<String, dynamic> source = rawSource.cast<String, dynamic>();
+    final String href = source['href'] as String? ?? '';
+    if (href.trim().isEmpty) return null;
+    return SoraSearchResult(
+      addonId: source['addonId'] as String? ?? '',
+      addonName: source['addonName'] as String? ?? '',
+      title: source['title'] as String? ?? '',
+      image: source['image'] as String? ?? '',
+      href: href,
+      languageCode: source['languageCode'] as String? ?? '',
+      query: source['query'] as String? ?? '',
+      score: (source['score'] as num?)?.toDouble() ?? 0,
+      raw:
+          (source['raw'] as Map?)?.cast<String, dynamic>() ??
+          const <String, dynamic>{},
+    );
+  }
 
   SoraEpisode _episodeFromMap(Map<String, dynamic> m, DownloadedEpisode fb) {
     if (m.isEmpty) {
@@ -782,15 +968,4 @@ class DownloadController extends Notifier<List<DownloadedEpisode>> {
           const <String, dynamic>{},
     );
   }
-}
-
-class _StreamPick {
-  const _StreamPick({
-    required this.url,
-    required this.headers,
-    required this.qualityLabel,
-  });
-  final String url;
-  final Map<String, String> headers;
-  final String qualityLabel;
 }

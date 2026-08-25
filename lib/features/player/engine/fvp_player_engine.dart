@@ -6,8 +6,11 @@ import 'package:flutter/widgets.dart';
 import 'package:fvp/mdk.dart' as mdk;
 
 import '../domain/player_models.dart';
+import 'local_hls_metadata.dart';
 import 'local_hls_proxy.dart';
 import 'player_engine.dart';
+import 'startup_seek.dart';
+import 'stream_url_policy.dart';
 
 const mdk.SeekFlag _networkVodSeekFlag = mdk.SeekFlag(mdk.SeekFlag.fromStart);
 const mdk.SeekFlag _cachedVodSeekFlag = mdk.SeekFlag(
@@ -26,7 +29,6 @@ const Duration _nativeDisposeSettleDelay = Duration(milliseconds: 250);
 const Duration _mediaClearSettleDelay = Duration(milliseconds: 80);
 const int _minimumTextureMdkVersion = 8960;
 const int _startupRetryLimit = 0;
-const Duration _fragileHlsSmallResumeThreshold = Duration(seconds: 30);
 const Duration _firstFramePollInterval = Duration(milliseconds: 250);
 const int _firstFramePollAttempts = 120;
 const Duration _invalidStatusGrace = Duration(seconds: 3);
@@ -92,12 +94,15 @@ class FvpPlayerEngine extends PlayerEngine {
   Duration _currentStartAt = Duration.zero;
   bool _currentAutoplay = true;
   int _openGeneration = 0;
+  int _seekEpoch = 0;
+  bool _initialPositionSettled = true;
   int _speedApplyGeneration = 0;
   bool _disposed = false;
   int _startupRetryCount = 0;
   bool _preserveStartupRetryCount = false;
   bool _requireVideoSurfaceDuringStartup = false;
   List<PlayerBufferedRange> _lastBufferedRanges = const <PlayerBufferedRange>[];
+  Duration _knownSourceDuration = Duration.zero;
   DateTime? _invalidSince;
   bool _reportedInvalid = false;
   _NativeSeekRequest? _activeNativeSeek;
@@ -116,6 +121,9 @@ class FvpPlayerEngine extends PlayerEngine {
 
   @override
   bool get managesInitialPosition => true;
+
+  @override
+  bool get initialPositionSettled => _initialPositionSettled;
 
   @override
   void addListener(VoidCallback listener) => _state.addListener(listener);
@@ -174,6 +182,8 @@ class FvpPlayerEngine extends PlayerEngine {
     _playbackSpeed = _state.value.playbackSpeed;
     _currentSource = source;
     _currentStartAt = startAt ?? Duration.zero;
+    final int startupSeekEpoch = ++_seekEpoch;
+    _initialPositionSettled = _currentStartAt <= Duration.zero;
     _currentAutoplay = autoplay;
     _lastError = null;
     _invalidSince = null;
@@ -221,11 +231,17 @@ class FvpPlayerEngine extends PlayerEngine {
       final bool isHls = _isHlsLikeSource(source);
       final bool isDash = _isDashLikeSource(source);
       final bool isLocalHls = remoteUri.scheme == 'file' && isHls;
+      _knownSourceDuration = isLocalHls
+          ? await readLocalHlsDuration(remoteUri)
+          : Duration.zero;
       final bool useProxy =
           !source.disableProxy &&
           !_previewMode &&
           (isNetwork || isInlineDash || isLocalHls);
-      if (isDash && Platform.isWindows && !useProxy) {
+      // A downloaded DASH presentation is stored as local HLS metadata around
+      // the original fMP4 tracks. It is already demuxable without the MPD
+      // parser, so only a real direct MPD needs this Windows guard.
+      if (isDash && !isHls && Platform.isWindows && !useProxy) {
         throw UnsupportedError(
           'FVP direct MPEG-DASH is unavailable on Windows because its bundled '
           'FFmpeg does not include the MPD demuxer. Use the local DASH '
@@ -293,6 +309,7 @@ class FvpPlayerEngine extends PlayerEngine {
           startAt: startAt ?? Duration.zero,
           autoplay: autoplay,
         );
+        _initialPositionSettled = true;
         _syncState();
         return;
       }
@@ -315,26 +332,19 @@ class FvpPlayerEngine extends PlayerEngine {
       _scheduleStartupRetry(openGeneration);
       _startVideoSurfaceTimeout(openGeneration);
 
-      final bool fragileHls = _isFragileHls(playbackUrl);
       final Duration requestedInitialPosition = startAt ?? Duration.zero;
-      final Duration initialPosition = fragileHls
-          ? _safeFragileHlsStartupPosition(requestedInitialPosition)
-          : requestedInitialPosition;
-
-      if (fragileHls) {
-        if (initialPosition > Duration.zero) {
-          unawaited(_seekAfterFirstFrame(player, initialPosition));
-        }
-        if (targetPlaybackSpeed != 1.0) {
-          unawaited(_applySpeedAfterFirstFrame(player, targetPlaybackSpeed));
-        }
-      } else {
-        if (initialPosition > Duration.zero) {
-          unawaited(_seekAfterOpen(initialPosition));
-        }
-        if (targetPlaybackSpeed != 1.0) {
-          unawaited(_applySpeedAfterStartup(player, targetPlaybackSpeed));
-        }
+      if (requestedInitialPosition > Duration.zero) {
+        unawaited(
+          _applyInitialPosition(
+            player,
+            openGeneration,
+            requestedInitialPosition,
+            startupSeekEpoch,
+          ),
+        );
+      }
+      if (targetPlaybackSpeed != 1.0) {
+        unawaited(_applySpeedAfterStartup(player, targetPlaybackSpeed));
       }
 
       _syncState();
@@ -349,24 +359,10 @@ class FvpPlayerEngine extends PlayerEngine {
     }
   }
 
-  bool _isFragileHls(String url) {
-    final String lower = url.toLowerCase();
-    return lower.contains('solodcdn.com') ||
-        lower.contains(':hls:manifest.m3u8') ||
-        lower.contains('.mp4:hls:');
-  }
-
   bool _isNetworkUrl(String url) {
     if (LocalHlsProxy.isInlineDashUrl(url)) return true;
     final Uri? uri = Uri.tryParse(url);
     return uri != null && (uri.scheme == 'http' || uri.scheme == 'https');
-  }
-
-  Duration _safeFragileHlsStartupPosition(Duration position) {
-    if (position < _fragileHlsSmallResumeThreshold) {
-      return Duration.zero;
-    }
-    return position;
   }
 
   void _scheduleStartupRetry(int generation) {
@@ -588,6 +584,18 @@ class FvpPlayerEngine extends PlayerEngine {
 
   @override
   Future<void> seekTo(Duration position) async {
+    _seekEpoch += 1;
+    try {
+      await _seekToNative(position);
+    } finally {
+      if (_player != null && _hasMedia) {
+        _initialPositionSettled = true;
+        _syncState();
+      }
+    }
+  }
+
+  Future<void> _seekToNative(Duration position) async {
     final mdk.Player? player = _player;
     if (player == null) return;
     final int targetMs = position.inMilliseconds.clamp(0, 1 << 62).toInt();
@@ -756,7 +764,29 @@ class FvpPlayerEngine extends PlayerEngine {
     }
   }
 
-  Future<void> _seekAfterOpen(Duration position) async {
+  Future<void> _applyInitialPosition(
+    mdk.Player player,
+    int openGeneration,
+    Duration position,
+    int startupSeekEpoch,
+  ) async {
+    try {
+      await _seekAfterOpen(player, openGeneration, position, startupSeekEpoch);
+    } finally {
+      if (_isActivePlayer(player, openGeneration) &&
+          startupSeekEpoch == _seekEpoch) {
+        _initialPositionSettled = true;
+        _syncState();
+      }
+    }
+  }
+
+  Future<void> _seekAfterOpen(
+    mdk.Player expectedPlayer,
+    int openGeneration,
+    Duration position,
+    int startupSeekEpoch,
+  ) async {
     // MDK/FVP often reports the player as usable before HLS metadata and
     // keyframes are actually ready. A single early seek can be ignored, which
     // makes resume always start from 0:00. Keep retrying for a short window and
@@ -765,13 +795,23 @@ class FvpPlayerEngine extends PlayerEngine {
       await Future<void>.delayed(const Duration(milliseconds: 250));
 
       final mdk.Player? player = _player;
-      if (player == null || !_hasMedia) return;
+      if (player == null ||
+          player != expectedPlayer ||
+          openGeneration != _openGeneration ||
+          startupSeekEpoch != _seekEpoch ||
+          !_hasMedia) {
+        return;
+      }
 
       // Submit exactly once after metadata becomes usable. FVP owns startAt, so
       // PlaybackController does not submit a second startup-resume seek.
       if (_hasStartupContent(player)) {
+        final Duration current = Duration(
+          milliseconds: player.position.clamp(0, 1 << 62).toInt(),
+        );
+        if (!startupSeekNeeded(requested: position, current: current)) return;
         try {
-          await seekTo(position);
+          await _seekToNative(position);
         } on Object catch (error) {
           debugPrint('FVP initial seek failed: $error');
         }
@@ -796,59 +836,6 @@ class FvpPlayerEngine extends PlayerEngine {
         break;
       }
     }
-
-    final mdk.Player? active = _player;
-    if (active == null || active != player || !_hasMedia) return;
-
-    _applyPlaybackSpeed(active, speed);
-    _syncState();
-  }
-
-  Future<bool> _waitForFirstFrame(mdk.Player player) async {
-    for (int attempt = 0; attempt < _firstFramePollAttempts; attempt += 1) {
-      await Future<void>.delayed(_firstFramePollInterval);
-
-      final mdk.Player? active = _player;
-      if (active == null || active != player || !_hasMedia) return false;
-
-      final mdk.MediaInfo info = active.mediaInfo;
-      final Size videoSize = _videoSize(info);
-      final bool hasVideoSize = videoSize.width > 0 && videoSize.height > 0;
-      final bool hasPlaybackClock = active.position > 0;
-      final bool hasDemuxedMedia = info.duration > 0 || active.buffered() > 0;
-
-      if (hasVideoSize && (hasPlaybackClock || hasDemuxedMedia)) {
-        await Future<void>.delayed(const Duration(milliseconds: 900));
-        return true;
-      }
-    }
-    return false;
-  }
-
-  Future<void> _seekAfterFirstFrame(
-    mdk.Player player,
-    Duration position,
-  ) async {
-    final bool ready = await _waitForFirstFrame(player);
-    if (!ready) return;
-
-    final mdk.Player? active = _player;
-    if (active == null || active != player || !_hasMedia) return;
-
-    try {
-      await seekTo(position);
-    } on Object catch (error) {
-      debugPrint('FVP fragile HLS delayed seek failed: $error');
-    }
-    _syncState();
-  }
-
-  Future<void> _applySpeedAfterFirstFrame(
-    mdk.Player player,
-    double speed,
-  ) async {
-    final bool ready = await _waitForFirstFrame(player);
-    if (!ready) return;
 
     final mdk.Player? active = _player;
     if (active == null || active != player || !_hasMedia) return;
@@ -1024,7 +1011,7 @@ class FvpPlayerEngine extends PlayerEngine {
     );
     headers.putIfAbsent(HttpHeaders.acceptHeader, () => '*/*');
 
-    if (_isOkCdnHost(uri.host) || _isGoogleVideoHost(uri.host)) {
+    if (explicitMediaEdgeAddress(uri) != null) {
       headers.remove('Origin');
     }
 
@@ -1033,8 +1020,7 @@ class FvpPlayerEngine extends PlayerEngine {
     final String? referer = headers[HttpHeaders.refererHeader];
     if (referer != null &&
         referer.isNotEmpty &&
-        !_isOkCdnHost(uri.host) &&
-        !_isGoogleVideoHost(uri.host) &&
+        explicitMediaEdgeAddress(uri) == null &&
         !headers.containsKey('Origin')) {
       final Uri? refUri = Uri.tryParse(referer);
       if (refUri != null && refUri.hasScheme && refUri.host.isNotEmpty) {
@@ -1083,19 +1069,6 @@ class FvpPlayerEngine extends PlayerEngine {
     if (lower == 'accept') return HttpHeaders.acceptHeader;
     if (lower == 'cookie') return HttpHeaders.cookieHeader;
     return name;
-  }
-
-  bool _isOkCdnHost(String host) {
-    final String lower = host.toLowerCase();
-    return lower == 'okcdn.ru' ||
-        lower.endsWith('.okcdn.ru') ||
-        lower == 'mycdn.me' ||
-        lower.endsWith('.mycdn.me');
-  }
-
-  bool _isGoogleVideoHost(String host) {
-    final String lower = host.toLowerCase();
-    return lower == 'googlevideo.com' || lower.endsWith('.googlevideo.com');
   }
 
   bool _isHlsLikeSource(PlayerSource source) {
@@ -1284,9 +1257,12 @@ class FvpPlayerEngine extends PlayerEngine {
     final Duration position = Duration(
       milliseconds: player.position.clamp(0, 1 << 62).toInt(),
     );
-    final Duration duration = Duration(
+    final Duration nativeDuration = Duration(
       milliseconds: info.duration.clamp(0, 1 << 62).toInt(),
     );
+    final Duration duration = nativeDuration > _knownSourceDuration
+        ? nativeDuration
+        : _knownSourceDuration;
     final bool hasTexture = player.textureId.value != null;
     final bool hasVideoSize = videoSize.width > 0 && videoSize.height > 0;
     if (_requireVideoSurfaceDuringStartup && hasVideoSize) {
@@ -1488,6 +1464,8 @@ class FvpPlayerEngine extends PlayerEngine {
 
   Future<void> _disposePlayerOnly() async {
     _openGeneration += 1;
+    _seekEpoch += 1;
+    _initialPositionSettled = true;
     final _NativeSeekRequest? pendingSeek = _pendingNativeSeek;
     if (pendingSeek != null && !pendingSeek.completion.isCompleted) {
       pendingSeek.completion.complete(-3);
@@ -1513,6 +1491,7 @@ class FvpPlayerEngine extends PlayerEngine {
     _nativePlaybackUrl = null;
     _nativePlaybackHeaders = const <String, String>{};
     _lastBufferedRanges = const <PlayerBufferedRange>[];
+    _knownSourceDuration = Duration.zero;
     _invalidSince = null;
     _reportedInvalid = false;
     _requireVideoSurfaceDuringStartup = false;

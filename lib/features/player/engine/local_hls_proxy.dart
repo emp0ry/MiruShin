@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
 import 'dash_hls_manifest.dart';
+import 'stream_url_policy.dart';
 
 // The per-request timeout detects failures while allowing slow HLS CDNs that
 // send a chunk only every few seconds.
@@ -1107,7 +1108,7 @@ class LocalHlsProxy {
       return Socket.startConnect(proxyHost, proxyPort ?? 80);
     }
 
-    final String connectHost = _okCdnEdgeHost(uri) ?? uri.host;
+    final String connectHost = explicitMediaEdgeAddress(uri) ?? uri.host;
     final int port = uri.hasPort ? uri.port : _defaultPort(uri);
     final Future<ConnectionTask<Socket>> pending = Socket.startConnect(
       connectHost,
@@ -1156,11 +1157,10 @@ class LocalHlsProxy {
   }
 
   void _applyUpstreamHeaders(HttpClientRequest r, Uri url) {
-    final bool isOkCdnPinned = _okCdnEdgeHost(url) != null;
-    if (isOkCdnPinned) {
-      // OK CDN signed URLs can pin the real edge in the `urls` query param.
-      // The same vd*.okcdn.ru host may point at different edge IPs, so do not
-      // reuse pooled sockets across signed links.
+    final bool hasPinnedEdge = explicitMediaEdgeAddress(url) != null;
+    if (hasPinnedEdge) {
+      // Signed URLs may carry a concrete edge address. Do not reuse a pooled
+      // socket across links that can select different edges.
       r.persistentConnection = false;
     }
 
@@ -1179,7 +1179,7 @@ class LocalHlsProxy {
       if (lk == 'host' || lk == 'connection' || lk == 'content-length') {
         return;
       }
-      if (isOkCdnPinned && lk == 'origin') {
+      if (hasPinnedEdge && lk == 'origin') {
         return;
       }
       if (v.trim().isEmpty) return;
@@ -1208,29 +1208,6 @@ class LocalHlsProxy {
         'Chrome/126.0 Safari/537.36',
       );
     }
-  }
-
-  bool _isOkCdnHost(String host) {
-    final String lower = host.toLowerCase();
-    return lower == 'okcdn.ru' ||
-        lower.endsWith('.okcdn.ru') ||
-        lower == 'mycdn.me' ||
-        lower.endsWith('.mycdn.me');
-  }
-
-  String? _okCdnEdgeHost(Uri uri) {
-    if (!_isOkCdnHost(uri.host)) return null;
-    final String? rawUrls = uri.queryParameters['urls'];
-    if (rawUrls == null || rawUrls.trim().isEmpty) return null;
-
-    for (final String candidate in rawUrls.split(RegExp(r'[,;|]'))) {
-      final String trimmed = candidate.trim();
-      if (trimmed.isEmpty) continue;
-      if (InternetAddress.tryParse(trimmed) != null) return trimmed;
-    }
-
-    final Match? match = RegExp(r'(?:\d{1,3}\.){3}\d{1,3}').firstMatch(rawUrls);
-    return match?.group(0);
   }
 
   void _copyResponseHeaders(

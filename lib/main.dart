@@ -1,4 +1,7 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -42,10 +45,27 @@ Future<void> main() async {
       FlutterError.presentError(details);
     }
   };
+  final bool Function(Object, StackTrace)? previousPlatformError =
+      PlatformDispatcher.instance.onError;
+  PlatformDispatcher.instance.onError = (Object error, StackTrace stack) {
+    if (_isRecoverableEmbeddedBrowserStartupError(error)) {
+      debugPrint('Embedded browser startup failed safely: $error');
+      return true;
+    }
+    return previousPlatformError?.call(error, stack) ?? false;
+  };
 
   configureMiruShinMediaKit();
   configureMiruShinFvp();
   runApp(ProviderScope(child: MiruShinApp(initialRoute: initialRoute)));
+}
+
+bool _isRecoverableEmbeddedBrowserStartupError(Object error) {
+  if (error is! PlatformException) return false;
+  final String message = '${error.code} ${error.message ?? ''} $error'
+      .toLowerCase();
+  return message.contains('cannot create the inappwebview instance') ||
+      message.contains('coinitialize has not been called');
 }
 
 Future<String> _loadInitialRoute(SharedPreferences preferences) async {

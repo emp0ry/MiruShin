@@ -726,7 +726,7 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
         if (ep.totalBytes > 0) parts.add(_formatBytes(ep.totalBytes));
         return parts.isEmpty ? context.t('Downloaded') : parts.join(' · ');
       case DownloadStatus.downloading:
-        if (ep.kind == DownloadKind.hls && ep.totalSegments > 0) {
+        if (ep.kind != DownloadKind.mp4 && ep.totalSegments > 0) {
           return '${context.t('Downloading')} ${ep.doneSegments}/${ep.totalSegments}';
         }
         return '${context.t('Downloading')} ${(ep.progressFraction * 100).round()}%';

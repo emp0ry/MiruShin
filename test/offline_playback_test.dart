@@ -122,6 +122,22 @@ void main() {
       );
       expect(subtitle.format, SubtitleFormat.ass);
     });
+
+    test('preserves downloaded DASH format for safe backend routing', () {
+      final DownloadedEpisode episode = _episode(
+        3,
+        kind: DownloadKind.dash,
+        videoFileName: 'index.m3u8',
+      );
+
+      final item = buildOfflinePlaybackItem(
+        episode: episode,
+        rootPath: '/downloads',
+      );
+
+      expect(item.servers.single.streamType, StreamType.dash);
+      expect(item.servers.single.url, endsWith('index.m3u8'));
+    });
   });
 }
 
@@ -150,6 +166,8 @@ DownloadedEpisode _episode(
   String mediaBackdropFileName = '',
   String episodeImageFileName = '',
   List<DownloadedSubtitle> subtitles = const <DownloadedSubtitle>[],
+  DownloadKind kind = DownloadKind.mp4,
+  String videoFileName = 'video.mp4',
 }) {
   final DateTime now = DateTime(2026);
   return DownloadedEpisode(
@@ -164,9 +182,9 @@ DownloadedEpisode _episode(
     episodeTitle: 'Episode $number',
     episodeImage: '',
     qualityLabel: '720p',
-    kind: DownloadKind.mp4,
+    kind: kind,
     relDir: 'anilist-1/addon/S${season}E$number',
-    videoFileName: 'video.mp4',
+    videoFileName: videoFileName,
     mediaPosterFileName: mediaPosterFileName,
     mediaBackdropFileName: mediaBackdropFileName,
     episodeImageFileName: episodeImageFileName,

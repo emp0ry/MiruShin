@@ -10,9 +10,9 @@ import '../../../shared/models/media_item.dart';
 /// `failed`: Stopped with an error and available for retry.
 enum DownloadStatus { queued, downloading, paused, completed, failed }
 
-/// Stream container we know how to download. `dash`/anything else is treated as
-/// not downloadable and never enqueued.
-enum DownloadKind { mp4, hls }
+/// Stream containers supported by the offline downloader. DASH is converted to
+/// local HLS metadata while its original fragmented media stays unmodified.
+enum DownloadKind { mp4, hls, dash }
 
 class DownloadedSubtitle {
   const DownloadedSubtitle({
@@ -176,7 +176,7 @@ class DownloadedEpisode {
 
   double get progressFraction {
     if (status == DownloadStatus.completed) return 1;
-    if (kind == DownloadKind.hls && totalSegments > 0) {
+    if (kind != DownloadKind.mp4 && totalSegments > 0) {
       return (doneSegments / totalSegments).clamp(0.0, 1.0);
     }
     if (totalBytes > 0) {
@@ -204,6 +204,7 @@ class DownloadedEpisode {
     String? mediaBackdropFileName,
     String? episodeImageFileName,
     DownloadStreamPreference? streamPreference,
+    Map<String, dynamic>? episodeData,
     List<DownloadedSubtitle>? subtitles,
     int? totalBytes,
     int? receivedBytes,
@@ -234,7 +235,7 @@ class DownloadedEpisode {
           mediaBackdropFileName ?? this.mediaBackdropFileName,
       episodeImageFileName: episodeImageFileName ?? this.episodeImageFileName,
       streamPreference: streamPreference ?? this.streamPreference,
-      episodeData: episodeData,
+      episodeData: episodeData ?? this.episodeData,
       subtitles: subtitles ?? this.subtitles,
       openingStart: openingStart,
       openingEnd: openingEnd,

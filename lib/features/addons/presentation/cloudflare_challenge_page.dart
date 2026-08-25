@@ -73,6 +73,7 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
   Timer? _pollTimer;
   Timer? _timeoutTimer;
   Timer? _loadingFallbackTimer;
+  Timer? _controllerStartupTimer;
   int _consecutiveErrors = 0;
   // Consecutive polls in which a cf_clearance cookie has been present.
   int _clearanceSeen = 0;
@@ -103,6 +104,16 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
     _loadingFallbackTimer = Timer(_loadingFallback, () {
       if (mounted && _loading) setState(() => _loading = false);
     });
+    if (_isWindows) {
+      _controllerStartupTimer = Timer(const Duration(seconds: 8), () {
+        if (!_completed && _controller == null) {
+          if (kDebugMode) {
+            debugPrint('Embedded browser controller did not start; aborting.');
+          }
+          _finish(null);
+        }
+      });
+    }
     _prepareWebView();
   }
 
@@ -135,6 +146,7 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
     _pollTimer?.cancel();
     _timeoutTimer?.cancel();
     _loadingFallbackTimer?.cancel();
+    _controllerStartupTimer?.cancel();
     _popupWindowId = null;
     super.dispose();
   }
@@ -651,6 +663,7 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
     _completed = true;
     _pollTimer?.cancel();
     _timeoutTimer?.cancel();
+    _controllerStartupTimer?.cancel();
     widget.onResult(result);
   }
 
@@ -769,6 +782,7 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
       ),
       onWebViewCreated: (InAppWebViewController controller) async {
         _controller = controller;
+        _controllerStartupTimer?.cancel();
         try {
           await _cookies.deleteCookies(
             url: _rootUri,
@@ -818,6 +832,7 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
                   ),
                   onWebViewCreated: (InAppWebViewController controller) {
                     _controller = controller;
+                    _controllerStartupTimer?.cancel();
                     _markWebViewActivity();
                     if (kDebugMode) {
                       debugPrint('[Cloudflare] onWebViewCreated');

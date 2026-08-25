@@ -1974,6 +1974,7 @@ class _AutoSkipWorkerState extends ConsumerState<_AutoSkipWorker> {
     if (!mounted || _skipInFlight) return;
     final PlayerEngine? controller = widget.state.engine;
     if (controller == null || !controller.value.isInitialized) return;
+    if (!controller.initialPositionSettled) return;
     if (!controller.value.isPlaying) return;
 
     final Duration position = controller.value.position;
@@ -2025,22 +2026,22 @@ class _AutoSkipWorkerState extends ConsumerState<_AutoSkipWorker> {
     final String key =
         '$_itemKey|$kind|${rangeStart.inMilliseconds}|${rangeEnd.inMilliseconds}';
     if (_skippedRanges.contains(key)) return false;
+    // A marker is single-shot for this episode. If a native backend rejects
+    // it, repeatedly seeking on every position event traps playback inside the
+    // marker range and can starve decoding. A failed automatic skip therefore
+    // degrades to ordinary playback; the user can still seek manually.
+    _skippedRanges.add(key);
     _skipInFlight = true;
     debugPrint(
       '[DEBUG] auto-skip ($kind): position=$position -> target=$target range=$rangeStart-$rangeEnd',
     );
-    unawaited(_skipTo(target, key));
+    unawaited(_skipTo(target));
     return true;
   }
 
-  Future<void> _skipTo(Duration target, String key) async {
+  Future<void> _skipTo(Duration target) async {
     try {
-      final bool completed = await ref
-          .read(playbackControllerProvider.notifier)
-          .skipTo(target);
-      if (completed && mounted) {
-        _skippedRanges.add(key);
-      }
+      await ref.read(playbackControllerProvider.notifier).skipTo(target);
     } finally {
       if (mounted) {
         _skipInFlight = false;

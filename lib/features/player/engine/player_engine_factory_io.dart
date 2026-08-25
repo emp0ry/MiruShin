@@ -32,6 +32,7 @@ bool isPlayerEngineRouteAvailable(
   PlayerBackend backend,
   PlaybackRoute route, {
   StreamType streamType = StreamType.unknown,
+  bool dashUsesHlsContainer = false,
 }) {
   if (!isPlayerEngineBackendAvailable(backend, streamType: streamType)) {
     return false;
@@ -42,6 +43,7 @@ bool isPlayerEngineRouteAvailable(
   if (Platform.isWindows &&
       backend == PlayerBackend.fvp &&
       streamType == StreamType.dash &&
+      !dashUsesHlsContainer &&
       route == PlaybackRoute.direct) {
     return false;
   }

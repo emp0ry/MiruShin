@@ -46,5 +46,14 @@ void main() {
     );
     expect(fvpDashProxy, isTrue);
     expect(fvpDashDirect, Platform.isWindows ? isFalse : isTrue);
+    expect(
+      isPlayerEngineRouteAvailable(
+        PlayerBackend.fvp,
+        PlaybackRoute.direct,
+        streamType: StreamType.dash,
+        dashUsesHlsContainer: true,
+      ),
+      isTrue,
+    );
   });
 }

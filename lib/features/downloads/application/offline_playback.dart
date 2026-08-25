@@ -20,9 +20,14 @@ MediaPlaybackItem buildOfflinePlaybackItem({
     episode.videoFileName,
   );
   final String fileUrl = Uri.file(videoPath).toString();
-  final StreamType streamType = episode.kind == DownloadKind.hls
-      ? StreamType.hls
-      : StreamType.mp4;
+  // Keep the original container type even when an offline DASH download is
+  // represented by local HLS metadata. The player uses this distinction to
+  // select the backend that can safely consume those fragmented-MP4 tracks.
+  final StreamType streamType = switch (episode.kind) {
+    DownloadKind.mp4 => StreamType.mp4,
+    DownloadKind.hls => StreamType.hls,
+    DownloadKind.dash => StreamType.dash,
+  };
 
   final List<SubtitleTrack> subtitles = <SubtitleTrack>[
     for (final DownloadedSubtitle s in episode.subtitles)

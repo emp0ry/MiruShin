@@ -7,7 +7,7 @@ void main() {
       expect(
         playbackCompletionIsCredible(
           isCompleted: true,
-          isOfflineLocalHls: true,
+          isOfflineLocalSegmentedMedia: true,
           duration: const Duration(seconds: 7),
           maxObservedPosition: const Duration(seconds: 7),
         ),
@@ -19,7 +19,7 @@ void main() {
       expect(
         playbackCompletionIsCredible(
           isCompleted: true,
-          isOfflineLocalHls: true,
+          isOfflineLocalSegmentedMedia: true,
           duration: const Duration(minutes: 24),
           maxObservedPosition: const Duration(minutes: 24),
         ),

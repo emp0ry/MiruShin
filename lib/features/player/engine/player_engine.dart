@@ -132,6 +132,13 @@ abstract class PlayerEngine implements Listenable {
   /// reinforcement from the playback controller.
   bool get managesInitialPosition => false;
 
+  /// Whether the backend has finished applying [open]'s `startAt` value.
+  ///
+  /// A backend may briefly expose frames from the beginning while its native
+  /// demuxer becomes seekable. Automatic timeline actions must wait for this
+  /// signal, otherwise they can race the startup seek and move playback twice.
+  bool get initialPositionSettled => true;
+
   Future<void> setHostFullscreen(bool fullscreen) async {}
 
   /// URL that native desktop PiP should use when taking over playback.
