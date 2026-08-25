@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.6.0",
+          "date": "2026-08-25",
+          "localizedDescription": "- Added automatic desktop update downloads and installation.\n- Fixed Sora and Cloudflare challenge handling on Windows.\n- Improved playback reliability with smarter stream fallbacks and DASH-to-HLS support.\n- Improved download reliability with URL recovery and redirect handling.\n- Fixed several local and offline HLS playback issues.\n- Added faster, more resilient catalog loading with metadata caching.\n- Hidden AniList account and tracker connections while using the TMDB catalog.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.6.0/MiruShin-ios-v2.6.0.ipa",
+          "size": 29408476,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.5.0",
           "date": "2026-08-14",
           "localizedDescription": "- Fixed offline episode counts to show only episodes available for the selected season, including only released episodes for ongoing anime.\n- Fixed offline playback occasionally freezing around 7 seconds with automatic stall recovery.\n- Randomized the Board hero from the top 20 anime.\n- Improved AniList profile action buttons with a compact mobile layout.\n- Added the `Z` keyboard shortcut for player zoom.\n- Added a persistent option to enable or disable horizontal swipe seeking.\n- Improved mobile volume behavior and disabled vertical swipe volume gestures on all devices.\n- Redesigned and repositioned Watch, Trailer, and Edit buttons for responsive layouts.\n- Fixed an AniList details overflow affecting popularity and favorites on narrow screens.",
@@ -407,11 +415,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.5.0",
-      "versionDate": "2026-08-14",
-      "versionDescription": "- Fixed offline episode counts to show only episodes available for the selected season, including only released episodes for ongoing anime.\n- Fixed offline playback occasionally freezing around 7 seconds with automatic stall recovery.\n- Randomized the Board hero from the top 20 anime.\n- Improved AniList profile action buttons with a compact mobile layout.\n- Added the `Z` keyboard shortcut for player zoom.\n- Added a persistent option to enable or disable horizontal swipe seeking.\n- Improved mobile volume behavior and disabled vertical swipe volume gestures on all devices.\n- Redesigned and repositioned Watch, Trailer, and Edit buttons for responsive layouts.\n- Fixed an AniList details overflow affecting popularity and favorites on narrow screens.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.5.0/MiruShin-ios-v2.5.0.ipa",
-      "size": 28318491,
+      "version": "2.6.0",
+      "versionDate": "2026-08-25",
+      "versionDescription": "- Added automatic desktop update downloads and installation.\n- Fixed Sora and Cloudflare challenge handling on Windows.\n- Improved playback reliability with smarter stream fallbacks and DASH-to-HLS support.\n- Improved download reliability with URL recovery and redirect handling.\n- Fixed several local and offline HLS playback issues.\n- Added faster, more resilient catalog loading with metadata caching.\n- Hidden AniList account and tracker connections while using the TMDB catalog.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.6.0/MiruShin-ios-v2.6.0.ipa",
+      "size": 29408476,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
