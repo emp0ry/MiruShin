@@ -13,6 +13,7 @@ import '../../../app/theme/app_spacing.dart';
 import '../../../app/theme/app_theme_extension.dart';
 import '../../../core/platform/url_opener.dart';
 import '../../../core/widgets/app_logo.dart';
+import '../application/desktop_update_controller.dart';
 import '../application/update_checker_provider.dart';
 
 class StartupUpdatePopup extends ConsumerStatefulWidget {
@@ -64,6 +65,11 @@ class _StartupUpdatePopupState extends ConsumerState<StartupUpdatePopup> {
   }
 
   Future<void> _download(UpdateInfo info) async {
+    final bool handled = await ref
+        .read(desktopUpdateControllerProvider.notifier)
+        .installAndRestart(info);
+    if (handled) return;
+
     if (await openExternalUrl(info.releaseUrl)) {
       // Only dismiss once the browser actually opened.
       _hideForSession(info.tagName);
@@ -86,7 +92,13 @@ class _StartupUpdatePopupState extends ConsumerState<StartupUpdatePopup> {
   @override
   Widget build(BuildContext context) {
     final AsyncValue<UpdateInfo?> update = ref.watch(updateCheckerProvider);
+    final DesktopUpdateState installState = ref.watch(
+      desktopUpdateControllerProvider,
+    );
     final UpdateInfo? info = update.asData?.value;
+    final bool automaticUpdate =
+        info != null &&
+        ref.read(desktopUpdateControllerProvider.notifier).canInstall(info);
     final bool show =
         info != null &&
         info.hasUpdate &&
@@ -139,7 +151,11 @@ class _StartupUpdatePopupState extends ConsumerState<StartupUpdatePopup> {
                 ? _UpdateNotificationCard(
                     key: ValueKey<String>('update-${info.tagName}'),
                     info: info,
-                    onDownload: () => unawaited(_download(info)),
+                    installState: installState,
+                    automaticUpdate: automaticUpdate,
+                    onDownload: installState.isBusy
+                        ? null
+                        : () => unawaited(_download(info)),
                     onDismissVersion: () =>
                         unawaited(_dismissVersion(info.tagName)),
                     onLater: () => _hideForSession(info.tagName),
@@ -155,6 +171,8 @@ class _StartupUpdatePopupState extends ConsumerState<StartupUpdatePopup> {
 class _UpdateNotificationCard extends StatelessWidget {
   const _UpdateNotificationCard({
     required this.info,
+    required this.installState,
+    required this.automaticUpdate,
     required this.onDownload,
     required this.onDismissVersion,
     required this.onLater,
@@ -162,7 +180,9 @@ class _UpdateNotificationCard extends StatelessWidget {
   });
 
   final UpdateInfo info;
-  final VoidCallback onDownload;
+  final DesktopUpdateState installState;
+  final bool automaticUpdate;
+  final VoidCallback? onDownload;
   final VoidCallback onDismissVersion;
   final VoidCallback onLater;
 
@@ -260,8 +280,21 @@ class _UpdateNotificationCard extends StatelessWidget {
                                 offset: const Offset(0, 2),
                                 child: FilledButton.icon(
                                   onPressed: onDownload,
-                                  icon: const Icon(Icons.download_rounded),
-                                  label: Text(context.t('Download')),
+                                  icon: installState.isBusy
+                                      ? const SizedBox.square(
+                                          dimension: 16,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                          ),
+                                        )
+                                      : const Icon(Icons.download_rounded),
+                                  label: Text(
+                                    _updateButtonLabel(
+                                      context,
+                                      installState,
+                                      automaticUpdate: automaticUpdate,
+                                    ),
+                                  ),
                                   style: FilledButton.styleFrom(
                                     visualDensity: compact
                                         ? VisualDensity.compact
@@ -277,8 +310,14 @@ class _UpdateNotificationCard extends StatelessWidget {
                               ),
                             ],
                           ),
+                          if (installState.phase !=
+                              DesktopUpdatePhase.idle) ...<Widget>[
+                            const SizedBox(height: AppSpacing.md),
+                            _UpdateProgress(state: installState),
+                          ],
                           const SizedBox(height: AppSpacing.lg),
                           _UpdateActions(
+                            enabled: !installState.isBusy,
                             onDismissVersion: onDismissVersion,
                             onLater: onLater,
                           ),
@@ -297,8 +336,13 @@ class _UpdateNotificationCard extends StatelessWidget {
 }
 
 class _UpdateActions extends StatelessWidget {
-  const _UpdateActions({required this.onDismissVersion, required this.onLater});
+  const _UpdateActions({
+    required this.enabled,
+    required this.onDismissVersion,
+    required this.onLater,
+  });
 
+  final bool enabled;
   final VoidCallback onDismissVersion;
   final VoidCallback onLater;
 
@@ -308,14 +352,14 @@ class _UpdateActions extends StatelessWidget {
       children: <Widget>[
         Expanded(
           child: _QuietUpdateButton(
-            onPressed: onDismissVersion,
+            onPressed: enabled ? onDismissVersion : null,
             label: context.t("Don't Show Again"),
           ),
         ),
         const SizedBox(width: AppSpacing.sm),
         Expanded(
           child: _QuietUpdateButton(
-            onPressed: onLater,
+            onPressed: enabled ? onLater : null,
             label: context.t('Later'),
           ),
         ),
@@ -327,7 +371,7 @@ class _UpdateActions extends StatelessWidget {
 class _QuietUpdateButton extends StatelessWidget {
   const _QuietUpdateButton({required this.onPressed, required this.label});
 
-  final VoidCallback onPressed;
+  final VoidCallback? onPressed;
   final String label;
 
   @override
@@ -354,4 +398,69 @@ class _QuietUpdateButton extends StatelessWidget {
       ),
     );
   }
+}
+
+class _UpdateProgress extends StatelessWidget {
+  const _UpdateProgress({required this.state});
+
+  final DesktopUpdateState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final AppThemeExtension palette = AppThemeExtension.of(context);
+    final bool failed = state.phase == DesktopUpdatePhase.failed;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        if (!failed)
+          LinearProgressIndicator(
+            value: state.progress,
+            minHeight: 3,
+            borderRadius: AppRadius.all(AppRadius.xl),
+          ),
+        if (!failed) const SizedBox(height: AppSpacing.sm),
+        Text(
+          failed
+              ? '${context.t('Automatic update failed')}: ${state.error ?? context.t('Unknown error')}'
+              : _updateStatusLabel(context, state),
+          maxLines: failed ? 3 : 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: failed
+                ? Theme.of(context).colorScheme.error
+                : palette.textSecondaryColor,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+String _updateButtonLabel(
+  BuildContext context,
+  DesktopUpdateState state, {
+  required bool automaticUpdate,
+}) {
+  return switch (state.phase) {
+    DesktopUpdatePhase.downloading =>
+      state.progress == null
+          ? context.t('Downloading update')
+          : '${(state.progress! * 100).round()}%',
+    DesktopUpdatePhase.preparing => context.t('Preparing update'),
+    DesktopUpdatePhase.restarting => context.t('Restarting'),
+    DesktopUpdatePhase.failed => context.t('Retry'),
+    DesktopUpdatePhase.idle => context.t(
+      automaticUpdate ? 'Update' : 'Download',
+    ),
+  };
+}
+
+String _updateStatusLabel(BuildContext context, DesktopUpdateState state) {
+  return switch (state.phase) {
+    DesktopUpdatePhase.downloading => context.t('Downloading update'),
+    DesktopUpdatePhase.preparing => context.t('Preparing update'),
+    DesktopUpdatePhase.restarting => context.t('Restarting to finish update'),
+    DesktopUpdatePhase.failed => context.t('Automatic update failed'),
+    DesktopUpdatePhase.idle => '',
+  };
 }

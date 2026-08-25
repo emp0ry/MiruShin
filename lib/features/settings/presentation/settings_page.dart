@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:cached_network_image/cached_network_image.dart';
@@ -39,6 +40,7 @@ import '../../tracking/application/tracker_library_provider.dart';
 import '../../tracking/domain/tracker_models.dart';
 import '../../tracking/presentation/anilist_login_flow.dart';
 import '../../tracking/presentation/tracker_login_flow.dart';
+import '../application/desktop_update_controller.dart';
 import '../application/settings_state.dart';
 import '../application/update_checker_provider.dart';
 import 'widgets/settings_widgets.dart';
@@ -109,9 +111,15 @@ class _UpdateSection extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final AsyncValue<UpdateInfo?> update = ref.watch(updateCheckerProvider);
+    final DesktopUpdateState installState = ref.watch(
+      desktopUpdateControllerProvider,
+    );
     return update.when(
       data: (UpdateInfo? info) {
         if (info == null || !info.hasUpdate) return const SizedBox.shrink();
+        final bool automaticUpdate = ref
+            .read(desktopUpdateControllerProvider.notifier)
+            .canInstall(info);
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
@@ -121,11 +129,28 @@ class _UpdateSection extends ConsumerWidget {
               children: <Widget>[
                 SettingsRow(
                   title: context.t('New version available'),
-                  subtitle: info.tagName,
+                  subtitle: _settingsUpdateSubtitle(
+                    context,
+                    info,
+                    installState,
+                  ),
                   trailing: FilledButton.icon(
-                    onPressed: () => openExternalUrl(info.releaseUrl),
-                    icon: const Icon(Icons.download_rounded),
-                    label: Text(context.t('Download')),
+                    onPressed: installState.isBusy
+                        ? null
+                        : () => unawaited(_installDesktopUpdate(ref, info)),
+                    icon: installState.isBusy
+                        ? const SizedBox.square(
+                            dimension: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.download_rounded),
+                    label: Text(
+                      _settingsUpdateButtonLabel(
+                        context,
+                        installState,
+                        automaticUpdate: automaticUpdate,
+                      ),
+                    ),
                   ),
                 ),
               ],
@@ -138,6 +163,51 @@ class _UpdateSection extends ConsumerWidget {
       error: (_, _) => const SizedBox.shrink(),
     );
   }
+}
+
+Future<void> _installDesktopUpdate(WidgetRef ref, UpdateInfo info) async {
+  final bool handled = await ref
+      .read(desktopUpdateControllerProvider.notifier)
+      .installAndRestart(info);
+  if (!handled) await openExternalUrl(info.releaseUrl);
+}
+
+String _settingsUpdateSubtitle(
+  BuildContext context,
+  UpdateInfo info,
+  DesktopUpdateState state,
+) {
+  final String? status = switch (state.phase) {
+    DesktopUpdatePhase.idle => null,
+    DesktopUpdatePhase.downloading =>
+      state.progress == null
+          ? context.t('Downloading update')
+          : '${context.t('Downloading update')} ${(state.progress! * 100).round()}%',
+    DesktopUpdatePhase.preparing => context.t('Preparing update'),
+    DesktopUpdatePhase.restarting => context.t('Restarting to finish update'),
+    DesktopUpdatePhase.failed =>
+      '${context.t('Automatic update failed')}: ${state.error ?? context.t('Unknown error')}',
+  };
+  return status == null ? info.tagName : '${info.tagName} · $status';
+}
+
+String _settingsUpdateButtonLabel(
+  BuildContext context,
+  DesktopUpdateState state, {
+  required bool automaticUpdate,
+}) {
+  return switch (state.phase) {
+    DesktopUpdatePhase.downloading =>
+      state.progress == null
+          ? context.t('Downloading update')
+          : '${(state.progress! * 100).round()}%',
+    DesktopUpdatePhase.preparing => context.t('Preparing update'),
+    DesktopUpdatePhase.restarting => context.t('Restarting'),
+    DesktopUpdatePhase.failed => context.t('Retry'),
+    DesktopUpdatePhase.idle => context.t(
+      automaticUpdate ? 'Update' : 'Download',
+    ),
+  };
 }
 
 class _WatchPartySection extends StatelessWidget {
