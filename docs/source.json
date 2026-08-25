@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.6.2",
+          "date": "2026-08-25",
+          "localizedDescription": "- Fixed Sora/Cloudflare security checks crashing after completion on Windows.\n- Fixed browser session and cookie handling across supported platforms.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.6.2/MiruShin-ios-v2.6.2.ipa",
+          "size": 28586517,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.6.1",
           "date": "2026-08-25",
           "localizedDescription": "- Fixed Sora/Cloudflare security checks crashing after completion on Windows.\n- Fixed browser session and cookie handling across supported platforms.",
@@ -423,11 +431,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.6.1",
+      "version": "2.6.2",
       "versionDate": "2026-08-25",
       "versionDescription": "- Fixed Sora/Cloudflare security checks crashing after completion on Windows.\n- Fixed browser session and cookie handling across supported platforms.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.6.1/MiruShin-ios-v2.6.1.ipa",
-      "size": 28589372,
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.6.2/MiruShin-ios-v2.6.2.ipa",
+      "size": 28586517,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
