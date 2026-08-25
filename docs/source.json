@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.6.4",
+          "date": "2026-08-25",
+          "localizedDescription": "- Fixed Sora/Cloudflare security checks not completing on Android, iOS, and macOS.\n- Fixed Windows crashes when starting Sora/Cloudflare security checks.\n- Fixed protected-source parsing across supported platforms.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.6.4/MiruShin-ios-v2.6.4.ipa",
+          "size": 28586997,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.6.3",
           "date": "2026-08-25",
           "localizedDescription": "- Fixed Sora/Cloudflare security checks not completing after website redirects.\n- Fixed protected-source parsing across Android, iOS, macOS, and Windows.",
@@ -439,11 +447,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.6.3",
+      "version": "2.6.4",
       "versionDate": "2026-08-25",
-      "versionDescription": "- Fixed Sora/Cloudflare security checks not completing after website redirects.\n- Fixed protected-source parsing across Android, iOS, macOS, and Windows.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.6.3/MiruShin-ios-v2.6.3.ipa",
-      "size": 28588602,
+      "versionDescription": "- Fixed Sora/Cloudflare security checks not completing on Android, iOS, and macOS.\n- Fixed Windows crashes when starting Sora/Cloudflare security checks.\n- Fixed protected-source parsing across supported platforms.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.6.4/MiruShin-ios-v2.6.4.ipa",
+      "size": 28586997,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
