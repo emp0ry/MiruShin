@@ -53,7 +53,7 @@ class SettingsPage extends ConsumerWidget {
     final SettingsState settings = ref.watch(settingsProvider);
     final SettingsController controller = ref.read(settingsProvider.notifier);
     final CatalogMode catalogMode = ref.watch(catalogModeProvider);
-    final bool showAniListProfileUi = catalogMode == CatalogMode.anilist;
+    final bool showAniListSettings = catalogMode == CatalogMode.anilist;
     final Widget content = SingleChildScrollView(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -61,16 +61,18 @@ class SettingsPage extends ConsumerWidget {
           SectionHeader(title: context.t('Settings')),
           const SizedBox(height: AppSpacing.lg),
           const _UpdateSection(),
-          if (showAniListProfileUi) ...<Widget>[
+          if (showAniListSettings) ...<Widget>[
             const _AccountSection(),
             const SizedBox(height: AppSpacing.lg),
           ],
-          if (showAniListProfileUi && settings.hasAniListSession) ...<Widget>[
+          if (showAniListSettings && settings.hasAniListSession) ...<Widget>[
             const _AniListSettingsShortcutSection(),
             const SizedBox(height: AppSpacing.lg),
           ],
-          const _TrackerConnectionsSection(),
-          const SizedBox(height: AppSpacing.lg),
+          if (showAniListSettings) ...<Widget>[
+            const _TrackerConnectionsSection(),
+            const SizedBox(height: AppSpacing.lg),
+          ],
           _AppearanceSection(settings: settings, controller: controller),
           const SizedBox(height: AppSpacing.lg),
           const _WatchPartySection(),

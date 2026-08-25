@@ -1,7 +1,7 @@
 name: mirushin
 description: "New way to watch and discover media."
 publish_to: 'none'
-version: 2.4.0+48
+version: 2.6.0+49
 
 environment:
   sdk: ^3.11.4
