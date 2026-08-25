@@ -87,7 +87,9 @@ jobs:
           path: ${{ steps.apk.outputs.apk_path }}
 
   build-linux:
-    runs-on: ubuntu-latest
+    # flutter_inappwebview_linux 0.1.0-beta.1 needs WPE WebKit 1.0.
+    # Ubuntu 24.04 no longer ships libwpewebkit-1.0-dev, but 22.04 does.
+    runs-on: ubuntu-22.04
     # Pin the MDK SDK (the native libmdk.so fvp bundles) to a stable, tagged
     # release. By default fvp downloads the SourceForge *nightly* at build
     # time (fvp cmake/deps.cmake), so the bundled libmdk silently changes day
@@ -114,7 +116,9 @@ jobs:
             clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev \
             libfuse2 libglib2.0-0 libsecret-1-dev libpulse0 python3-pil \
             libwebkit2gtk-4.1-0 libwebkit2gtk-4.1-dev \
-            libsoup-3.0-0 libsoup-3.0-dev
+            libsoup-3.0-0 libsoup-3.0-dev libepoxy-dev libwayland-dev \
+            libwpe-1.0-dev libwpebackend-fdo-1.0-dev \
+            libwpewebkit-1.0-dev
           # libmdk ships its OWN FFmpeg (libffmpeg.so.8, bundled below), so the
           # host does not need the system ffmpeg/VA-API stack. libpulse0 stays
           # because libmdk DT_NEEDs libpulse.so.0 and linuxdeploy bundles it.
@@ -511,6 +515,9 @@ jobs:
 
       - name: Flutter pub get
         run: flutter pub get
+
+      - name: Patch flutter_inappwebview macOS for Xcode 26
+        run: bash .github/scripts/patch-flutter-inappwebview-macos.sh
 
       - name: Generate .env (TMDB key)
         uses: ./.github/actions/generate-env

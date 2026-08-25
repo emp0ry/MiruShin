@@ -27,6 +27,9 @@ jobs:
       - name: Flutter pub get
         run: flutter pub get
 
+      - name: Patch flutter_inappwebview macOS for Xcode 26
+        run: bash .github/scripts/patch-flutter-inappwebview-macos.sh
+
       - name: Generate .env (TMDB key)
         uses: ./.github/actions/generate-env
         with:
