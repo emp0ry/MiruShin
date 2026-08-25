@@ -146,8 +146,8 @@ class _MiruShinAppState extends ConsumerState<MiruShinApp> {
 }
 
 /// Whether an interactive Cloudflare challenge WebView (flutter_inappwebview)
-/// is available on this platform. Linux has no implementation that can read the
-/// HttpOnly `cf_clearance` cookie, so the solver is left unregistered there and
+/// is available on this platform. Linux has no embedded WebView implementation
+/// for the browser-context retry, so the solver is left unregistered there and
 /// challenged fetches surface their error instead of opening a broken WebView.
 bool get _cloudflareWebViewSupported {
   if (kIsWeb) return false;

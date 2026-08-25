@@ -260,7 +260,7 @@ async function extractDetails(url) {
   );
 
   test(
-    'standard Android/iOS/macOS flow preserves the 2.5.0 original-host replay',
+    'iOS browser flow replays Cloudflare on the effective redirected host',
     () async {
       final TargetPlatform? previousPlatform =
           debugDefaultTargetPlatformOverride;
@@ -292,9 +292,14 @@ async function extractDetails(url) {
         solverCalls++;
         solvedUri = url;
         return (
-          cookies: 'cf_clearance=stable-v250-token',
-          effectiveUri: url,
-          userAgent: 'Stable WebView Test UA',
+          cookies: 'cf_clearance=ios-browser-token',
+          effectiveUri: Uri(
+            scheme: url.scheme,
+            host: url.host,
+            port: url.hasPort ? url.port : null,
+            path: '/',
+          ),
+          userAgent: 'iOS WebView Test UA',
         );
       });
       addTearDown(() async {
@@ -311,10 +316,10 @@ async function searchResults(keyword) {
 }
 ''');
       final SoraInstalledAddon addon = SoraInstalledAddon(
-        id: 'stable-v250-cloudflare',
+        id: 'ios-browser-cloudflare',
         manifestUrl: 'https://manifest.example.test/addon.json',
         manifest: SoraAddonManifest.fromJson(<String, dynamic>{
-          'sourceName': 'Stable Cloudflare Test',
+          'sourceName': 'iOS Browser Cloudflare Test',
           'iconUrl': 'https://manifest.example.test/icon.png',
           'author': <String, dynamic>{'name': 'Tester'},
           'version': '1.0.0',
@@ -353,15 +358,16 @@ async function searchResults(keyword) {
 
       expect(results.single.title, 'Redirected Result');
       expect(solverCalls, 1);
-      expect(solvedUri, originalUri);
-      expect(adapter.originalRequests, hasLength(2));
+      expect(solvedUri, effectiveUri);
+      expect(adapter.originalRequests, hasLength(1));
+      expect(adapter.effectiveRequests, hasLength(1));
       expect(
-        adapter.originalRequests.last.headers['Cookie'],
-        contains('cf_clearance=stable-v250-token'),
+        adapter.effectiveRequests.last.headers['Cookie'],
+        contains('cf_clearance=ios-browser-token'),
       );
       expect(
-        adapter.originalRequests.last.headers['User-Agent'],
-        'Stable WebView Test UA',
+        adapter.effectiveRequests.last.headers['User-Agent'],
+        'iOS WebView Test UA',
       );
     },
   );
@@ -400,7 +406,12 @@ async function searchResults(keyword) {
         solvedUri = url;
         return (
           cookies: 'cf_clearance=windows-test-token',
-          effectiveUri: url,
+          effectiveUri: Uri(
+            scheme: url.scheme,
+            host: url.host,
+            port: url.hasPort ? url.port : null,
+            path: '/',
+          ),
           userAgent: 'Windows WebView Test UA',
         );
       });

@@ -39,8 +39,8 @@ class SoraJsRuntime {
   final SoraAddonStore _store;
   final Dio _dio;
   final CloudflareChallengeService _cf = CloudflareChallengeService.instance;
-  final Map<String, _WindowsCloudflareWebViewSession>
-  _windowsCloudflareSessions = <String, _WindowsCloudflareWebViewSession>{};
+  final Map<String, _CloudflareWebViewSession> _cloudflareWebViewSessions =
+      <String, _CloudflareWebViewSession>{};
   final Map<String, _LoadedSoraModule> _loaded = <String, _LoadedSoraModule>{};
   final List<String> _loadOrder = <String>[];
   Future<void> _jsTail = Future<void>.value();
@@ -86,8 +86,19 @@ class SoraJsRuntime {
   static bool get _usesQuickJs =>
       Platform.isLinux || Platform.isWindows || Platform.isAndroid;
 
-  bool get _usesWindowsCloudflareTransport =>
-      Platform.isWindows && defaultTargetPlatform == TargetPlatform.windows;
+  bool get _usesCloudflareBrowserTransport {
+    if (kIsWeb) return false;
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.android:
+      case TargetPlatform.iOS:
+      case TargetPlatform.macOS:
+      case TargetPlatform.windows:
+        return true;
+      case TargetPlatform.linux:
+      case TargetPlatform.fuchsia:
+        return false;
+    }
+  }
 
   JavascriptRuntime _runtime() {
     final JavascriptRuntime? existing = _sharedRuntime;
@@ -246,7 +257,7 @@ class SoraJsRuntime {
     unawaited(
       _serialized<void>(() async {
         _removeAllModules();
-        await _disposeWindowsSessions(waitForRequests: true);
+        await _disposeCloudflareWebViewSessions(waitForRequests: true);
       }),
     );
   }
@@ -256,14 +267,17 @@ class SoraJsRuntime {
   /// be waiting for a browser request during application shutdown.
   Future<void> shutdown() async {
     cancelActiveSearches();
-    await _disposeWindowsSessions(waitForRequests: false);
+    await _disposeCloudflareWebViewSessions(waitForRequests: false);
   }
 
-  Future<void> _disposeWindowsSessions({required bool waitForRequests}) async {
-    final List<_WindowsCloudflareWebViewSession> sessions =
-        _windowsCloudflareSessions.values.toList(growable: false);
-    _windowsCloudflareSessions.clear();
-    for (final _WindowsCloudflareWebViewSession session in sessions) {
+  Future<void> _disposeCloudflareWebViewSessions({
+    required bool waitForRequests,
+  }) async {
+    final List<_CloudflareWebViewSession> sessions = _cloudflareWebViewSessions
+        .values
+        .toList(growable: false);
+    _cloudflareWebViewSessions.clear();
+    for (final _CloudflareWebViewSession session in sessions) {
       await session.dispose(waitForRequests: waitForRequests);
     }
   }
@@ -846,17 +860,17 @@ class SoraJsRuntime {
   /// Runs [send] and, if the response is a Cloudflare challenge, presents the
   /// interactive solver and retries with the freshly captured clearance.
   ///
-  /// On Windows a clearance cookie is not always enough for a separate Dart
-  /// HTTP stack: browser verification can also be bound to the WebView2 client
-  /// fingerprint. Protected retries therefore stay inside a reusable headless
-  /// WebView2 session after the visible challenge has succeeded. Other
-  /// platforms deliberately retain the existing HTTP retry behavior.
+  /// A clearance cookie is not always enough for a separate Dart HTTP stack:
+  /// browser verification can also be bound to the browser TLS/client
+  /// fingerprint. On Android, iOS, macOS, and Windows, protected retries stay
+  /// inside a reusable headless WebView that shares the visible solver's cookie
+  /// store and browser identity.
   Future<Response<String>> _sendWithCloudflare(
     _CloudflareBrowserRequest request,
     String userAgent,
     Future<Response<String>> Function(Uri requestUri) send,
   ) async {
-    if (!_usesWindowsCloudflareTransport) {
+    if (!_usesCloudflareBrowserTransport) {
       return _sendWithStableCloudflare(request.uri, userAgent, send);
     }
 
@@ -865,24 +879,22 @@ class SoraJsRuntime {
     if (!_isCloudflareChallenge(response)) return response;
 
     // Dart deliberately does not forward sensitive headers such as Cookie to a
-    // different host during an automatic redirect. WebView2 can solve on the
-    // redirected/canonical host, so Windows must replay directly against the
-    // effective response URI. Other platforms retain their existing URI flow.
+    // different host during an automatic redirect. The browser can solve on
+    // the redirected/canonical host, so replay against the effective URI.
     final Uri challengeUri = response.realUri.host.isNotEmpty
         ? response.realUri
         : uri;
 
     final String? existing = await _cf.cookies.cookieFor(challengeUri);
     if (existing != null && existing.isNotEmpty) {
-      final Response<String>? browserResponse = await _sendWithWindowsWebView(
-        request.withUri(challengeUri),
-      );
+      final Response<String>? browserResponse =
+          await _sendWithCloudflareWebView(request.withUri(challengeUri));
       if (browserResponse != null) {
         response = browserResponse;
         if (!_isCloudflareChallenge(response)) return response;
         await _cf.cookies.clear(challengeUri);
       } else {
-        // Unit-test environments and installations without WebView2 still
+        // Unit-test environments and installations without an embedded WebView
         // get the stable cookie retry rather than failing the request.
         response = await send(challengeUri);
         if (!_isCloudflareChallenge(response)) return response;
@@ -894,10 +906,13 @@ class SoraJsRuntime {
       url: challengeUri,
       userAgent: userAgent,
     );
-    if (solved == null || solved.cookies.trim().isEmpty) return response;
+    // A successful WebView solve is enough even when an HttpOnly clearance
+    // cookie cannot be read through the platform cookie API. The browser retry
+    // below still shares that cookie store and browser fingerprint.
+    if (solved == null) return response;
     final Uri replayUri = _cloudflareReplayUri(solved, challengeUri);
 
-    final Response<String>? browserResponse = await _sendWithWindowsWebView(
+    final Response<String>? browserResponse = await _sendWithCloudflareWebView(
       request.withUri(replayUri),
     );
     if (browserResponse != null) {
@@ -914,11 +929,7 @@ class SoraJsRuntime {
     return response;
   }
 
-  /// The standard Cloudflare path used by Android, iOS, and macOS.
-  ///
-  /// Keep this isolated from Windows browser transport: after the interactive
-  /// WebView stores the clearance cookie and matching user agent, retry the
-  /// original request exactly as 2.5.0 did.
+  /// Fallback for platforms without an embedded WebView implementation.
   Future<Response<String>> _sendWithStableCloudflare(
     Uri uri,
     String userAgent,
@@ -933,8 +944,6 @@ class SoraJsRuntime {
     );
     if (solved == null || solved.cookies.trim().isEmpty) return response;
 
-    // Preserve 2.5.0 behavior on Android/iOS/macOS: replay the same request.
-    // Redirected-host/browser-context transport is Windows-only above.
     response = await send(uri);
     if (_isCloudflareChallenge(response)) {
       await _cf.cookies.clear(uri);
@@ -947,13 +956,23 @@ class SoraJsRuntime {
     if (uri.host.isEmpty || (uri.scheme != 'http' && uri.scheme != 'https')) {
       return fallback;
     }
-    return uri;
+    // The visible solver intentionally loads the site root, so its effective
+    // URI supplies the canonical origin only. Preserve the protected request's
+    // path/query instead of accidentally parsing the site's home page.
+    return Uri(
+      scheme: uri.scheme,
+      host: uri.host,
+      port: uri.hasPort ? uri.port : null,
+      path: fallback.path,
+      query: fallback.hasQuery ? fallback.query : null,
+      fragment: fallback.hasFragment ? fallback.fragment : null,
+    );
   }
 
-  Future<Response<String>?> _sendWithWindowsWebView(
+  Future<Response<String>?> _sendWithCloudflareWebView(
     _CloudflareBrowserRequest request,
   ) async {
-    if (!_usesWindowsCloudflareTransport) return null;
+    if (!_usesCloudflareBrowserTransport) return null;
     final Uri origin = Uri(
       scheme: request.uri.scheme,
       host: request.uri.host,
@@ -961,15 +980,21 @@ class SoraJsRuntime {
       path: '/',
     );
     final String key = origin.toString();
-    final _WindowsCloudflareWebViewSession session = _windowsCloudflareSessions
-        .putIfAbsent(key, () => _WindowsCloudflareWebViewSession(origin));
+    final _CloudflareWebViewSession session = _cloudflareWebViewSessions
+        .putIfAbsent(key, () => _CloudflareWebViewSession(origin));
     try {
       return await session.send(
         request,
         cookieHeader: await _cf.cookies.cookieFor(request.uri),
       );
-    } catch (_) {
-      _windowsCloudflareSessions.remove(key);
+    } catch (error) {
+      if (kDebugMode) {
+        debugPrint(
+          '[Cloudflare] embedded browser request failed for '
+          '${request.uri}: $error',
+        );
+      }
+      _cloudflareWebViewSessions.remove(key);
       unawaited(session.dispose());
       return null;
     }
@@ -1126,7 +1151,7 @@ class SoraJsRuntime {
           send,
         );
         final Uri cookieUri =
-            _usesWindowsCloudflareTransport && response.realUri.host.isNotEmpty
+            _usesCloudflareBrowserTransport && response.realUri.host.isNotEmpty
             ? response.realUri
             : uri;
         capturedCookies = await _cf.cookies.cookieFor(cookieUri);
@@ -1739,11 +1764,11 @@ class _CloudflareBrowserRequest {
   }
 }
 
-/// A same-origin browser transport used only after Windows has encountered a
-/// challenge. It shares WebView2's default profile with the visible solver, so
-/// cookies and the browser fingerprint remain together for protected retries.
-class _WindowsCloudflareWebViewSession {
-  _WindowsCloudflareWebViewSession(this.origin);
+/// A same-origin browser transport used after a native platform encounters a
+/// challenge. It shares the platform WebView's default profile with the visible
+/// solver, so cookies and the browser fingerprint remain together.
+class _CloudflareWebViewSession {
+  _CloudflareWebViewSession(this.origin);
 
   static const Duration _startupTimeout = Duration(seconds: 20);
   static const Duration _requestTimeout = Duration(seconds: 30);
@@ -1787,7 +1812,7 @@ class _WindowsCloudflareWebViewSession {
     try {
       await previous.catchError((Object _) {});
       if (_disposed) {
-        throw StateError('The Windows browser session has been disposed.');
+        throw StateError('The Cloudflare browser session has been disposed.');
       }
       await _ensureReady();
       await _syncCookies(request.uri, cookieHeader);
@@ -1821,7 +1846,7 @@ class _WindowsCloudflareWebViewSession {
     await loaded.future.timeout(_startupTimeout);
     _controller ??= headless.webViewController;
     if (_controller == null) {
-      throw StateError('Windows WebView2 did not create a controller.');
+      throw StateError('The embedded WebView did not create a controller.');
     }
   }
 
@@ -1898,11 +1923,11 @@ return {
         .timeout(_requestTimeout);
     final String error = result?.error?.trim() ?? '';
     if (error.isNotEmpty) {
-      throw StateError('Windows WebView2 request failed: $error');
+      throw StateError('Embedded WebView request failed: $error');
     }
     final Map<String, dynamic> value = _asMap(result?.value);
     if (value.isEmpty) {
-      throw StateError('Windows WebView2 returned no request result.');
+      throw StateError('Embedded WebView returned no request result.');
     }
 
     final Map<String, List<String>> responseHeaders = <String, List<String>>{};

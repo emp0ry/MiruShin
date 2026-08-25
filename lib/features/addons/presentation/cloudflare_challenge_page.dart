@@ -23,11 +23,12 @@ import '../application/cloudflare_challenge_service.dart';
 /// - Reads cookies from **this WebView's own store** (via `webViewController`)
 ///   so a fresh challenge isn't confused by stale cookies elsewhere.
 ///
-/// As soon as a `cf_clearance` cookie appears it captures every cookie for the
-/// host plus the native UA and reports them through [onResult]; the host removes
-/// the overlay. Hosted in an [OverlayEntry] (not a route) so unrelated
-/// navigation. A source-resolution flow that pops its own routes cannot tear it
-/// down before the user solves the challenge.
+/// Completion is confirmed from both cookie state and the live document. This
+/// also works when a platform keeps the HttpOnly `cf_clearance` cookie hidden
+/// from Dart: after an actual challenge was observed, a stable clean document
+/// proves that the shared browser session is ready. The host then removes the
+/// overlay. It is hosted in an [OverlayEntry] (not a route), so a source flow
+/// that pops its own routes cannot tear it down before the user solves it.
 class CloudflareChallengePage extends StatefulWidget {
   const CloudflareChallengePage({
     required this.url,
@@ -57,14 +58,11 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
   /// bail out instead of spamming the log for the full timeout window.
   static const int _maxConsecutiveErrors = 5;
 
-  /// Number of consecutive polls a fresh `cf_clearance` must persist before we
-  /// accept it after the document no longer reports a challenge. WebView2 can
-  /// expose a cookie just before its final navigation settles, so require a few
-  /// stable observations without delaying the source request for several seconds.
-  static const int _windowsClearanceConfirmPolls = 3;
-  static const Duration _windowsClearanceIdleDelay = Duration(
-    milliseconds: 500,
-  );
+  /// A browser may expose a cookie just before its final navigation settles.
+  /// Require stable observations on every platform before removing the WebView.
+  static const int _clearanceConfirmPolls = 3;
+  static const int _cleanPageConfirmPolls = 2;
+  static const Duration _completionIdleDelay = Duration(milliseconds: 500);
 
   final CookieManager _cookies = CookieManager.instance();
   InAppWebViewController? _controller;
@@ -77,6 +75,8 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
   int _consecutiveErrors = 0;
   // Consecutive polls in which a cf_clearance cookie has been present.
   int _clearanceSeen = 0;
+  int _cleanPageSeen = 0;
+  bool _challengeObserved = false;
   DateTime? _clearanceFirstSeenAt;
   DateTime _lastWebViewActivityAt = DateTime.now();
   bool _clearanceCheckInFlight = false;
@@ -95,7 +95,12 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
 
   /// The page we actually load: the site root, where the challenge can run.
   late final WebUri _rootUri = WebUri(
-    Uri(scheme: widget.url.scheme, host: widget.url.host, path: '/').toString(),
+    Uri(
+      scheme: widget.url.scheme,
+      host: widget.url.host,
+      port: widget.url.hasPort ? widget.url.port : null,
+      path: '/',
+    ).toString(),
   );
 
   @override
@@ -107,29 +112,25 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
     _loadingFallbackTimer = Timer(_loadingFallback, () {
       if (mounted && _loading) setState(() => _loading = false);
     });
-    if (_isWindows) {
-      _controllerStartupTimer = Timer(const Duration(seconds: 8), () {
-        if (!_completed && _controller == null) {
-          if (kDebugMode) {
-            debugPrint('Embedded browser controller did not start; aborting.');
-          }
-          _finish(null);
+    _controllerStartupTimer = Timer(const Duration(seconds: 15), () {
+      if (!_completed && _controller == null) {
+        if (kDebugMode) {
+          debugPrint('Embedded browser controller did not start; aborting.');
         }
-      });
-    }
+        _finish(null);
+      }
+    });
     _prepareWebView();
   }
 
   Future<void> _prepareWebView() async {
-    if (!_isWindows) return;
     await _preClearCookies();
   }
 
   Future<void> _preClearCookies() async {
     try {
-      // Delete without webViewController because the WebView2 instance does not exist
-      // yet, and using webViewController in onWebViewCreated can race against
-      // WebView2 initialisation and silently block the subsequent navigation.
+      // Delete before the platform view exists. Clearing and loading from
+      // onWebViewCreated can race controller initialization on some engines.
       await _cookies
           .deleteCookies(url: _rootUri)
           .timeout(const Duration(seconds: 3), onTimeout: () => false);
@@ -165,19 +166,10 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
 
   /// Reads cookies for the challenge host, merging the available sources.
   ///
-  /// On Windows/WebView2, CookieManager reads through the plugin's hidden
-  /// default environment, while the visible controller can expose newer cookies
-  /// through DevTools first. Query both stores and merge them. On iOS/macOS the
-  /// controller read is canonical; this deliberately matches the v2.1.0 flow
-  /// that worked there.
+  /// Query both the root and current/redirected URL through the visible
+  /// controller and the shared platform store. Windows additionally has a
+  /// DevTools fallback for WebView2 cookies.
   Future<List<Cookie>> _readCookies() async {
-    if (!_isWindows) {
-      // This is the proven 2.5.0 Android/iOS/macOS path. Do one
-      // controller-scoped read for the root URL; redirected-host merging is a
-      // WebView2 workaround and must not change WKWebView/Android behavior.
-      return _safeGetCookies(withController: true);
-    }
-
     final Map<String, Cookie> merged = <String, Cookie>{};
     void addAll(Iterable<Cookie> cookies) {
       for (final Cookie cookie in cookies) {
@@ -185,8 +177,22 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
       }
     }
 
-    addAll(await _safeGetCookies(withController: false));
-    addAll(await _safeGetCookies(withController: true));
+    final List<InAppWebViewController> controllers = <InAppWebViewController>[
+      if (_controller case final InAppWebViewController controller) controller,
+      if (_popupController case final InAppWebViewController controller)
+        controller,
+    ];
+    final Set<String> urls = <String>{_rootUri.toString()};
+    for (final InAppWebViewController controller in controllers) {
+      urls.addAll(await _cookieUrls(controller));
+    }
+    for (final String rawUrl in urls) {
+      final WebUri url = WebUri(rawUrl);
+      addAll(await _safeGetCookies(url: url));
+      for (final InAppWebViewController controller in controllers) {
+        addAll(await _safeGetCookies(url: url, controller: controller));
+      }
+    }
     addAll(await _readDevToolsCookies(_controller));
     addAll(await _readDevToolsCookies(_popupController));
     addAll(await _readDocumentCookies(_controller));
@@ -208,15 +214,12 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
 
   /// A single getCookies call guarded by a timeout so it cannot hang the poll.
   Future<List<Cookie>> _safeGetCookies({
-    required bool withController,
     WebUri? url,
+    InAppWebViewController? controller,
   }) async {
     try {
       return await _cookies
-          .getCookies(
-            url: url ?? _rootUri,
-            webViewController: withController ? _controller : null,
-          )
+          .getCookies(url: url ?? _rootUri, webViewController: controller)
           .timeout(
             const Duration(milliseconds: 1500),
             onTimeout: () => const <Cookie>[],
@@ -326,7 +329,7 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
   Future<List<Cookie>> _readDocumentCookies(
     InAppWebViewController? controller,
   ) async {
-    if (!_isWindows || controller == null) return const <Cookie>[];
+    if (controller == null) return const <Cookie>[];
     try {
       final String raw = _normalizeUserAgent(
         await controller
@@ -394,17 +397,14 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
 
   Future<void> _checkForClearance() async {
     if (_completed || _controller == null) return;
-    if (_isWindows) {
-      // Timer ticks and WebView load events can arrive together on WebView2.
-      // Keep exactly one controller transaction active so view removal cannot
-      // race an older native callback. Other platforms retain the 2.5.0 flow.
-      if (_finishRequested || _clearanceCheckInFlight) return;
-      _clearanceCheckInFlight = true;
-    }
+    // Timer ticks and WebView load events can arrive together. Keep exactly one
+    // controller transaction active so view removal cannot race a native call.
+    if (_finishRequested || _clearanceCheckInFlight) return;
+    _clearanceCheckInFlight = true;
     try {
       final List<Cookie> cookies = await _readCookies();
       // Re-check after the await: dispose may have run while we were waiting.
-      if (_completed || (_isWindows && _finishRequested)) return;
+      if (_completed || _finishRequested) return;
       _consecutiveErrors = 0;
       final bool cleared = cookies.any(
         (Cookie c) => c.name == 'cf_clearance' && _cookieValue(c).isNotEmpty,
@@ -415,24 +415,31 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
           'cf_clearance=$cleared, names=${cookies.map((Cookie c) => c.name).toList()}',
         );
       }
-      if (!cleared) {
+      if (cleared) {
+        _clearanceSeen++;
+        _clearanceFirstSeenAt ??= DateTime.now();
+      } else {
         _clearanceSeen = 0;
         _clearanceFirstSeenAt = null;
-        return;
       }
-      _clearanceSeen++;
-      _clearanceFirstSeenAt ??= DateTime.now();
 
-      // A cf_clearance cookie alone isn't proof we passed. Cloudflare/WebView2
-      // can expose it before the visible Turnstile/CAPTCHA step has completed,
-      // so Windows also verifies the document no longer looks like a challenge
-      // and has settled before auto-closing.
+      // A cookie alone is not proof that the visible Turnstile/CAPTCHA has
+      // completed. Conversely, some platforms do not expose HttpOnly clearance
+      // cookies to Dart at all. Verify the document state on every platform.
       final bool stillChallenging = await _stillOnChallenge();
       if (stillChallenging) {
-        if (_isWindows) _windowsClearanceSettled();
+        _cleanPageSeen = 0;
+        if (cleared) _clearanceSettled();
         return;
       }
-      if (_isWindows && !_windowsClearanceSettled()) {
+      _cleanPageSeen++;
+      final bool cookieReady = cleared && _clearanceSettled();
+      final bool browserSessionReady =
+          _challengeObserved &&
+          _cleanPageSeen >= _cleanPageConfirmPolls &&
+          DateTime.now().difference(_lastWebViewActivityAt) >=
+              _completionIdleDelay;
+      if (!cookieReady && !browserSessionReady) {
         return;
       }
 
@@ -443,15 +450,15 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
       // cf_clearance is bound to the user agent that solved it. Capture the
       // WebView's user agent so the runtime can replay subsequent requests.
       final String userAgent = await _readUserAgent();
-      final Uri effectiveUri = _isWindows ? await _effectiveUri() : widget.url;
-      if (_completed || (_isWindows && _finishRequested)) return;
+      final Uri effectiveUri = await _effectiveUri();
+      if (_completed || _finishRequested) return;
       _finish((
         cookies: header,
         effectiveUri: effectiveUri,
         userAgent: userAgent,
       ));
     } catch (error) {
-      if (_completed || (_isWindows && _finishRequested)) return;
+      if (_completed || _finishRequested) return;
       _consecutiveErrors++;
       if (kDebugMode && _consecutiveErrors == 1) {
         debugPrint('[Cloudflare] cookie poll failed: $error');
@@ -470,16 +477,14 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
         _finish(null);
       }
     } finally {
-      if (_isWindows) {
-        _clearanceCheckInFlight = false;
-        if (_finishRequested && !_completed) {
-          _completeFinish(_pendingFinishResult);
-        }
+      _clearanceCheckInFlight = false;
+      if (_finishRequested && !_completed) {
+        _completeFinish(_pendingFinishResult);
       }
     }
   }
 
-  bool _windowsClearanceSettled() {
+  bool _clearanceSettled() {
     final DateTime now = DateTime.now();
     final DateTime? firstSeen = _clearanceFirstSeenAt;
     final Duration cookieAge = firstSeen == null
@@ -487,13 +492,13 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
         : now.difference(firstSeen);
     final Duration idleFor = now.difference(_lastWebViewActivityAt);
     final bool settled =
-        _clearanceSeen >= _windowsClearanceConfirmPolls &&
-        idleFor >= _windowsClearanceIdleDelay;
+        _clearanceSeen >= _clearanceConfirmPolls &&
+        idleFor >= _completionIdleDelay;
 
     if (!settled && kDebugMode) {
       debugPrint(
-        '[Cloudflare] waiting for Windows clearance settle: '
-        'seen=$_clearanceSeen/$_windowsClearanceConfirmPolls, '
+        '[Cloudflare] waiting for clearance settle: '
+        'seen=$_clearanceSeen/$_clearanceConfirmPolls, '
         'cookieAge=${cookieAge.inMilliseconds}ms, '
         'idle=${idleFor.inMilliseconds}ms',
       );
@@ -560,10 +565,7 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
     return trimmed;
   }
 
-  Future<bool?> _windowsDomShowsChallenge(
-    InAppWebViewController controller,
-  ) async {
-    if (!_isWindows) return null;
+  Future<bool?> _domShowsChallenge(InAppWebViewController controller) async {
     try {
       final Object? raw = await controller
           .evaluateJavascript(
@@ -606,7 +608,7 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
       final String html = '${state['html']}'.toLowerCase();
       final bool hasSelector = state['hasSelector'] == true;
       final String haystack = '$title\n$href\n$text\n$html';
-      final bool hasMarker = _windowsChallengeMarkers.any(haystack.contains);
+      final bool hasMarker = _challengeMarkers.any(haystack.contains);
 
       if (kDebugMode) {
         debugPrint(
@@ -617,7 +619,10 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
       }
 
       if (readyState == 'loading') return true;
-      if (hasSelector || hasMarker) return true;
+      if (hasSelector || hasMarker) {
+        _challengeObserved = true;
+        return true;
+      }
       if (title.trim().isEmpty && text.trim().isEmpty) return true;
       return false;
     } catch (error) {
@@ -628,7 +633,7 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
     }
   }
 
-  static const List<String> _windowsChallengeMarkers = <String>[
+  static const List<String> _challengeMarkers = <String>[
     'cdn-cgi/challenge-platform',
     '__cf_chl',
     'cf_chl',
@@ -689,15 +694,19 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
       if (kDebugMode) {
         debugPrint('[Cloudflare] state: title="$title" url="$url"');
       }
-      if (_isWindows && title.isEmpty) return true;
+      if (title.isEmpty) return true;
       // Cloudflare's interstitial title is "Just a moment..." in all locales.
-      if (title.contains('just a moment')) return true;
-      if (url.contains('__cf_chl')) return true;
-      final bool? domShowsChallenge = await _windowsDomShowsChallenge(
-        controller,
-      );
+      if (title.contains('just a moment')) {
+        _challengeObserved = true;
+        return true;
+      }
+      if (url.contains('__cf_chl')) {
+        _challengeObserved = true;
+        return true;
+      }
+      final bool? domShowsChallenge = await _domShowsChallenge(controller);
       if (domShowsChallenge != null) return domShowsChallenge;
-      return _isWindows;
+      return true;
     } catch (_) {
       // If we can't read the state, assume still challenging and keep waiting.
       return true;
@@ -705,18 +714,6 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
   }
 
   void _finish(CloudflareSolveResult? result) {
-    if (!_isWindows) {
-      // Preserve the proven 2.5.0 mobile/Apple behavior: report the clearance
-      // immediately after the controller-backed cookie read completes.
-      if (_completed) return;
-      _completed = true;
-      _pollTimer?.cancel();
-      _timeoutTimer?.cancel();
-      _loadingFallbackTimer?.cancel();
-      widget.onResult(result);
-      return;
-    }
-
     if (_completed || _finishRequested) return;
     _finishRequested = true;
     _pendingFinishResult = result;
@@ -748,8 +745,6 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
         'windowId=${createWindowAction.windowId}',
       );
     }
-    if (!_isWindows) return false;
-
     if (mounted && !_completed) {
       setState(() {
         _popupWindowId = createWindowAction.windowId;
@@ -773,11 +768,9 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
     unawaited(_checkForClearance());
   }
 
-  Widget _buildWindowsPopupWebView(int windowId) {
-    // flutter_inappwebview_windows completes WebView2's NewWindowRequested
-    // deferral only when a real InAppWebView with this windowId is mounted.
-    // A tiny mounted child satisfies the native contract without covering the
-    // challenge the user is solving in the main WebView.
+  Widget _buildPopupWebView(int windowId) {
+    // A real InAppWebView with this windowId completes the platform new-window
+    // contract. Keep it tiny so it does not cover the main challenge.
     return Positioned(
       left: 0,
       top: 0,
@@ -839,53 +832,12 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
     );
   }
 
-  Widget _buildDefaultWebView() {
-    return InAppWebView(
-      // No initialUrlRequest: we clear stale cookies first, then load (below),
-      // exactly like v2.1.0. The challenge must write cf_clearance into the same
-      // controller-backed store CookieManager.getCookies reads.
-      // No custom userAgent is set. See the class documentation.
-      initialSettings: InAppWebViewSettings(
-        javaScriptEnabled: true,
-        thirdPartyCookiesEnabled: true,
-        transparentBackground: true,
-      ),
-      onWebViewCreated: (InAppWebViewController controller) async {
-        _controller = controller;
-        _controllerStartupTimer?.cancel();
-        try {
-          await _cookies.deleteCookies(
-            url: _rootUri,
-            webViewController: controller,
-          );
-        } catch (_) {
-          // Best-effort; the challenge still overwrites on success.
-        }
-        if (!_completed) {
-          await controller.loadUrl(urlRequest: URLRequest(url: _rootUri));
-        }
-      },
-      onLoadStop: (_, _) {
-        if (mounted) setState(() => _loading = false);
-        unawaited(_checkForClearance());
-      },
-      onProgressChanged: (_, int progress) {
-        if (mounted) setState(() => _loading = progress < 100);
-      },
-      onReceivedError: (_, _, _) {
-        if (mounted) setState(() => _loading = false);
-      },
-    );
-  }
-
-  Widget _buildWindowsWebView() {
+  Widget _buildCloudflareWebView() {
     final int? popupWindowId = _popupWindowId;
     return ColoredBox(
       color: Colors.white,
-      // The InAppWebView is only inserted once _preClearCookies()
-      // finishes so initialUrlRequest fires on a clean cookie store,
-      // without a racing async loadUrl call inside onWebViewCreated
-      // (which silently no-ops on Windows/WebView2 in some cases).
+      // Insert the view only after _preClearCookies() finishes so the initial
+      // request starts with a clean store and no racing async loadUrl call.
       child: Stack(
         children: <Widget>[
           _ready
@@ -948,7 +900,7 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
                   },
                 )
               : const SizedBox.expand(),
-          if (popupWindowId != null) _buildWindowsPopupWebView(popupWindowId),
+          if (popupWindowId != null) _buildPopupWebView(popupWindowId),
         ],
       ),
     );
@@ -989,11 +941,7 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
         body: Column(
           children: <Widget>[
             if (_loading) const LinearProgressIndicator(minHeight: 2),
-            Expanded(
-              child: _isWindows
-                  ? _buildWindowsWebView()
-                  : _buildDefaultWebView(),
-            ),
+            Expanded(child: _buildCloudflareWebView()),
           ],
         ),
       ),
