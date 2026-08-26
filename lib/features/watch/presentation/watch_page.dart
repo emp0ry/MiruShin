@@ -3,13 +3,6 @@ import 'dart:ui' show ImageFilter;
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'
-    show
-        MethodChannel,
-        MissingPluginException,
-        PlatformException,
-        SystemChrome,
-        SystemUiMode;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -46,6 +39,7 @@ import '../../metadata/application/metadata_providers.dart';
 import '../../metadata/domain/anime_episode_metadata.dart';
 import '../../metadata/domain/tmdb_episode_metadata.dart';
 import '../../player/domain/player_models.dart';
+import '../../player/presentation/player_fullscreen_transfer.dart';
 import '../../settings/application/settings_state.dart';
 import '../../tracking/application/anilist_library_provider.dart';
 import '../application/watch_session.dart';
@@ -131,8 +125,6 @@ class WatchPage extends ConsumerStatefulWidget {
 }
 
 class _WatchPageState extends ConsumerState<WatchPage> {
-  static const MethodChannel _windowChannel = MethodChannel('mirushin/window');
-
   WatchSession? _session;
   MediaItem? _lastItem;
   String? _lastWatchDebugSignature;
@@ -519,21 +511,10 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     return result;
   }
 
-  Future<void> _exitFullscreen() async {
-    try {
-      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-      await _windowChannel.invokeMethod<bool>('setFullscreen', false);
-    } on MissingPluginException {
-      // Not on desktop.
-    } on PlatformException {
-      // The window may already have left fullscreen mode.
-    }
-  }
-
   void _clearAutoNextFullscreen() {
     if (!_nextEpisodeInFullscreen) return;
     _nextEpisodeInFullscreen = false;
-    unawaited(_exitFullscreen());
+    unawaited(PlayerFullscreenTransfer.exitToPage());
   }
 
   void _scrollToKey(GlobalKey key) {

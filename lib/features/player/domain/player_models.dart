@@ -270,6 +270,21 @@ class PlayerEpisodeSelectionResult {
   final bool startInFullscreen;
 }
 
+class DirectPlayerRouteArgs {
+  const DirectPlayerRouteArgs({
+    required this.item,
+    this.startInFullscreen = false,
+  });
+
+  final MediaPlaybackItem item;
+  final bool startInFullscreen;
+}
+
+bool fullscreenForPlayerAdvance({
+  required bool currentFullscreen,
+  required bool advancing,
+}) => advancing && currentFullscreen;
+
 class PlayerSettings {
   const PlayerSettings({
     this.seekInterval = const Duration(seconds: 10),

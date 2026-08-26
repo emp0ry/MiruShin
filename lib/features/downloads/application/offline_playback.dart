@@ -112,6 +112,48 @@ DownloadedEpisode? downloadedEpisodeByHref(
   return null;
 }
 
+class OfflinePlayerContinuation {
+  const OfflinePlayerContinuation({
+    required this.episode,
+    required this.startInFullscreen,
+  });
+
+  final DownloadedEpisode episode;
+  final bool startInFullscreen;
+}
+
+OfflinePlayerContinuation? offlinePlayerContinuationForResult({
+  required Object? result,
+  required DownloadedEpisode current,
+  required List<DownloadedEpisode> moduleEpisodes,
+}) {
+  if (result is PlayerEpisodeSelectionResult) {
+    final DownloadedEpisode? selected = downloadedEpisodeByHref(
+      result.episodeHref,
+      moduleEpisodes,
+    );
+    return selected == null
+        ? null
+        : OfflinePlayerContinuation(
+            episode: selected,
+            startInFullscreen: result.startInFullscreen,
+          );
+  }
+  if (result is PlayerNextEpisodeResult) {
+    final DownloadedEpisode? next = nextDownloadedEpisode(
+      current,
+      moduleEpisodes,
+    );
+    return next == null
+        ? null
+        : OfflinePlayerContinuation(
+            episode: next,
+            startInFullscreen: result.startInFullscreen,
+          );
+  }
+  return null;
+}
+
 /// Picks the downloaded episode the offline page should label as "Continue".
 ///
 /// A fresh full download that starts at episode 1 has no continuation yet, but

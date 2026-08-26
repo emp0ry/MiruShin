@@ -66,12 +66,53 @@ class SeekThumbnailPlan {
   final bool isOffline;
 }
 
+enum SeekThumbnailFailureScope {
+  cancelled,
+  bucketSpecific,
+  transient,
+  permanentSource,
+}
+
+enum SeekThumbnailFailureReason {
+  cancelled,
+  timeout,
+  network,
+  httpNotFound,
+  httpForbidden,
+  noVideoTrack,
+  invalidPlaylist,
+  unsupportedCodec,
+  unsupportedEncryption,
+  missingRandomAccessContext,
+  decodeFailure,
+  unavailable,
+  unknown,
+}
+
+class SeekThumbnailFailure {
+  const SeekThumbnailFailure({required this.scope, required this.reason});
+
+  final SeekThumbnailFailureScope scope;
+  final SeekThumbnailFailureReason reason;
+}
+
+class SeekThumbnailExtractionResult {
+  const SeekThumbnailExtractionResult.success(this.thumbnail) : failure = null;
+
+  const SeekThumbnailExtractionResult.failure(this.failure) : thumbnail = null;
+
+  final SeekThumbnail? thumbnail;
+  final SeekThumbnailFailure? failure;
+
+  bool get isSuccess => thumbnail != null;
+}
+
 abstract interface class SeekThumbnailExtractor {
   Future<void> warm(SeekThumbnailSource source);
 
   void cancelPending();
 
-  Future<SeekThumbnail?> extract({
+  Future<SeekThumbnailExtractionResult> extract({
     required SeekThumbnailSource source,
     required Duration position,
     required Duration duration,
@@ -152,19 +193,24 @@ class SeekThumbnailService {
     required SeekThumbnailExtractorFactory extractorFactory,
     this.maxCacheBytes = 16 * 1024 * 1024,
     this.maxCacheEntries = 120,
-    this.extractionTimeout = const Duration(seconds: 4),
+    this.extractionTimeout = const Duration(milliseconds: 1300),
+    this.onlineRequestTimeout = const Duration(milliseconds: 3200),
+    this.offlineRequestTimeout = const Duration(milliseconds: 900),
   }) : _extractorFactory = extractorFactory;
 
   final SeekThumbnailExtractorFactory _extractorFactory;
   final int maxCacheBytes;
   final int maxCacheEntries;
   final Duration extractionTimeout;
+  final Duration onlineRequestTimeout;
+  final Duration offlineRequestTimeout;
 
   final LinkedHashMap<SeekThumbnailCacheKey, SeekThumbnail> _cache =
       LinkedHashMap<SeekThumbnailCacheKey, SeekThumbnail>();
   final Map<String, Future<SeekThumbnail?>> _inFlight =
       <String, Future<SeekThumbnail?>>{};
-  final Map<String, int> _successfulCandidateBySession = <String, int>{};
+  final Map<String, Map<String, _SeekThumbnailSourceHealth>> _sourceHealth =
+      <String, Map<String, _SeekThumbnailSourceHealth>>{};
 
   SeekThumbnailExtractor? _extractor;
   String? _desiredContextKey;
@@ -241,7 +287,7 @@ class SeekThumbnailService {
     SeekThumbnailPlan plan,
     Duration position, {
     Duration duration = Duration.zero,
-    Duration maxDistance = const Duration(seconds: 30),
+    Duration maxDistance = const Duration(seconds: 15),
   }) {
     final Duration bucket = quantizeSeekThumbnailPosition(
       position,
@@ -334,6 +380,7 @@ class SeekThumbnailService {
     }
     final SeekThumbnailExtractor? extractor = _extractor;
     if (extractor == null) return null;
+    final Stopwatch stopwatch = Stopwatch()..start();
 
     for (final int index in _candidateOrder(plan)) {
       final SeekThumbnailSource candidate = plan.candidates[index];
@@ -360,30 +407,72 @@ class SeekThumbnailService {
           '(${_safeCandidateLabel(candidate.label)}).',
         );
       }
-      SeekThumbnail? thumbnail;
-      try {
-        thumbnail = await extractor
-            .extract(source: candidate, position: bucket, duration: duration)
-            .timeout(extractionTimeout);
-      } on TimeoutException {
+      final Duration totalBudget = plan.isOffline
+          ? offlineRequestTimeout
+          : onlineRequestTimeout;
+      final Duration elapsed = stopwatch.elapsed;
+      final Duration remaining = totalBudget - elapsed;
+      if (remaining <= Duration.zero) {
         if (kDebugMode) {
           debugPrint(
-            'SeekPreview: candidate ${index + 1} timed out after '
-            '${extractionTimeout.inMilliseconds}ms.',
+            'SeekPreview: bucket=${bucket.inSeconds} result=total-timeout.',
           );
         }
-        thumbnail = null;
-      } on Object {
-        thumbnail = null;
+        break;
       }
+      final Duration candidateBudget = remaining < extractionTimeout
+          ? remaining
+          : extractionTimeout;
+      SeekThumbnailExtractionResult extraction;
+      try {
+        extraction = await extractor
+            .extract(source: candidate, position: bucket, duration: duration)
+            .timeout(
+              candidateBudget,
+              onTimeout: () {
+                extractor.cancelPending();
+                return const SeekThumbnailExtractionResult.failure(
+                  SeekThumbnailFailure(
+                    scope: SeekThumbnailFailureScope.transient,
+                    reason: SeekThumbnailFailureReason.timeout,
+                  ),
+                );
+              },
+            );
+      } on TimeoutException {
+        extraction = const SeekThumbnailExtractionResult.failure(
+          SeekThumbnailFailure(
+            scope: SeekThumbnailFailureScope.transient,
+            reason: SeekThumbnailFailureReason.timeout,
+          ),
+        );
+      } on Object {
+        extraction = const SeekThumbnailExtractionResult.failure(
+          SeekThumbnailFailure(
+            scope: SeekThumbnailFailureScope.transient,
+            reason: SeekThumbnailFailureReason.unknown,
+          ),
+        );
+      }
+      final SeekThumbnail? thumbnail = extraction.thumbnail;
       if (thumbnail == null || thumbnail.bytes.isEmpty) {
+        final SeekThumbnailFailure failure =
+            extraction.failure ??
+            const SeekThumbnailFailure(
+              scope: SeekThumbnailFailureScope.bucketSpecific,
+              reason: SeekThumbnailFailureReason.decodeFailure,
+            );
+        _recordFailure(plan, candidate, bucket, failure);
         if (kDebugMode) {
-          debugPrint('SeekPreview: candidate ${index + 1} failed; fallback.');
+          debugPrint(
+            'SeekPreview: bucket=${bucket.inSeconds} '
+            'quality=${_safeCandidateLabel(candidate.label)} '
+            'result=${failure.reason.name} scope=${failure.scope.name}.',
+          );
         }
         continue;
       }
 
-      _successfulCandidateBySession[plan.sessionKey] = index;
       _put(cacheKey, thumbnail);
       if (kDebugMode) {
         debugPrint(
@@ -398,12 +487,43 @@ class SeekThumbnailService {
 
   List<int> _candidateOrder(SeekThumbnailPlan plan) {
     if (plan.candidates.isEmpty) return const <int>[];
-    final int start = (_successfulCandidateBySession[plan.sessionKey] ?? 0)
-        .clamp(0, plan.candidates.length - 1)
-        .toInt();
+    final Map<String, _SeekThumbnailSourceHealth>? health =
+        _sourceHealth[plan.sessionKey];
     return <int>[
-      for (int index = start; index < plan.candidates.length; index++) index,
+      for (int index = 0; index < plan.candidates.length; index++)
+        if (!(health?[plan.candidates[index].sourceKey]?.hardFailed ?? false))
+          index,
     ];
+  }
+
+  void _recordFailure(
+    SeekThumbnailPlan plan,
+    SeekThumbnailSource source,
+    Duration bucket,
+    SeekThumbnailFailure failure,
+  ) {
+    if (failure.scope == SeekThumbnailFailureScope.cancelled ||
+        failure.scope == SeekThumbnailFailureScope.bucketSpecific ||
+        (failure.scope == SeekThumbnailFailureScope.transient &&
+            failure.reason != SeekThumbnailFailureReason.httpNotFound)) {
+      return;
+    }
+    final _SeekThumbnailSourceHealth health = _sourceHealth
+        .putIfAbsent(
+          plan.sessionKey,
+          () => <String, _SeekThumbnailSourceHealth>{},
+        )
+        .putIfAbsent(source.sourceKey, _SeekThumbnailSourceHealth.new);
+    if (failure.scope == SeekThumbnailFailureScope.permanentSource) {
+      health.hardFailed = true;
+      return;
+    }
+    if (failure.reason == SeekThumbnailFailureReason.httpNotFound) {
+      health.notFoundBuckets.add(bucket.inMilliseconds);
+      // A single missing object may be one bad segment. Require separate
+      // buckets to independently confirm that the rendition itself is gone.
+      if (health.notFoundBuckets.length >= 2) health.hardFailed = true;
+    }
   }
 
   void _put(SeekThumbnailCacheKey key, SeekThumbnail thumbnail) {
@@ -437,7 +557,7 @@ class SeekThumbnailService {
     _inFlight.clear();
     _cache.clear();
     _cacheBytes = 0;
-    _successfulCandidateBySession.clear();
+    _sourceHealth.clear();
     if (kDebugMode) debugPrint('SeekPreview: cache and decoder reset.');
   }
 
@@ -459,9 +579,14 @@ class SeekThumbnailService {
     _inFlight.clear();
     _cache.clear();
     _cacheBytes = 0;
-    _successfulCandidateBySession.clear();
+    _sourceHealth.clear();
     if (kDebugMode) debugPrint('SeekPreview: service disposed.');
   }
+}
+
+class _SeekThumbnailSourceHealth {
+  bool hardFailed = false;
+  final Set<int> notFoundBuckets = <int>{};
 }
 
 String _safeCandidateLabel(String value) {

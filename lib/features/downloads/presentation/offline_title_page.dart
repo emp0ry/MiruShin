@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ui';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -22,6 +23,7 @@ import '../../../shared/models/media_item.dart';
 import '../../library/application/local_library_provider.dart';
 import '../../metadata/application/metadata_providers.dart';
 import '../../player/domain/player_models.dart';
+import '../../player/presentation/player_fullscreen_transfer.dart';
 import '../../watch/domain/normalized_models.dart';
 import '../application/download_episode_availability.dart';
 import '../application/download_episode_display.dart';
@@ -756,7 +758,11 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
     return '';
   }
 
-  void _play(DownloadedEpisode ep, List<DownloadedEpisode> moduleEpisodes) {
+  void _play(
+    DownloadedEpisode ep,
+    List<DownloadedEpisode> moduleEpisodes, {
+    bool startInFullscreen = false,
+  }) {
     final String? rootPath = ref.read(downloadsProvider.notifier).rootPath;
     if (rootPath == null) return;
     final MediaPlaybackItem item = buildOfflinePlaybackItem(
@@ -765,14 +771,20 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
       moduleEpisodes: moduleEpisodes,
     );
     unawaited(
-      context.push(AppRoutes.watchPlay, extra: item).then((
-        Object? result,
-      ) async {
-        if (!mounted) return;
-        await _deleteWatchedDownloadIfEnabled(ep);
-        if (!mounted) return;
-        _handlePlayerResult(result, ep, moduleEpisodes);
-      }),
+      context
+          .push(
+            AppRoutes.watchPlay,
+            extra: DirectPlayerRouteArgs(
+              item: item,
+              startInFullscreen: startInFullscreen,
+            ),
+          )
+          .then((Object? result) async {
+            if (!mounted) return;
+            await _deleteWatchedDownloadIfEnabled(ep);
+            if (!mounted) return;
+            _handlePlayerResult(result, ep, moduleEpisodes);
+          }),
     );
   }
 
@@ -800,25 +812,36 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
     DownloadedEpisode current,
     List<DownloadedEpisode> moduleEpisodes,
   ) {
-    if (result is PlayerEpisodeSelectionResult) {
-      final DownloadedEpisode? next = downloadedEpisodeByHref(
-        result.episodeHref,
-        moduleEpisodes,
-      );
-      if (next != null) {
-        _play(next, moduleEpisodes);
-        return;
+    final OfflinePlayerContinuation? continuation =
+        offlinePlayerContinuationForResult(
+          result: result,
+          current: current,
+          moduleEpisodes: moduleEpisodes,
+        );
+    if (continuation != null) {
+      if (kDebugMode) {
+        debugPrint(
+          'OfflineNext: episode=S${continuation.episode.seasonNumber}'
+          'E${continuation.episode.displayNumber} '
+          'startFullscreen=${continuation.startInFullscreen}.',
+        );
       }
+      _play(
+        continuation.episode,
+        moduleEpisodes,
+        startInFullscreen: continuation.startInFullscreen,
+      );
+      return;
     }
-    if (result is PlayerNextEpisodeResult) {
-      final DownloadedEpisode? next = nextDownloadedEpisode(
-        current,
-        moduleEpisodes,
-      );
-      if (next != null) {
-        _play(next, moduleEpisodes);
-        return;
-      }
+    final bool preservedButNoNext = switch (result) {
+      PlayerNextEpisodeResult(:final startInFullscreen) ||
+      PlayerEpisodeSelectionResult(
+        :final startInFullscreen,
+      ) => startInFullscreen,
+      _ => false,
+    };
+    if (preservedButNoNext) {
+      unawaited(PlayerFullscreenTransfer.exitToPage());
     }
     setState(() {});
   }

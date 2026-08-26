@@ -1,18 +1,56 @@
+import 'dart:async';
+import 'dart:ffi';
 import 'dart:io';
 
+import 'package:ffi/ffi.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mirushin/features/player/domain/player_models.dart';
+import 'package:mirushin/features/player/engine/direct_frame_decoder.dart';
+import 'package:mirushin/features/player/engine/direct_frame_decoder_io.dart';
 import 'package:mirushin/features/player/engine/player_engine.dart';
 import 'package:mirushin/features/player/engine/seek_thumbnail.dart';
 import 'package:mirushin/features/player/engine/seek_thumbnail_extractor_io.dart';
+import 'package:path/path.dart' as p;
 
 void main() {
   test(
+    'native geometry uses SAR and rotation for display size',
+    () {
+      final DynamicLibrary library = Platform.isWindows
+          ? DynamicLibrary.open('mirushin_seek_thumbnail.dll')
+          : Platform.isLinux || Platform.isAndroid
+          ? DynamicLibrary.open('libmirushin_seek_thumbnail.so')
+          : DynamicLibrary.process();
+      final _OutputSizeDart outputSize = library
+          .lookup<NativeFunction<_OutputSizeNative>>(
+            'mirushin_seek_thumbnail_output_size',
+          )
+          .asFunction<_OutputSizeDart>();
+      final Pointer<Int32> width = calloc<Int32>();
+      final Pointer<Int32> height = calloc<Int32>();
+      final Pointer<Double> aspect = calloc<Double>();
+      try {
+        expect(outputSize(640, 480, 4, 3, 0, 240, width, height, aspect), 0);
+        expect(width.value, 240);
+        expect(height.value, 135);
+        expect(aspect.value, closeTo(16 / 9, 0.0001));
+
+        expect(outputSize(1920, 1080, 1, 1, 90, 240, width, height, aspect), 0);
+        expect(width.value, 240);
+        expect(height.value, 427);
+        expect(aspect.value, closeTo(9 / 16, 0.0001));
+      } finally {
+        calloc.free(width);
+        calloc.free(height);
+        calloc.free(aspect);
+      }
+    },
+    skip: Platform.environment['MIRUSHIN_NATIVE_SEEK_SMOKE'] != '1',
+  );
+
+  test(
     'native bridge decodes one indexed public HLS segment',
     () async {
-      final NativeSeekThumbnailExtractor extractor =
-          NativeSeekThumbnailExtractor();
-      addTearDown(extractor.dispose);
       final SeekThumbnailSource source = SeekThumbnailSource(
         source: const PlayerSource(
           url: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
@@ -25,23 +63,53 @@ void main() {
         kind: SeekThumbnailSourceKind.networkHls,
         inspectMasterPlaylist: true,
       );
-      final Stopwatch stopwatch = Stopwatch()..start();
-      final SeekThumbnail? thumbnail = await extractor.extract(
-        source: source,
+      final SeekThumbnailPlan plan = SeekThumbnailPlan(
+        sessionKey: 'online-hls-smoke-session',
+        candidates: <SeekThumbnailSource>[source],
+        isOffline: false,
+      );
+      final SeekThumbnailService service = SeekThumbnailService(
+        extractorFactory: (_) => NativeSeekThumbnailExtractor(),
+      );
+      addTearDown(service.dispose);
+      final Stopwatch first = Stopwatch()..start();
+      final SeekThumbnail? firstThumbnail = await service.request(
+        plan: plan,
+        backend: PlayerBackend.auto,
         position: const Duration(seconds: 20),
         duration: const Duration(minutes: 10),
       );
-      stopwatch.stop();
+      first.stop();
+      final Stopwatch warm = Stopwatch()..start();
+      final SeekThumbnail? warmThumbnail = await service.request(
+        plan: plan,
+        backend: PlayerBackend.auto,
+        position: const Duration(seconds: 25),
+        duration: const Duration(minutes: 10),
+      );
+      warm.stop();
+      final Stopwatch cached = Stopwatch()..start();
+      final SeekThumbnail? cachedThumbnail = await service.request(
+        plan: plan,
+        backend: PlayerBackend.auto,
+        position: const Duration(seconds: 25),
+        duration: const Duration(minutes: 10),
+      );
+      cached.stop();
 
-      expect(thumbnail, isNotNull);
-      expect(thumbnail!.width, 240);
-      expect(thumbnail.height, greaterThan(0));
-      expect(thumbnail.bytes, hasLength(greaterThan(4)));
-      expect(thumbnail.bytes.sublist(0, 2), <int>[0xff, 0xd8]);
+      expect(firstThumbnail, isNotNull);
+      expect(warmThumbnail, isNotNull);
+      expect(cachedThumbnail, same(warmThumbnail));
+      expect(firstThumbnail!.width, 240);
+      expect(firstThumbnail.height, greaterThan(0));
+      expect(firstThumbnail.bytes, hasLength(greaterThan(4)));
+      expect(firstThumbnail.bytes.sublist(0, 2), <int>[0xff, 0xd8]);
       // ignore: avoid_print
       print(
-        'native HLS thumbnail ${thumbnail.width}x${thumbnail.height} '
-        '${thumbnail.bytes.length} bytes in ${stopwatch.elapsedMilliseconds}ms',
+        'online HLS first=${first.elapsedMicroseconds / 1000}ms '
+        'warm=${warm.elapsedMicroseconds / 1000}ms '
+        'cached=${cached.elapsedMicroseconds / 1000}ms '
+        'output=${firstThumbnail.width}x${firstThumbnail.height}',
       );
     },
     skip: Platform.environment['MIRUSHIN_NATIVE_SEEK_SMOKE'] != '1',
@@ -62,9 +130,10 @@ void main() {
           '193039199_mp4_h264_aac_ld_7.ts',
         ),
       );
-      await File(
+      final File localSegment = File(
         '${directory.path}${Platform.pathSeparator}segment.ts',
-      ).writeAsBytes(segmentBytes, flush: true);
+      );
+      await localSegment.writeAsBytes(segmentBytes, flush: true);
       final File playlist = File(
         '${directory.path}${Platform.pathSeparator}index.m3u8',
       );
@@ -128,6 +197,20 @@ segment.ts
       expect(firstThumbnail, isNotNull);
       expect(nearbyThumbnail, isNotNull);
       expect(cachedThumbnail, same(nearbyThumbnail));
+      await service.dispose();
+      expect(
+        await directory
+            .list()
+            .where(
+              (FileSystemEntity entity) => p.basename(
+                entity.path,
+              ).startsWith('.mirushin_seek_preview_'),
+            )
+            .isEmpty,
+        isTrue,
+      );
+      await localSegment.delete();
+      expect(await localSegment.exists(), isFalse);
       // Fixture download is complete before timing; all preview inputs above
       // are file URIs and require no provider, CDN, or loopback HTTP access.
       // ignore: avoid_print
@@ -162,34 +245,138 @@ segment.ts
         ),
         flush: true,
       );
-      final NativeSeekThumbnailExtractor extractor =
-          NativeSeekThumbnailExtractor();
-      addTearDown(extractor.dispose);
-      final Stopwatch stopwatch = Stopwatch()..start();
-      final SeekThumbnail? thumbnail = await extractor.extract(
-        source: SeekThumbnailSource(
-          source: PlayerSource(url: video.path, streamType: StreamType.mp4),
-          sourceKey: 'local-mp4-smoke-source',
-          decoderKey: 'local-mp4-smoke-decoder',
-          label: 'offline local media',
-          isOffline: true,
-          kind: SeekThumbnailSourceKind.localFile,
+      final NativeDirectFrameDecoder decoder = NativeDirectFrameDecoder();
+      addTearDown(decoder.dispose);
+      const String sessionKey = 'local-mp4-smoke-decoder';
+      final Stopwatch first = Stopwatch()..start();
+      final DirectFrameDecodeResult firstResult = await decoder.decode(
+        DirectFrameDecodeRequest(
+          input: video.path,
+          position: const Duration(seconds: 1),
+          sessionKey: sessionKey,
+          reuseSession: true,
         ),
-        position: const Duration(seconds: 1),
-        duration: const Duration(seconds: 4),
       );
-      stopwatch.stop();
+      first.stop();
+      final Stopwatch warm = Stopwatch()..start();
+      final DirectFrameDecodeResult warmResult = await decoder.decode(
+        DirectFrameDecodeRequest(
+          input: video.path,
+          position: const Duration(seconds: 2),
+          sessionKey: sessionKey,
+          reuseSession: true,
+        ),
+      );
+      warm.stop();
 
-      expect(thumbnail, isNotNull);
-      expect(thumbnail!.width, 240);
+      expect(firstResult.frame, isNotNull);
+      expect(warmResult.frame, isNotNull);
+      expect(firstResult.frame!.sessionReused, isFalse);
+      expect(warmResult.frame!.sessionReused, isTrue);
+      expect(warmResult.frame!.width, 240);
       // ignore: avoid_print
       print(
-        'offline local MP4 frame=${stopwatch.elapsedMicroseconds / 1000}ms',
+        'offline local MP4 first=${first.elapsedMicroseconds / 1000}ms '
+        'warm=${warm.elapsedMicroseconds / 1000}ms '
+        'decode=${warmResult.frame!.nativeDecodeMicroseconds / 1000}ms '
+        'encode=${warmResult.frame!.encodeMicroseconds / 1000}ms',
+      );
+    },
+    skip: Platform.environment['MIRUSHIN_NATIVE_SEEK_SMOKE'] != '1',
+  );
+
+  test(
+    'native cancellation interrupts IO and the next decode still works',
+    () async {
+      final Directory directory = await Directory.systemTemp.createTemp(
+        'mirushin_native_cancel_',
+      );
+      addTearDown(() async {
+        if (await directory.exists()) await directory.delete(recursive: true);
+      });
+      final File video = File(
+        '${directory.path}${Platform.pathSeparator}video.mp4',
+      );
+      await video.writeAsBytes(
+        await _download(
+          Uri.parse(
+            'https://flutter.github.io/assets-for-api-docs/assets/videos/'
+            'bee.mp4',
+          ),
+        ),
+        flush: true,
+      );
+      final HttpServer server = await HttpServer.bind(
+        InternetAddress.loopbackIPv4,
+        0,
+      );
+      addTearDown(() => server.close(force: true));
+      final Completer<HttpRequest> received = Completer<HttpRequest>();
+      server.listen((HttpRequest request) {
+        if (!received.isCompleted) received.complete(request);
+      });
+      final NativeDirectFrameDecoder decoder = NativeDirectFrameDecoder();
+      addTearDown(decoder.dispose);
+      final Future<DirectFrameDecodeResult> blocked = decoder.decode(
+        DirectFrameDecodeRequest(
+          input: 'http://${server.address.address}:${server.port}/video.mp4',
+          position: Duration.zero,
+          sessionKey: 'cancelled-network-session',
+          reuseSession: true,
+        ),
+      );
+      await received.future.timeout(const Duration(seconds: 2));
+      final Stopwatch cancellation = Stopwatch()..start();
+      decoder.cancelPending();
+      final DirectFrameDecodeResult cancelled = await blocked.timeout(
+        const Duration(seconds: 2),
+      );
+      cancellation.stop();
+
+      expect(cancelled.failure, DirectFrameFailureKind.cancelled);
+      final DirectFrameDecodeResult recovered = await decoder.decode(
+        DirectFrameDecodeRequest(
+          input: video.path,
+          position: const Duration(seconds: 1),
+          sessionKey: 'recovery-local-session',
+          reuseSession: true,
+        ),
+      );
+      expect(recovered.frame, isNotNull);
+      // ignore: avoid_print
+      print(
+        'native cancellation=${cancellation.elapsedMicroseconds / 1000}ms '
+        'recovery=${recovered.frame!.width}x${recovered.frame!.height}',
       );
     },
     skip: Platform.environment['MIRUSHIN_NATIVE_SEEK_SMOKE'] != '1',
   );
 }
+
+typedef _OutputSizeNative =
+    Int32 Function(
+      Int32 codedWidth,
+      Int32 codedHeight,
+      Int32 sarNum,
+      Int32 sarDen,
+      Int32 rotationDegrees,
+      Int32 targetWidth,
+      Pointer<Int32> outputWidth,
+      Pointer<Int32> outputHeight,
+      Pointer<Double> displayAspectRatio,
+    );
+typedef _OutputSizeDart =
+    int Function(
+      int codedWidth,
+      int codedHeight,
+      int sarNum,
+      int sarDen,
+      int rotationDegrees,
+      int targetWidth,
+      Pointer<Int32> outputWidth,
+      Pointer<Int32> outputHeight,
+      Pointer<Double> displayAspectRatio,
+    );
 
 Future<List<int>> _download(Uri uri) async {
   final HttpClient client = HttpClient();

@@ -4,8 +4,10 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mirushin/features/player/domain/player_models.dart';
+import 'package:mirushin/features/player/engine/direct_frame_decoder.dart';
 import 'package:mirushin/features/player/engine/player_engine.dart';
 import 'package:mirushin/features/player/engine/seek_thumbnail.dart';
+import 'package:mirushin/features/player/engine/seek_thumbnail_extractor_io.dart';
 import 'package:mirushin/features/player/engine/seek_thumbnail_hls.dart';
 import 'package:mirushin/features/player/engine/seek_thumbnail_hls_index.dart';
 import 'package:mirushin/features/player/engine/seek_thumbnail_media_loader_io.dart';
@@ -13,6 +15,59 @@ import 'package:mirushin/features/player/engine/seek_thumbnail_source.dart';
 import 'package:mirushin/shared/models/media_item.dart';
 
 void main() {
+  group('thumbnail display geometry', () {
+    test('preserves common square-pixel display ratios', () {
+      expect(
+        thumbnailDisplaySize(codedWidth: 1920, codedHeight: 1080).height,
+        135,
+      );
+      expect(
+        thumbnailDisplaySize(codedWidth: 1280, codedHeight: 720).height,
+        135,
+      );
+      expect(
+        thumbnailDisplaySize(codedWidth: 640, codedHeight: 480).height,
+        180,
+      );
+      expect(
+        thumbnailDisplaySize(codedWidth: 1080, codedHeight: 1920).height,
+        427,
+      );
+    });
+
+    test('applies sample aspect ratio before sizing', () {
+      expect(
+        thumbnailDisplaySize(
+          codedWidth: 640,
+          codedHeight: 480,
+          sampleAspectRatioNumerator: 4,
+          sampleAspectRatioDenominator: 3,
+        ).height,
+        135,
+      );
+      expect(
+        thumbnailDisplaySize(
+          codedWidth: 720,
+          codedHeight: 480,
+          sampleAspectRatioNumerator: 32,
+          sampleAspectRatioDenominator: 27,
+        ).height,
+        135,
+      );
+    });
+
+    test('swaps display axes for quarter-turn rotation', () {
+      final ThumbnailDisplaySize size = thumbnailDisplaySize(
+        codedWidth: 1920,
+        codedHeight: 1080,
+        rotationDegrees: 90,
+      );
+
+      expect(size.height, 427);
+      expect(size.displayAspectRatio, closeTo(0.5625, 0.0001));
+    });
+  });
+
   group('seek thumbnail quantization', () {
     test('uses deterministic five-second floor buckets', () {
       expect(quantizeSeekThumbnailPosition(Duration.zero), Duration.zero);
@@ -426,6 +481,73 @@ part-3.m4s
       expect(index.kind, HlsPlaylistKind.master);
       expect(index.segments, isEmpty);
     });
+
+    test('expands backward without crossing a discontinuity', () {
+      const String playlist = '''
+#EXTM3U
+#EXT-X-TARGETDURATION:10
+#EXTINF:10,
+segment-0.ts
+#EXTINF:10,
+segment-1.ts
+#EXT-X-DISCONTINUITY
+#EXTINF:10,
+segment-2.ts
+#EXTINF:10,
+segment-3.ts
+#EXTINF:10,
+segment-4.ts
+#EXT-X-ENDLIST
+''';
+      final HlsMediaIndex index = parseHlsMediaIndex(
+        playlist,
+        Uri.parse('https://cdn.example/show/index.m3u8'),
+      );
+
+      expect(
+        index
+            .decodeWindowFor(const Duration(seconds: 45), maxSegments: 4)
+            .map((HlsMediaSegment segment) => segment.sequence),
+        <int>[2, 3, 4],
+      );
+      expect(
+        index
+            .decodeWindowFor(const Duration(seconds: 35), maxSegments: 2)
+            .map((HlsMediaSegment segment) => segment.sequence),
+        <int>[2, 3],
+      );
+    });
+
+    test('caps backward context by time as well as segment count', () {
+      const String playlist = '''
+#EXTM3U
+#EXT-X-TARGETDURATION:15
+#EXTINF:15,
+segment-0.ts
+#EXTINF:15,
+segment-1.ts
+#EXTINF:15,
+segment-2.ts
+#EXTINF:15,
+segment-3.ts
+#EXT-X-ENDLIST
+''';
+      final HlsMediaIndex index = parseHlsMediaIndex(
+        playlist,
+        Uri.parse('https://cdn.example/show/index.m3u8'),
+      );
+
+      expect(
+        index
+            .decodeWindowFor(
+              const Duration(seconds: 50),
+              maxSegments: 6,
+              maxBackward: const Duration(seconds: 20),
+            )
+            .map((HlsMediaSegment segment) => segment.sequence),
+        <int>[2, 3],
+      );
+    });
   });
 
   group('seek thumbnail segment loader', () {
@@ -467,25 +589,24 @@ media.bin
         kind: SeekThumbnailSourceKind.localHls,
       );
 
-      final List<PreparedThumbnailInput> prepared = await loader.prepare(
+      final PreparedThumbnailInput? prepared = await loader.prepare(
         source,
         const Duration(seconds: 5),
       );
-      expect(prepared, hasLength(1));
-      final Directory requestDirectory = prepared.single.temporaryDirectory!;
-      expect(
-        await File(
-          '${requestDirectory.path}${Platform.pathSeparator}init-0.mp4',
-        ).readAsBytes(),
-        <int>[0, 1, 2, 3],
-      );
+      expect(prepared, isNotNull);
+      final Directory requestDirectory = prepared!.temporaryDirectory!;
+      final String localPlaylist = await File(prepared.input).readAsString();
+      expect(localPlaylist, contains('BYTERANGE="4@0"'));
+      expect(localPlaylist, contains('#EXT-X-BYTERANGE:5@9'));
+      expect(localPlaylist, contains('../media.bin'));
+      expect(requestDirectory.parent.path, directory.path);
       expect(
         await File(
           '${requestDirectory.path}${Platform.pathSeparator}segment-0.m4s',
-        ).readAsBytes(),
-        <int>[9, 10, 11, 12, 13],
+        ).exists(),
+        isFalse,
       );
-      await prepared.single.dispose();
+      await prepared.dispose();
     });
 
     test(
@@ -558,11 +679,11 @@ blob.bin
           kind: SeekThumbnailSourceKind.networkHls,
         );
 
-        final List<PreparedThumbnailInput> prepared = await loader.prepare(
+        final PreparedThumbnailInput? prepared = await loader.prepare(
           source,
           const Duration(seconds: 7),
         );
-        expect(prepared, hasLength(1));
+        expect(prepared, isNotNull);
         expect(
           requests,
           containsAll(<String>[
@@ -575,38 +696,158 @@ blob.bin
         expect(requests, isNot(contains('/segment-0.ts')));
         expect(ranges[requests.indexOf('/blob.bin')], 'bytes=4-7');
         expect(ranges[requests.indexOf('/init.mp4')], 'bytes=2-5');
-        await prepared.single.dispose();
+        await prepared!.dispose();
 
         requests.clear();
         ranges.clear();
-        final List<PreparedThumbnailInput> fallback = await loader.prepare(
+        final PreparedThumbnailInput? fallback = await loader.prepare(
           source,
           const Duration(seconds: 7),
-          previousSegment: true,
+          windowSegments: 2,
         );
-        expect(fallback, hasLength(1));
-        expect(requests, containsAll(<String>['/segment-0.ts', '/blob.bin']));
+        expect(fallback, isNotNull);
+        expect(requests, contains('/segment-0.ts'));
+        expect(requests, isNot(contains('/blob.bin')));
         expect(requests, isNot(contains('/media.m3u8')));
         final String fallbackPlaylist = await File(
-          fallback.single.input,
+          fallback!.input,
         ).readAsString();
         expect(fallbackPlaylist, contains('#EXT-X-MEDIA-SEQUENCE:0'));
         expect(fallbackPlaylist, contains('segment-0.ts'));
         expect(fallbackPlaylist, contains('segment-1.m4s'));
-        expect(fallback.single.position, const Duration(seconds: 7));
-        await fallback.single.dispose();
+        expect(fallback.position, const Duration(seconds: 7));
+        await fallback.dispose();
         await server.close(force: true);
         await serving.future;
       },
     );
+
+    test('extractor expands from one segment until context decodes', () async {
+      final Directory directory = await Directory.systemTemp.createTemp(
+        'mirushin_seek_window_test_',
+      );
+      addTearDown(() async {
+        if (await directory.exists()) await directory.delete(recursive: true);
+      });
+      final File playlist = File(
+        '${directory.path}${Platform.pathSeparator}index.m3u8',
+      );
+      for (int index = 0; index < 4; index += 1) {
+        await File(
+          '${directory.path}${Platform.pathSeparator}segment-$index.ts',
+        ).writeAsBytes(<int>[index]);
+      }
+      await playlist.writeAsString('''
+#EXTM3U
+#EXT-X-TARGETDURATION:5
+#EXTINF:5,
+segment-0.ts
+#EXTINF:5,
+segment-1.ts
+#EXTINF:5,
+segment-2.ts
+#EXTINF:5,
+segment-3.ts
+#EXT-X-ENDLIST
+''');
+      final _WindowAwareDecoder decoder = _WindowAwareDecoder(
+        requiredSegments: 3,
+      );
+      final NativeSeekThumbnailExtractor extractor =
+          NativeSeekThumbnailExtractor(decoder: decoder);
+      addTearDown(extractor.dispose);
+      final SeekThumbnailSource source = SeekThumbnailSource(
+        source: PlayerSource(
+          url: playlist.uri.toString(),
+          streamType: StreamType.hls,
+        ),
+        sourceKey: 'offline-window-source',
+        decoderKey: 'offline-window-decoder',
+        label: 'offline local media',
+        isOffline: true,
+        kind: SeekThumbnailSourceKind.localHls,
+      );
+
+      final SeekThumbnailExtractionResult result = await extractor.extract(
+        source: source,
+        position: const Duration(seconds: 17),
+        duration: const Duration(seconds: 20),
+      );
+
+      expect(result.thumbnail, isNotNull);
+      expect(decoder.windowSizes, <int>[1, 2, 3]);
+    });
+
+    test('extractor stops after the bounded four-segment context', () async {
+      final Directory directory = await Directory.systemTemp.createTemp(
+        'mirushin_seek_window_bound_test_',
+      );
+      addTearDown(() async {
+        if (await directory.exists()) await directory.delete(recursive: true);
+      });
+      final File playlist = File(
+        '${directory.path}${Platform.pathSeparator}index.m3u8',
+      );
+      for (int index = 0; index < 6; index += 1) {
+        await File(
+          '${directory.path}${Platform.pathSeparator}segment-$index.ts',
+        ).writeAsBytes(<int>[index]);
+      }
+      await playlist.writeAsString('''
+#EXTM3U
+#EXT-X-TARGETDURATION:5
+#EXTINF:5,
+segment-0.ts
+#EXTINF:5,
+segment-1.ts
+#EXTINF:5,
+segment-2.ts
+#EXTINF:5,
+segment-3.ts
+#EXTINF:5,
+segment-4.ts
+#EXTINF:5,
+segment-5.ts
+#EXT-X-ENDLIST
+''');
+      final _WindowAwareDecoder decoder = _WindowAwareDecoder(
+        requiredSegments: 5,
+      );
+      final NativeSeekThumbnailExtractor extractor =
+          NativeSeekThumbnailExtractor(decoder: decoder);
+      addTearDown(extractor.dispose);
+      final SeekThumbnailSource source = SeekThumbnailSource(
+        source: PlayerSource(
+          url: playlist.uri.toString(),
+          streamType: StreamType.hls,
+        ),
+        sourceKey: 'offline-bounded-source',
+        decoderKey: 'offline-bounded-decoder',
+        label: 'offline local media',
+        isOffline: true,
+        kind: SeekThumbnailSourceKind.localHls,
+      );
+
+      final SeekThumbnailExtractionResult result = await extractor.extract(
+        source: source,
+        position: const Duration(seconds: 27),
+        duration: const Duration(seconds: 30),
+      );
+
+      expect(result.thumbnail, isNull);
+      expect(
+        result.failure?.reason,
+        SeekThumbnailFailureReason.missingRandomAccessContext,
+      );
+      expect(decoder.windowSizes, <int>[1, 2, 3, 4]);
+    });
   });
 
   group('seek thumbnail service', () {
-    test('broken low qualities fall upward and remember the success', () async {
+    test('each new bucket retries the lowest quality first', () async {
       final _FakeExtractor extractor = _FakeExtractor(
-        failingUrls: <String>{
-          'https://cdn.example/144p/index.m3u8',
-          'https://cdn.example/240p/index.m3u8',
+        failingBuckets: <String, Set<int>>{
+          'https://cdn.example/144p/index.m3u8': <int>{5},
         },
       );
       final SeekThumbnailService service = _service(extractor);
@@ -631,9 +872,54 @@ blob.bin
         ),
         isNotNull,
       );
+      expect(extractor.urls, <String>['https://cdn.example/144p/index.m3u8']);
+
+      extractor.urls.clear();
+      await service.request(
+        plan: plan,
+        backend: PlayerBackend.mpv,
+        position: const Duration(seconds: 5),
+        duration: const Duration(minutes: 24),
+      );
       expect(extractor.urls, <String>[
         'https://cdn.example/144p/index.m3u8',
         'https://cdn.example/240p/index.m3u8',
+      ]);
+
+      extractor.urls.clear();
+      await service.request(
+        plan: plan,
+        backend: PlayerBackend.mpv,
+        position: const Duration(seconds: 10),
+        duration: const Duration(minutes: 24),
+      );
+      expect(extractor.urls, <String>['https://cdn.example/144p/index.m3u8']);
+    });
+
+    test('only permanent source evidence skips a quality later', () async {
+      final _FakeExtractor extractor = _FakeExtractor(
+        permanentUrls: <String>{'https://cdn.example/144p/index.m3u8'},
+      );
+      final SeekThumbnailService service = _service(extractor);
+      addTearDown(service.dispose);
+      final MediaServer server = _onlineServer(<StreamQuality>[
+        _quality('360p', 360),
+        _quality('144p', 144),
+      ]);
+      final SeekThumbnailPlan plan = buildSeekThumbnailPlan(
+        item: _item(server),
+        server: server,
+        activeQuality: server.qualities.first,
+      );
+
+      await service.request(
+        plan: plan,
+        backend: PlayerBackend.mpv,
+        position: Duration.zero,
+        duration: const Duration(minutes: 24),
+      );
+      expect(extractor.urls, <String>[
+        'https://cdn.example/144p/index.m3u8',
         'https://cdn.example/360p/index.m3u8',
       ]);
 
@@ -646,6 +932,170 @@ blob.bin
       );
       expect(extractor.urls, <String>['https://cdn.example/360p/index.m3u8']);
     });
+
+    test('a one-off 403 does not poison later buckets', () async {
+      final _FakeExtractor extractor = _FakeExtractor(
+        bucketFailures: <String, Map<int, SeekThumbnailFailure>>{
+          'https://cdn.example/144p/index.m3u8': <int, SeekThumbnailFailure>{
+            0: const SeekThumbnailFailure(
+              scope: SeekThumbnailFailureScope.transient,
+              reason: SeekThumbnailFailureReason.httpForbidden,
+            ),
+          },
+        },
+      );
+      final SeekThumbnailService service = _service(extractor);
+      addTearDown(service.dispose);
+      final MediaServer server = _onlineServer(<StreamQuality>[
+        _quality('360p', 360),
+        _quality('144p', 144),
+      ]);
+      final SeekThumbnailPlan plan = buildSeekThumbnailPlan(
+        item: _item(server),
+        server: server,
+        activeQuality: server.qualities.first,
+      );
+
+      await service.request(
+        plan: plan,
+        backend: PlayerBackend.mpv,
+        position: Duration.zero,
+        duration: const Duration(minutes: 24),
+      );
+      extractor.urls.clear();
+      await service.request(
+        plan: plan,
+        backend: PlayerBackend.mpv,
+        position: const Duration(seconds: 5),
+        duration: const Duration(minutes: 24),
+      );
+
+      expect(extractor.urls.first, 'https://cdn.example/144p/index.m3u8');
+    });
+
+    test('two independent 404 buckets can mark a source unavailable', () async {
+      const SeekThumbnailFailure missing = SeekThumbnailFailure(
+        scope: SeekThumbnailFailureScope.transient,
+        reason: SeekThumbnailFailureReason.httpNotFound,
+      );
+      final _FakeExtractor extractor = _FakeExtractor(
+        bucketFailures: <String, Map<int, SeekThumbnailFailure>>{
+          'https://cdn.example/144p/index.m3u8': <int, SeekThumbnailFailure>{
+            0: missing,
+            5: missing,
+          },
+        },
+      );
+      final SeekThumbnailService service = _service(extractor);
+      addTearDown(service.dispose);
+      final MediaServer server = _onlineServer(<StreamQuality>[
+        _quality('360p', 360),
+        _quality('144p', 144),
+      ]);
+      final SeekThumbnailPlan plan = buildSeekThumbnailPlan(
+        item: _item(server),
+        server: server,
+        activeQuality: server.qualities.first,
+      );
+
+      for (final int second in <int>[0, 5]) {
+        await service.request(
+          plan: plan,
+          backend: PlayerBackend.mpv,
+          position: Duration(seconds: second),
+          duration: const Duration(minutes: 24),
+        );
+      }
+      extractor.urls.clear();
+      await service.request(
+        plan: plan,
+        backend: PlayerBackend.mpv,
+        position: const Duration(seconds: 10),
+        duration: const Duration(minutes: 24),
+      );
+
+      expect(extractor.urls, <String>['https://cdn.example/360p/index.m3u8']);
+    });
+
+    test('a timed-out bucket retries the lowest quality next time', () async {
+      final _FakeExtractor extractor = _FakeExtractor(
+        bucketDelays: <String, Map<int, Duration>>{
+          'https://cdn.example/144p/index.m3u8': <int, Duration>{
+            0: const Duration(milliseconds: 30),
+          },
+        },
+      );
+      final SeekThumbnailService service = SeekThumbnailService(
+        extractorFactory: (_) => extractor,
+        extractionTimeout: const Duration(milliseconds: 5),
+        onlineRequestTimeout: const Duration(milliseconds: 100),
+      );
+      addTearDown(service.dispose);
+      final MediaServer server = _onlineServer(<StreamQuality>[
+        _quality('360p', 360),
+        _quality('144p', 144),
+      ]);
+      final SeekThumbnailPlan plan = buildSeekThumbnailPlan(
+        item: _item(server),
+        server: server,
+        activeQuality: server.qualities.first,
+      );
+
+      await service.request(
+        plan: plan,
+        backend: PlayerBackend.mpv,
+        position: Duration.zero,
+        duration: const Duration(minutes: 24),
+      );
+      extractor.urls.clear();
+      await service.request(
+        plan: plan,
+        backend: PlayerBackend.mpv,
+        position: const Duration(seconds: 5),
+        duration: const Duration(minutes: 24),
+      );
+
+      expect(extractor.cancelCount, greaterThanOrEqualTo(1));
+      expect(extractor.urls.first, 'https://cdn.example/144p/index.m3u8');
+    });
+
+    test(
+      'the total fallback deadline bounds a failing quality chain',
+      () async {
+        final _FakeExtractor extractor = _FakeExtractor(
+          defaultDelay: const Duration(milliseconds: 100),
+        );
+        final SeekThumbnailService service = SeekThumbnailService(
+          extractorFactory: (_) => extractor,
+          extractionTimeout: const Duration(milliseconds: 20),
+          onlineRequestTimeout: const Duration(milliseconds: 45),
+        );
+        addTearDown(service.dispose);
+        final MediaServer server = _onlineServer(<StreamQuality>[
+          _quality('360p', 360),
+          _quality('240p', 240),
+          _quality('144p', 144),
+        ]);
+        final SeekThumbnailPlan plan = buildSeekThumbnailPlan(
+          item: _item(server),
+          server: server,
+          activeQuality: server.qualities.first,
+        );
+        final Stopwatch stopwatch = Stopwatch()..start();
+
+        final SeekThumbnail? result = await service.request(
+          plan: plan,
+          backend: PlayerBackend.mpv,
+          position: Duration.zero,
+          duration: const Duration(minutes: 24),
+        );
+        stopwatch.stop();
+
+        expect(result, isNull);
+        expect(stopwatch.elapsed, lessThan(const Duration(milliseconds: 200)));
+        expect(extractor.cancelCount, greaterThanOrEqualTo(2));
+      },
+    );
 
     test('same source and bucket share a cache key', () {
       const SeekThumbnailCacheKey first = SeekThumbnailCacheKey(
@@ -898,9 +1348,20 @@ MediaPlaybackItem _item(
 }
 
 class _FakeExtractor implements SeekThumbnailExtractor {
-  _FakeExtractor({this.failingUrls = const <String>{}, this.gate});
+  _FakeExtractor({
+    this.failingBuckets = const <String, Set<int>>{},
+    this.bucketFailures = const <String, Map<int, SeekThumbnailFailure>>{},
+    this.bucketDelays = const <String, Map<int, Duration>>{},
+    this.defaultDelay = Duration.zero,
+    this.permanentUrls = const <String>{},
+    this.gate,
+  });
 
-  final Set<String> failingUrls;
+  final Map<String, Set<int>> failingBuckets;
+  final Map<String, Map<int, SeekThumbnailFailure>> bucketFailures;
+  final Map<String, Map<int, Duration>> bucketDelays;
+  final Duration defaultDelay;
+  final Set<String> permanentUrls;
   final Completer<void>? gate;
   final List<String> urls = <String>[];
   int disposeCount = 0;
@@ -915,19 +1376,45 @@ class _FakeExtractor implements SeekThumbnailExtractor {
   Future<void> warm(SeekThumbnailSource source) async {}
 
   @override
-  Future<SeekThumbnail?> extract({
+  Future<SeekThumbnailExtractionResult> extract({
     required SeekThumbnailSource source,
     required Duration position,
     required Duration duration,
   }) async {
     urls.add(source.source.url);
     await gate?.future;
-    if (failingUrls.contains(source.source.url)) return null;
-    return SeekThumbnail(
-      bytes: Uint8List.fromList(<int>[position.inSeconds & 0xff, 1, 2]),
-      position: position,
-      width: 320,
-      height: 180,
+    final Duration delay =
+        bucketDelays[source.source.url]?[position.inSeconds] ?? defaultDelay;
+    if (delay > Duration.zero) await Future<void>.delayed(delay);
+    if (permanentUrls.contains(source.source.url)) {
+      return const SeekThumbnailExtractionResult.failure(
+        SeekThumbnailFailure(
+          scope: SeekThumbnailFailureScope.permanentSource,
+          reason: SeekThumbnailFailureReason.noVideoTrack,
+        ),
+      );
+    }
+    final SeekThumbnailFailure? explicitFailure =
+        bucketFailures[source.source.url]?[position.inSeconds];
+    if (explicitFailure != null) {
+      return SeekThumbnailExtractionResult.failure(explicitFailure);
+    }
+    if (failingBuckets[source.source.url]?.contains(position.inSeconds) ??
+        false) {
+      return const SeekThumbnailExtractionResult.failure(
+        SeekThumbnailFailure(
+          scope: SeekThumbnailFailureScope.bucketSpecific,
+          reason: SeekThumbnailFailureReason.decodeFailure,
+        ),
+      );
+    }
+    return SeekThumbnailExtractionResult.success(
+      SeekThumbnail(
+        bytes: Uint8List.fromList(<int>[position.inSeconds & 0xff, 1, 2]),
+        position: position,
+        width: 320,
+        height: 180,
+      ),
     );
   }
 
@@ -935,4 +1422,48 @@ class _FakeExtractor implements SeekThumbnailExtractor {
   Future<void> dispose() async {
     disposeCount++;
   }
+}
+
+class _WindowAwareDecoder implements DirectFrameDecoder {
+  _WindowAwareDecoder({required this.requiredSegments});
+
+  final int requiredSegments;
+  final List<int> windowSizes = <int>[];
+
+  @override
+  bool get isSupported => true;
+
+  @override
+  Future<void> warm() async {}
+
+  @override
+  void cancelPending() {}
+
+  @override
+  Future<DirectFrameDecodeResult> decode(
+    DirectFrameDecodeRequest request,
+  ) async {
+    final String playlist = await File(request.input).readAsString();
+    final int count = RegExp(
+      r'^#EXTINF:',
+      multiLine: true,
+    ).allMatches(playlist).length;
+    windowSizes.add(count);
+    if (count < requiredSegments) {
+      return const DirectFrameDecodeResult.failure(
+        DirectFrameFailureKind.noFrame,
+      );
+    }
+    return DirectFrameDecodeResult.success(
+      DirectFrame(
+        jpegBytes: Uint8List.fromList(<int>[1, 2, 3]),
+        position: request.position,
+        width: 240,
+        height: 135,
+      ),
+    );
+  }
+
+  @override
+  Future<void> dispose() async {}
 }

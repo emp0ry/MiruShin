@@ -63,6 +63,15 @@ class PlayerPage extends ConsumerStatefulWidget {
     super.key,
   });
 
+  factory PlayerPage.fromDirectRouteArgs(
+    DirectPlayerRouteArgs args, {
+    Key? key,
+  }) => PlayerPage(
+    item: args.item,
+    startInFullscreen: args.startInFullscreen,
+    key: key,
+  );
+
   final MediaPlaybackItem item;
   final bool startInFullscreen;
 
@@ -713,11 +722,20 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
       }
     }
     final bool wasFullscreen = _isFullscreen;
-    final bool shouldStartNextFullscreen =
-        advancing && (wasFullscreen || _shouldStartFullscreen);
-    final bool preserveFullscreenForNext =
-        _isMobile && shouldStartNextFullscreen;
+    final bool shouldStartNextFullscreen = fullscreenForPlayerAdvance(
+      currentFullscreen: wasFullscreen,
+      advancing: advancing,
+    );
+    final bool preserveFullscreenForNext = shouldStartNextFullscreen;
     _preserveFullscreenForNextRoute = preserveFullscreenForNext;
+    if (kDebugMode) {
+      debugPrint(
+        'PlayerRoute: advancing=$advancing '
+        'wasFullscreen=$wasFullscreen '
+        'nextStartFullscreen=$shouldStartNextFullscreen '
+        'source=${widget.item.servers.any((MediaServer server) => server.id == 'offline') ? 'offline' : 'online'}.',
+      );
+    }
     setState(() {
       _exitingPlayer = true;
     });
@@ -2954,8 +2972,7 @@ class _PositionBarState extends ConsumerState<_PositionBar> {
         : (_lastDragPosition!.inMilliseconds / duration.inMilliseconds)
               .clamp(0, 1)
               .toDouble();
-    final double previewValue =
-        _dragValue ?? _hoverValue ?? lastPreviewValue;
+    final double previewValue = _dragValue ?? _hoverValue ?? lastPreviewValue;
     final bool isInteracting =
         _dragValue != null || _hoverValue != null || seekPreviewActive;
     final double bufferedValue =

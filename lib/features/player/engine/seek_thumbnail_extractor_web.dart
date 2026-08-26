@@ -21,12 +21,17 @@ class _UnsupportedSeekThumbnailExtractor implements SeekThumbnailExtractor {
   Future<void> warm(SeekThumbnailSource source) async {}
 
   @override
-  Future<SeekThumbnail?> extract({
+  Future<SeekThumbnailExtractionResult> extract({
     required SeekThumbnailSource source,
     required Duration position,
     required Duration duration,
   }) async {
-    return null;
+    return const SeekThumbnailExtractionResult.failure(
+      SeekThumbnailFailure(
+        scope: SeekThumbnailFailureScope.permanentSource,
+        reason: SeekThumbnailFailureReason.unavailable,
+      ),
+    );
   }
 
   @override

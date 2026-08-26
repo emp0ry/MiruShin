@@ -107,6 +107,28 @@ class HlsMediaIndex {
     }
     return segments[low];
   }
+
+  List<HlsMediaSegment> decodeWindowFor(
+    Duration position, {
+    int maxSegments = 1,
+    Duration maxBackward = const Duration(seconds: 30),
+  }) {
+    if (segments.isEmpty || maxSegments <= 0) {
+      return const <HlsMediaSegment>[];
+    }
+    final HlsMediaSegment target = segmentFor(position)!;
+    final int targetIndex = segments.indexOf(target);
+    int firstIndex = targetIndex;
+    while (firstIndex > 0 && targetIndex - firstIndex + 1 < maxSegments) {
+      final HlsMediaSegment previous = segments[firstIndex - 1];
+      if (previous.discontinuitySequence != target.discontinuitySequence) {
+        break;
+      }
+      if (target.start - previous.start > maxBackward) break;
+      firstIndex -= 1;
+    }
+    return segments.sublist(firstIndex, targetIndex + 1);
+  }
 }
 
 HlsMediaIndex parseHlsMediaIndex(String playlist, Uri playlistUri) {

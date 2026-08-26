@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mirushin/features/downloads/application/offline_playback.dart';
 import 'package:mirushin/features/downloads/domain/download_models.dart';
 import 'package:mirushin/features/player/domain/player_models.dart';
+import 'package:mirushin/features/player/presentation/player_page.dart';
 import 'package:mirushin/shared/models/media_item.dart';
 
 void main() {
@@ -137,6 +138,120 @@ void main() {
 
       expect(item.servers.single.streamType, StreamType.dash);
       expect(item.servers.single.url, endsWith('index.m3u8'));
+    });
+  });
+
+  group('offline player continuation', () {
+    test('auto-next preserves live fullscreen state', () {
+      final List<DownloadedEpisode> episodes = <DownloadedEpisode>[
+        _episode(1),
+        _episode(2),
+      ];
+
+      final OfflinePlayerContinuation? continuation =
+          offlinePlayerContinuationForResult(
+            result: const PlayerNextEpisodeResult(startInFullscreen: true),
+            current: episodes.first,
+            moduleEpisodes: episodes,
+          );
+
+      expect(continuation?.episode.id, episodes.last.id);
+      expect(continuation?.startInFullscreen, isTrue);
+    });
+
+    test('offline next route builds a fullscreen player page', () {
+      final List<DownloadedEpisode> episodes = <DownloadedEpisode>[
+        _episode(1),
+        _episode(2),
+      ];
+      final OfflinePlayerContinuation continuation =
+          offlinePlayerContinuationForResult(
+            result: const PlayerNextEpisodeResult(startInFullscreen: true),
+            current: episodes.first,
+            moduleEpisodes: episodes,
+          )!;
+      final MediaPlaybackItem nextItem = buildOfflinePlaybackItem(
+        episode: continuation.episode,
+        rootPath: r'C:\downloads',
+        moduleEpisodes: episodes,
+      );
+      final DirectPlayerRouteArgs routeArgs = DirectPlayerRouteArgs(
+        item: nextItem,
+        startInFullscreen: continuation.startInFullscreen,
+      );
+
+      final PlayerPage page = PlayerPage.fromDirectRouteArgs(routeArgs);
+
+      expect(page.item.servers.single.id, 'offline');
+      expect(page.item.servers.single.url, startsWith('file:'));
+      expect(page.startInFullscreen, isTrue);
+    });
+
+    test('auto-next remains windowed after fullscreen was exited', () {
+      final List<DownloadedEpisode> episodes = <DownloadedEpisode>[
+        _episode(1),
+        _episode(2),
+      ];
+
+      final OfflinePlayerContinuation? continuation =
+          offlinePlayerContinuationForResult(
+            result: const PlayerNextEpisodeResult(startInFullscreen: false),
+            current: episodes.first,
+            moduleEpisodes: episodes,
+          );
+
+      expect(continuation?.episode.id, episodes.last.id);
+      expect(continuation?.startInFullscreen, isFalse);
+    });
+
+    test('in-player selection preserves fullscreen state', () {
+      final List<DownloadedEpisode> episodes = <DownloadedEpisode>[
+        _episode(1),
+        _episode(2),
+      ];
+
+      final OfflinePlayerContinuation? continuation =
+          offlinePlayerContinuationForResult(
+            result: PlayerEpisodeSelectionResult(
+              episodeHref: episodes.last.episodeHref,
+              startInFullscreen: true,
+            ),
+            current: episodes.first,
+            moduleEpisodes: episodes,
+          );
+
+      expect(continuation?.episode.id, episodes.last.id);
+      expect(continuation?.startInFullscreen, isTrue);
+    });
+
+    test('missing next episode produces no continuation', () {
+      final DownloadedEpisode episode = _episode(1);
+
+      expect(
+        offlinePlayerContinuationForResult(
+          result: const PlayerNextEpisodeResult(startInFullscreen: true),
+          current: episode,
+          moduleEpisodes: <DownloadedEpisode>[episode],
+        ),
+        isNull,
+      );
+    });
+  });
+
+  group('player fullscreen state transfer', () {
+    test('advancing transfers the current fullscreen state only', () {
+      expect(
+        fullscreenForPlayerAdvance(currentFullscreen: true, advancing: true),
+        isTrue,
+      );
+      expect(
+        fullscreenForPlayerAdvance(currentFullscreen: false, advancing: true),
+        isFalse,
+      );
+      expect(
+        fullscreenForPlayerAdvance(currentFullscreen: true, advancing: false),
+        isFalse,
+      );
     });
   });
 }

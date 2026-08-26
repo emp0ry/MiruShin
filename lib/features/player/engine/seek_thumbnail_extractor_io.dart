@@ -44,90 +44,176 @@ class NativeSeekThumbnailExtractor implements SeekThumbnailExtractor {
   @override
   Future<void> warm(SeekThumbnailSource source) async {
     if (_disposed || !_decoder.isSupported) return;
-    await _loader.warm(source);
+    await Future.wait<void>(<Future<void>>[
+      _decoder.warm(),
+      _loader.warm(source),
+    ]);
   }
 
   @override
   void cancelPending() {
     _generation += 1;
     _loader.cancelPending();
+    _decoder.cancelPending();
   }
 
   @override
-  Future<SeekThumbnail?> extract({
+  Future<SeekThumbnailExtractionResult> extract({
     required SeekThumbnailSource source,
     required Duration position,
     required Duration duration,
   }) {
     if (_disposed || !_decoder.isSupported) {
-      return Future<SeekThumbnail?>.value();
+      return Future<SeekThumbnailExtractionResult>.value(
+        const SeekThumbnailExtractionResult.failure(
+          SeekThumbnailFailure(
+            scope: SeekThumbnailFailureScope.permanentSource,
+            reason: SeekThumbnailFailureReason.unavailable,
+          ),
+        ),
+      );
     }
     final int generation = _generation;
-    final Completer<SeekThumbnail?> result = Completer<SeekThumbnail?>();
+    final Completer<SeekThumbnailExtractionResult> result =
+        Completer<SeekThumbnailExtractionResult>();
     _serial = _serial.then((_) async {
       if (_disposed || generation != _generation) {
-        result.complete();
+        result.complete(_cancelledResult);
         return;
       }
       try {
-        final SeekThumbnail? thumbnail = await _extractSerial(source, position);
-        result.complete(generation == _generation ? thumbnail : null);
+        final SeekThumbnailExtractionResult extraction = await _extractSerial(
+          source,
+          position,
+        );
+        result.complete(
+          generation == _generation ? extraction : _cancelledResult,
+        );
       } on Object {
-        result.complete();
+        result.complete(
+          const SeekThumbnailExtractionResult.failure(
+            SeekThumbnailFailure(
+              scope: SeekThumbnailFailureScope.transient,
+              reason: SeekThumbnailFailureReason.unknown,
+            ),
+          ),
+        );
       }
     });
     return result.future;
   }
 
-  Future<SeekThumbnail?> _extractSerial(
+  Future<SeekThumbnailExtractionResult> _extractSerial(
     SeekThumbnailSource source,
     Duration position,
   ) async {
     final Stopwatch total = Stopwatch()..start();
     int prepareMilliseconds = 0;
+    int indexLookupMicroseconds = 0;
     final bool segmented =
         source.kind == SeekThumbnailSourceKind.localHls ||
         source.kind == SeekThumbnailSourceKind.networkHls ||
         source.kind == SeekThumbnailSourceKind.networkDash;
-    final int attempts = segmented ? 2 : 1;
+    final int attempts = segmented ? 4 : 1;
+    int lastWindowSize = 0;
     for (int index = 0; index < attempts; index += 1) {
       final Stopwatch prepare = Stopwatch()..start();
-      final List<PreparedThumbnailInput> inputs = await _loader.prepare(
-        source,
-        position,
-        previousSegment: index > 0,
-      );
+      PreparedThumbnailInput? input;
+      try {
+        input = await _loader.prepare(
+          source,
+          position,
+          windowSegments: index + 1,
+        );
+      } on SeekThumbnailLoadException catch (error) {
+        return SeekThumbnailExtractionResult.failure(error.failure);
+      }
       prepare.stop();
       prepareMilliseconds += prepare.elapsedMilliseconds;
-      if (inputs.isEmpty) continue;
-      final PreparedThumbnailInput input = inputs.single;
+      if (input == null) continue;
+      indexLookupMicroseconds += input.indexLookupMicroseconds;
+      if (segmented && input.windowSegmentCount == lastWindowSize) {
+        await input.dispose();
+        break;
+      }
+      lastWindowSize = input.windowSegmentCount;
       final Stopwatch decode = Stopwatch()..start();
       try {
-        final DirectFrame? frame = await _decoder.decode(
+        final DirectFrameDecodeResult decoded = await _decoder.decode(
           DirectFrameDecodeRequest(
             input: input.input,
             position: input.position,
+            sessionKey: source.decoderKey,
             headers: input.headers,
             width: 240,
+            reuseSession: !segmented,
           ),
         );
         decode.stop();
+        final DirectFrame? frame = decoded.frame;
         if (frame != null && frame.jpegBytes.isNotEmpty) {
           total.stop();
           if (kDebugMode) {
             debugPrint(
               'SeekPreview: frame timing '
+              'indexLookup=${(indexLookupMicroseconds / 1000).toStringAsFixed(3)}ms, '
               'prepare=${prepareMilliseconds}ms, '
-              'decode=${decode.elapsedMilliseconds}ms, '
+              'decode=${(frame.nativeDecodeMicroseconds / 1000).toStringAsFixed(3)}ms, '
+              'encode=${(frame.encodeMicroseconds / 1000).toStringAsFixed(3)}ms, '
+              'worker=${decode.elapsedMilliseconds}ms, '
               'total=${total.elapsedMilliseconds}ms, '
-              'fallback=$index.',
+              'window=${input.windowSegmentCount}, '
+              'decoderSession=${frame.sessionReused ? 'reused' : 'open'}, '
+              'coded=${frame.codedWidth}x${frame.codedHeight}, '
+              'SAR=${frame.sampleAspectRatioNumerator}:'
+              '${frame.sampleAspectRatioDenominator}, '
+              'DAR=${frame.displayAspectRatio.toStringAsFixed(4)}, '
+              'rotation=${frame.rotationDegrees}, '
+              'output=${frame.width}x${frame.height}.',
             );
           }
-          return SeekThumbnail(
-            bytes: frame.jpegBytes,
-            position: position,
-            width: frame.width,
-            height: frame.height,
+          return SeekThumbnailExtractionResult.success(
+            SeekThumbnail(
+              bytes: frame.jpegBytes,
+              position: position,
+              width: frame.width,
+              height: frame.height,
+            ),
+          );
+        }
+        final DirectFrameFailureKind failure =
+            decoded.failure ?? DirectFrameFailureKind.unknown;
+        if (failure == DirectFrameFailureKind.cancelled) {
+          return _cancelledResult;
+        }
+        if (failure == DirectFrameFailureKind.noVideoTrack ||
+            failure == DirectFrameFailureKind.unsupportedCodec) {
+          return SeekThumbnailExtractionResult.failure(
+            SeekThumbnailFailure(
+              scope: SeekThumbnailFailureScope.permanentSource,
+              reason: failure == DirectFrameFailureKind.noVideoTrack
+                  ? SeekThumbnailFailureReason.noVideoTrack
+                  : SeekThumbnailFailureReason.unsupportedCodec,
+            ),
+          );
+        }
+        if (!segmented) {
+          return SeekThumbnailExtractionResult.failure(
+            SeekThumbnailFailure(
+              scope:
+                  failure == DirectFrameFailureKind.openInput ||
+                      failure == DirectFrameFailureKind.streamInfo
+                  ? SeekThumbnailFailureScope.transient
+                  : SeekThumbnailFailureScope.bucketSpecific,
+              reason: _thumbnailReason(failure),
+            ),
+          );
+        }
+        if (kDebugMode) {
+          debugPrint(
+            'SeekPreview: bucket=${position.inSeconds} '
+            'window=${input.windowSegmentCount} '
+            'result=${_thumbnailReason(failure).name}.',
           );
         }
       } finally {
@@ -142,7 +228,12 @@ class NativeSeekThumbnailExtractor implements SeekThumbnailExtractor {
         'SeekPreview: frame unavailable after ${total.elapsedMilliseconds}ms.',
       );
     }
-    return null;
+    return const SeekThumbnailExtractionResult.failure(
+      SeekThumbnailFailure(
+        scope: SeekThumbnailFailureScope.bucketSpecific,
+        reason: SeekThumbnailFailureReason.missingRandomAccessContext,
+      ),
+    );
   }
 
   @override
@@ -166,14 +257,45 @@ class _UnsupportedSeekThumbnailExtractor implements SeekThumbnailExtractor {
   Future<void> warm(SeekThumbnailSource source) async {}
 
   @override
-  Future<SeekThumbnail?> extract({
+  Future<SeekThumbnailExtractionResult> extract({
     required SeekThumbnailSource source,
     required Duration position,
     required Duration duration,
   }) async {
-    return null;
+    return const SeekThumbnailExtractionResult.failure(
+      SeekThumbnailFailure(
+        scope: SeekThumbnailFailureScope.permanentSource,
+        reason: SeekThumbnailFailureReason.unavailable,
+      ),
+    );
   }
 
   @override
   Future<void> dispose() async {}
 }
+
+const SeekThumbnailExtractionResult _cancelledResult =
+    SeekThumbnailExtractionResult.failure(
+      SeekThumbnailFailure(
+        scope: SeekThumbnailFailureScope.cancelled,
+        reason: SeekThumbnailFailureReason.cancelled,
+      ),
+    );
+
+SeekThumbnailFailureReason _thumbnailReason(
+  DirectFrameFailureKind failure,
+) => switch (failure) {
+  DirectFrameFailureKind.cancelled => SeekThumbnailFailureReason.cancelled,
+  DirectFrameFailureKind.noVideoTrack =>
+    SeekThumbnailFailureReason.noVideoTrack,
+  DirectFrameFailureKind.unsupportedCodec =>
+    SeekThumbnailFailureReason.unsupportedCodec,
+  DirectFrameFailureKind.noFrame =>
+    SeekThumbnailFailureReason.missingRandomAccessContext,
+  DirectFrameFailureKind.openInput ||
+  DirectFrameFailureKind.streamInfo => SeekThumbnailFailureReason.network,
+  DirectFrameFailureKind.seek ||
+  DirectFrameFailureKind.scale ||
+  DirectFrameFailureKind.unknown => SeekThumbnailFailureReason.decodeFailure,
+  DirectFrameFailureKind.unavailable => SeekThumbnailFailureReason.unavailable,
+};

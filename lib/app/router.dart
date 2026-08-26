@@ -252,6 +252,15 @@ CustomTransitionPage<void> _playerPage(
   BuildContext context,
   GoRouterState state,
 ) {
+  if (state.extra is DirectPlayerRouteArgs) {
+    final DirectPlayerRouteArgs args = state.extra! as DirectPlayerRouteArgs;
+    return _appPage(
+      context,
+      state,
+      PlayerPage.fromDirectRouteArgs(args),
+      motion: AppPageMotion.immersiveFade,
+    );
+  }
   if (state.extra is MediaPlaybackItem) {
     return _appPage(
       context,

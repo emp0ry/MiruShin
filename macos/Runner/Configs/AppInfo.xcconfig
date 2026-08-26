@@ -14,4 +14,4 @@ PRODUCT_BUNDLE_IDENTIFIER = com.emp0ry.mirushin
 PRODUCT_COPYRIGHT = Copyright © 2026 com.emp0ry. All rights reserved.
 
 // Keep the C ABI entry points discoverable by Dart FFI in dead-stripped builds.
-OTHER_LDFLAGS = $(inherited) -Wl,-u,_mirushin_seek_thumbnail_decode -Wl,-u,_mirushin_seek_thumbnail_free
+OTHER_LDFLAGS = $(inherited) -Wl,-u,_mirushin_seek_thumbnail_decode -Wl,-u,_mirushin_seek_thumbnail_free -Wl,-u,_mirushin_seek_thumbnail_session_create -Wl,-u,_mirushin_seek_thumbnail_session_reset_cancel -Wl,-u,_mirushin_seek_thumbnail_session_open -Wl,-u,_mirushin_seek_thumbnail_session_decode -Wl,-u,_mirushin_seek_thumbnail_session_cancel -Wl,-u,_mirushin_seek_thumbnail_session_destroy -Wl,-u,_mirushin_seek_thumbnail_output_size
