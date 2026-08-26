@@ -15,11 +15,16 @@ class _UnsupportedSeekThumbnailExtractor implements SeekThumbnailExtractor {
   const _UnsupportedSeekThumbnailExtractor();
 
   @override
+  void cancelPending() {}
+
+  @override
+  Future<void> warm(SeekThumbnailSource source) async {}
+
+  @override
   Future<SeekThumbnail?> extract({
-    required source,
-    required position,
-    required duration,
-    required sourceKey,
+    required SeekThumbnailSource source,
+    required Duration position,
+    required Duration duration,
   }) async {
     return null;
   }

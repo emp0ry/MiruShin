@@ -74,6 +74,15 @@ set_target_properties(${BINARY_NAME}
 # them to the application.
 include(flutter/generated_plugins.cmake)
 
+add_library(mirushin_seek_thumbnail SHARED
+  "${CMAKE_CURRENT_SOURCE_DIR}/../native/seek_thumbnail_decoder/seek_thumbnail_decoder.cpp")
+target_compile_features(mirushin_seek_thumbnail PUBLIC cxx_std_17)
+target_compile_options(mirushin_seek_thumbnail PRIVATE -Wall -Werror)
+target_include_directories(mirushin_seek_thumbnail PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../native/seek_thumbnail_decoder"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/ffmpeg_headers")
+target_link_libraries(mirushin_seek_thumbnail PRIVATE dl)
+
 
 # === Installation ===
 # By default, "installing" just makes a relocatable bundle in the build
@@ -93,6 +102,8 @@ set(INSTALL_BUNDLE_LIB_DIR "${CMAKE_INSTALL_PREFIX}/lib")
 
 install(TARGETS ${BINARY_NAME} RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
   COMPONENT Runtime)
+install(TARGETS mirushin_seek_thumbnail LIBRARY
+  DESTINATION "${INSTALL_BUNDLE_LIB_DIR}" COMPONENT Runtime)
 
 install(FILES "${FLUTTER_ICU_DATA_FILE}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   COMPONENT Runtime)

@@ -39,6 +39,7 @@ SeekThumbnailPlan buildSeekThumbnailPlan({
       streamType: server.streamType,
       allowDirectFallback: false,
     );
+    final String localPath = Uri.tryParse(url)?.path.toLowerCase() ?? '';
     return SeekThumbnailPlan(
       sessionKey: identity,
       candidates: <SeekThumbnailSource>[
@@ -48,6 +49,9 @@ SeekThumbnailPlan buildSeekThumbnailPlan({
           decoderKey: seekThumbnailDecoderFingerprint(source),
           label: 'offline local media',
           isOffline: true,
+          kind: localPath.endsWith('.m3u8')
+              ? SeekThumbnailSourceKind.localHls
+              : SeekThumbnailSourceKind.localFile,
         ),
       ],
       isOffline: true,
@@ -89,6 +93,7 @@ SeekThumbnailPlan buildSeekThumbnailPlan({
     required Map<String, String> headers,
     required String label,
     required StreamType fallbackType,
+    required bool inspectMasterPlaylist,
   }) {
     final String trimmed = url.trim();
     if (trimmed.isEmpty) return;
@@ -102,6 +107,18 @@ SeekThumbnailPlan buildSeekThumbnailPlan({
       streamType: streamType,
       allowDirectFallback: false,
     );
+    final Uri? uri = Uri.tryParse(trimmed);
+    final String path = (uri?.path ?? trimmed).toLowerCase();
+    final SeekThumbnailSourceKind kind =
+        streamType == StreamType.hls || path.endsWith('.m3u8')
+        ? SeekThumbnailSourceKind.networkHls
+        : streamType == StreamType.dash || path.endsWith('.mpd')
+        ? SeekThumbnailSourceKind.networkDash
+        : streamType == StreamType.mp4 ||
+              path.endsWith('.mp4') ||
+              path.endsWith('.mkv')
+        ? SeekThumbnailSourceKind.networkFile
+        : SeekThumbnailSourceKind.unknown;
     final String key = seekThumbnailSourceFingerprint(source);
     if (!seen.add(key)) return;
     candidates.add(
@@ -111,6 +128,8 @@ SeekThumbnailPlan buildSeekThumbnailPlan({
         decoderKey: seekThumbnailDecoderFingerprint(source),
         label: label,
         isOffline: false,
+        kind: kind,
+        inspectMasterPlaylist: inspectMasterPlaylist,
       ),
     );
   }
@@ -122,6 +141,7 @@ SeekThumbnailPlan buildSeekThumbnailPlan({
       headers: quality.headers.isNotEmpty ? quality.headers : server.headers,
       label: quality.label,
       fallbackType: server.streamType,
+      inspectMasterPlaylist: false,
     );
   }
   if (!activeQuality.isAuto && !isClearlyAudioOnlyQuality(activeQuality)) {
@@ -132,6 +152,7 @@ SeekThumbnailPlan buildSeekThumbnailPlan({
           : server.headers,
       label: activeQuality.label,
       fallbackType: server.streamType,
+      inspectMasterPlaylist: false,
     );
   }
   addCandidate(
@@ -139,6 +160,7 @@ SeekThumbnailPlan buildSeekThumbnailPlan({
     headers: server.headers,
     label: explicit.isEmpty ? 'current single-quality stream' : 'server source',
     fallbackType: server.streamType,
+    inspectMasterPlaylist: true,
   );
 
   final String sessionKey = _hash(<String>[

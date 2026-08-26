@@ -1,3 +1,5 @@
+import 'seek_thumbnail_hls_index.dart';
+
 class HlsVideoVariant {
   const HlsVideoVariant({
     required this.uri,
@@ -74,14 +76,5 @@ HlsVideoVariant? lowestVideoHlsVariant(String playlist, Uri playlistUri) {
 }
 
 Map<String, String> _attributes(String input) {
-  final Map<String, String> result = <String, String>{};
-  final RegExp pattern = RegExp(r'([A-Z0-9-]+)=("[^"]*"|[^,]*)');
-  for (final RegExpMatch match in pattern.allMatches(input.toUpperCase())) {
-    String value = match.group(2) ?? '';
-    if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
-      value = value.substring(1, value.length - 1);
-    }
-    result[match.group(1)!] = value;
-  }
-  return result;
+  return parseHlsAttributes(input);
 }

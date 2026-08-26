@@ -16,6 +16,7 @@ bool isPlayerEngineRouteAvailable(
   PlayerBackend backend,
   PlaybackRoute route, {
   StreamType streamType = StreamType.unknown,
+  bool dashUsesHlsContainer = false,
 }) {
   return backend == PlayerBackend.auto && route == PlaybackRoute.direct;
 }

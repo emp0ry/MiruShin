@@ -187,7 +187,12 @@ class PlaybackState {
 
 class PlaybackController extends Notifier<PlaybackState> {
   static const Duration _interactiveSeekDelay = Duration(milliseconds: 180);
-  static const Duration _seekPreviewDebounce = Duration(milliseconds: 140);
+  static const Duration _offlineSeekPreviewDebounce = Duration(
+    milliseconds: 30,
+  );
+  static const Duration _onlineSeekPreviewDebounce = Duration(
+    milliseconds: 100,
+  );
   static const Duration _seekSettleTick = Duration(milliseconds: 80);
   static const Duration _seekSettleMinHold = Duration(milliseconds: 700);
   static const Duration _seekSettleTimeout = Duration(seconds: 12);
@@ -1100,6 +1105,9 @@ class PlaybackController extends Notifier<PlaybackState> {
         attemptFailures,
       );
       _startOfflineStallWatch(item, server, engine, generation);
+      unawaited(
+        _warmSeekThumbnailIndex(thumbnailPlan, thumbnailBackend, generation),
+      );
     } on Object catch (error) {
       final Duration fallbackPosition = _fallbackPositionFor(
         engine,
@@ -1151,6 +1159,26 @@ class PlaybackController extends Notifier<PlaybackState> {
       );
       _engineForDispose = null;
     }
+  }
+
+  Future<void> _warmSeekThumbnailIndex(
+    SeekThumbnailPlan plan,
+    PlayerBackend backend,
+    int generation,
+  ) async {
+    // Local downloads can be indexed immediately. Online warmup yields to the
+    // main player so its initial manifest/segment requests are never competing
+    // with preview traffic during startup.
+    if (!plan.isOffline) {
+      await Future<void>.delayed(const Duration(milliseconds: 800));
+    }
+    if (generation != _playbackGeneration ||
+        _seekThumbnailPlan?.sessionKey != plan.sessionKey ||
+        state.engine == null ||
+        !state.engine!.state.value.isInitialized) {
+      return;
+    }
+    await _seekThumbnailService.warm(plan, backend);
   }
 
   double? _safeAspectRatio(double? value) {
@@ -2234,9 +2262,19 @@ class PlaybackController extends Notifier<PlaybackState> {
     final SeekThumbnail? cached = imageSurface
         ? _seekThumbnailService.cachedFor(plan, clamped, duration: duration)
         : null;
+    final SeekThumbnail? visibleThumbnail =
+        cached ??
+        (imageSurface
+            ? state.seekPreviewThumbnail ??
+                  _seekThumbnailService.nearestCachedFor(
+                    plan,
+                    clamped,
+                    duration: duration,
+                  )
+            : null);
     state = state.copyWith(
-      seekPreviewThumbnail: cached,
-      clearSeekPreviewThumbnail: cached == null,
+      seekPreviewThumbnail: visibleThumbnail,
+      clearSeekPreviewThumbnail: !imageSurface,
       seekPreviewLoading: false,
       seekPreviewImageSurface: imageSurface,
     );
@@ -2255,6 +2293,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     _seekPreviewTimer = null;
     _pendingSeekPreviewTarget = null;
     _seekThumbnailRequests.invalidate();
+    _seekThumbnailService.cancelPending();
   }
 
   /// Ends slider interaction. The committed seek remains a separate operation.
@@ -2264,6 +2303,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     _seekPreviewTimer = null;
     _pendingSeekPreviewTarget = null;
     _seekThumbnailRequests.invalidate();
+    _seekThumbnailService.cancelPending();
     if (state.seekPreviewLoading) {
       state = state.copyWith(seekPreviewLoading: false);
     }
@@ -2285,9 +2325,12 @@ class PlaybackController extends Notifier<PlaybackState> {
 
   void _queueSeekPreviewFrame(Duration target) {
     _pendingSeekPreviewTarget = target;
+    if (_seekPreviewInFlight) _seekThumbnailService.cancelPending();
     _seekPreviewTimer?.cancel();
     _seekPreviewTimer = Timer(
-      _seekPreviewDebounce,
+      (_seekThumbnailPlan?.isOffline ?? false)
+          ? _offlineSeekPreviewDebounce
+          : _onlineSeekPreviewDebounce,
       () => unawaited(_flushSeekPreviewFrame()),
     );
   }
@@ -2334,7 +2377,6 @@ class PlaybackController extends Notifier<PlaybackState> {
     final int generation = _seekPreviewGeneration;
     final int request = _seekThumbnailRequests.begin(plan.sessionKey, bucket);
     state = state.copyWith(
-      clearSeekPreviewThumbnail: true,
       seekPreviewLoading: true,
       seekPreviewImageSurface: true,
     );
@@ -2367,16 +2409,15 @@ class PlaybackController extends Notifier<PlaybackState> {
       }
       state = state.copyWith(
         seekPreviewThumbnail: thumbnail,
-        clearSeekPreviewThumbnail: thumbnail == null,
         seekPreviewLoading: false,
-        seekPreviewImageSurface: thumbnail != null,
+        seekPreviewImageSurface:
+            thumbnail != null || state.seekPreviewThumbnail != null,
       );
     } on Object {
       if (generation == _seekPreviewGeneration && state.engine == engine) {
         state = state.copyWith(
-          clearSeekPreviewThumbnail: true,
           seekPreviewLoading: false,
-          seekPreviewImageSurface: false,
+          seekPreviewImageSurface: state.seekPreviewThumbnail != null,
         );
       }
     } finally {
@@ -2392,6 +2433,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     _seekPreviewTimer = null;
     _pendingSeekPreviewTarget = null;
     _seekThumbnailRequests.invalidate();
+    _seekThumbnailService.cancelPending();
   }
 
   StreamType _streamTypeForUrl(String url, StreamType fallback) {

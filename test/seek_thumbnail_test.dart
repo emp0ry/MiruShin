@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -6,6 +7,8 @@ import 'package:mirushin/features/player/domain/player_models.dart';
 import 'package:mirushin/features/player/engine/player_engine.dart';
 import 'package:mirushin/features/player/engine/seek_thumbnail.dart';
 import 'package:mirushin/features/player/engine/seek_thumbnail_hls.dart';
+import 'package:mirushin/features/player/engine/seek_thumbnail_hls_index.dart';
+import 'package:mirushin/features/player/engine/seek_thumbnail_media_loader_io.dart';
 import 'package:mirushin/features/player/engine/seek_thumbnail_source.dart';
 import 'package:mirushin/shared/models/media_item.dart';
 
@@ -55,6 +58,11 @@ void main() {
       expect(from1080.candidates.first.label, '144p');
       expect(from720.candidates.first.label, '144p');
       expect(from1080.candidates.first.source.url, contains('/144p/'));
+      expect(from1080.candidates.first.inspectMasterPlaylist, isFalse);
+      expect(
+        from1080.candidates.first.kind,
+        SeekThumbnailSourceKind.networkHls,
+      );
       expect(from720.sessionKey, from1080.sessionKey);
     });
 
@@ -149,6 +157,26 @@ void main() {
       expect(plan.candidates.single.label, 'offline local media');
       expect(plan.candidates.single.source.url, server.url);
       expect(plan.candidates.single.source.streamType, StreamType.mp4);
+      expect(plan.candidates.single.kind, SeekThumbnailSourceKind.localFile);
+    });
+
+    test('unknown single HLS source is eligible for one master inspection', () {
+      final MediaServer server = MediaServer(
+        id: 'server-1',
+        name: 'Server',
+        sourceName: 'addon',
+        url: 'https://cdn.example/master.m3u8',
+        streamType: StreamType.hls,
+      );
+      final SeekThumbnailPlan plan = buildSeekThumbnailPlan(
+        item: _item(server),
+        server: server,
+        activeQuality: StreamQuality.auto,
+      );
+
+      expect(plan.candidates, hasLength(1));
+      expect(plan.candidates.single.inspectMasterPlaylist, isTrue);
+      expect(plan.candidates.single.kind, SeekThumbnailSourceKind.networkHls);
     });
 
     test('offline identity survives an absolute root path change', () {
@@ -268,6 +296,309 @@ audio/index.m3u8
       expect(variant!.height, 144);
       expect(variant.uri.toString(), 'https://cdn.example/144/index.m3u8');
     });
+  });
+
+  group('HLS media timeline index', () {
+    test('uses variable durations and advances on exact boundaries', () {
+      const String playlist = '''
+#EXTM3U
+#EXT-X-TARGETDURATION:7
+#EXT-X-MEDIA-SEQUENCE:41
+#EXTINF:4.25,
+segment-41.ts
+#EXTINF:6.5,
+segment-42.ts
+#EXTINF:3.25,
+segment-43.ts
+#EXT-X-ENDLIST
+''';
+      final HlsMediaIndex index = parseHlsMediaIndex(
+        playlist,
+        Uri.parse('https://cdn.example/show/video/index.m3u8'),
+      );
+
+      expect(index.kind, HlsPlaylistKind.media);
+      expect(index.mediaSequence, 41);
+      expect(index.targetDuration, const Duration(seconds: 7));
+      expect(index.hasEndList, isTrue);
+      expect(index.duration, const Duration(seconds: 14));
+      expect(index.segmentFor(Duration.zero)!.sequence, 41);
+      expect(
+        index.segmentFor(const Duration(milliseconds: 4249))!.sequence,
+        41,
+      );
+      expect(
+        index.segmentFor(const Duration(milliseconds: 4250))!.sequence,
+        42,
+      );
+      expect(
+        index.segmentFor(const Duration(milliseconds: 10750))!.sequence,
+        43,
+      );
+    });
+
+    test('resolves explicit and implicit byte ranges per resource', () {
+      const String playlist = '''
+#EXTM3U
+#EXT-X-MAP:URI="media.mp4",BYTERANGE="100@0"
+#EXTINF:5,
+#EXT-X-BYTERANGE:500@100
+media.mp4
+#EXTINF:5,
+#EXT-X-BYTERANGE:450
+media.mp4
+#EXTINF:5,
+#EXT-X-BYTERANGE:50
+other.mp4
+''';
+      final HlsMediaIndex index = parseHlsMediaIndex(
+        playlist,
+        Uri.parse('file:///downloads/episode/index.m3u8'),
+      );
+
+      expect(
+        index.segments[0].initMap!.byteRange,
+        const HlsByteRange(length: 100, offset: 0),
+      );
+      expect(
+        index.segments[0].byteRange,
+        const HlsByteRange(length: 500, offset: 100),
+      );
+      expect(
+        index.segments[1].byteRange,
+        const HlsByteRange(length: 450, offset: 600),
+      );
+      expect(
+        index.segments[2].byteRange,
+        const HlsByteRange(length: 50, offset: 0),
+      );
+    });
+
+    test('preserves key, IV, map, and discontinuity metadata', () {
+      const String playlist = '''
+#EXTM3U
+#EXT-X-DISCONTINUITY-SEQUENCE:3
+#EXT-X-KEY:METHOD=AES-128,URI="Keys/Token.BIN",IV=0x0000000000000000000000000000002A
+#EXT-X-MAP:URI="Init.MP4",BYTERANGE="800@20"
+#EXTINF:5,
+part-1.m4s
+#EXT-X-DISCONTINUITY
+#EXTINF:5,
+part-2.m4s
+#EXT-X-KEY:METHOD=NONE
+#EXTINF:5,
+part-3.m4s
+''';
+      final HlsMediaIndex index = parseHlsMediaIndex(
+        playlist,
+        Uri.parse('https://cdn.example/Video/Index.m3u8'),
+      );
+
+      expect(index.segments[0].discontinuitySequence, 3);
+      expect(index.segments[1].discontinuitySequence, 4);
+      expect(index.segments[0].encryption!.method, 'AES-128');
+      expect(
+        index.segments[0].encryption!.keyUri.toString(),
+        'https://cdn.example/Video/Keys/Token.BIN',
+      );
+      expect(
+        index.segments[0].encryption!.iv,
+        '0x0000000000000000000000000000002A',
+      );
+      expect(
+        index.segments[0].initMap!.uri.toString(),
+        'https://cdn.example/Video/Init.MP4',
+      );
+      expect(index.segments[2].encryption, isNull);
+    });
+
+    test('recognises master playlists without treating them as media', () {
+      const String playlist = '''
+#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=250000,RESOLUTION=256x144
+144/index.m3u8
+''';
+      final HlsMediaIndex index = parseHlsMediaIndex(
+        playlist,
+        Uri.parse('https://cdn.example/master.m3u8'),
+      );
+
+      expect(index.kind, HlsPlaylistKind.master);
+      expect(index.segments, isEmpty);
+    });
+  });
+
+  group('seek thumbnail segment loader', () {
+    test('offline HLS reads exact local map and target ranges', () async {
+      final Directory directory = await Directory.systemTemp.createTemp(
+        'mirushin_seek_loader_test_',
+      );
+      addTearDown(() async {
+        if (await directory.exists()) await directory.delete(recursive: true);
+      });
+      await File(
+        '${directory.path}${Platform.pathSeparator}media.bin',
+      ).writeAsBytes(List<int>.generate(24, (int index) => index));
+      final File playlist = File(
+        '${directory.path}${Platform.pathSeparator}index.m3u8',
+      );
+      await playlist.writeAsString('''
+#EXTM3U
+#EXT-X-MAP:URI="media.bin",BYTERANGE="4@0"
+#EXTINF:5,
+#EXT-X-BYTERANGE:5@4
+media.bin
+#EXTINF:5,
+#EXT-X-BYTERANGE:5@9
+media.bin
+#EXT-X-ENDLIST
+''');
+      final SeekThumbnailMediaLoader loader = SeekThumbnailMediaLoader();
+      addTearDown(loader.dispose);
+      final SeekThumbnailSource source = SeekThumbnailSource(
+        source: PlayerSource(
+          url: playlist.uri.toString(),
+          streamType: StreamType.hls,
+        ),
+        sourceKey: 'offline-source',
+        decoderKey: 'offline-decoder',
+        label: 'offline local media',
+        isOffline: true,
+        kind: SeekThumbnailSourceKind.localHls,
+      );
+
+      final List<PreparedThumbnailInput> prepared = await loader.prepare(
+        source,
+        const Duration(seconds: 5),
+      );
+      expect(prepared, hasLength(1));
+      final Directory requestDirectory = prepared.single.temporaryDirectory!;
+      expect(
+        await File(
+          '${requestDirectory.path}${Platform.pathSeparator}init-0.mp4',
+        ).readAsBytes(),
+        <int>[0, 1, 2, 3],
+      );
+      expect(
+        await File(
+          '${requestDirectory.path}${Platform.pathSeparator}segment-0.m4s',
+        ).readAsBytes(),
+        <int>[9, 10, 11, 12, 13],
+      );
+      await prepared.single.dispose();
+    });
+
+    test(
+      'online HLS reuses headers and fetches only target resources',
+      () async {
+        final HttpServer server = await HttpServer.bind(
+          InternetAddress.loopbackIPv4,
+          0,
+        );
+        addTearDown(() => server.close(force: true));
+        final List<String> requests = <String>[];
+        final List<String?> ranges = <String?>[];
+        final Completer<void> serving = Completer<void>();
+        unawaited(() async {
+          try {
+            await for (final HttpRequest request in server) {
+              requests.add(request.uri.path);
+              ranges.add(request.headers.value(HttpHeaders.rangeHeader));
+              expect(request.headers.value('X-Preview-Test'), 'allowed');
+              switch (request.uri.path) {
+                case '/media.m3u8':
+                  request.response.write('''
+#EXTM3U
+#EXT-X-KEY:METHOD=AES-128,URI="key.bin",IV=0x00000000000000000000000000000001
+#EXT-X-MAP:URI="init.mp4",BYTERANGE="4@2"
+#EXTINF:5,
+segment-0.ts
+#EXTINF:5,
+#EXT-X-BYTERANGE:4@4
+blob.bin
+#EXT-X-ENDLIST
+''');
+                  break;
+                case '/init.mp4':
+                  request.response.statusCode = HttpStatus.partialContent;
+                  request.response.add(<int>[2, 3, 4, 5]);
+                  break;
+                case '/blob.bin':
+                  request.response.statusCode = HttpStatus.partialContent;
+                  request.response.add(<int>[4, 5, 6, 7]);
+                  break;
+                case '/segment-0.ts':
+                  request.response.add(<int>[8, 9, 10, 11]);
+                  break;
+                case '/key.bin':
+                  request.response.add(List<int>.generate(16, (int i) => i));
+                  break;
+                default:
+                  request.response.statusCode = HttpStatus.notFound;
+              }
+              await request.response.close();
+            }
+            serving.complete();
+          } on Object catch (error, stackTrace) {
+            serving.completeError(error, stackTrace);
+          }
+        }());
+        final SeekThumbnailMediaLoader loader = SeekThumbnailMediaLoader();
+        addTearDown(loader.dispose);
+        final SeekThumbnailSource source = SeekThumbnailSource(
+          source: PlayerSource(
+            url: 'http://${server.address.address}:${server.port}/media.m3u8',
+            headers: const <String, String>{'X-Preview-Test': 'allowed'},
+            streamType: StreamType.hls,
+          ),
+          sourceKey: 'network-source',
+          decoderKey: 'network-decoder',
+          label: '144p',
+          isOffline: false,
+          kind: SeekThumbnailSourceKind.networkHls,
+        );
+
+        final List<PreparedThumbnailInput> prepared = await loader.prepare(
+          source,
+          const Duration(seconds: 7),
+        );
+        expect(prepared, hasLength(1));
+        expect(
+          requests,
+          containsAll(<String>[
+            '/media.m3u8',
+            '/blob.bin',
+            '/init.mp4',
+            '/key.bin',
+          ]),
+        );
+        expect(requests, isNot(contains('/segment-0.ts')));
+        expect(ranges[requests.indexOf('/blob.bin')], 'bytes=4-7');
+        expect(ranges[requests.indexOf('/init.mp4')], 'bytes=2-5');
+        await prepared.single.dispose();
+
+        requests.clear();
+        ranges.clear();
+        final List<PreparedThumbnailInput> fallback = await loader.prepare(
+          source,
+          const Duration(seconds: 7),
+          previousSegment: true,
+        );
+        expect(fallback, hasLength(1));
+        expect(requests, containsAll(<String>['/segment-0.ts', '/blob.bin']));
+        expect(requests, isNot(contains('/media.m3u8')));
+        final String fallbackPlaylist = await File(
+          fallback.single.input,
+        ).readAsString();
+        expect(fallbackPlaylist, contains('#EXT-X-MEDIA-SEQUENCE:0'));
+        expect(fallbackPlaylist, contains('segment-0.ts'));
+        expect(fallbackPlaylist, contains('segment-1.m4s'));
+        expect(fallback.single.position, const Duration(seconds: 7));
+        await fallback.single.dispose();
+        await server.close(force: true);
+        await serving.future;
+      },
+    );
   });
 
   group('seek thumbnail service', () {
@@ -390,6 +721,17 @@ audio/index.m3u8
 
       expect(results[0], same(results[1]));
       expect(extractor.urls, hasLength(1));
+    });
+
+    test('superseded preview work is forwarded to the extractor', () async {
+      final _FakeExtractor extractor = _FakeExtractor();
+      final SeekThumbnailService service = _service(extractor);
+      addTearDown(service.dispose);
+      await service.activate(_singlePlan(), PlayerBackend.mpv);
+
+      service.cancelPending();
+
+      expect(extractor.cancelCount, 1);
     });
 
     test('quality change keeps the low-quality decoder context', () async {
@@ -562,17 +904,25 @@ class _FakeExtractor implements SeekThumbnailExtractor {
   final Completer<void>? gate;
   final List<String> urls = <String>[];
   int disposeCount = 0;
+  int cancelCount = 0;
+
+  @override
+  void cancelPending() {
+    cancelCount++;
+  }
+
+  @override
+  Future<void> warm(SeekThumbnailSource source) async {}
 
   @override
   Future<SeekThumbnail?> extract({
-    required PlayerSource source,
+    required SeekThumbnailSource source,
     required Duration position,
     required Duration duration,
-    required String sourceKey,
   }) async {
-    urls.add(source.url);
+    urls.add(source.source.url);
     await gate?.future;
-    if (failingUrls.contains(source.url)) return null;
+    if (failingUrls.contains(source.source.url)) return null;
     return SeekThumbnail(
       bytes: Uint8List.fromList(<int>[position.inSeconds & 0xff, 1, 2]),
       position: position,

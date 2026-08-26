@@ -22,6 +22,15 @@ class SeekThumbnail {
   final int height;
 }
 
+enum SeekThumbnailSourceKind {
+  localFile,
+  localHls,
+  networkFile,
+  networkHls,
+  networkDash,
+  unknown,
+}
+
 class SeekThumbnailSource {
   const SeekThumbnailSource({
     required this.source,
@@ -29,6 +38,8 @@ class SeekThumbnailSource {
     required this.decoderKey,
     required this.label,
     required this.isOffline,
+    this.kind = SeekThumbnailSourceKind.unknown,
+    this.inspectMasterPlaylist = false,
   });
 
   final PlayerSource source;
@@ -36,6 +47,11 @@ class SeekThumbnailSource {
   final String decoderKey;
   final String label;
   final bool isOffline;
+  final SeekThumbnailSourceKind kind;
+
+  /// True only when the URL may still be a master playlist. Explicit quality
+  /// URLs are already renditions and must not incur a redundant master fetch.
+  final bool inspectMasterPlaylist;
 }
 
 class SeekThumbnailPlan {
@@ -51,11 +67,14 @@ class SeekThumbnailPlan {
 }
 
 abstract interface class SeekThumbnailExtractor {
+  Future<void> warm(SeekThumbnailSource source);
+
+  void cancelPending();
+
   Future<SeekThumbnail?> extract({
-    required PlayerSource source,
+    required SeekThumbnailSource source,
     required Duration position,
     required Duration duration,
-    required String sourceKey,
   });
 
   Future<void> dispose();
@@ -218,6 +237,59 @@ class SeekThumbnailService {
     return null;
   }
 
+  SeekThumbnail? nearestCachedFor(
+    SeekThumbnailPlan plan,
+    Duration position, {
+    Duration duration = Duration.zero,
+    Duration maxDistance = const Duration(seconds: 30),
+  }) {
+    final Duration bucket = quantizeSeekThumbnailPosition(
+      position,
+      duration: duration,
+    );
+    SeekThumbnailCacheKey? nearestKey;
+    SeekThumbnail? nearest;
+    int nearestDistance = maxDistance.inMilliseconds + 1;
+    final Set<String> sourceKeys = <String>{
+      for (final SeekThumbnailSource source in plan.candidates)
+        source.sourceKey,
+    };
+    for (final MapEntry<SeekThumbnailCacheKey, SeekThumbnail> entry
+        in _cache.entries) {
+      if (!sourceKeys.contains(entry.key.sourceKey)) continue;
+      final int distance =
+          (entry.key.bucket.inMilliseconds - bucket.inMilliseconds).abs();
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearestKey = entry.key;
+        nearest = entry.value;
+      }
+    }
+    if (nearestKey != null && nearest != null) {
+      _cache.remove(nearestKey);
+      _cache[nearestKey] = nearest;
+    }
+    return nearest;
+  }
+
+  Future<void> warm(SeekThumbnailPlan plan, PlayerBackend backend) async {
+    if (_disposed || plan.candidates.isEmpty) return;
+    await activate(plan, backend);
+    if (_disposed ||
+        _activeContextKey != '${backend.name}|${plan.sessionKey}') {
+      return;
+    }
+    try {
+      await _extractor?.warm(plan.candidates.first);
+    } on Object {
+      // Warmup is opportunistic; the first real request can retry preparation.
+    }
+  }
+
+  void cancelPending() {
+    _extractor?.cancelPending();
+  }
+
   Future<SeekThumbnail?> request({
     required SeekThumbnailPlan plan,
     required PlayerBackend backend,
@@ -291,12 +363,7 @@ class SeekThumbnailService {
       SeekThumbnail? thumbnail;
       try {
         thumbnail = await extractor
-            .extract(
-              source: candidate.source,
-              position: bucket,
-              duration: duration,
-              sourceKey: candidate.decoderKey,
-            )
+            .extract(source: candidate, position: bucket, duration: duration)
             .timeout(extractionTimeout);
       } on TimeoutException {
         if (kDebugMode) {

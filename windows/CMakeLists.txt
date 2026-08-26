@@ -61,6 +61,18 @@ add_subdirectory("runner")
 # them to the application.
 include(flutter/generated_plugins.cmake)
 
+# Headless seek thumbnails use the FFmpeg runtime already bundled by fvp. The
+# bridge is deliberately a decoder-only DLL: it owns no Flutter texture and no
+# playback controller.
+add_library(mirushin_seek_thumbnail SHARED
+  "${CMAKE_CURRENT_SOURCE_DIR}/../native/seek_thumbnail_decoder/seek_thumbnail_decoder.cpp")
+target_compile_features(mirushin_seek_thumbnail PUBLIC cxx_std_17)
+target_compile_options(mirushin_seek_thumbnail PRIVATE /W3 /EHsc)
+target_compile_definitions(mirushin_seek_thumbnail PRIVATE NOMINMAX)
+target_include_directories(mirushin_seek_thumbnail PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../native/seek_thumbnail_decoder"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/ffmpeg_headers")
+
 # flutter_webrtc 1.6.0 does not release its event channel before Flutter begins
 # destroying the plugin registrar, and it declares its Windows TaskRunner after
 # FlutterWebRTC. Both orders leave Flutter-facing objects alive beyond their
@@ -118,6 +130,8 @@ set(INSTALL_BUNDLE_LIB_DIR "${CMAKE_INSTALL_PREFIX}")
 
 install(TARGETS ${BINARY_NAME} RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
   COMPONENT Runtime)
+install(TARGETS mirushin_seek_thumbnail RUNTIME
+  DESTINATION "${INSTALL_BUNDLE_LIB_DIR}" COMPONENT Runtime)
 
 install(FILES "${FLUTTER_ICU_DATA_FILE}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   COMPONENT Runtime)

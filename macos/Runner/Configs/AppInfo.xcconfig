@@ -12,3 +12,6 @@ PRODUCT_BUNDLE_IDENTIFIER = com.emp0ry.mirushin
 
 // The copyright displayed in application information
 PRODUCT_COPYRIGHT = Copyright © 2026 com.emp0ry. All rights reserved.
+
+// Keep the C ABI entry points discoverable by Dart FFI in dead-stripped builds.
+OTHER_LDFLAGS = $(inherited) -Wl,-u,_mirushin_seek_thumbnail_decode -Wl,-u,_mirushin_seek_thumbnail_free
