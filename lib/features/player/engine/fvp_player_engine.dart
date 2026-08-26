@@ -16,13 +16,7 @@ const mdk.SeekFlag _networkVodSeekFlag = mdk.SeekFlag(mdk.SeekFlag.fromStart);
 const mdk.SeekFlag _cachedVodSeekFlag = mdk.SeekFlag(
   mdk.SeekFlag.fromStart | mdk.SeekFlag.inCache,
 );
-const mdk.SeekFlag _previewSeekFlag = mdk.SeekFlag(
-  mdk.SeekFlag.fromStart | mdk.SeekFlag.keyFrame,
-);
-const Duration _seekVerificationDelay = Duration(milliseconds: 180);
 const Duration _seekAcceptanceTolerance = Duration(milliseconds: 1500);
-const Duration _previewPrepareTimeout = Duration(milliseconds: 1800);
-const Duration _previewTextureTimeout = Duration(milliseconds: 1200);
 const Duration _startupRetryDelay = Duration(seconds: 45);
 const Duration _videoSurfaceStartupTimeout = Duration(seconds: 20);
 const Duration _nativeDisposeSettleDelay = Duration(milliseconds: 250);
@@ -59,9 +53,8 @@ class _NativeSeekRequest {
 /// This engine intentionally does not use VideoPlayerController at runtime.
 /// It talks directly to the MDK Player backend exposed by fvp.
 class FvpPlayerEngine extends PlayerEngine {
-  FvpPlayerEngine({double? initialAspectRatio, bool previewMode = false})
+  FvpPlayerEngine({double? initialAspectRatio})
     : _initialAspectRatio = initialAspectRatio,
-      _previewMode = previewMode,
       _state = ValueNotifier<PlayerEngineState>(
         PlayerEngineState(
           aspectRatio: _usableAspectRatio(initialAspectRatio) ?? 16 / 9,
@@ -69,7 +62,6 @@ class FvpPlayerEngine extends PlayerEngine {
       );
 
   final double? _initialAspectRatio;
-  final bool _previewMode;
   final ValueNotifier<PlayerEngineState> _state;
 
   mdk.Player? _player;
@@ -235,9 +227,7 @@ class FvpPlayerEngine extends PlayerEngine {
           ? await readLocalHlsDuration(remoteUri)
           : Duration.zero;
       final bool useProxy =
-          !source.disableProxy &&
-          !_previewMode &&
-          (isNetwork || isInlineDash || isLocalHls);
+          !source.disableProxy && (isNetwork || isInlineDash || isLocalHls);
       // A downloaded DASH presentation is stored as local HLS metadata around
       // the original fMP4 tracks. It is already demuxable without the MPD
       // parser, so only a real direct MPD needs this Windows guard.
@@ -248,7 +238,7 @@ class FvpPlayerEngine extends PlayerEngine {
           'compatibility proxy.',
         );
       }
-      _requireVideoSurfaceDuringStartup = !_previewMode && isNetwork;
+      _requireVideoSurfaceDuringStartup = isNetwork;
       String playbackUrl = remoteUri.toString();
       if (useProxy && isInlineDash) {
         await _proxy.stop();
@@ -303,17 +293,6 @@ class FvpPlayerEngine extends PlayerEngine {
       );
 
       player.media = playbackUrl;
-      if (_previewMode) {
-        await _openPreparedPreview(
-          player,
-          startAt: startAt ?? Duration.zero,
-          autoplay: autoplay,
-        );
-        _initialPositionSettled = true;
-        _syncState();
-        return;
-      }
-
       // FVP/MDK direct examples open the main source by setting `media`, then
       // setting playback state, then creating/updating the Flutter texture.
       // Do not call `prepare()` for normal playback: HLS can stay async and
@@ -492,72 +471,6 @@ class FvpPlayerEngine extends PlayerEngine {
     await open(source, startAt: position, autoplay: autoplay);
   }
 
-  Future<void> _openPreparedPreview(
-    mdk.Player player, {
-    required Duration startAt,
-    required bool autoplay,
-  }) async {
-    _startPositionTimer();
-    try {
-      final int preparedPosition = await player
-          .prepare(position: startAt.inMilliseconds, flags: _previewSeekFlag)
-          .timeout(_previewPrepareTimeout);
-      if (preparedPosition < 0) {
-        throw StateError('FVP preview prepare failed ($preparedPosition).');
-      }
-
-      final int textureResult = await player
-          .updateTexture(width: 320, height: 180)
-          .timeout(_previewTextureTimeout, onTimeout: () => -1);
-      if (textureResult < 0) {
-        unawaited(player.updateTexture(width: 320, height: 180));
-      }
-    } on Object catch (error) {
-      debugPrint('FVP preview prepare fallback: $error');
-      player.state = autoplay
-          ? mdk.PlaybackState.playing
-          : mdk.PlaybackState.paused;
-      unawaited(player.updateTexture(width: 320, height: 180));
-      if (startAt > Duration.zero) {
-        unawaited(_seekPreviewAfterOpen(player, startAt));
-      }
-      _startOpenTimeout();
-      _syncState();
-      return;
-    }
-
-    _opening = false;
-    _openTimeoutTimer?.cancel();
-    _openTimeoutTimer = null;
-
-    if (autoplay) {
-      player.state = mdk.PlaybackState.playing;
-    } else {
-      player.state = mdk.PlaybackState.paused;
-    }
-  }
-
-  Future<void> _seekPreviewAfterOpen(
-    mdk.Player player,
-    Duration position,
-  ) async {
-    await Future<void>.delayed(const Duration(milliseconds: 220));
-    final mdk.Player? active = _player;
-    if (active == null || active != player || !_hasMedia) return;
-
-    try {
-      await _seekWithVerification(
-        active,
-        position.inMilliseconds,
-        flag: _previewSeekFlag,
-        attempts: 2,
-        verificationDelay: const Duration(milliseconds: 120),
-      );
-    } on Object catch (error) {
-      debugPrint('FVP preview delayed seek ignored: $error');
-    }
-  }
-
   @override
   Future<void> play() async {
     if (_disposed) return;
@@ -604,43 +517,26 @@ class FvpPlayerEngine extends PlayerEngine {
     // downloaded. Keep exactly one native operation active and make every
     // duplicate caller await that same operation. This preserves seekTo's
     // completion contract without creating overlapping native callbacks.
-    if (!_previewMode) {
-      _publishPendingSeek(Duration(milliseconds: targetMs));
-      final mdk.SeekFlag flag = _seekFlagFor(position);
-      final int resultMs = await _queueNativeSeek(player, targetMs, flag: flag);
-      if (resultMs < 0) {
-        throw StateError(
-          'FVP native seek failed at ${position.inMilliseconds}ms '
-          '(result=$resultMs).',
-        );
-      }
-      if (player != _player || _disposed || !_hasMedia) return;
-      _syncState();
-      if ((resultMs - targetMs).abs() >
-          _seekAcceptanceTolerance.inMilliseconds) {
-        throw StateError(
-          'FVP seek completed at ${resultMs}ms instead of ${targetMs}ms.',
-        );
-      }
-      if (kDebugMode) {
-        debugPrint(
-          'FVP seek complete: target=${targetMs}ms result=${resultMs}ms '
-          'mode=${flag.rawValue == _cachedVodSeekFlag.rawValue ? 'cache' : 'network'}',
-        );
-      }
-      return;
-    }
-
-    final bool accepted = await _seekWithVerification(
-      player,
-      targetMs,
-      flag: _previewSeekFlag,
-      attempts: 4,
-      verificationDelay: _seekVerificationDelay,
-    );
-    if (!accepted) {
+    _publishPendingSeek(Duration(milliseconds: targetMs));
+    final mdk.SeekFlag flag = _seekFlagFor(position);
+    final int resultMs = await _queueNativeSeek(player, targetMs, flag: flag);
+    if (resultMs < 0) {
       throw StateError(
-        'FVP seek did not settle at ${position.inMilliseconds}ms.',
+        'FVP native seek failed at ${position.inMilliseconds}ms '
+        '(result=$resultMs).',
+      );
+    }
+    if (player != _player || _disposed || !_hasMedia) return;
+    _syncState();
+    if ((resultMs - targetMs).abs() > _seekAcceptanceTolerance.inMilliseconds) {
+      throw StateError(
+        'FVP seek completed at ${resultMs}ms instead of ${targetMs}ms.',
+      );
+    }
+    if (kDebugMode) {
+      debugPrint(
+        'FVP seek complete: target=${targetMs}ms result=${resultMs}ms '
+        'mode=${flag.rawValue == _cachedVodSeekFlag.rawValue ? 'cache' : 'network'}',
       );
     }
     _syncState();
@@ -844,72 +740,6 @@ class FvpPlayerEngine extends PlayerEngine {
     _syncState();
   }
 
-  Future<bool> _seekWithVerification(
-    mdk.Player player,
-    int targetMs, {
-    required mdk.SeekFlag flag,
-    required int attempts,
-    required Duration verificationDelay,
-  }) async {
-    int attemptCount = attempts < 1 ? 1 : attempts;
-    final Duration target = Duration(milliseconds: targetMs);
-
-    for (int attempt = 0; attempt < attemptCount; attempt += 1) {
-      final mdk.Player? active = _player;
-      if (active == null || active != player || !_hasMedia) return false;
-
-      final int beforeMs = active.position.clamp(0, 1 << 62).toInt();
-      final PlayerEngineState current = _state.value;
-      _setState(
-        current.copyWith(
-          position: target,
-          isBuffering:
-              _isPositionBuffered(current.buffered, target, current.duration)
-              ? false
-              : current.isBuffering,
-        ),
-      );
-
-      final int resultMs = await active.seek(position: targetMs, flags: flag);
-      if (resultMs < 0) return false;
-      await Future<void>.delayed(verificationDelay);
-
-      final mdk.Player? verifyPlayer = _player;
-      if (verifyPlayer == null || verifyPlayer != player || !_hasMedia) {
-        return false;
-      }
-
-      _syncState();
-      final int actualMs = resultMs;
-      if (_seekWasAccepted(
-        beforeMs: beforeMs,
-        actualMs: actualMs,
-        targetMs: targetMs,
-      )) {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  bool _seekWasAccepted({
-    required int beforeMs,
-    required int actualMs,
-    required int targetMs,
-  }) {
-    final int toleranceMs = _seekAcceptanceTolerance.inMilliseconds;
-    if ((actualMs - targetMs).abs() <= toleranceMs) {
-      return true;
-    }
-
-    final bool seekingForward = targetMs >= beforeMs;
-    if (seekingForward) {
-      return actualMs >= targetMs - toleranceMs;
-    }
-    return actualMs <= targetMs + toleranceMs;
-  }
-
   @override
   Future<void> setPlaybackSpeed(double speed) async {
     if (_disposed) return;
@@ -1089,15 +919,10 @@ class FvpPlayerEngine extends PlayerEngine {
   }
 
   ({int min, int max, String ranges}) _bufferConfigFor({
-    required bool previewMode,
     required bool isHls,
     required bool isNetwork,
     required double speed,
   }) {
-    if (previewMode) {
-      return (min: 500, max: 8000, ranges: '2');
-    }
-
     // MPV-like FVP profile: start fast with a small minimum buffer, but allow
     // a large read-ahead cache. This helps streams that only continue loading
     // well when the playback pressure is low, without forcing visible pauses.
@@ -1147,7 +972,6 @@ class FvpPlayerEngine extends PlayerEngine {
         url.contains('.m3u8') ||
         url.contains(':hls:');
     final config = _bufferConfigFor(
-      previewMode: _previewMode,
       isHls: isHls,
       isNetwork: isNetwork,
       speed: playbackSpeed,
@@ -1156,17 +980,9 @@ class FvpPlayerEngine extends PlayerEngine {
     try {
       player.setProperty('demux.buffer.protocols', 'file,http,https');
       player.setProperty('demux.buffer.ranges', config.ranges);
-      player.setBufferRange(
-        min: config.min,
-        max: config.max,
-        drop: _previewMode,
-      );
+      player.setBufferRange(min: config.min, max: config.max, drop: false);
     } on Object {
-      player.setBufferRange(
-        min: config.min,
-        max: config.max,
-        drop: _previewMode,
-      );
+      player.setBufferRange(min: config.min, max: config.max, drop: false);
     }
 
     try {

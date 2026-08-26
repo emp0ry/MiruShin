@@ -26,6 +26,7 @@ import '../domain/auto_skip.dart';
 import '../domain/player_models.dart';
 import '../domain/player_volume_policy.dart';
 import '../engine/player_engine.dart';
+import '../engine/seek_thumbnail.dart';
 import 'widgets/auto_next_overlay.dart';
 import 'widgets/gesture_overlay.dart';
 import 'widgets/player_shortcuts_view.dart';
@@ -112,6 +113,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
   bool _preserveFullscreenForNextRoute = false;
   bool _spacePressed = false;
   bool _spaceTemporarySpeedActive = false;
+  bool _timelineInteractionActive = false;
   DateTime? _lastTrailerFullscreenShortcutAt;
   DateTime? _lastTrailerEscapeShortcutAt;
   late final bool _isMobile;
@@ -503,6 +505,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
 
   void _scheduleHide([Duration delay = _controlsHideDelay]) {
     _hideTimer?.cancel();
+    // Never auto-hide the player chrome while the pointer is over the position
+    // slider or while the user is actively dragging it.
+    if (_timelineInteractionActive) return;
     // On Android TV keep the controls up while paused so the user can navigate
     // them with the D-pad; they only auto-hide again once playback resumes.
     if (_isTv && !(_tvObservedEngine?.state.value.isPlaying ?? true)) {
@@ -550,6 +555,22 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     } else if (!shouldAutoNext && _autoNextTimer != null) {
       _autoNextTimer?.cancel();
       _autoNextTimer = null;
+    }
+  }
+
+  void _setTimelineInteractionActive(bool active) {
+    if (_timelineInteractionActive == active) return;
+    _timelineInteractionActive = active;
+
+    if (active) {
+      // Cancel any already-running hide timer immediately. Merely keeping the
+      // pointer stationary over the timeline must keep the chrome visible.
+      _hideTimer?.cancel();
+      ref.read(playbackControllerProvider.notifier).setControlsVisible(true);
+    } else {
+      // Resume the normal auto-hide countdown once the pointer/finger leaves
+      // the timeline or a drag finishes.
+      _scheduleHide();
     }
   }
 
@@ -1526,6 +1547,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
                                             : null,
                                         onExit: () => unawaited(_exitPlayer()),
                                         onToggleFullscreen: _toggleFullscreen,
+                                        onTimelineInteractionChanged:
+                                            _setTimelineInteractionActive,
                                         onSelectEpisode: (String href) =>
                                             unawaited(
                                               _exitPlayer(
@@ -2131,6 +2154,7 @@ class _PlayerChrome extends ConsumerWidget {
     required this.volumeControlsEnabled,
     required this.onExit,
     required this.onToggleFullscreen,
+    required this.onTimelineInteractionChanged,
     this.onSelectEpisode,
     this.onEnterNativePip,
     this.tvSeedFocusNode,
@@ -2141,6 +2165,7 @@ class _PlayerChrome extends ConsumerWidget {
   final bool volumeControlsEnabled;
   final VoidCallback onExit;
   final VoidCallback onToggleFullscreen;
+  final ValueChanged<bool> onTimelineInteractionChanged;
 
   /// Plays the episode the user picks from the in-player Episodes sheet.
   final void Function(String href)? onSelectEpisode;
@@ -2362,6 +2387,7 @@ class _PlayerChrome extends ConsumerWidget {
                         _PositionBar(
                           controller: controller,
                           skipMarkers: markers,
+                          onInteractionChanged: onTimelineInteractionChanged,
                         ),
                       const SizedBox(height: 8),
                       Row(
@@ -2581,21 +2607,19 @@ class _PositionLabelState extends ConsumerState<_PositionLabel> {
 
   @override
   Widget build(BuildContext context) {
-    final PlaybackState state = ref.watch(playbackControllerProvider);
-    final Duration? previewPosition = state.engine == widget.controller
-        ? state.seekPreviewPosition
-        : null;
     return Text(
-      _label(widget.controller, previewPosition),
+      _label(widget.controller),
       style: widget.style ?? const TextStyle(color: Colors.white70),
     );
   }
 
-  String _label(PlayerEngine? controller, Duration? previewPosition) {
+  String _label(PlayerEngine? controller) {
     if (controller == null || !controller.value.isInitialized) {
       return '00:00 / 00:00';
     }
-    final Duration shownPosition = previewPosition ?? controller.value.position;
+    // The bottom-left time label always shows the real playback position.
+    // Hover/drag seek preview time is displayed only inside the preview bubble.
+    final Duration shownPosition = controller.value.position;
     return '${_fmt(shownPosition)} / ${_fmt(controller.value.duration)}';
   }
 
@@ -2822,9 +2846,15 @@ class _InlineVolumeControlState extends ConsumerState<_InlineVolumeControl> {
 }
 
 class _PositionBar extends ConsumerStatefulWidget {
-  const _PositionBar({required this.controller, this.skipMarkers});
+  const _PositionBar({
+    required this.controller,
+    required this.onInteractionChanged,
+    this.skipMarkers,
+  });
+
   final PlayerEngine controller;
   final SkipMarkers? skipMarkers;
+  final ValueChanged<bool> onInteractionChanged;
 
   @override
   ConsumerState<_PositionBar> createState() => _PositionBarState();
@@ -2832,7 +2862,9 @@ class _PositionBar extends ConsumerStatefulWidget {
 
 class _PositionBarState extends ConsumerState<_PositionBar> {
   double? _dragValue;
+  double? _hoverValue;
   Duration? _lastDragPosition;
+  bool _pointerInside = false;
 
   Duration _positionFromValue(Duration duration, double value) {
     return Duration(milliseconds: (duration.inMilliseconds * value).round());
@@ -2852,11 +2884,13 @@ class _PositionBarState extends ConsumerState<_PositionBar> {
       oldWidget.controller.removeListener(_tick);
       widget.controller.addListener(_tick);
       _dragValue = null;
+      _hoverValue = null;
     }
   }
 
   @override
   void dispose() {
+    widget.onInteractionChanged(false);
     widget.controller.removeListener(_tick);
     super.dispose();
   }
@@ -2897,20 +2931,41 @@ class _PositionBarState extends ConsumerState<_PositionBar> {
     final bool seekPreviewActive =
         playback.engine == widget.controller &&
         playback.seekPreviewPosition != null;
-    final Duration position = seekPreviewActive
+    // Keep the real timeline position separate from the hover seek preview.
+    // Hovering may update the preview thumbnail/time, but must not move the
+    // actual Slider thumb or played-progress position.
+    final Duration enginePosition = widget.controller.value.position;
+    final Duration previewPosition = seekPreviewActive
         ? playback.seekPreviewPosition!
-        : widget.controller.value.position;
+        : enginePosition;
     final double engineValue = duration.inMilliseconds <= 0
         ? 0
-        : (position.inMilliseconds / duration.inMilliseconds)
+        : (enginePosition.inMilliseconds / duration.inMilliseconds)
               .clamp(0, 1)
               .toDouble();
     final double value = _dragValue ?? engineValue;
-    final bool isInteracting = _dragValue != null || seekPreviewActive;
+
+    // Keep the preview anchored at the last mouse/drag position while its
+    // fade-out animation is running. Otherwise clearing _hoverValue on exit
+    // makes the still-visible bubble jump back to the current playback thumb.
+    final double lastPreviewValue =
+        duration.inMilliseconds <= 0 || _lastDragPosition == null
+        ? engineValue
+        : (_lastDragPosition!.inMilliseconds / duration.inMilliseconds)
+              .clamp(0, 1)
+              .toDouble();
+    final double previewValue =
+        _dragValue ?? _hoverValue ?? lastPreviewValue;
+    final bool isInteracting =
+        _dragValue != null || _hoverValue != null || seekPreviewActive;
     final double bufferedValue =
         seekPreviewActive && playback.seekPreviewBufferedEnd != null
         ? _bufferedValueFromEnd(duration, playback.seekPreviewBufferedEnd!)
-        : _bufferedValue(widget.controller.value.buffered, duration, position);
+        : _bufferedValue(
+            widget.controller.value.buffered,
+            duration,
+            enginePosition,
+          );
     final SliderThemeData sliderTheme = SliderTheme.of(context).copyWith(
       trackHeight: 4,
       thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
@@ -2921,8 +2976,8 @@ class _PositionBarState extends ConsumerState<_PositionBar> {
       overlayColor: Colors.white.withValues(alpha: 0.12),
       overlayShape: const RoundSliderOverlayShape(overlayRadius: 10),
     );
-    final bool showBubble = _dragValue != null;
-    final Duration bubblePosition = _lastDragPosition ?? position;
+    final bool showBubble = _dragValue != null || _hoverValue != null;
+    final Duration bubblePosition = _lastDragPosition ?? previewPosition;
 
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
@@ -2932,167 +2987,243 @@ class _PositionBarState extends ConsumerState<_PositionBar> {
           0.0,
           double.infinity,
         );
-        final double thumbCenterX = thumbHPad + value * trackWidth;
-        final double bubbleWidth = _SeekPreviewBubble.timecodeWidthFor(
+        final double previewCenterX = thumbHPad + previewValue * trackWidth;
+        final double bubbleWidth = _SeekPreviewBubble.widthFor(
           context,
           bubblePosition,
+          imageSurface: playback.seekPreviewImageSurface,
         );
-        final double bubbleLeft = (thumbCenterX - bubbleWidth / 2).clamp(
+        final double bubbleLeft = (previewCenterX - bubbleWidth / 2).clamp(
           0.0,
           (constraints.maxWidth - bubbleWidth).clamp(0.0, double.infinity),
         );
-        final double bubbleArrowX = (thumbCenterX - bubbleLeft).clamp(
+        final double bubbleArrowX = (previewCenterX - bubbleLeft).clamp(
           8.0,
           bubbleWidth - 8.0,
         );
-        return SizedBox(
-          height: 10,
-          child: Stack(
-            clipBehavior: Clip.none,
-            alignment: Alignment.center,
-            children: <Widget>[
-              if (widget.skipMarkers != null && duration.inMilliseconds > 0)
-                Positioned.fill(
-                  child: Padding(
-                    // Slider internal track padding = max(overlayRadius, thumbRadius) = max(10, 6) = 10
-                    padding: const EdgeInsets.symmetric(horizontal: 10),
-                    child: CustomPaint(
-                      painter: _SkipMarkerPainter(
-                        markers: widget.skipMarkers!,
-                        totalMs: duration.inMilliseconds,
+        return MouseRegion(
+          // Entering the timeline should keep the chrome visible immediately,
+          // but do NOT start seek preview yet. Starting preview before the first
+          // hover coordinate is known would flash the current playback time.
+          onEnter: TvPlatform.isAndroidTv || duration <= Duration.zero
+              ? null
+              : (_) {
+                  _pointerInside = true;
+                  widget.onInteractionChanged(true);
+                },
+          onHover: TvPlatform.isAndroidTv || duration <= Duration.zero
+              ? null
+              : (PointerHoverEvent event) {
+                  if (_dragValue != null || trackWidth <= 0) return;
+                  widget.onInteractionChanged(true);
+                  final double hover =
+                      ((event.localPosition.dx - thumbHPad) / trackWidth)
+                          .clamp(0.0, 1.0)
+                          .toDouble();
+                  final Duration pos = _positionFromValue(duration, hover);
+                  final bool startingHover = _hoverValue == null;
+
+                  // Store the mouse position first, before notifying the
+                  // playback controller. That way every rebuild already knows
+                  // where the preview bubble belongs.
+                  setState(() {
+                    _hoverValue = hover;
+                    _lastDragPosition = pos;
+                  });
+
+                  final PlaybackController notifier = ref.read(
+                    playbackControllerProvider.notifier,
+                  );
+                  if (startingHover) {
+                    notifier.beginSeekPreview();
+                  }
+                  notifier.previewSeekTo(pos);
+                },
+          onExit: TvPlatform.isAndroidTv
+              ? null
+              : (_) {
+                  _pointerInside = false;
+                  // If a drag is still in progress, keep auto-hide blocked until
+                  // onChangeEnd. Otherwise leaving the timeline releases it now.
+                  if (_dragValue != null) return;
+                  setState(() {
+                    // Hide the preview, but keep its last anchor until the
+                    // opacity animation finishes so it does not flash back at
+                    // the real playback thumb while disappearing.
+                    _hoverValue = null;
+                  });
+                  ref
+                      .read(playbackControllerProvider.notifier)
+                      .cancelSeekPreview();
+                  widget.onInteractionChanged(false);
+                },
+          child: SizedBox(
+            height: 10,
+            child: Stack(
+              clipBehavior: Clip.none,
+              alignment: Alignment.center,
+              children: <Widget>[
+                if (widget.skipMarkers != null && duration.inMilliseconds > 0)
+                  Positioned.fill(
+                    child: Padding(
+                      // Slider internal track padding = max(overlayRadius, thumbRadius) = max(10, 6) = 10
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      child: CustomPaint(
+                        painter: _SkipMarkerPainter(
+                          markers: widget.skipMarkers!,
+                          totalMs: duration.inMilliseconds,
+                        ),
                       ),
                     ),
                   ),
-                ),
-              // On TV the timeline is driven with Left/Right seek on the
-              // playback surface; a focused Slider would swallow every arrow
-              // key and strand the D-pad, so keep it out of traversal there.
-              ExcludeFocus(
-                excluding: TvPlatform.isAndroidTv,
-                child: SliderTheme(
-                  data: sliderTheme,
-                  child: TweenAnimationBuilder<double>(
-                    tween: Tween<double>(end: value),
-                    duration: isInteracting
-                        ? Duration.zero
-                        : const Duration(milliseconds: 140),
-                    curve: Curves.linear,
-                    builder:
-                        (
-                          BuildContext context,
-                          double animatedValue,
-                          Widget? child,
-                        ) {
-                          final double displayedValue = isInteracting
-                              ? value
-                              : animatedValue.clamp(0, 1).toDouble();
-                          return TweenAnimationBuilder<double>(
-                            tween: Tween<double>(end: bufferedValue),
-                            duration: isInteracting
-                                ? Duration.zero
-                                : const Duration(milliseconds: 220),
-                            curve: Curves.easeOutCubic,
-                            builder:
-                                (
-                                  BuildContext context,
-                                  double animatedBufferedValue,
-                                  Widget? child,
-                                ) {
-                                  final double displayedBufferedValue =
-                                      animatedBufferedValue
-                                          .clamp(0, 1)
-                                          .toDouble();
-                                  return Slider(
-                                    value: displayedValue,
-                                    secondaryTrackValue:
-                                        displayedBufferedValue > displayedValue
-                                        ? displayedBufferedValue
-                                        : null,
-                                    onChangeStart: duration.inMilliseconds <= 0
-                                        ? null
-                                        : (double startValue) {
-                                            final Duration pos =
-                                                _positionFromValue(
-                                                  duration,
-                                                  startValue,
-                                                );
-                                            setState(() {
-                                              _dragValue = startValue;
-                                              _lastDragPosition = pos;
-                                            });
-                                            final PlaybackController notifier =
-                                                ref.read(
-                                                  playbackControllerProvider
-                                                      .notifier,
-                                                );
-                                            notifier.beginSeekPreview();
-                                            notifier.previewSeekTo(pos);
-                                          },
-                                    onChanged: duration.inMilliseconds <= 0
-                                        ? null
-                                        : (double v) {
-                                            final Duration pos =
-                                                _positionFromValue(duration, v);
-                                            setState(() {
-                                              _dragValue = v;
-                                              _lastDragPosition = pos;
-                                            });
-                                            ref
-                                                .read(
-                                                  playbackControllerProvider
-                                                      .notifier,
-                                                )
-                                                .previewSeekTo(pos);
-                                          },
-                                    onChangeEnd: duration.inMilliseconds <= 0
-                                        ? null
-                                        : (double v) {
-                                            final Duration pos =
-                                                _positionFromValue(duration, v);
-                                            setState(() {
-                                              _dragValue = null;
-                                              _lastDragPosition = pos;
-                                            });
-                                            final PlaybackController notifier =
-                                                ref.read(
-                                                  playbackControllerProvider
-                                                      .notifier,
-                                                );
-                                            notifier.seekTo(pos);
-                                            notifier.endSeekPreview();
-                                          },
-                                  );
-                                },
-                          );
-                        },
+                // On TV the timeline is driven with Left/Right seek on the
+                // playback surface; a focused Slider would swallow every arrow
+                // key and strand the D-pad, so keep it out of traversal there.
+                ExcludeFocus(
+                  excluding: TvPlatform.isAndroidTv,
+                  child: SliderTheme(
+                    data: sliderTheme,
+                    child: TweenAnimationBuilder<double>(
+                      tween: Tween<double>(end: value),
+                      duration: isInteracting
+                          ? Duration.zero
+                          : const Duration(milliseconds: 140),
+                      curve: Curves.linear,
+                      builder:
+                          (
+                            BuildContext context,
+                            double animatedValue,
+                            Widget? child,
+                          ) {
+                            final double displayedValue = isInteracting
+                                ? value
+                                : animatedValue.clamp(0, 1).toDouble();
+                            return TweenAnimationBuilder<double>(
+                              tween: Tween<double>(end: bufferedValue),
+                              duration: isInteracting
+                                  ? Duration.zero
+                                  : const Duration(milliseconds: 220),
+                              curve: Curves.easeOutCubic,
+                              builder:
+                                  (
+                                    BuildContext context,
+                                    double animatedBufferedValue,
+                                    Widget? child,
+                                  ) {
+                                    final double displayedBufferedValue =
+                                        animatedBufferedValue
+                                            .clamp(0, 1)
+                                            .toDouble();
+                                    return Slider(
+                                      value: displayedValue,
+                                      secondaryTrackValue:
+                                          displayedBufferedValue >
+                                              displayedValue
+                                          ? displayedBufferedValue
+                                          : null,
+                                      onChangeStart:
+                                          duration.inMilliseconds <= 0
+                                          ? null
+                                          : (double startValue) {
+                                              widget.onInteractionChanged(true);
+                                              final Duration pos =
+                                                  _positionFromValue(
+                                                    duration,
+                                                    startValue,
+                                                  );
+                                              setState(() {
+                                                _dragValue = startValue;
+                                                _lastDragPosition = pos;
+                                              });
+                                              final PlaybackController
+                                              notifier = ref.read(
+                                                playbackControllerProvider
+                                                    .notifier,
+                                              );
+                                              notifier.beginSeekPreview();
+                                              notifier.previewSeekTo(pos);
+                                            },
+                                      onChanged: duration.inMilliseconds <= 0
+                                          ? null
+                                          : (double v) {
+                                              final Duration pos =
+                                                  _positionFromValue(
+                                                    duration,
+                                                    v,
+                                                  );
+                                              setState(() {
+                                                _dragValue = v;
+                                                _lastDragPosition = pos;
+                                              });
+                                              ref
+                                                  .read(
+                                                    playbackControllerProvider
+                                                        .notifier,
+                                                  )
+                                                  .previewSeekTo(pos);
+                                            },
+                                      onChangeEnd: duration.inMilliseconds <= 0
+                                          ? null
+                                          : (double v) {
+                                              final Duration pos =
+                                                  _positionFromValue(
+                                                    duration,
+                                                    v,
+                                                  );
+                                              setState(() {
+                                                _dragValue = null;
+                                                _hoverValue = null;
+                                                _lastDragPosition = pos;
+                                              });
+                                              final PlaybackController
+                                              notifier = ref.read(
+                                                playbackControllerProvider
+                                                    .notifier,
+                                              );
+                                              notifier.seekTo(pos);
+                                              notifier.endSeekPreview();
+                                              // Mouse release can happen while
+                                              // the pointer is still sitting on
+                                              // the timeline. In that case keep
+                                              // auto-hide blocked until onExit.
+                                              widget.onInteractionChanged(
+                                                _pointerInside,
+                                              );
+                                            },
+                                    );
+                                  },
+                            );
+                          },
+                    ),
                   ),
                 ),
-              ),
-              Positioned(
-                bottom: 16,
-                left: bubbleLeft,
-                child: IgnorePointer(
-                  child: AnimatedOpacity(
-                    opacity: showBubble ? 1.0 : 0.0,
-                    duration: const Duration(milliseconds: 160),
-                    curve: Curves.easeInOut,
-                    child: AnimatedScale(
-                      scale: showBubble ? 1.0 : 0.82,
+                Positioned(
+                  bottom: 16,
+                  left: bubbleLeft,
+                  child: IgnorePointer(
+                    child: AnimatedOpacity(
+                      opacity: showBubble ? 1.0 : 0.0,
                       duration: const Duration(milliseconds: 160),
                       curve: Curves.easeInOut,
-                      alignment: Alignment.bottomCenter,
-                      child: _SeekPreviewBubble(
-                        position: bubblePosition,
-                        controller: null,
-                        ready: false,
-                        width: bubbleWidth,
-                        arrowX: bubbleArrowX,
+                      child: AnimatedScale(
+                        scale: showBubble ? 1.0 : 0.82,
+                        duration: const Duration(milliseconds: 160),
+                        curve: Curves.easeInOut,
+                        alignment: Alignment.bottomCenter,
+                        child: _SeekPreviewBubble(
+                          position: bubblePosition,
+                          thumbnail: playback.seekPreviewThumbnail,
+                          loading: playback.seekPreviewLoading,
+                          imageSurface: playback.seekPreviewImageSurface,
+                          width: bubbleWidth,
+                          arrowX: bubbleArrowX,
+                        ),
                       ),
                     ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         );
       },
@@ -3157,18 +3288,21 @@ class _SkipMarkerPainter extends CustomPainter {
 class _SeekPreviewBubble extends StatelessWidget {
   const _SeekPreviewBubble({
     required this.position,
-    required this.controller,
-    required this.ready,
+    required this.thumbnail,
+    required this.loading,
+    required this.imageSurface,
     required this.width,
     required this.arrowX,
   });
+
   final Duration position;
-  final PlayerEngine? controller;
-  final bool ready;
+  final SeekThumbnail? thumbnail;
+  final bool loading;
+  final bool imageSurface;
   final double width;
   final double arrowX;
 
-  static const double _previewWidth = 160.0;
+  static const double _previewWidth = 240;
   static const EdgeInsets _timecodePadding = EdgeInsets.symmetric(
     horizontal: 8,
     vertical: 6,
@@ -3180,7 +3314,12 @@ class _SeekPreviewBubble extends StatelessWidget {
     height: 1,
   );
 
-  static double timecodeWidthFor(BuildContext context, Duration position) {
+  static double widthFor(
+    BuildContext context,
+    Duration position, {
+    required bool imageSurface,
+  }) {
+    if (imageSurface) return _previewWidth;
     final TextPainter painter = TextPainter(
       text: TextSpan(text: _format(position), style: _timecodeStyle),
       textDirection: Directionality.of(context),
@@ -3192,29 +3331,14 @@ class _SeekPreviewBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final PlayerEngine? preview = controller;
-    if (preview == null) {
+    if (!imageSurface) {
       return Column(
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
           Container(
             width: width,
             padding: _timecodePadding,
-            decoration: BoxDecoration(
-              color: const Color(0xE8111111),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                color: Colors.white.withValues(alpha: 0.18),
-                width: 0.5,
-              ),
-              boxShadow: const <BoxShadow>[
-                BoxShadow(
-                  color: Color(0x60000000),
-                  blurRadius: 12,
-                  offset: Offset(0, 4),
-                ),
-              ],
-            ),
+            decoration: _decoration(),
             child: Text(
               _format(position),
               maxLines: 1,
@@ -3235,11 +3359,12 @@ class _SeekPreviewBubble extends StatelessWidget {
       );
     }
 
-    final double ar = preview.value.aspectRatio;
-    final double safeAr = (ar > 0.2 && ar < 5.0 && ar.isFinite)
-        ? ar
-        : 16.0 / 9.0;
-    final double previewHeight = (_previewWidth / safeAr).clamp(40.0, 140.0);
+    final SeekThumbnail? frame = thumbnail;
+    final double aspectRatio =
+        frame != null && frame.width > 0 && frame.height > 0
+        ? frame.width / frame.height
+        : 16 / 9;
+    final double previewHeight = (_previewWidth / aspectRatio).clamp(80, 180);
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -3248,59 +3373,32 @@ class _SeekPreviewBubble extends StatelessWidget {
           width: _previewWidth,
           height: previewHeight,
           clipBehavior: Clip.hardEdge,
-          decoration: BoxDecoration(
-            color: Colors.black,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: Colors.white.withValues(alpha: 0.18),
-              width: 0.5,
-            ),
-            boxShadow: const <BoxShadow>[
-              BoxShadow(
-                color: Color(0x60000000),
-                blurRadius: 12,
-                offset: Offset(0, 4),
-              ),
-            ],
-          ),
+          decoration: _decoration(),
           child: Stack(
             fit: StackFit.expand,
             children: <Widget>[
-              if (!ready)
-                const _SeekPreviewPlaceholder(loading: true)
+              if (frame == null)
+                _SeekPreviewPlaceholder(loading: loading)
               else
-                ValueListenableBuilder<PlayerEngineState>(
-                  valueListenable: preview.state,
-                  builder:
-                      (
-                        BuildContext context,
-                        PlayerEngineState value,
-                        Widget? child,
-                      ) {
-                        if (value.hasError) {
-                          return const _SeekPreviewPlaceholder(loading: false);
-                        }
-                        if (!value.isInitialized) {
-                          return const _SeekPreviewPlaceholder(loading: false);
-                        }
-                        if (!value.hasVideoSurface) {
-                          return const _SeekPreviewPlaceholder(loading: false);
-                        }
-                        return preview.buildVideoSurface(context);
-                      },
+                Image.memory(
+                  frame.bytes,
+                  fit: BoxFit.contain,
+                  gaplessPlayback: false,
+                  filterQuality: FilterQuality.medium,
+                  errorBuilder: (_, _, _) =>
+                      const _SeekPreviewPlaceholder(loading: false),
                 ),
-              // Time label gradient overlay at bottom
               Positioned(
                 bottom: 0,
                 left: 0,
                 right: 0,
                 child: Container(
-                  padding: const EdgeInsets.fromLTRB(6, 10, 6, 5),
+                  padding: const EdgeInsets.fromLTRB(6, 12, 6, 6),
                   decoration: const BoxDecoration(
                     gradient: LinearGradient(
                       begin: Alignment.bottomCenter,
                       end: Alignment.topCenter,
-                      colors: <Color>[Color(0xCC000000), Colors.transparent],
+                      colors: <Color>[Color(0xD9000000), Colors.transparent],
                     ),
                   ),
                   child: Text(
@@ -3308,7 +3406,7 @@ class _SeekPreviewBubble extends StatelessWidget {
                     textAlign: TextAlign.center,
                     style: const TextStyle(
                       color: Colors.white,
-                      fontSize: 11,
+                      fontSize: 12,
                       fontWeight: FontWeight.w700,
                       letterSpacing: 0.3,
                       height: 1,
@@ -3324,9 +3422,27 @@ class _SeekPreviewBubble extends StatelessWidget {
           height: 5,
           child: CustomPaint(
             painter: _SeekBubbleArrowPainter(
-              arrowCenterX: arrowX.clamp(8.0, _previewWidth - 8.0),
+              arrowCenterX: arrowX.clamp(8, _previewWidth - 8),
             ),
           ),
+        ),
+      ],
+    );
+  }
+
+  static BoxDecoration _decoration() {
+    return BoxDecoration(
+      color: const Color(0xE8111111),
+      borderRadius: BorderRadius.circular(8),
+      border: Border.all(
+        color: Colors.white.withValues(alpha: 0.18),
+        width: 0.5,
+      ),
+      boxShadow: const <BoxShadow>[
+        BoxShadow(
+          color: Color(0x60000000),
+          blurRadius: 12,
+          offset: Offset(0, 4),
         ),
       ],
     );
@@ -3337,7 +3453,8 @@ class _SeekPreviewBubble extends StatelessWidget {
     final int m = d.inMinutes.remainder(60);
     final int s = d.inSeconds.remainder(60);
     if (h > 0) {
-      return '$h:${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
+      return '$h:${m.toString().padLeft(2, '0')}:'
+          '${s.toString().padLeft(2, '0')}';
     }
     return '$m:${s.toString().padLeft(2, '0')}';
   }
@@ -3354,14 +3471,7 @@ class _SeekPreviewPlaceholder extends StatelessWidget {
       color: const Color(0xFF080808),
       child: Center(
         child: loading
-            ? const SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: Colors.white70,
-                ),
-              )
+            ? const SizedBox.shrink()
             : const Icon(
                 Icons.movie_filter_outlined,
                 size: 22,

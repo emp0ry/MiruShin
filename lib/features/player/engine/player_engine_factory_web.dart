@@ -24,15 +24,11 @@ bool get usesBrowserPlayerEngine => true;
 
 PlayerEngine createPlayerEngine({
   double? initialAspectRatio,
-  bool previewMode = false,
   PlayerBackend backend = PlayerBackend.auto,
   bool youtubeEmbed = false,
   String trailerBackLabel = 'Back',
 }) {
   // Web keeps the browser video backend. The native MPV/FVP engines are FFI
   // based and are intentionally not selected in web builds.
-  return VideoPlayerEngine(
-    initialAspectRatio: initialAspectRatio,
-    previewMode: previewMode,
-  );
+  return VideoPlayerEngine(initialAspectRatio: initialAspectRatio);
 }

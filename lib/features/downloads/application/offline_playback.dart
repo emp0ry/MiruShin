@@ -71,6 +71,12 @@ MediaPlaybackItem buildOfflinePlaybackItem({
       ...media.externalIds,
       'sora_addon_id': episode.addonId,
       'sora_episode_href': episode.episodeHref,
+      'mirushin_offline_download_id': episode.id,
+      'mirushin_offline_media_path': p.join(
+        episode.relDir,
+        episode.videoFileName,
+      ),
+      'mirushin_offline_quality': episode.qualityLabel,
     },
     servers: <MediaServer>[server],
     seasons: _buildSeasons(moduleEpisodes, rootPath: rootPath),

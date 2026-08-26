@@ -25,6 +25,16 @@ class _SegmentBufferTooLarge implements Exception {
   const _SegmentBufferTooLarge();
 }
 
+String _safeUpstream(Uri uri) {
+  if (uri.scheme == 'http' || uri.scheme == 'https') {
+    final String port = uri.hasPort ? ':${uri.port}' : '';
+    return '${uri.scheme}://${uri.host}$port/<redacted>';
+  }
+  return '${uri.scheme}:<redacted>';
+}
+
+String _safeFailure(Object error) => error.runtimeType.toString();
+
 /// Local HTTP/HLS proxy that sits between MPV/native PiP and the upstream CDN.
 ///
 /// Why it helps vs. MPV fetching directly:
@@ -192,7 +202,7 @@ class LocalHlsProxy {
     for (final MapEntry<String, String> header in headers.entries) {
       _putForwardHeader(header.key, header.value, overwrite: true);
     }
-    debugPrint('HlsProxy DASH→HLS manifest ← $remoteUrl');
+    debugPrint('HlsProxy DASH→HLS manifest ← ${_safeUpstream(remoteUrl)}');
     final String manifest = await _fetchPlaylist(remoteUrl);
     return _registerDashHlsPresentation(
       manifest: manifest,
@@ -378,7 +388,7 @@ class LocalHlsProxy {
       return req.response.close();
     }
 
-    debugPrint('HlsProxy DASH manifest ← $source');
+    debugPrint('HlsProxy DASH manifest ← ${_safeUpstream(source)}');
     try {
       final String manifest = await _fetchPlaylist(source);
       if (!RegExp(r'<MPD(?:\s|>)', caseSensitive: false).hasMatch(manifest)) {
@@ -400,10 +410,13 @@ class LocalHlsProxy {
       );
       return req.response.close();
     } on Object catch (error) {
-      debugPrint('HlsProxy DASH manifest FAIL $source -> $error');
+      debugPrint(
+        'HlsProxy DASH manifest FAIL ${_safeUpstream(source)} '
+        '(${_safeFailure(error)})',
+      );
       req.response.statusCode = HttpStatus.badGateway;
       req.response.headers.set(HttpHeaders.contentTypeHeader, 'text/plain');
-      req.response.write('DASH proxy error: $error');
+      req.response.write('upstream DASH request failed');
       return req.response.close();
     }
   }
@@ -513,7 +526,7 @@ class LocalHlsProxy {
       req.response.statusCode = HttpStatus.forbidden;
       return req.response.close();
     }
-    debugPrint('HlsProxy playlist ← $src');
+    debugPrint('HlsProxy playlist ← ${_safeUpstream(src)}');
 
     try {
       final String raw = await _fetchPlaylist(src);
@@ -521,10 +534,7 @@ class LocalHlsProxy {
       // Validate: every HLS playlist must start with #EXTM3U.
       final String trimmed = raw.trimLeft();
       if (!trimmed.startsWith('#EXTM3U')) {
-        debugPrint(
-          'HlsProxy: invalid playlist from $src '
-          '(first 120 chars: ${trimmed.substring(0, trimmed.length.clamp(0, 120))})',
-        );
+        debugPrint('HlsProxy: invalid playlist from ${_safeUpstream(src)}');
         req.response.statusCode = HttpStatus.badGateway;
         req.response.headers.set(HttpHeaders.contentTypeHeader, 'text/plain');
         req.response.write('invalid HLS response from upstream');
@@ -551,11 +561,14 @@ class LocalHlsProxy {
         ..headers.set(HttpHeaders.cacheControlHeader, 'no-cache');
       req.response.write(rewritten);
       return req.response.close();
-    } catch (e) {
-      debugPrint('HlsProxy playlist FAIL $src -> $e');
+    } on Object catch (error) {
+      debugPrint(
+        'HlsProxy playlist FAIL ${_safeUpstream(src)} '
+        '(${_safeFailure(error)})',
+      );
       req.response.statusCode = HttpStatus.badGateway;
       req.response.headers.set(HttpHeaders.contentTypeHeader, 'text/plain');
-      req.response.write('proxy error: $e');
+      req.response.write('upstream playlist request failed');
       return req.response.close();
     }
   }
@@ -583,9 +596,10 @@ class LocalHlsProxy {
 
         // Decompress (autoUncompress handles gzip) then decode.
         return await resp.transform(utf8.decoder).join().timeout(_kReadTimeout);
-      } catch (e) {
+      } on Object catch (error) {
         debugPrint(
-          'HlsProxy playlist attempt $attempt/$_kPlaylistRetries FAIL: $e',
+          'HlsProxy playlist attempt $attempt/$_kPlaylistRetries FAIL '
+          '(${_safeFailure(error)})',
         );
         if (attempt == _kPlaylistRetries) rethrow;
         _destroyClient();
@@ -667,24 +681,30 @@ class LocalHlsProxy {
       req.response.add(upstream.body);
       return req.response.close();
     } on _SegmentBufferTooLarge {
-      debugPrint('HlsProxy seg too large for prebuffer, streaming $uri');
+      debugPrint(
+        'HlsProxy seg too large for prebuffer, streaming '
+        '${_safeUpstream(uri)}',
+      );
       return _serveStreamingSegment(
         req,
         uri,
         range,
         preserveContentType: preserveContentType,
       );
-    } catch (e) {
-      if (_stopping && _isShutdownError(e)) {
+    } on Object catch (error) {
+      if (_stopping && _isShutdownError(error)) {
         try {
           await req.response.close();
         } catch (_) {}
         return;
       }
-      debugPrint('HlsProxy seg FAIL $uri -> $e');
+      debugPrint(
+        'HlsProxy seg FAIL ${_safeUpstream(uri)} '
+        '(${_safeFailure(error)})',
+      );
       req.response.statusCode = HttpStatus.badGateway;
       req.response.headers.set(HttpHeaders.contentTypeHeader, 'text/plain');
-      req.response.write('segment error: $e');
+      req.response.write('upstream media request failed');
       return req.response.close();
     }
   }
@@ -818,7 +838,7 @@ class LocalHlsProxy {
           await upstream.drain<void>().catchError((_) {});
           debugPrint(
             'HlsProxy seg retry $attempt '
-            '(HTTP ${upstream.statusCode}) $uri',
+            '(HTTP ${upstream.statusCode}) ${_safeUpstream(uri)}',
           );
           await _beforeRetry(attempt);
           continue;
@@ -845,11 +865,14 @@ class LocalHlsProxy {
         );
       } on _SegmentBufferTooLarge {
         rethrow;
-      } catch (e) {
+      } on Object catch (error) {
         final bool canRetry =
-            _isRetriableError(e) && attempt < _kSegmentRetries;
+            _isRetriableError(error) && attempt < _kSegmentRetries;
         if (canRetry) {
-          debugPrint('HlsProxy seg retry $attempt ($e) $uri');
+          debugPrint(
+            'HlsProxy seg retry $attempt (${_safeFailure(error)}) '
+            '${_safeUpstream(uri)}',
+          );
           await _beforeRetry(attempt);
           continue;
         }
@@ -896,7 +919,7 @@ class LocalHlsProxy {
           await upstream.drain<void>().catchError((_) {});
           debugPrint(
             'HlsProxy seg retry $attempt '
-            '(HTTP ${upstream.statusCode}) $uri',
+            '(HTTP ${upstream.statusCode}) ${_safeUpstream(uri)}',
           );
           await _beforeRetry(attempt);
           continue;
@@ -920,37 +943,46 @@ class LocalHlsProxy {
         try {
           await req.response.addStream(_activeStream(upstream));
           return req.response.close();
-        } catch (e) {
-          if (_stopping && _isShutdownError(e)) {
+        } on Object catch (error) {
+          if (_stopping && _isShutdownError(error)) {
             try {
               await req.response.close();
             } catch (_) {}
             return;
           }
-          debugPrint('HlsProxy seg stream FAIL $uri -> $e');
+          debugPrint(
+            'HlsProxy seg stream FAIL ${_safeUpstream(uri)} '
+            '(${_safeFailure(error)})',
+          );
           try {
             await req.response.close();
           } catch (_) {}
           return;
         }
-      } catch (e) {
-        if (_stopping && _isShutdownError(e)) {
+      } on Object catch (error) {
+        if (_stopping && _isShutdownError(error)) {
           try {
             await req.response.close();
           } catch (_) {}
           return;
         }
         final bool canRetry =
-            _isRetriableError(e) && attempt < _kSegmentRetries;
+            _isRetriableError(error) && attempt < _kSegmentRetries;
         if (canRetry) {
-          debugPrint('HlsProxy seg retry $attempt ($e) $uri');
+          debugPrint(
+            'HlsProxy seg retry $attempt (${_safeFailure(error)}) '
+            '${_safeUpstream(uri)}',
+          );
           await _beforeRetry(attempt);
           continue;
         }
-        debugPrint('HlsProxy seg FAIL $uri -> $e');
+        debugPrint(
+          'HlsProxy seg FAIL ${_safeUpstream(uri)} '
+          '(${_safeFailure(error)})',
+        );
         req.response.statusCode = HttpStatus.badGateway;
         req.response.headers.set(HttpHeaders.contentTypeHeader, 'text/plain');
-        req.response.write('segment error: $e');
+        req.response.write('upstream media request failed');
         return req.response.close();
       }
     }
@@ -1269,8 +1301,8 @@ class LocalHlsProxy {
       for (final MapEntry<String, dynamic> entry in dec.entries) {
         _putForwardHeader(entry.key, entry.value.toString(), overwrite: true);
       }
-    } catch (e) {
-      debugPrint('HlsProxy: failed to parse h-param: $e');
+    } on Object catch (error) {
+      debugPrint('HlsProxy: failed to parse h-param (${_safeFailure(error)})');
     }
   }
 

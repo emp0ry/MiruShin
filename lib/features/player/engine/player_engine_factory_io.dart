@@ -54,7 +54,6 @@ bool get usesBrowserPlayerEngine => false;
 
 PlayerEngine createPlayerEngine({
   double? initialAspectRatio,
-  bool previewMode = false,
   PlayerBackend backend = PlayerBackend.auto,
   bool youtubeEmbed = false,
   String trailerBackLabel = 'Back',
@@ -69,14 +68,8 @@ PlayerEngine createPlayerEngine({
   switch (resolvePlayerEngineBackend(backend)) {
     case PlayerBackend.auto:
     case PlayerBackend.mpv:
-      return MediaKitPlayerEngine(
-        initialAspectRatio: initialAspectRatio,
-        previewMode: previewMode,
-      );
+      return MediaKitPlayerEngine(initialAspectRatio: initialAspectRatio);
     case PlayerBackend.fvp:
-      return FvpPlayerEngine(
-        initialAspectRatio: initialAspectRatio,
-        previewMode: previewMode,
-      );
+      return FvpPlayerEngine(initialAspectRatio: initialAspectRatio);
   }
 }

@@ -6,7 +6,7 @@ import '../domain/player_models.dart';
 import 'player_engine.dart';
 
 class VideoPlayerEngine extends PlayerEngine {
-  VideoPlayerEngine({double? initialAspectRatio, bool previewMode = false})
+  VideoPlayerEngine({double? initialAspectRatio})
     : _initialAspectRatio = initialAspectRatio,
       _state = ValueNotifier<PlayerEngineState>(
         PlayerEngineState(

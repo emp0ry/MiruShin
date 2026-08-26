@@ -9,6 +9,7 @@ import 'package:media_kit_video/media_kit_video.dart' as mkv;
 import '../domain/player_models.dart';
 import 'local_hls_metadata.dart';
 import 'local_hls_proxy.dart';
+import 'media_kit_runtime.dart';
 import 'player_engine.dart';
 import 'startup_seek.dart';
 import 'stream_url_policy.dart';
@@ -75,9 +76,8 @@ int _mkIoBufferBytes() {
 /// player UI, subtitles, auto-next, RPC, skip markers, seek preview and
 /// progress logic continue to work above it.
 class MediaKitPlayerEngine extends PlayerEngine {
-  MediaKitPlayerEngine({double? initialAspectRatio, bool previewMode = false})
+  MediaKitPlayerEngine({double? initialAspectRatio})
     : _initialAspectRatio = initialAspectRatio,
-      _previewMode = previewMode,
       _state = ValueNotifier<PlayerEngineState>(
         PlayerEngineState(
           aspectRatio: _usableAspectRatio(initialAspectRatio) ?? 16 / 9,
@@ -85,7 +85,6 @@ class MediaKitPlayerEngine extends PlayerEngine {
       );
 
   final double? _initialAspectRatio;
-  final bool _previewMode;
   final ValueNotifier<PlayerEngineState> _state;
 
   // Initialize mpv and MediaKit only when creating a player instead of at app
@@ -96,19 +95,6 @@ class MediaKitPlayerEngine extends PlayerEngine {
   // keeps addon resolution in a clean process. mpv loads only after the
   // user actually plays, after the stream URL has already been resolved by the
   // addon JS.
-  static bool _mediaKitInitialized = false;
-
-  static void _ensureMediaKitInitialized() {
-    if (_mediaKitInitialized) return;
-    if (Platform.isLinux) {
-      throw UnsupportedError(
-        'MediaKit/mpv is disabled on Linux; use the FVP backend instead.',
-      );
-    }
-    mk.MediaKit.ensureInitialized();
-    _mediaKitInitialized = true;
-  }
-
   mk.Player? _player;
   mkv.VideoController? _videoController;
   Timer? _positionTimer;
@@ -119,7 +105,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
 
   // Local HTTP/HLS proxy for network playback. HLS playlists use /m3u8 and
   // direct media URLs use /media so headers, retries, and Range handling stay
-  // consistent across providers. Preview mode skips it to stay lightweight.
+  // consistent across providers. Seek thumbnails own a separate proxy.
   final LocalHlsProxy _proxy = LocalHlsProxy();
 
   bool _opening = false;
@@ -215,14 +201,12 @@ class MediaKitPlayerEngine extends PlayerEngine {
     _lastReliableDuration = Duration.zero;
     _knownSourceDuration = Duration.zero;
 
-    _ensureMediaKitInitialized();
+    MediaKitRuntime.ensureInitialized();
 
     final mk.Player player = mk.Player(
       configuration: mk.PlayerConfiguration(
         title: 'MiruShin',
-        // Use a small I/O buffer for the lightweight preview decoder; use a
-        // large one for the main player so CDN TCP payloads are absorbed fast.
-        bufferSize: _previewMode ? 8 * 1024 * 1024 : _mkIoBufferBytes(),
+        bufferSize: _mkIoBufferBytes(),
         ready: () {
           _syncState();
         },
@@ -313,12 +297,9 @@ class MediaKitPlayerEngine extends PlayerEngine {
           ? await readLocalHlsDuration(remoteUri)
           : Duration.zero;
       final bool useProxy =
-          !source.disableProxy &&
-          !_previewMode &&
-          (isNetwork || isInlineDash || isLocalHls);
-      if (!_previewMode &&
-          ((source.disableProxy && isNetwork) ||
-              (useProxy && !source.allowDirectFallback))) {
+          !source.disableProxy && (isNetwork || isInlineDash || isLocalHls);
+      if ((source.disableProxy && isNetwork) ||
+          (useProxy && !source.allowDirectFallback)) {
         _requireVideoSurfaceDuringStartup = true;
       }
 
@@ -789,7 +770,6 @@ class MediaKitPlayerEngine extends PlayerEngine {
         ((native.width ?? 0) > 0 && (native.height ?? 0) > 0) ||
         _lastVideoSize != Size.zero;
     final bool missingVideo =
-        !_previewMode &&
         _lastError == null &&
         initialized &&
         native.playing &&

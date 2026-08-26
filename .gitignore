@@ -68,7 +68,6 @@ coverage/
 
 **/doc/api/
 **/generated_plugin_registrant.dart
-lib/generated_plugin_registrant.dart
 
 flutter_*.png
 linked_*.ds

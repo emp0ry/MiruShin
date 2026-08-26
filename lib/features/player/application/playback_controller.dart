@@ -29,6 +29,9 @@ import '../domain/seek_settle.dart';
 import '../engine/local_hls_proxy.dart';
 import '../engine/player_engine.dart';
 import '../engine/player_engine_factory.dart';
+import '../engine/seek_thumbnail.dart';
+import '../engine/seek_thumbnail_extractor.dart';
+import '../engine/seek_thumbnail_source.dart';
 import 'player_settings.dart';
 import 'resume_stability.dart';
 
@@ -77,8 +80,9 @@ class PlaybackState {
     this.autoNextVisible = false,
     this.seekPreviewPosition,
     this.seekPreviewBufferedEnd,
-    this.seekPreviewEngine,
-    this.seekPreviewReady = false,
+    this.seekPreviewThumbnail,
+    this.seekPreviewLoading = false,
+    this.seekPreviewImageSurface = false,
     this.temporarySpeedActive = false,
     this.desiredPlaying = false,
     this.playPauseOperationInFlight = false,
@@ -100,8 +104,9 @@ class PlaybackState {
   final bool autoNextVisible;
   final Duration? seekPreviewPosition;
   final Duration? seekPreviewBufferedEnd;
-  final PlayerEngine? seekPreviewEngine;
-  final bool seekPreviewReady;
+  final SeekThumbnail? seekPreviewThumbnail;
+  final bool seekPreviewLoading;
+  final bool seekPreviewImageSurface;
   final bool temporarySpeedActive;
   final bool desiredPlaying;
   final bool playPauseOperationInFlight;
@@ -127,11 +132,12 @@ class PlaybackState {
     bool? autoNextVisible,
     Duration? seekPreviewPosition,
     Duration? seekPreviewBufferedEnd,
-    PlayerEngine? seekPreviewEngine,
-    bool? seekPreviewReady,
+    SeekThumbnail? seekPreviewThumbnail,
+    bool? seekPreviewLoading,
+    bool? seekPreviewImageSurface,
     bool clearSeekPreviewPosition = false,
     bool clearSeekPreviewBufferedEnd = false,
-    bool clearSeekPreviewEngine = false,
+    bool clearSeekPreviewThumbnail = false,
     bool? temporarySpeedActive,
     bool? desiredPlaying,
     bool? playPauseOperationInFlight,
@@ -160,12 +166,16 @@ class PlaybackState {
           clearSeekPreviewPosition || clearSeekPreviewBufferedEnd
           ? null
           : seekPreviewBufferedEnd ?? this.seekPreviewBufferedEnd,
-      seekPreviewEngine: clearSeekPreviewEngine
+      seekPreviewThumbnail:
+          clearSeekPreviewPosition || clearSeekPreviewThumbnail
           ? null
-          : seekPreviewEngine ?? this.seekPreviewEngine,
-      seekPreviewReady: clearSeekPreviewEngine
+          : seekPreviewThumbnail ?? this.seekPreviewThumbnail,
+      seekPreviewLoading: clearSeekPreviewPosition || clearSeekPreviewThumbnail
           ? false
-          : seekPreviewReady ?? this.seekPreviewReady,
+          : seekPreviewLoading ?? this.seekPreviewLoading,
+      seekPreviewImageSurface: clearSeekPreviewPosition
+          ? false
+          : seekPreviewImageSurface ?? this.seekPreviewImageSurface,
       temporarySpeedActive: temporarySpeedActive ?? this.temporarySpeedActive,
       desiredPlaying: desiredPlaying ?? this.desiredPlaying,
       playPauseOperationInFlight:
@@ -175,31 +185,9 @@ class PlaybackState {
   }
 }
 
-class _SeekPreviewSource {
-  const _SeekPreviewSource({required this.source, required this.key});
-
-  final PlayerSource source;
-  final String key;
-}
-
 class PlaybackController extends Notifier<PlaybackState> {
-  // Disabled for release: FVP/MDK can abort on macOS when creating a second
-  // Flutter texture for a low-quality preview stream next to the main player.
-  static const bool _seekPreviewStreamEnabled = false;
   static const Duration _interactiveSeekDelay = Duration(milliseconds: 180);
-  static const Duration _seekPreviewDebounce = Duration(milliseconds: 220);
-  static const Duration _seekPreviewMinStep = Duration(seconds: 3);
-  static const Duration _seekPreviewOpenTimeout = Duration(milliseconds: 1800);
-  static const Duration _seekPreviewFrameHold = Duration(milliseconds: 180);
-  static const Duration _seekPreviewWarmupDelay = Duration(milliseconds: 650);
-  static const Duration _seekPreviewWarmupFrameHold = Duration(
-    milliseconds: 700,
-  );
-  static const Duration _seekPreviewWarmupInterval = Duration(seconds: 25);
-  static const Duration _seekPreviewSettleTimeout = Duration(milliseconds: 900);
-  static const Duration _seekPreviewTargetTolerance = Duration(
-    milliseconds: 1500,
-  );
+  static const Duration _seekPreviewDebounce = Duration(milliseconds: 140);
   static const Duration _seekSettleTick = Duration(milliseconds: 80);
   static const Duration _seekSettleMinHold = Duration(milliseconds: 700);
   static const Duration _seekSettleTimeout = Duration(seconds: 12);
@@ -274,7 +262,6 @@ class PlaybackController extends Notifier<PlaybackState> {
   bool _autoNextDismissed = false;
   Timer? _interactiveSeekTimer;
   Timer? _seekPreviewTimer;
-  Timer? _seekPreviewWarmupTimer;
   Timer? _seekSettleTimer;
   int _retryCount = 0;
   int _playbackGeneration = 0;
@@ -285,12 +272,8 @@ class PlaybackController extends Notifier<PlaybackState> {
   PlayerEngine? _queuedSeekEngine;
   Duration? _queuedSeekTarget;
   bool _seekInFlight = false;
-  PlayerEngine? _seekPreviewEngine;
-  String? _seekPreviewSourceKey;
   Duration? _pendingSeekPreviewTarget;
-  Duration? _lastSeekPreviewTarget;
   bool _seekPreviewInFlight = false;
-  bool _seekPreviewScrubbing = false;
   bool _playPauseOperationActive = false;
   bool? _pendingDesiredPlaying;
   Completer<void>? _playPauseDrainCompleter;
@@ -303,7 +286,13 @@ class PlaybackController extends Notifier<PlaybackState> {
   Duration _lastStablePausePosition = Duration.zero;
   PlayerEngine? _engineForDispose;
   Future<void>? _finalProgressSaveBarrier;
-  DateTime _nextSeekPreviewWarmupAt = DateTime.fromMillisecondsSinceEpoch(0);
+  final SeekThumbnailRequestTracker _seekThumbnailRequests =
+      SeekThumbnailRequestTracker();
+  final SeekThumbnailService _seekThumbnailService = SeekThumbnailService(
+    extractorFactory: createSeekThumbnailExtractor,
+  );
+  SeekThumbnailPlan? _seekThumbnailPlan;
+  PlayerBackend _seekThumbnailBackend = PlayerBackend.auto;
   PlayerEngine? _settlingSeekEngine;
   Duration? _settlingSeekTarget;
   Duration? _settlingSeekFrom;
@@ -518,14 +507,9 @@ class PlaybackController extends Notifier<PlaybackState> {
       _autoNextOverlayTimer?.cancel();
       _interactiveSeekTimer?.cancel();
       _seekPreviewTimer?.cancel();
-      _seekPreviewWarmupTimer?.cancel();
       _seekSettleTimer?.cancel();
       unawaited(_ignorePlaybackTeardownErrors(DiscordRpcService.dispose()));
-      unawaited(
-        _ignorePlaybackTeardownErrors(
-          _disposeSeekPreviewEngine(clearState: false),
-        ),
-      );
+      unawaited(_ignorePlaybackTeardownErrors(_seekThumbnailService.dispose()));
       final PlayerEngine? engine = _engineForDispose;
       if (engine != null) {
         unawaited(_ignorePlaybackTeardownErrors(engine.dispose()));
@@ -757,12 +741,12 @@ class PlaybackController extends Notifier<PlaybackState> {
     if (state.autoNextVisible ||
         state.lastSkippedFrom != null ||
         state.seekPreviewPosition != null ||
-        state.seekPreviewEngine != null) {
+        state.seekPreviewThumbnail != null) {
       state = state.copyWith(
         autoNextVisible: false,
         clearLastSkippedFrom: true,
         clearSeekPreviewPosition: true,
-        clearSeekPreviewEngine: true,
+        clearSeekPreviewThumbnail: true,
         desiredPlaying: false,
         playPauseOperationInFlight: false,
         resumeStabilizing: false,
@@ -948,7 +932,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     _autoNextOverlayTimer?.cancel();
     final int generation = ++_playbackGeneration;
     _clearInteractiveSeek();
-    unawaited(_disposeSeekPreviewEngine());
+    _cancelSeekThumbnailRequests();
     _resumeGuardPosition = position;
     _resumeGuardUntil = position > const Duration(seconds: 3)
         ? DateTime.now().add(_resumeSeekRetryTimeout)
@@ -972,7 +956,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       clearError: true,
       clearLastSkippedFrom: true,
       clearSeekPreviewPosition: true,
-      clearSeekPreviewEngine: true,
+      clearSeekPreviewThumbnail: true,
       temporarySpeedActive: false,
       desiredPlaying: autoplay,
       playPauseOperationInFlight: false,
@@ -1026,6 +1010,18 @@ class PlaybackController extends Notifier<PlaybackState> {
         : attempts[attemptIndex];
     final PlayerBackend backend = attempt?.backend ?? PlayerBackend.auto;
     final PlayerBackend engineBackend = resolvePlayerEngineBackend(backend);
+    final SeekThumbnailPlan thumbnailPlan = buildSeekThumbnailPlan(
+      item: item,
+      server: server,
+      activeQuality: quality,
+    );
+    final PlayerBackend thumbnailBackend = seekThumbnailExtractionBackend(
+      engineBackend,
+    );
+    await _seekThumbnailService.activate(thumbnailPlan, thumbnailBackend);
+    if (generation != _playbackGeneration) return;
+    _seekThumbnailPlan = thumbnailPlan;
+    _seekThumbnailBackend = thumbnailBackend;
     final bool disableProxy = attempt?.disableProxy ?? false;
     if (attempt != null) {
       debugPrint(
@@ -1104,9 +1100,6 @@ class PlaybackController extends Notifier<PlaybackState> {
         attemptFailures,
       );
       _startOfflineStallWatch(item, server, engine, generation);
-      if (_seekPreviewStreamEnabled) {
-        _scheduleSeekPreviewWarmup(position);
-      }
     } on Object catch (error) {
       final Duration fallbackPosition = _fallbackPositionFor(
         engine,
@@ -1709,10 +1702,13 @@ class PlaybackController extends Notifier<PlaybackState> {
     _undoTimer?.cancel();
     _autoNextOverlayTimer?.cancel();
     _clearInteractiveSeek();
+    _cancelSeekThumbnailRequests();
     _engineForDispose = null;
     state = const PlaybackState();
     try {
-      await _disposeSeekPreviewEngine(clearState: false);
+      await _seekThumbnailService.reset();
+      _seekThumbnailPlan = null;
+      _seekThumbnailBackend = PlayerBackend.auto;
     } catch (_) {
       // Preview teardown must not prevent the main player from being released.
     }
@@ -2225,541 +2221,181 @@ class PlaybackController extends Notifier<PlaybackState> {
   void previewSeekTo(Duration position) {
     final PlayerEngine? engine = state.engine;
     if (engine == null || !engine.state.value.isInitialized) return;
-    final Duration clamped = _clampSeekPosition(
-      position,
-      engine.state.value.duration,
-    );
+    final Duration duration = engine.state.value.duration;
+    final Duration clamped = _clampSeekPosition(position, duration);
     _cancelSeekSettle(clearPreview: false);
     _setSeekPreview(engine, clamped);
-    if (_seekPreviewStreamEnabled) {
-      _queueSeekPreviewFrame(clamped);
+
+    final SeekThumbnailPlan? plan = _seekThumbnailPlan;
+    final bool imageSurface =
+        seekThumbnailExtractionSupported &&
+        plan != null &&
+        plan.candidates.isNotEmpty;
+    final SeekThumbnail? cached = imageSurface
+        ? _seekThumbnailService.cachedFor(plan, clamped, duration: duration)
+        : null;
+    state = state.copyWith(
+      seekPreviewThumbnail: cached,
+      clearSeekPreviewThumbnail: cached == null,
+      seekPreviewLoading: false,
+      seekPreviewImageSurface: imageSurface,
+    );
+    if (cached != null) {
+      _seekPreviewTimer?.cancel();
+      _pendingSeekPreviewTarget = null;
+      return;
+    }
+    if (imageSurface) _queueSeekPreviewFrame(clamped);
+  }
+
+  /// Starts a hover/drag preview session without mutating the main engine.
+  void beginSeekPreview() {
+    _seekPreviewGeneration++;
+    _seekPreviewTimer?.cancel();
+    _seekPreviewTimer = null;
+    _pendingSeekPreviewTarget = null;
+    _seekThumbnailRequests.invalidate();
+  }
+
+  /// Ends slider interaction. The committed seek remains a separate operation.
+  void endSeekPreview() {
+    _seekPreviewGeneration++;
+    _seekPreviewTimer?.cancel();
+    _seekPreviewTimer = null;
+    _pendingSeekPreviewTarget = null;
+    _seekThumbnailRequests.invalidate();
+    if (state.seekPreviewLoading) {
+      state = state.copyWith(seekPreviewLoading: false);
     }
   }
 
-  /// Start a slider preview session without touching the active playback engine.
-  void beginSeekPreview() {
-    _seekPreviewGeneration++;
-    _seekPreviewScrubbing = true;
-    _seekPreviewTimer?.cancel();
-    _seekPreviewWarmupTimer?.cancel();
-    _seekPreviewTimer = null;
-    _seekPreviewWarmupTimer = null;
-    _pendingSeekPreviewTarget = null;
-    _lastSeekPreviewTarget = null;
-  }
-
-  /// End slider interaction while keeping real playback seek separate.
-  void endSeekPreview() {
-    _seekPreviewScrubbing = false;
-    _seekPreviewTimer?.cancel();
-    _seekPreviewTimer = null;
-    _pendingSeekPreviewTarget = null;
-    if (!_seekPreviewStreamEnabled) return;
-
-    final PlayerEngine? engine = state.engine;
-    if (engine == null || !engine.state.value.isInitialized) return;
-
-    final Duration target = _clampSeekPosition(
-      state.seekPreviewPosition ?? engine.state.value.position,
-      engine.state.value.duration,
-    );
-    _scheduleSeekPreviewWarmup(target);
+  /// Ends a desktop hover preview without committing a seek.
+  void cancelSeekPreview() {
+    endSeekPreview();
+    if (state.seekPreviewPosition != null ||
+        state.seekPreviewThumbnail != null ||
+        state.seekPreviewImageSurface) {
+      state = state.copyWith(
+        clearSeekPreviewPosition: true,
+        clearSeekPreviewThumbnail: true,
+        seekPreviewImageSurface: false,
+      );
+    }
   }
 
   void _queueSeekPreviewFrame(Duration target) {
-    if (!_seekPreviewStreamEnabled) return;
     _pendingSeekPreviewTarget = target;
     _seekPreviewTimer?.cancel();
-    _seekPreviewTimer = null;
-
-    if (!_shouldSeekPreviewFrame(target)) return;
-
     _seekPreviewTimer = Timer(
       _seekPreviewDebounce,
       () => unawaited(_flushSeekPreviewFrame()),
     );
   }
 
-  bool _shouldSeekPreviewFrame(Duration target) {
-    if (!_seekPreviewStreamEnabled) return false;
-    final _SeekPreviewSource? source = _seekPreviewSourceForCurrentState();
-    if (source == null) return false;
-    if (_seekPreviewEngine == null || _seekPreviewSourceKey != source.key) {
-      return true;
-    }
-
-    final Duration? lastTarget = _lastSeekPreviewTarget;
-    if (lastTarget == null) return true;
-
-    final int deltaMs = (target.inMilliseconds - lastTarget.inMilliseconds)
-        .abs();
-    return deltaMs >= _seekPreviewMinStep.inMilliseconds;
-  }
-
   Future<void> _flushSeekPreviewFrame() async {
-    if (!_seekPreviewStreamEnabled) return;
-    if (_seekPreviewInFlight) {
-      final Duration? pending = _pendingSeekPreviewTarget;
-      if (pending != null && _shouldSeekPreviewFrame(pending)) {
-        _seekPreviewTimer?.cancel();
-        _seekPreviewTimer = Timer(
-          _seekPreviewDebounce,
-          () => unawaited(_flushSeekPreviewFrame()),
-        );
-      }
-      return;
-    }
-
+    if (_seekPreviewInFlight) return;
     final Duration? target = _pendingSeekPreviewTarget;
-    if (target == null || !_shouldSeekPreviewFrame(target)) {
+    final PlayerEngine? engine = state.engine;
+    final SeekThumbnailPlan? plan = _seekThumbnailPlan;
+    if (target == null ||
+        engine == null ||
+        !engine.state.value.isInitialized ||
+        plan == null ||
+        plan.candidates.isEmpty ||
+        !seekThumbnailExtractionSupported) {
       _pendingSeekPreviewTarget = null;
       return;
     }
 
+    final Duration duration = engine.state.value.duration;
+    final Duration bucket = quantizeSeekThumbnailPosition(
+      target,
+      duration: duration,
+    );
+    final SeekThumbnail? cached = _seekThumbnailService.cachedFor(
+      plan,
+      target,
+      duration: duration,
+    );
+    if (cached != null) {
+      _pendingSeekPreviewTarget = null;
+      state = state.copyWith(
+        seekPreviewThumbnail: cached,
+        seekPreviewLoading: false,
+        seekPreviewImageSurface: true,
+      );
+      return;
+    }
+
     _seekPreviewTimer?.cancel();
     _seekPreviewTimer = null;
     _pendingSeekPreviewTarget = null;
     _seekPreviewInFlight = true;
     final int generation = _seekPreviewGeneration;
-
-    try {
-      final PlayerEngine? previewEngine = await _ensureSeekPreviewEngine(
-        target,
-        generation,
-      );
-      if (previewEngine == null ||
-          generation != _seekPreviewGeneration ||
-          _seekPreviewEngine != previewEngine) {
-        return;
-      }
-
-      await previewEngine.setVolume(0);
-      await _primeSeekPreviewFrame(previewEngine, target, generation);
-      if (!_isActiveSeekPreview(previewEngine, generation)) return;
-      _lastSeekPreviewTarget = target;
-      if (state.seekPreviewEngine == previewEngine) {
-        state = state.copyWith(
-          seekPreviewEngine: previewEngine,
-          seekPreviewReady: true,
-        );
-      }
-    } on Object {
-      // Slider previews should never interrupt real playback if the preview
-      // decoder rejects a target or a provider URL.
-    } finally {
-      _seekPreviewInFlight = false;
-      final Duration? nextTarget = _pendingSeekPreviewTarget;
-      if (nextTarget != null && _shouldSeekPreviewFrame(nextTarget)) {
-        _queueSeekPreviewFrame(nextTarget);
-      } else if (!_seekPreviewScrubbing) {
-        final PlayerEngine? engine = state.engine;
-        if (engine != null && engine.state.value.isInitialized) {
-          _scheduleSeekPreviewWarmup(engine.state.value.position);
-        }
-      }
-    }
-  }
-
-  void _scheduleSeekPreviewWarmup(
-    Duration position, {
-    Duration delay = _seekPreviewWarmupDelay,
-  }) {
-    _seekPreviewWarmupTimer?.cancel();
-    _seekPreviewWarmupTimer = null;
-    if (!_seekPreviewStreamEnabled) return;
-    if (_seekPreviewScrubbing) return;
-
-    final PlayerEngine? engine = state.engine;
-    if (engine == null || !engine.state.value.isInitialized) return;
-
-    final Duration target = _clampSeekPosition(
-      position,
-      engine.state.value.duration,
-    );
-    _seekPreviewWarmupTimer = Timer(
-      delay,
-      () => unawaited(_warmSeekPreviewEngine(target)),
-    );
-  }
-
-  void _maybeScheduleSeekPreviewWarmup(PlayerEngine engine) {
-    if (!_seekPreviewStreamEnabled) return;
-    if (_seekPreviewScrubbing || _seekPreviewInFlight) return;
-    if (!engine.state.value.isPlaying) return;
-
-    final DateTime now = DateTime.now();
-    if (now.isBefore(_nextSeekPreviewWarmupAt)) return;
-
-    _nextSeekPreviewWarmupAt = now.add(_seekPreviewWarmupInterval);
-    _scheduleSeekPreviewWarmup(
-      engine.state.value.position,
-      delay: Duration.zero,
-    );
-  }
-
-  Future<void> _warmSeekPreviewEngine(Duration position) async {
-    if (!_seekPreviewStreamEnabled) return;
-    if (_seekPreviewScrubbing || _seekPreviewInFlight) return;
-
-    final PlayerEngine? engine = state.engine;
-    if (engine == null || !engine.state.value.isInitialized) return;
-
-    final Duration target = _clampSeekPosition(
-      position,
-      engine.state.value.duration,
-    );
-    _seekPreviewInFlight = true;
-    final int generation = _seekPreviewGeneration;
-
-    try {
-      final PlayerEngine? previewEngine = await _ensureSeekPreviewEngine(
-        target,
-        generation,
-      );
-      if (previewEngine == null ||
-          generation != _seekPreviewGeneration ||
-          _seekPreviewEngine != previewEngine) {
-        return;
-      }
-
-      await previewEngine.setVolume(0);
-      await _primeSeekPreviewFrame(
-        previewEngine,
-        target,
-        generation,
-        hold: _seekPreviewWarmupFrameHold,
-      );
-      if (!_isActiveSeekPreview(previewEngine, generation)) return;
-      _lastSeekPreviewTarget = target;
-      if (state.seekPreviewEngine == previewEngine) {
-        state = state.copyWith(
-          seekPreviewEngine: previewEngine,
-          seekPreviewReady: true,
-        );
-      }
-    } on Object {
-      // Background preview warmup is opportunistic; the main player must never
-      // care if a low-quality variant rejects a seek.
-    } finally {
-      _seekPreviewInFlight = false;
-      final Duration? nextTarget = _pendingSeekPreviewTarget;
-      if (nextTarget != null && _shouldSeekPreviewFrame(nextTarget)) {
-        _queueSeekPreviewFrame(nextTarget);
-      }
-    }
-  }
-
-  Future<PlayerEngine?> _ensureSeekPreviewEngine(
-    Duration target,
-    int generation,
-  ) async {
-    if (!_seekPreviewStreamEnabled) return null;
-    final _SeekPreviewSource? previewSource =
-        _seekPreviewSourceForCurrentState();
-    if (previewSource == null) return null;
-
-    final PlayerEngine? current = _seekPreviewEngine;
-    if (current != null && _seekPreviewSourceKey == previewSource.key) {
-      return current;
-    }
-
-    _lastSeekPreviewTarget = null;
-    if (current != null) {
-      unawaited(current.dispose());
-    }
-
-    final PlayerEngine? mainEngine = state.engine;
-    final PlayerSettings settings =
-        ref.read(playerSettingsProvider).value ?? const PlayerSettings();
-    final PlayerEngine previewEngine = createPlayerEngine(
-      initialAspectRatio: _safeAspectRatio(mainEngine?.state.value.aspectRatio),
-      previewMode: true,
-      backend: resolvePlayerEngineBackend(settings.playerBackend),
-    );
-    _seekPreviewEngine = previewEngine;
-    _seekPreviewSourceKey = previewSource.key;
+    final int request = _seekThumbnailRequests.begin(plan.sessionKey, bucket);
     state = state.copyWith(
-      seekPreviewEngine: previewEngine,
-      seekPreviewReady: false,
+      clearSeekPreviewThumbnail: true,
+      seekPreviewLoading: true,
+      seekPreviewImageSurface: true,
     );
+    if (kDebugMode) {
+      debugPrint(
+        'SeekPreview: extracting @ ${bucket.inSeconds}s '
+        'from candidate 1/${plan.candidates.length}.',
+      );
+    }
 
     try {
-      await previewEngine.setVolume(0);
-      await previewEngine.open(
-        previewSource.source,
-        startAt: target,
-        autoplay: true,
+      final SeekThumbnail? thumbnail = await _seekThumbnailService.request(
+        plan: plan,
+        backend: _seekThumbnailBackend,
+        position: target,
+        duration: duration,
       );
-      await previewEngine.setVolume(0);
-      await _waitForSeekPreviewContent(
-        previewEngine,
-        generation,
-        timeout: _seekPreviewOpenTimeout,
-      );
-    } on Object {
-      if (_seekPreviewEngine == previewEngine) {
-        _seekPreviewEngine = null;
-        _seekPreviewSourceKey = null;
-        if (state.seekPreviewEngine == previewEngine) {
-          state = state.copyWith(clearSeekPreviewEngine: true);
-        }
-      }
-      await previewEngine.dispose();
-      return null;
-    }
-
-    if (generation != _seekPreviewGeneration ||
-        _seekPreviewEngine != previewEngine) {
-      if (_seekPreviewEngine == previewEngine) {
-        _seekPreviewEngine = null;
-        _seekPreviewSourceKey = null;
-        if (state.seekPreviewEngine == previewEngine) {
-          state = state.copyWith(clearSeekPreviewEngine: true);
-        }
-      }
-      await previewEngine.dispose();
-      return null;
-    }
-
-    return previewEngine;
-  }
-
-  Future<void> _primeSeekPreviewFrame(
-    PlayerEngine previewEngine,
-    Duration target,
-    int generation, {
-    Duration hold = _seekPreviewFrameHold,
-  }) async {
-    try {
-      await previewEngine.setVolume(0);
-      await previewEngine.play();
-      await _waitForSeekPreviewContent(
-        previewEngine,
-        generation,
-        timeout: _seekPreviewOpenTimeout,
-      );
-      if (!_isActiveSeekPreview(previewEngine, generation)) return;
-
-      await previewEngine.seekTo(target);
-      await previewEngine.setVolume(0);
-      await previewEngine.play();
-      await _waitForSeekPreviewTarget(previewEngine, target, generation);
-      if (!_isActiveSeekPreview(previewEngine, generation)) return;
-
-      await Future<void>.delayed(hold);
-    } finally {
-      if (_seekPreviewEngine == previewEngine) {
-        try {
-          await previewEngine.pause();
-          await previewEngine.setVolume(0);
-        } on Object {
-          // A disposed or rejected preview decoder should not bubble into playback.
-        }
-      }
-    }
-  }
-
-  Future<void> _waitForSeekPreviewContent(
-    PlayerEngine previewEngine,
-    int generation, {
-    required Duration timeout,
-  }) async {
-    final DateTime deadline = DateTime.now().add(timeout);
-    while (_isActiveSeekPreview(previewEngine, generation) &&
-        DateTime.now().isBefore(deadline)) {
-      final PlayerEngineState value = previewEngine.state.value;
-      if (value.hasError) return;
-      if (_hasSeekPreviewFrameContext(value)) {
+      final Duration? visiblePosition = state.seekPreviewPosition;
+      final bool currentBucket =
+          visiblePosition != null &&
+          quantizeSeekThumbnailPosition(visiblePosition, duration: duration) ==
+              bucket;
+      if (generation != _seekPreviewGeneration ||
+          state.engine != engine ||
+          _seekThumbnailPlan?.sessionKey != plan.sessionKey ||
+          !_seekThumbnailRequests.accepts(request, plan.sessionKey, bucket) ||
+          !currentBucket) {
+        if (kDebugMode) debugPrint('SeekPreview: request superseded.');
         return;
       }
-      await Future<void>.delayed(const Duration(milliseconds: 60));
-    }
-  }
-
-  Future<void> _waitForSeekPreviewTarget(
-    PlayerEngine previewEngine,
-    Duration target,
-    int generation,
-  ) async {
-    final DateTime deadline = DateTime.now().add(_seekPreviewSettleTimeout);
-    while (_isActiveSeekPreview(previewEngine, generation) &&
-        DateTime.now().isBefore(deadline)) {
-      final PlayerEngineState value = previewEngine.state.value;
-      if (value.hasError) return;
-      final int deltaMs =
-          (value.position.inMilliseconds - target.inMilliseconds).abs();
-      final bool nearTarget =
-          deltaMs <= _seekPreviewTargetTolerance.inMilliseconds;
-      final bool hasFrameContext = _hasSeekPreviewFrameContext(value);
-      if (nearTarget && hasFrameContext) return;
-      await Future<void>.delayed(const Duration(milliseconds: 60));
-    }
-  }
-
-  bool _hasSeekPreviewFrameContext(PlayerEngineState value) {
-    return value.hasVideoSurface ||
-        (value.videoSize.width > 0 && value.videoSize.height > 0) ||
-        value.duration > Duration.zero ||
-        value.buffered.isNotEmpty;
-  }
-
-  bool _isActiveSeekPreview(PlayerEngine previewEngine, int generation) {
-    return generation == _seekPreviewGeneration &&
-        _seekPreviewEngine == previewEngine;
-  }
-
-  _SeekPreviewSource? _seekPreviewSourceForCurrentState() {
-    final MediaServer? server = state.server;
-    if (server == null) return null;
-
-    final StreamQuality? lowQuality = _lowestSeekPreviewQuality(server);
-    final StreamQuality? activeQuality = state.quality;
-
-    final String url =
-        _usableQualityUrl(lowQuality) ??
-        _usableQualityUrl(activeQuality) ??
-        server.url.trim();
-    if (url.isEmpty) return null;
-
-    final Map<String, String> headers;
-    if (lowQuality != null) {
-      headers = lowQuality.headers.isNotEmpty
-          ? lowQuality.headers
-          : server.headers;
-    } else if (activeQuality != null && activeQuality.headers.isNotEmpty) {
-      headers = activeQuality.headers;
-    } else {
-      headers = server.headers;
-    }
-    final StreamType streamType = _streamTypeForUrl(url, server.streamType);
-    final PlayerSource source = PlayerSource(
-      url: url,
-      headers: headers,
-      streamType: streamType,
-    );
-    return _SeekPreviewSource(source: source, key: _sourceKeyFor(source));
-  }
-
-  String? _usableQualityUrl(StreamQuality? quality) {
-    if (quality == null || quality.isAuto) return null;
-    final String url = quality.url.trim();
-    return url.isEmpty ? null : url;
-  }
-
-  StreamQuality? _lowestSeekPreviewQuality(MediaServer server) {
-    final List<StreamQuality> explicitQualities = server.qualities
-        .where((StreamQuality q) => !q.isAuto && q.url.trim().isNotEmpty)
-        .toList(growable: false);
-    if (explicitQualities.isEmpty) return null;
-
-    final List<StreamQuality> hlsQualities = explicitQualities
-        .where(
-          (StreamQuality q) =>
-              _streamTypeForUrl(q.url, server.streamType) == StreamType.hls,
-        )
-        .toList(growable: false);
-    final List<StreamQuality> candidates = hlsQualities.isNotEmpty
-        ? hlsQualities
-        : explicitQualities;
-    final List<StreamQuality> ranked = candidates
-        .where(_hasPreviewQualitySignal)
-        .toList(growable: true);
-    if (ranked.isEmpty) {
-      return candidates.last;
-    }
-
-    ranked.sort((StreamQuality a, StreamQuality b) {
-      final int heightCompare = (_previewQualityHeight(a) ?? (1 << 30))
-          .compareTo(_previewQualityHeight(b) ?? (1 << 30));
-      if (heightCompare != 0) return heightCompare;
-
-      final int bitrateCompare = (a.bitrate ?? 1 << 30).compareTo(
-        b.bitrate ?? 1 << 30,
+      state = state.copyWith(
+        seekPreviewThumbnail: thumbnail,
+        clearSeekPreviewThumbnail: thumbnail == null,
+        seekPreviewLoading: false,
+        seekPreviewImageSurface: thumbnail != null,
       );
-      if (bitrateCompare != 0) return bitrateCompare;
-
-      return a.label.compareTo(b.label);
-    });
-    return ranked.first;
-  }
-
-  bool _hasPreviewQualitySignal(StreamQuality quality) {
-    return _previewQualityHeight(quality) != null ||
-        (quality.bitrate != null && quality.bitrate! > 0);
-  }
-
-  int? _previewQualityHeight(StreamQuality quality) {
-    final int? height = quality.height;
-    if (height != null && height > 0) return height;
-
-    final String label = '${quality.label} ${quality.id}'.toLowerCase();
-    if (label.contains('4k')) return 2160;
-    if (label.contains('2k')) return 1440;
-
-    final RegExpMatch? match = RegExp(
-      r'(2160|1440|1080|720|576|540|480|360|240|144)\s*p?\b',
-    ).firstMatch(label);
-    if (match != null) {
-      return int.tryParse(match.group(1)!);
+    } on Object {
+      if (generation == _seekPreviewGeneration && state.engine == engine) {
+        state = state.copyWith(
+          clearSeekPreviewThumbnail: true,
+          seekPreviewLoading: false,
+          seekPreviewImageSurface: false,
+        );
+      }
+    } finally {
+      _seekPreviewInFlight = false;
+      final Duration? pending = _pendingSeekPreviewTarget;
+      if (pending != null) _queueSeekPreviewFrame(pending);
     }
-    if (label.contains('low') || label.contains('sd')) return 480;
-    if (label.contains('hd')) return 720;
-    return null;
+  }
+
+  void _cancelSeekThumbnailRequests() {
+    _seekPreviewGeneration++;
+    _seekPreviewTimer?.cancel();
+    _seekPreviewTimer = null;
+    _pendingSeekPreviewTarget = null;
+    _seekThumbnailRequests.invalidate();
   }
 
   StreamType _streamTypeForUrl(String url, StreamType fallback) {
-    if (LocalHlsProxy.isInlineDashUrl(url)) return StreamType.dash;
-    final Uri? uri = Uri.tryParse(url);
-    // Offline DASH is intentionally stored as generated HLS metadata. Preserve
-    // the persisted source type so backend selection does not mistake it for
-    // an ordinary HLS download.
-    if (uri?.scheme.toLowerCase() == 'file' && fallback == StreamType.dash) {
-      return StreamType.dash;
-    }
-    final String lower = url.toLowerCase();
-    if (lower.contains('.m3u8')) return StreamType.hls;
-    if (lower.contains('.mpd')) return StreamType.dash;
-    if (lower.contains('.mp4')) return StreamType.mp4;
-    return fallback;
-  }
-
-  String _sourceKeyFor(PlayerSource source) {
-    final List<MapEntry<String, String>> headers = source.headers.entries
-        .toList(growable: false);
-    headers.sort(
-      (MapEntry<String, String> a, MapEntry<String, String> b) =>
-          a.key.compareTo(b.key),
-    );
-
-    final StringBuffer buffer = StringBuffer()
-      ..writeln(source.streamType.name)
-      ..writeln(source.url);
-    for (final MapEntry<String, String> header in headers) {
-      buffer.writeln('${header.key}: ${header.value}');
-    }
-    return buffer.toString();
-  }
-
-  Future<void> _disposeSeekPreviewEngine({bool clearState = true}) async {
-    _seekPreviewGeneration++;
-    _seekPreviewTimer?.cancel();
-    _seekPreviewWarmupTimer?.cancel();
-    _seekPreviewTimer = null;
-    _seekPreviewWarmupTimer = null;
-    _pendingSeekPreviewTarget = null;
-    _lastSeekPreviewTarget = null;
-    _seekPreviewInFlight = false;
-    _seekPreviewScrubbing = false;
-    _seekPreviewSourceKey = null;
-
-    final PlayerEngine? previewEngine = _seekPreviewEngine;
-    _seekPreviewEngine = null;
-    if (clearState && state.seekPreviewEngine == previewEngine) {
-      state = state.copyWith(clearSeekPreviewEngine: true);
-    }
-    if (previewEngine != null) {
-      await previewEngine.dispose();
-    }
+    return seekPreviewStreamTypeForUrl(url, fallback);
   }
 
   Duration _seekBaseFor(PlayerEngine engine) {
@@ -3360,9 +2996,6 @@ class PlaybackController extends Notifier<PlaybackState> {
         await _saveProgress(item, engine);
       }
       _updateMediaSession();
-      if (_seekPreviewStreamEnabled) {
-        _maybeScheduleSeekPreviewWarmup(engine);
-      }
       if (item.ignoreProgress) {
         return;
       }
