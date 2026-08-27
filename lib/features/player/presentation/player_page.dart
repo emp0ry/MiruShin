@@ -227,13 +227,11 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
       case NativePlayerCompleted(:final positionMs, :final durationMs):
         setState(() => _nativePipActive = false);
         unawaited(
-          _playbackNotifier.saveNativeProgress(
+          _handleNativePlayerCompleted(
             positionMs: positionMs,
             durationMs: durationMs,
-            completed: true,
           ),
         );
-        unawaited(_exitPlayer(playNext: true));
       case NativePlayerPipRestored(:final positionMs, :final durationMs):
         unawaited(
           _playbackNotifier.saveNativeProgress(
@@ -241,6 +239,37 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
             durationMs: durationMs,
           ),
         );
+    }
+  }
+
+  Future<void> _handleNativePlayerCompleted({
+    required int positionMs,
+    required int durationMs,
+  }) async {
+    final bool confirmed = _playbackNotifier
+        .evaluateNativePlaybackEnd(
+          positionMs: positionMs,
+          durationMs: durationMs,
+          backendCompleted: true,
+        )
+        .confirmedEnded;
+    await _playbackNotifier.saveNativeProgress(
+      positionMs: positionMs,
+      durationMs: durationMs,
+      completed: true,
+    );
+    if (!mounted) return;
+    if (confirmed) {
+      await _exitPlayer(playNext: true);
+      return;
+    }
+    // Native PiP reported EOF before the authoritative duration. Restore the
+    // existing Flutter player at the same position instead of advancing.
+    await _playbackNotifier.skipTo(Duration(milliseconds: positionMs));
+    if (!mounted) return;
+    final PlayerEngine? engine = ref.read(playbackControllerProvider).engine;
+    if (engine != null && !engine.state.value.isPlaying) {
+      await _playbackNotifier.togglePlay();
     }
   }
 
@@ -524,19 +553,24 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
         !_exitingPlayer &&
         isSamePlaybackRouteItem(state.item, widget.item) &&
         settings.autoplayNext &&
-        state.autoNextVisible;
+        state.autoNextVisible &&
+        state.confirmedEnded;
     if (shouldAutoNext && _autoNextTimer == null) {
+      debugPrint('AutoNext: confirmedEnd=true countdown=start');
       debugPrint('[DEBUG] auto-next: scheduling advance in 5s');
       _autoNextTimer = Timer(const Duration(seconds: 5), () {
         if (!mounted) return;
         final PlaybackState currentState = ref.read(playbackControllerProvider);
-        if (!isSamePlaybackRouteItem(currentState.item, widget.item)) {
+        if (!isSamePlaybackRouteItem(currentState.item, widget.item) ||
+            !currentState.confirmedEnded ||
+            !currentState.autoNextVisible) {
           _autoNextTimer?.cancel();
           _autoNextTimer = null;
           return;
         }
         _autoNextTimer?.cancel();
         _autoNextTimer = null;
+        debugPrint('AutoNext: countdown=complete transition=requested');
         debugPrint(
           '[DEBUG] auto-next: timer fired -> advancing to next episode',
         );
@@ -1149,7 +1183,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
       playbackControllerProvider.notifier,
     );
     // 1. Next episode: the overlay appears only at the end, so it takes priority.
-    if (state.autoNextVisible) {
+    if (state.autoNextVisible && state.confirmedEnded) {
       notifier.dismissAutoNext();
       unawaited(_exitPlayer(playNext: true));
       return true;
@@ -1625,6 +1659,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
                                     ),
                                   ),
                                 if (state.autoNextVisible &&
+                                    state.confirmedEnded &&
                                     settings.showNextEpisodeButton &&
                                     !settings.autoplayNext)
                                   AutoNextOverlay(
@@ -1632,6 +1667,13 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
                                     showButton: true,
                                     showCountdown: true,
                                     onProceed: () {
+                                      final PlaybackState current = ref.read(
+                                        playbackControllerProvider,
+                                      );
+                                      if (!current.confirmedEnded ||
+                                          !current.autoNextVisible) {
+                                        return;
+                                      }
                                       ref
                                           .read(
                                             playbackControllerProvider.notifier,
@@ -1645,6 +1687,13 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
                                         )
                                         .dismissAutoNext(),
                                     onExpire: () {
+                                      final PlaybackState current = ref.read(
+                                        playbackControllerProvider,
+                                      );
+                                      if (!current.confirmedEnded ||
+                                          !current.autoNextVisible) {
+                                        return;
+                                      }
                                       ref
                                           .read(
                                             playbackControllerProvider.notifier,

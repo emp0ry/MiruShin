@@ -1,56 +1,209 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mirushin/features/player/domain/offline_stall_recovery.dart';
+import 'package:mirushin/features/player/domain/playback_end_decision.dart';
 
 void main() {
-  group('playbackCompletionIsCredible', () {
-    test('rejects the false first-segment completion from offline HLS', () {
+  group('evaluatePlaybackEnd', () {
+    PlaybackEndEvaluation evaluate({
+      required int positionSeconds,
+      required int durationSeconds,
+      bool completed = true,
+      bool authoritative = true,
+      PlaybackMediaKind kind = PlaybackMediaKind.segmented,
+      int? highWaterSeconds,
+    }) {
+      return evaluatePlaybackEnd(
+        backendCompleted: completed,
+        durationIsAuthoritative: authoritative,
+        mediaKind: kind,
+        position: Duration(seconds: positionSeconds),
+        maxObservedPosition: Duration(
+          seconds: highWaterSeconds ?? positionSeconds,
+        ),
+        duration: Duration(seconds: durationSeconds),
+      );
+    }
+
+    test('rejects every captured early EOF gap', () {
       expect(
-        playbackCompletionIsCredible(
-          isCompleted: true,
-          isOfflineLocalSegmentedMedia: true,
-          duration: const Duration(seconds: 7),
-          maxObservedPosition: const Duration(seconds: 7),
+        evaluate(positionSeconds: 1403, durationSeconds: 1434).decision,
+        PlaybackEndDecision.prematureBackendEof,
+      );
+      expect(
+        evaluate(positionSeconds: 1194, durationSeconds: 1246).decision,
+        PlaybackEndDecision.prematureBackendEof,
+      );
+      expect(
+        evaluate(positionSeconds: 1264, durationSeconds: 1305).decision,
+        PlaybackEndDecision.prematureBackendEof,
+      );
+    });
+
+    test('rejects required direct and segmented false EOF matrix', () {
+      expect(
+        evaluate(
+          positionSeconds: 1374,
+          durationSeconds: 1434,
+          kind: PlaybackMediaKind.direct,
+        ).decision,
+        PlaybackEndDecision.prematureBackendEof,
+        reason: 'online direct 60 seconds early',
+      );
+      expect(
+        evaluate(
+          positionSeconds: 1403,
+          durationSeconds: 1434,
+          kind: PlaybackMediaKind.direct,
+        ).decision,
+        PlaybackEndDecision.prematureBackendEof,
+        reason: 'online direct 31 seconds early',
+      );
+      expect(
+        evaluate(positionSeconds: 1414, durationSeconds: 1434).decision,
+        PlaybackEndDecision.prematureBackendEof,
+        reason: 'online HLS 20 seconds early',
+      );
+      expect(
+        evaluate(
+          positionSeconds: 1194,
+          durationSeconds: 1246,
+          kind: PlaybackMediaKind.direct,
+        ).decision,
+        PlaybackEndDecision.prematureBackendEof,
+        reason: 'offline MP4 52 seconds early',
+      );
+      expect(
+        evaluate(positionSeconds: 1264, durationSeconds: 1305).decision,
+        PlaybackEndDecision.prematureBackendEof,
+        reason: 'offline HLS 41 seconds early',
+      );
+      expect(
+        evaluate(positionSeconds: 1414, durationSeconds: 1434).decision,
+        PlaybackEndDecision.prematureBackendEof,
+        reason: 'offline DASH 20 seconds early',
+      );
+    });
+
+    test('accepts only the final seconds for direct and segmented media', () {
+      expect(
+        evaluate(
+          positionSeconds: 1432,
+          durationSeconds: 1434,
+          kind: PlaybackMediaKind.direct,
+        ).decision,
+        PlaybackEndDecision.confirmedEnded,
+      );
+      expect(
+        evaluate(positionSeconds: 1430, durationSeconds: 1434).decision,
+        PlaybackEndDecision.confirmedEnded,
+      );
+    });
+
+    test('high-water validates backend reset to zero at real end', () {
+      expect(
+        evaluate(
+          positionSeconds: 0,
+          highWaterSeconds: 1432,
+          durationSeconds: 1434,
+          kind: PlaybackMediaKind.direct,
+        ).decision,
+        PlaybackEndDecision.confirmedEnded,
+      );
+    });
+
+    test('backend reset to zero still rejects a premature high-water', () {
+      expect(
+        evaluate(
+          positionSeconds: 0,
+          highWaterSeconds: 1403,
+          durationSeconds: 1434,
+          kind: PlaybackMediaKind.direct,
+        ).decision,
+        PlaybackEndDecision.prematureBackendEof,
+      );
+    });
+
+    test('unknown duration cannot authorize backend completion', () {
+      expect(
+        evaluate(
+          positionSeconds: 1403,
+          durationSeconds: 0,
+          authoritative: false,
+        ).decision,
+        PlaybackEndDecision.durationUnreliable,
+      );
+    });
+
+    test('85 percent watched remains separate from real completion', () {
+      final PlaybackEndEvaluation result = evaluate(
+        positionSeconds: 1224,
+        durationSeconds: 1440,
+        completed: false,
+      );
+      expect(result.watchedThresholdReached, isTrue);
+      expect(result.decision, PlaybackEndDecision.notEnded);
+      expect(result.confirmedEnded, isFalse);
+    });
+  });
+
+  group('PlaybackDurationEvidence', () {
+    test('rejects tiny duration and requires stable online data', () {
+      final PlaybackDurationEvidence evidence = PlaybackDurationEvidence();
+      evidence.observe(const Duration(seconds: 7));
+      expect(
+        evidence.isAuthoritative(
+          isOffline: true,
+          mediaKind: PlaybackMediaKind.segmented,
         ),
         isFalse,
       );
-    });
 
-    test('accepts offline HLS completion after the full duration is known', () {
+      evidence
+        ..reset()
+        ..observe(const Duration(seconds: 1434));
       expect(
-        playbackCompletionIsCredible(
-          isCompleted: true,
-          isOfflineLocalSegmentedMedia: true,
-          duration: const Duration(minutes: 24),
-          maxObservedPosition: const Duration(minutes: 24),
+        evidence.isAuthoritative(
+          isOffline: false,
+          mediaKind: PlaybackMediaKind.segmented,
+        ),
+        isFalse,
+      );
+      evidence.observe(const Duration(seconds: 1434));
+      expect(
+        evidence.isAuthoritative(
+          isOffline: false,
+          mediaKind: PlaybackMediaKind.segmented,
+        ),
+        isTrue,
+      );
+
+      evidence
+        ..reset()
+        ..observe(const Duration(seconds: 1434));
+      expect(
+        evidence.isAuthoritative(
+          isOffline: false,
+          mediaKind: PlaybackMediaKind.direct,
+        ),
+        isFalse,
+        reason: 'online direct duration must stabilize too',
+      );
+      evidence.observe(const Duration(seconds: 1434));
+      expect(
+        evidence.isAuthoritative(
+          isOffline: false,
+          mediaKind: PlaybackMediaKind.direct,
         ),
         isTrue,
       );
     });
 
-    test('accepts the released online EOF tolerance without reopening', () {
-      expect(
-        playbackCompletionIsCredible(
-          isCompleted: true,
-          isOfflineLocalSegmentedMedia: false,
-          duration: const Duration(seconds: 1434),
-          maxObservedPosition: const Duration(seconds: 1403),
-          endProximityTolerance: const Duration(seconds: 60),
-        ),
-        isTrue,
-      );
-    });
-
-    test('accepts the released offline EOF tolerance without reopening', () {
-      expect(
-        playbackCompletionIsCredible(
-          isCompleted: true,
-          isOfflineLocalSegmentedMedia: true,
-          duration: const Duration(seconds: 1246),
-          maxObservedPosition: const Duration(seconds: 1194),
-          endProximityTolerance: const Duration(seconds: 60),
-        ),
-        isTrue,
-      );
+    test('reports material duration growth', () {
+      final PlaybackDurationEvidence evidence = PlaybackDurationEvidence();
+      expect(evidence.observe(const Duration(seconds: 1400)), isFalse);
+      expect(evidence.observe(const Duration(seconds: 1400)), isFalse);
+      expect(evidence.observe(const Duration(seconds: 1434)), isTrue);
+      expect(evidence.maximum, const Duration(seconds: 1434));
     });
   });
 

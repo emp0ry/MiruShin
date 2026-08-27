@@ -7,8 +7,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mirushin/features/library/application/local_library_provider.dart';
 import 'package:mirushin/features/player/application/playback_controller.dart';
 import 'package:mirushin/features/player/application/player_settings.dart';
+import 'package:mirushin/features/player/domain/playback_end_decision.dart';
 import 'package:mirushin/features/player/domain/player_models.dart';
 import 'package:mirushin/features/player/engine/player_engine.dart';
+import 'package:mirushin/features/watch/domain/normalized_models.dart';
 import 'package:mirushin/shared/models/media_item.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -278,6 +280,282 @@ void main() {
       expect(c.read(playbackControllerProvider).seekPreviewPosition, isNull);
     });
 
+    test('premature EOF is bounded and never exposes auto-next', () async {
+      final ProviderContainer c = container();
+      final PlaybackController controller = c.read(
+        playbackControllerProvider.notifier,
+      );
+      final MediaPlaybackItem item = _testPlaybackItem('premature-eof');
+      final _FakePlayerEngine engine = _FakePlayerEngine(
+        const PlayerEngineState(
+          isInitialized: true,
+          isPlaying: true,
+          position: Duration(seconds: 1403),
+          duration: Duration(seconds: 1434),
+        ),
+      );
+      controller.debugSetPlaybackState(
+        PlaybackState(
+          item: item,
+          engine: engine,
+          server: item.servers.first,
+          desiredPlaying: true,
+        ),
+      );
+      controller.debugEvaluatePlaybackProgress(engine);
+      controller.debugEvaluatePlaybackProgress(engine);
+      engine.setState(engine.value.copyWith(isCompleted: true));
+      controller.debugEvaluatePlaybackProgress(engine);
+
+      await Future<void>.delayed(const Duration(milliseconds: 1600));
+
+      final PlaybackState state = c.read(playbackControllerProvider);
+      expect(state.confirmedEnded, isFalse);
+      expect(state.autoNextVisible, isFalse);
+      expect(state.error?.title, 'Playback stopped early');
+      expect(engine.seekCalls, 2);
+      expect(engine.disposeCalls, 0);
+    });
+
+    test('false EOF recovery can later confirm exactly the real end', () async {
+      final ProviderContainer c = container();
+      final PlaybackController controller = c.read(
+        playbackControllerProvider.notifier,
+      );
+      final MediaPlaybackItem item = _testPlaybackItem('recovered-real-eof');
+      final _FakePlayerEngine engine = _FakePlayerEngine(
+        const PlayerEngineState(
+          isInitialized: true,
+          isPlaying: true,
+          position: Duration(seconds: 1130),
+          duration: Duration(seconds: 1200),
+        ),
+      );
+      controller.debugSetPlaybackState(
+        PlaybackState(
+          item: item,
+          engine: engine,
+          server: item.servers.first,
+          desiredPlaying: true,
+        ),
+      );
+      controller.debugEvaluatePlaybackProgress(engine);
+      controller.debugEvaluatePlaybackProgress(engine);
+      engine.setState(engine.value.copyWith(isCompleted: true));
+      controller.debugEvaluatePlaybackProgress(engine);
+      await Future<void>.delayed(const Duration(milliseconds: 1600));
+      expect(c.read(playbackControllerProvider).confirmedEnded, isFalse);
+
+      engine.setState(
+        engine.value.copyWith(
+          position: const Duration(milliseconds: 1199500),
+          isCompleted: true,
+          hasError: false,
+        ),
+      );
+      controller.debugEvaluatePlaybackProgress(engine);
+      controller.debugEvaluatePlaybackProgress(engine);
+
+      final PlaybackState state = c.read(playbackControllerProvider);
+      expect(state.confirmedEnded, isTrue);
+      expect(state.autoNextVisible, isTrue);
+    });
+
+    test('failed near-end seek intent cannot authorize auto-next', () async {
+      final ProviderContainer c = container();
+      final PlaybackController controller = c.read(
+        playbackControllerProvider.notifier,
+      );
+      final MediaPlaybackItem item = _testPlaybackItem('failed-end-seek');
+      final _FakePlayerEngine engine = _FakePlayerEngine(
+        const PlayerEngineState(
+          isInitialized: true,
+          isPlaying: true,
+          position: Duration(seconds: 1403),
+          duration: Duration(seconds: 1434),
+        ),
+        onSeek: (_) => Future<void>.error(StateError('seek rejected')),
+      );
+      controller.debugSetPlaybackState(
+        PlaybackState(
+          item: item,
+          engine: engine,
+          server: item.servers.first,
+          desiredPlaying: true,
+        ),
+      );
+      controller.debugEvaluatePlaybackProgress(engine);
+      controller.debugEvaluatePlaybackProgress(engine);
+
+      await controller.seekTo(const Duration(seconds: 1433));
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      final PlaybackState state = c.read(playbackControllerProvider);
+      expect(state.confirmedEnded, isFalse);
+      expect(state.autoNextVisible, isFalse);
+    });
+
+    test('watched final stretch resumes there until real EOF', () {
+      final ProviderContainer c = container();
+      final PlaybackController controller = c.read(
+        playbackControllerProvider.notifier,
+      );
+      final MediaPlaybackItem item = _testPlaybackItem('watched-resume');
+
+      final Duration resume = controller.debugSafeResumePosition(
+        item,
+        EpisodeProgress(
+          positionSeconds: 1418,
+          durationSeconds: 1434,
+          updatedAt: DateTime(2026),
+          completed: true,
+        ),
+      );
+
+      expect(resume, const Duration(seconds: 1418));
+    });
+
+    test('native completion uses the same strict end decision', () {
+      final ProviderContainer c = container();
+      final PlaybackController controller = c.read(
+        playbackControllerProvider.notifier,
+      );
+
+      expect(
+        controller
+            .evaluateNativePlaybackEnd(
+              positionMs: 1403000,
+              durationMs: 1434000,
+              backendCompleted: true,
+            )
+            .confirmedEnded,
+        isFalse,
+      );
+      expect(
+        controller
+            .evaluateNativePlaybackEnd(
+              positionMs: 1433000,
+              durationMs: 1434000,
+              backendCompleted: true,
+            )
+            .confirmedEnded,
+        isTrue,
+      );
+
+      controller.debugSetMaxObservedPosition(const Duration(seconds: 1433));
+      expect(
+        controller
+            .evaluateNativePlaybackEnd(
+              positionMs: 0,
+              durationMs: 1434000,
+              backendCompleted: true,
+            )
+            .confirmedEnded,
+        isTrue,
+        reason: 'genuine native EOF may snap the current position to zero',
+      );
+
+      controller.debugSetMaxObservedPosition(const Duration(seconds: 1403));
+      expect(
+        controller
+            .evaluateNativePlaybackEnd(
+              positionMs: 0,
+              durationMs: 1434000,
+              backendCompleted: true,
+            )
+            .decision,
+        PlaybackEndDecision.prematureBackendEof,
+        reason: 'a premature native snap must remain rejected',
+      );
+    });
+
+    test('real segmented end confirms and exposes auto-next', () async {
+      final ProviderContainer c = container();
+      final PlaybackController controller = c.read(
+        playbackControllerProvider.notifier,
+      );
+      final MediaPlaybackItem item = _testPlaybackItem('real-end');
+      final _FakePlayerEngine engine = _FakePlayerEngine(
+        const PlayerEngineState(
+          isInitialized: true,
+          position: Duration(seconds: 1430),
+          duration: Duration(seconds: 1434),
+        ),
+      );
+      controller.debugSetPlaybackState(
+        PlaybackState(item: item, engine: engine, server: item.servers.first),
+      );
+
+      controller.debugEvaluatePlaybackProgress(engine);
+      controller.debugEvaluatePlaybackProgress(engine);
+
+      final PlaybackState state = c.read(playbackControllerProvider);
+      expect(state.confirmedEnded, isTrue);
+      expect(state.autoNextVisible, isTrue);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    });
+
+    test('85 percent watched does not confirm end or auto-next', () async {
+      final ProviderContainer c = container();
+      final PlaybackController controller = c.read(
+        playbackControllerProvider.notifier,
+      );
+      final MediaPlaybackItem item = _testPlaybackItem('watched-not-ended');
+      final _FakePlayerEngine engine = _FakePlayerEngine(
+        const PlayerEngineState(
+          isInitialized: true,
+          position: Duration(seconds: 1224),
+          duration: Duration(seconds: 1440),
+        ),
+      );
+      controller.debugSetPlaybackState(
+        PlaybackState(item: item, engine: engine, server: item.servers.first),
+      );
+
+      controller.debugEvaluatePlaybackProgress(engine);
+      controller.debugEvaluatePlaybackProgress(engine);
+
+      final PlaybackState state = c.read(playbackControllerProvider);
+      expect(state.confirmedEnded, isFalse);
+      expect(state.autoNextVisible, isFalse);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    });
+
+    test('duration growth invalidates a previously confirmed end', () async {
+      final ProviderContainer c = container();
+      final PlaybackController controller = c.read(
+        playbackControllerProvider.notifier,
+      );
+      final MediaPlaybackItem item = _testPlaybackItem('duration-growth');
+      final _FakePlayerEngine engine = _FakePlayerEngine(
+        const PlayerEngineState(
+          isInitialized: true,
+          position: Duration(seconds: 1430),
+          duration: Duration(seconds: 1434),
+        ),
+      );
+      controller.debugSetPlaybackState(
+        PlaybackState(item: item, engine: engine, server: item.servers.first),
+      );
+      controller.debugEvaluatePlaybackProgress(engine);
+      controller.debugEvaluatePlaybackProgress(engine);
+      expect(c.read(playbackControllerProvider).confirmedEnded, isTrue);
+
+      engine.setState(
+        engine.value.copyWith(
+          position: const Duration(seconds: 1430),
+          duration: const Duration(seconds: 1450),
+          isCompleted: false,
+        ),
+      );
+      controller.debugEvaluatePlaybackProgress(engine);
+
+      final PlaybackState state = c.read(playbackControllerProvider);
+      expect(state.confirmedEnded, isFalse);
+      expect(state.autoNextVisible, isFalse);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    });
+
     test('mobile playback controller keeps app-side volume at 100%', () async {
       debugDefaultTargetPlatformOverride = TargetPlatform.android;
       addTearDown(() => debugDefaultTargetPlatformOverride = null);
@@ -398,6 +676,10 @@ class _FakePlayerEngine extends PlayerEngine {
 
   void setPosition(Duration position) {
     _state.value = _state.value.copyWith(position: position);
+  }
+
+  void setState(PlayerEngineState value) {
+    _state.value = value;
   }
 
   @override

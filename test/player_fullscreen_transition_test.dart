@@ -150,6 +150,98 @@ void main() {
       debugDefaultTargetPlatformOverride = null;
     },
   );
+
+  testWidgets('auto-next timer cannot start before confirmed end', (
+    WidgetTester tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'settings.appLanguage': 'en',
+      'mirushin.player.settings': jsonEncode(
+        const PlayerSettings(autoplayNext: true).toJson(),
+      ),
+    });
+    binding.defaultBinaryMessenger.setMockMethodCallHandler(windowChannel, (
+      MethodCall call,
+    ) async {
+      if (call.method == 'isFullscreen' || call.method == 'setFullscreen') {
+        return false;
+      }
+      return null;
+    });
+
+    final _FullscreenTestEngine engine = _FullscreenTestEngine();
+    final _FullscreenTestPlaybackController controller =
+        _FullscreenTestPlaybackController(_item, engine);
+    Object? routeResult;
+    final GoRouter router = GoRouter(
+      routes: <RouteBase>[
+        GoRoute(
+          path: '/',
+          builder: (BuildContext context, GoRouterState state) => FilledButton(
+            onPressed: () async {
+              routeResult = await context.push<Object?>('/player');
+            },
+            child: const Text('Open player'),
+          ),
+        ),
+        GoRoute(
+          path: '/player',
+          builder: (BuildContext context, GoRouterState state) =>
+              const PlayerPage(item: _item),
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
+    addTearDown(engine.disposeNotifier);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          playbackControllerProvider.overrideWith(() => controller),
+          watchPartyProvider.overrideWith(_IdleWatchPartyController.new),
+          pipControllerProvider.overrideWithValue(
+            const UnsupportedPipController(),
+          ),
+        ],
+        child: MaterialApp.router(
+          routerConfig: router,
+          locale: const Locale('en'),
+          supportedLocales: AppLocalizations.supportedLocales,
+          localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
+            AppLocalizations.delegate,
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Open player'));
+    await tester.pumpAndSettle();
+
+    // Even an inconsistent state from a stale callback cannot start the timer
+    // without the controller's confirmed-end latch.
+    controller.showFalseAutoNext();
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 6));
+    expect(find.byType(PlayerPage), findsOneWidget);
+    expect(routeResult, isNull);
+
+    controller.showAutoNext();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 4900));
+    expect(find.byType(PlayerPage), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(routeResult, isA<PlayerNextEpisodeResult>());
+    expect(controller.stopCalls, greaterThanOrEqualTo(1));
+    await tester.pump(const Duration(seconds: 3));
+    debugDefaultTargetPlatformOverride = null;
+  });
 }
 
 class _IdleWatchPartyController extends WatchPartyController {
@@ -175,7 +267,11 @@ class _FullscreenTestPlaybackController extends PlaybackController {
   );
 
   void showAutoNext() {
-    state = state.copyWith(autoNextVisible: true);
+    state = state.copyWith(autoNextVisible: true, confirmedEnded: true);
+  }
+
+  void showFalseAutoNext() {
+    state = state.copyWith(autoNextVisible: true, confirmedEnded: false);
   }
 
   @override

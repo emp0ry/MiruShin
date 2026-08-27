@@ -23,6 +23,7 @@ import '../data/media_session_service.dart';
 import '../data/subtitle_loader.dart';
 import '../domain/offline_stall_recovery.dart';
 import '../domain/playback_attempt_plan.dart';
+import '../domain/playback_end_decision.dart';
 import '../domain/player_models.dart';
 import '../domain/player_volume_policy.dart';
 import '../domain/seek_settle.dart';
@@ -78,6 +79,7 @@ class PlaybackState {
     this.error,
     this.lastSkippedFrom,
     this.autoNextVisible = false,
+    this.confirmedEnded = false,
     this.seekPreviewPosition,
     this.seekPreviewBufferedEnd,
     this.seekPreviewThumbnail,
@@ -102,6 +104,7 @@ class PlaybackState {
   final PlayerError? error;
   final Duration? lastSkippedFrom;
   final bool autoNextVisible;
+  final bool confirmedEnded;
   final Duration? seekPreviewPosition;
   final Duration? seekPreviewBufferedEnd;
   final SeekThumbnail? seekPreviewThumbnail;
@@ -130,6 +133,7 @@ class PlaybackState {
     Duration? lastSkippedFrom,
     bool clearLastSkippedFrom = false,
     bool? autoNextVisible,
+    bool? confirmedEnded,
     Duration? seekPreviewPosition,
     Duration? seekPreviewBufferedEnd,
     SeekThumbnail? seekPreviewThumbnail,
@@ -159,6 +163,7 @@ class PlaybackState {
           ? null
           : lastSkippedFrom ?? this.lastSkippedFrom,
       autoNextVisible: autoNextVisible ?? this.autoNextVisible,
+      confirmedEnded: confirmedEnded ?? this.confirmedEnded,
       seekPreviewPosition: clearSeekPreviewPosition
           ? null
           : seekPreviewPosition ?? this.seekPreviewPosition,
@@ -221,12 +226,6 @@ class PlaybackController extends Notifier<PlaybackState> {
   // convention where the last ~15% is the ED/credits + next-episode preview, so
   // progress is committed before the stream actually reaches the end.
   static const double _watchedFraction = 0.85;
-  // How close playback must have actually advanced to the reported end before a
-  // backend "completed" signal is believed. A bad or reloaded stream can emit a
-  // transient end-of-stream (EOF) minutes early while the manifest duration
-  // stays correct; without this guard that false completion latches auto-next
-  // and marks the episode watched well before the real ending.
-  static const Duration _endProximityTolerance = Duration(seconds: 60);
   // Grace period between an episode finishing and the manual next-episode button
   // overlay appearing, so it eases in instead of popping up the instant the
   // stream ends. Auto-play mode advances immediately (no overlay), so this only
@@ -255,6 +254,9 @@ class PlaybackController extends Notifier<PlaybackState> {
   // still far from the end is a spurious EOF (bad/reloaded stream) and must be
   // ignored. Survives an end-of-stream snap-back to 0:00.
   Duration _maxObservedPosition = Duration.zero;
+  final PlaybackDurationEvidence _durationEvidence = PlaybackDurationEvidence();
+  bool _prematureEofRecoveryActive = false;
+  int _prematureEofRecoveryAttempts = 0;
   // Latched once the current episode crosses the watched threshold (85%). The
   // engine listener fires on every position tick, so this guarantees the
   // watched mark + AniList sync run exactly once and can't be cleared by a
@@ -538,6 +540,19 @@ class PlaybackController extends Notifier<PlaybackState> {
     _maxObservedPosition = value;
   }
 
+  @visibleForTesting
+  void debugEvaluatePlaybackProgress(PlayerEngine engine) {
+    _evaluatePlaybackProgress(engine);
+  }
+
+  @visibleForTesting
+  Duration debugSafeResumePosition(
+    MediaPlaybackItem item,
+    EpisodeProgress? progress,
+  ) {
+    return _safeResumePosition(item, progress);
+  }
+
   void _updateMediaSession() {
     final MediaPlaybackItem? item = state.item;
     final PlayerEngine? engine = state.engine;
@@ -736,6 +751,9 @@ class PlaybackController extends Notifier<PlaybackState> {
     _autoNextOverlayTimer?.cancel();
     _reachedNearEnd = false;
     _maxObservedPosition = Duration.zero;
+    _durationEvidence.reset();
+    _prematureEofRecoveryActive = false;
+    _prematureEofRecoveryAttempts = 0;
     _autoProgressMarked = false;
     _autoNextDismissed = false;
     _playPauseIntentEpoch++;
@@ -744,11 +762,13 @@ class PlaybackController extends Notifier<PlaybackState> {
     _lastStablePausePosition = Duration.zero;
     _clearInteractiveSeek();
     if (state.autoNextVisible ||
+        state.confirmedEnded ||
         state.lastSkippedFrom != null ||
         state.seekPreviewPosition != null ||
         state.seekPreviewThumbnail != null) {
       state = state.copyWith(
         autoNextVisible: false,
+        confirmedEnded: false,
         clearLastSkippedFrom: true,
         clearSeekPreviewPosition: true,
         clearSeekPreviewThumbnail: true,
@@ -855,15 +875,6 @@ class PlaybackController extends Notifier<PlaybackState> {
       '[DEBUG] _safeResumePosition: savedSeconds=$savedSeconds item.startPosition=${item.startPosition} -> start=$start',
     );
 
-    final int? durationSeconds = progress?.durationSeconds;
-    if (durationSeconds != null && durationSeconds > 0) {
-      final Duration duration = Duration(seconds: durationSeconds);
-      if (start >= duration - const Duration(seconds: 20)) {
-        debugPrint('[DEBUG] _safeResumePosition: near end -> 0');
-        return Duration.zero;
-      }
-    }
-
     return start;
   }
 
@@ -935,6 +946,10 @@ class PlaybackController extends Notifier<PlaybackState> {
     _progressTimer?.cancel();
     _undoTimer?.cancel();
     _autoNextOverlayTimer?.cancel();
+    _reachedNearEnd = false;
+    _durationEvidence.reset();
+    _prematureEofRecoveryActive = false;
+    _prematureEofRecoveryAttempts = 0;
     final int generation = ++_playbackGeneration;
     _clearInteractiveSeek();
     _cancelSeekThumbnailRequests();
@@ -958,6 +973,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       loading: true,
       controlsVisible: true,
       autoNextVisible: false,
+      confirmedEnded: false,
       clearError: true,
       clearLastSkippedFrom: true,
       clearSeekPreviewPosition: true,
@@ -1574,11 +1590,11 @@ class PlaybackController extends Notifier<PlaybackState> {
     final DateTime now = DateTime.now();
     final PlayerEngineState value = engine.state.value;
     final DateTime observedAt = _offlineStallObservedAt ?? now;
-    final bool durationLooksReliable =
-        value.duration >= const Duration(seconds: 30);
-    final bool isNearEnd =
-        durationLooksReliable &&
-        value.position + const Duration(seconds: 2) >= value.duration;
+    // Completion is decided before the stall state machine sees an inactive
+    // backend. A raw completed flag at 1194/1246 is premature EOF and remains
+    // recoverable; only a confirmed real end suppresses stall recovery.
+    _evaluatePlaybackProgress(engine);
+    final bool confirmedEnded = state.confirmedEnded;
     final bool interactionInProgress =
         _offlineStallRecoveryActive ||
         state.loading ||
@@ -1590,10 +1606,10 @@ class PlaybackController extends Notifier<PlaybackState> {
     final OfflinePlaybackStallDecision decision = offlinePlaybackStallDecision(
       desiredPlaying: state.desiredPlaying,
       isInitialized: value.isInitialized,
-      isCompleted: value.isCompleted && durationLooksReliable,
+      isCompleted: confirmedEnded,
       hasError: value.hasError,
       interactionInProgress: interactionInProgress,
-      isNearEnd: isNearEnd,
+      isNearEnd: confirmedEnded,
       position: value.position,
       observedPosition: _offlineStallObservedPosition,
       stalledFor: now.difference(observedAt),
@@ -2099,22 +2115,24 @@ class PlaybackController extends Notifier<PlaybackState> {
 
     final int positionSeconds = positionMs ~/ 1000;
     final int durationSeconds = durationMs ~/ 1000;
-    // Mirror the FVP/MPV path: watched at 85% (keep the real position), but only
-    // snap the resume point to 0:00 once essentially finished.
-    final bool reachedWatchedFraction =
-        durationSeconds > 0 &&
-        positionSeconds >= durationSeconds * _watchedFraction;
-    final bool isNearEnd =
-        durationSeconds > 0 && positionSeconds >= durationSeconds - 20;
-    final bool resetToStart = completed || isNearEnd;
+    final PlaybackEndEvaluation end = evaluateNativePlaybackEnd(
+      positionMs: positionMs,
+      durationMs: durationMs,
+      backendCompleted: completed,
+    );
+    final bool resetToStart = end.confirmedEnded;
     final int savePosition = resetToStart ? 0 : positionSeconds;
-    final bool saveCompleted = completed || isNearEnd || reachedWatchedFraction;
+    final bool saveCompleted =
+        end.confirmedEnded || end.watchedThresholdReached;
 
     // Latch the watched mark so a later FVP save can't clear it. Only latch
     // end-of-stream only when genuinely finished. At 85% there is still about 15% left,
     // and _reachedNearEnd would otherwise pop the auto-next overlay on restore.
     if (saveCompleted) _autoProgressMarked = true;
-    if (resetToStart) _reachedNearEnd = true;
+    if (resetToStart) {
+      _reachedNearEnd = true;
+      state = state.copyWith(confirmedEnded: true);
+    }
 
     for (final String mediaId in _progressMediaIds(item)) {
       await ref
@@ -2178,7 +2196,6 @@ class PlaybackController extends Notifier<PlaybackState> {
       duration,
     );
     _clearResumeGuard();
-    _noteManualSeekTarget(target, duration);
     _notePausedResumeTarget(engine, target);
     _queueInteractiveSeek(
       engine,
@@ -2195,7 +2212,6 @@ class PlaybackController extends Notifier<PlaybackState> {
     final Duration duration = engine.state.value.duration;
     final Duration target = _clampSeekPosition(position, duration);
     _clearResumeGuard();
-    _noteManualSeekTarget(target, duration);
     _notePausedResumeTarget(engine, target);
     _queueInteractiveSeek(engine, target, delay: Duration.zero);
     _broadcastSeek(target);
@@ -2212,13 +2228,23 @@ class PlaybackController extends Notifier<PlaybackState> {
   // auto-next overlay. Seeking back well before the end clears the latch so a
   // re-watch doesn't instantly re-trigger completion.
   void _noteManualSeekTarget(Duration target, Duration duration) {
-    if (duration < const Duration(minutes: 2)) return;
-    if (target >= duration - const Duration(seconds: 3)) {
+    _durationEvidence.observe(duration);
+    final PlaybackEndEvaluation end = evaluatePlaybackEnd(
+      backendCompleted: false,
+      durationIsAuthoritative: duration >= const Duration(seconds: 30),
+      mediaKind: _mediaKindForCurrentSource(),
+      position: target,
+      maxObservedPosition: target,
+      duration: duration,
+      watchedFraction: _watchedFraction,
+    );
+    if (end.confirmedEnded) {
       if (_reachedNearEnd) return;
       _reachedNearEnd = true;
+      state = state.copyWith(confirmedEnded: true);
       _markCurrentCompleted(showNext: true);
     } else if (target < duration - const Duration(seconds: 30)) {
-      _reachedNearEnd = false;
+      _invalidateConfirmedEnd('manual seek moved before end');
       // Lower the high-water mark to the rewatch point so a spurious EOF during
       // the re-watch isn't validated against progress from before the seek.
       if (_maxObservedPosition > target) _maxObservedPosition = target;
@@ -2229,7 +2255,7 @@ class PlaybackController extends Notifier<PlaybackState> {
   /// saver. Used before auto-advancing and on seek-to-end so the episode is
   /// never left unwatched when the next one starts.
   Future<void> markCurrentEpisodeWatched() async {
-    _reachedNearEnd = true;
+    if (!state.confirmedEnded || !_reachedNearEnd) return;
     await _markCurrentCompleted(showNext: false);
   }
 
@@ -2242,6 +2268,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     final PlayerSettings settings =
         ref.read(playerSettingsProvider).value ?? const PlayerSettings();
     if ((settings.autoplayNext || settings.showNextEpisodeButton) &&
+        state.confirmedEnded &&
         !state.autoNextVisible) {
       state = state.copyWith(autoNextVisible: true);
     }
@@ -2524,9 +2551,14 @@ class PlaybackController extends Notifier<PlaybackState> {
     _queuedSeekTarget = null;
     _seekInFlight = true;
     final Duration from = engine.state.value.position;
+    bool seekCompleted = false;
 
     try {
-      await _seekEngineTo(engine, target, reason: 'Interactive seek');
+      seekCompleted = await _seekEngineTo(
+        engine,
+        target,
+        reason: 'Interactive seek',
+      );
     } on Object {
       // Keep rapid seek gestures from surfacing as uncaught async errors if
       // the native player rejects a stale target during stream transitions.
@@ -2536,7 +2568,12 @@ class PlaybackController extends Notifier<PlaybackState> {
         unawaited(_flushInteractiveSeek());
       } else if (state.engine == engine) {
         _queuedSeekEngine = null;
-        _beginSeekSettle(engine, target, from: from);
+        if (seekCompleted) {
+          _noteManualSeekTarget(target, engine.state.value.duration);
+          _beginSeekSettle(engine, target, from: from);
+        } else {
+          _cancelSeekSettle(clearPreview: true);
+        }
       } else if (_queuedSeekEngine == engine) {
         _clearInteractiveSeek();
       }
@@ -3064,16 +3101,21 @@ class PlaybackController extends Notifier<PlaybackState> {
       _evaluatePlaybackProgress(engine);
     };
     engine.addListener(listener);
+    _evaluatePlaybackProgress(engine);
   }
 
   // Records the furthest point playback has genuinely reached. A lower reading
   // never lowers the mark, so an end-of-stream snap-back to 0:00 is ignored; a
   // glitchy overshoot past the reported duration is dropped too. The mark is the
-  // evidence used by [_engineReportsCompletion] to tell a real end from a
+  // evidence used by the shared completion oracle to tell a real end from a
   // premature EOF.
   void _trackMaxObservedPosition(PlayerEngine engine) {
     final PlayerEngineState es = engine.state.value;
     if (!es.isInitialized) return;
+    final bool durationGrew = _durationEvidence.observe(es.duration);
+    if (durationGrew) {
+      _invalidateConfirmedEnd('authoritative duration grew');
+    }
     final Duration pos = es.position;
     if (pos <= _maxObservedPosition) return;
     final Duration dur = es.duration;
@@ -3081,26 +3123,215 @@ class PlaybackController extends Notifier<PlaybackState> {
     _maxObservedPosition = pos;
   }
 
-  // Whether the backend's end-of-stream signal should be believed. For a
-  // reliable-duration stream, completion is trusted only once playback has
-  // actually advanced to near the end: a bad or reloaded stream can report a
-  // transient EOF minutes early while the manifest duration stays correct, and
-  // believing it would latch auto-next + mark the episode watched prematurely.
-  // Short/unknown durations can't be validated this way, so they're trusted as
-  // before.
-  bool _engineReportsCompletion(PlayerEngine engine) {
+  PlaybackMediaKind _mediaKindForCurrentSource() {
+    final MediaServer? server = state.server;
+    if (server == null) return PlaybackMediaKind.direct;
+    final StreamQuality? quality = state.quality;
+    final String url = quality == null || quality.isAuto || quality.url.isEmpty
+        ? server.url
+        : quality.url;
+    final StreamType type = _streamTypeForUrl(url, server.streamType);
+    return type == StreamType.hls || type == StreamType.dash
+        ? PlaybackMediaKind.segmented
+        : PlaybackMediaKind.direct;
+  }
+
+  PlaybackEndEvaluation _playbackEndEvaluation(PlayerEngine engine) {
     final PlayerEngineState es = engine.state.value;
     final MediaServer? server = state.server;
-    return playbackCompletionIsCredible(
-      isCompleted: es.isCompleted,
-      isOfflineLocalSegmentedMedia:
-          server != null &&
-          _isOfflineLocalServer(server) &&
-          (server.streamType == StreamType.hls ||
-              server.streamType == StreamType.dash),
-      duration: es.duration,
+    final PlaybackMediaKind mediaKind = _mediaKindForCurrentSource();
+    final bool isOffline = server != null && _isOfflineLocalServer(server);
+    return evaluatePlaybackEnd(
+      backendCompleted: es.isCompleted,
+      durationIsAuthoritative: _durationEvidence.isAuthoritative(
+        isOffline: isOffline,
+        mediaKind: mediaKind,
+      ),
+      mediaKind: mediaKind,
+      position: es.position,
       maxObservedPosition: _maxObservedPosition,
-      endProximityTolerance: _endProximityTolerance,
+      duration: _durationEvidence.maximum,
+      watchedFraction: _watchedFraction,
+    );
+  }
+
+  String _playbackEndSourceLabel() {
+    final MediaServer? server = state.server;
+    final bool offline = server != null && _isOfflineLocalServer(server);
+    final StreamQuality? quality = state.quality;
+    final String url = server == null
+        ? ''
+        : quality == null || quality.isAuto || quality.url.isEmpty
+        ? server.url
+        : quality.url;
+    final StreamType type = server == null
+        ? StreamType.unknown
+        : _streamTypeForUrl(url, server.streamType);
+    final String kind = switch (type) {
+      StreamType.hls => 'hls',
+      StreamType.dash => 'dash',
+      _ => 'direct',
+    };
+    return '${offline ? 'offline' : 'online'}-$kind';
+  }
+
+  void _logPlaybackEnd(PlayerEngine engine, PlaybackEndEvaluation evaluation) {
+    final int? durationSeconds = evaluation.authoritativeDuration?.inSeconds;
+    final int? remainingSeconds = durationSeconds == null
+        ? null
+        : (durationSeconds - evaluation.observedPosition.inSeconds)
+              .clamp(0, durationSeconds)
+              .toInt();
+    debugPrint(
+      'PlaybackEnd: source=${_playbackEndSourceLabel()} '
+      'backendCompleted=${engine.state.value.isCompleted} '
+      'position=${engine.state.value.position.inSeconds}s '
+      'maxObserved=${_maxObservedPosition.inSeconds}s '
+      'duration=${durationSeconds == null ? 'unknown' : '${durationSeconds}s'} '
+      'remaining=${remainingSeconds == null ? 'unknown' : '${remainingSeconds}s'} '
+      'decision=${evaluation.decision.name}',
+    );
+  }
+
+  void _invalidateConfirmedEnd(String reason) {
+    final bool hadEndState =
+        _reachedNearEnd || state.confirmedEnded || state.autoNextVisible;
+    _reachedNearEnd = false;
+    _autoNextOverlayTimer?.cancel();
+    _autoNextOverlayTimer = null;
+    if (state.confirmedEnded || state.autoNextVisible) {
+      state = state.copyWith(confirmedEnded: false, autoNextVisible: false);
+    }
+    if (hadEndState) {
+      debugPrint('[DEBUG] auto-next: confirmed end invalidated ($reason)');
+    }
+  }
+
+  void _handlePrematureBackendEof(
+    PlayerEngine engine,
+    PlaybackEndEvaluation evaluation,
+  ) {
+    _invalidateConfirmedEnd(evaluation.decision.name);
+    if (_prematureEofRecoveryActive || _prematureEofRecoveryAttempts >= 2) {
+      if (_prematureEofRecoveryAttempts >= 2 && state.error == null) {
+        state = state.copyWith(
+          error: const PlayerError(
+            title: 'Playback stopped early',
+            message:
+                'The stream ended before the episode finished. Retry to continue from the last position.',
+            canRetry: true,
+          ),
+          desiredPlaying: false,
+        );
+      }
+      return;
+    }
+    unawaited(_recoverPrematureBackendEof(engine, evaluation));
+  }
+
+  Future<void> _recoverPrematureBackendEof(
+    PlayerEngine engine,
+    PlaybackEndEvaluation evaluation,
+  ) async {
+    if (_prematureEofRecoveryActive || !identical(state.engine, engine)) {
+      return;
+    }
+    _prematureEofRecoveryActive = true;
+    final int generation = _playbackGeneration;
+    final int attempt = ++_prematureEofRecoveryAttempts;
+    final Duration resumeAt =
+        evaluation.observedPosition > const Duration(milliseconds: 750)
+        ? evaluation.observedPosition - const Duration(milliseconds: 750)
+        : Duration.zero;
+    bool recoveryOperationFailed = false;
+    _logPlaybackEnd(engine, evaluation);
+    try {
+      await engine.pause();
+      if (generation != _playbackGeneration ||
+          !identical(state.engine, engine)) {
+        return;
+      }
+      await engine.seekTo(resumeAt);
+      if (generation != _playbackGeneration ||
+          !identical(state.engine, engine)) {
+        return;
+      }
+      await engine.play();
+      if (generation == _playbackGeneration &&
+          identical(state.engine, engine)) {
+        state = state.copyWith(
+          desiredPlaying: true,
+          clearError: true,
+          confirmedEnded: false,
+          autoNextVisible: false,
+        );
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 700));
+    } on Object catch (error) {
+      recoveryOperationFailed = true;
+      if (kDebugMode) {
+        debugPrint(
+          'PlaybackRecovery: reason=premature-eof attempt=$attempt/2 '
+          'resume=${resumeAt.inSeconds}s success=false '
+          'error=${error.runtimeType}',
+        );
+      }
+    } finally {
+      if (generation == _playbackGeneration &&
+          identical(state.engine, engine)) {
+        _prematureEofRecoveryActive = false;
+        final PlayerEngineState value = engine.state.value;
+        if (!recoveryOperationFailed && !value.hasError) {
+          debugPrint(
+            'PlaybackRecovery: reason=premature-eof attempt=$attempt/2 '
+            'resume=${resumeAt.inSeconds}s success=${!value.isCompleted}',
+          );
+        }
+        if (value.isCompleted || value.hasError) {
+          if (_prematureEofRecoveryAttempts >= 2) {
+            state = state.copyWith(
+              error: const PlayerError(
+                title: 'Playback stopped early',
+                message:
+                    'The stream ended before the episode finished. Retry to continue from the last position.',
+                canRetry: true,
+              ),
+              desiredPlaying: false,
+            );
+          } else {
+            _trackMaxObservedPosition(engine);
+            final PlaybackEndEvaluation evaluation = _playbackEndEvaluation(
+              engine,
+            );
+            if (evaluation.confirmedEnded) {
+              _evaluatePlaybackProgress(engine);
+            } else {
+              _handlePrematureBackendEof(engine, evaluation);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  PlaybackEndEvaluation evaluateNativePlaybackEnd({
+    required int positionMs,
+    required int durationMs,
+    required bool backendCompleted,
+  }) {
+    final Duration position = Duration(milliseconds: positionMs);
+    final Duration duration = Duration(milliseconds: durationMs);
+    if (position > _maxObservedPosition) {
+      _maxObservedPosition = position;
+    }
+    return evaluatePlaybackEnd(
+      backendCompleted: backendCompleted,
+      durationIsAuthoritative: duration >= const Duration(seconds: 30),
+      mediaKind: _mediaKindForCurrentSource(),
+      position: position,
+      maxObservedPosition: _maxObservedPosition,
+      duration: duration,
+      watchedFraction: _watchedFraction,
     );
   }
 
@@ -3111,22 +3342,16 @@ class PlaybackController extends Notifier<PlaybackState> {
     if (!es.isInitialized) return;
 
     _trackMaxObservedPosition(engine);
-
-    final Duration dur = es.duration;
-    final Duration pos = es.position;
-    // Require a stable, realistic duration before trusting a fraction/near-end
-    // check: fragile HLS/DASH streams briefly expose a few-second duration while
-    // the full manifest is still being parsed.
-    final bool reliableDuration = dur >= const Duration(minutes: 2);
+    final PlaybackEndEvaluation end = _playbackEndEvaluation(engine);
     // (1) Auto-progress: mark the episode watched the instant playback crosses
     // 85%, independent of ever reaching the very end. This is what makes the
     // watched mark + AniList sync fire mid-playback instead of only on exit.
-    if (reliableDuration &&
-        !_autoProgressMarked &&
-        pos.inMilliseconds >= dur.inMilliseconds * _watchedFraction) {
+    if (end.watchedThresholdReached && !_autoProgressMarked) {
       _autoProgressMarked = true;
       debugPrint(
-        '[DEBUG] auto-progress: 85% reached at ${pos.inSeconds}s/${dur.inSeconds}s -> marking watched',
+        '[DEBUG] auto-progress: 85% reached at '
+        '${end.observedPosition.inSeconds}s/'
+        '${end.authoritativeDuration?.inSeconds}s -> marking watched',
       );
       unawaited(_saveProgress(item, engine));
     }
@@ -3136,15 +3361,21 @@ class PlaybackController extends Notifier<PlaybackState> {
     // a seek-to-end or a 0:00 position-snap can never hide completion. The
     // completion signal is validated against real progress so a premature EOF on
     // a bad/reloaded stream can't latch the end minutes early.
-    final bool ended =
-        _engineReportsCompletion(engine) ||
-        (reliableDuration && pos >= dur - const Duration(seconds: 2));
-    if (ended && !_reachedNearEnd) {
+    if ((end.decision == PlaybackEndDecision.prematureBackendEof ||
+            end.decision == PlaybackEndDecision.durationUnreliable) &&
+        es.isCompleted) {
+      _handlePrematureBackendEof(engine, end);
+      return;
+    }
+    if (end.confirmedEnded && !_reachedNearEnd) {
       _reachedNearEnd = true;
+      _prematureEofRecoveryAttempts = 0;
+      state = state.copyWith(confirmedEnded: true);
+      _logPlaybackEnd(engine, end);
       debugPrint(
         '[DEBUG] auto-next: end latched (isCompleted=${es.isCompleted} '
-        'pos=${pos.inSeconds}s max=${_maxObservedPosition.inSeconds}s '
-        'dur=${dur.inSeconds}s)',
+        'pos=${es.position.inSeconds}s max=${_maxObservedPosition.inSeconds}s '
+        'dur=${end.authoritativeDuration?.inSeconds}s)',
       );
       unawaited(_saveProgress(item, engine));
     }
@@ -3159,32 +3390,16 @@ class PlaybackController extends Notifier<PlaybackState> {
   void _evaluateAutoNextOverlay(PlayerEngine engine) {
     final MediaPlaybackItem? item = state.item;
     if (item == null || item.ignoreProgress) return;
-    _trackMaxObservedPosition(engine);
     final PlayerSettings settings =
         ref.read(playerSettingsProvider).value ?? const PlayerSettings();
     final bool showNextOverlay =
         settings.autoplayNext || settings.showNextEpisodeButton;
     if (showNextOverlay && !state.autoNextVisible && !_autoNextDismissed) {
-      final Duration dur = engine.state.value.duration;
-      final Duration pos = engine.state.value.position;
-      final bool ended = _engineReportsCompletion(engine) || _reachedNearEnd;
-      // The backend reaching end-of-stream is the most reliable trigger:
-      // some streams snap the reported position back to 0:00 on completion,
-      // so a pure position-vs-duration check would never fire auto-next.
-      bool shouldShow = ended;
-      // Otherwise wait until the episode is effectively finished before
-      // surfacing auto-next, so the stream plays through to its end. Auto-play
-      // mode previously surfaced ~10s early, so the 5s countdown advanced to
-      // the next episode a few seconds before the ending. The >=2min guard
-      // ignores the tiny initial duration some HLS/DASH streams report before
-      // the full manifest is parsed.
-      if (!shouldShow && dur >= const Duration(minutes: 2)) {
-        shouldShow = pos + const Duration(seconds: 1) >= dur;
-      }
+      final bool shouldShow = state.confirmedEnded && _reachedNearEnd;
       if (shouldShow) {
+        debugPrint('AutoNext: confirmedEnd=true overlay=eligible');
         debugPrint(
-          '[DEBUG] auto-next: trigger reached (ended=$ended '
-          'pos=${pos.inSeconds}s/${dur.inSeconds}s '
+          '[DEBUG] auto-next: trigger reached (confirmed=true '
           'autoplay=${settings.autoplayNext})',
         );
         if (settings.autoplayNext) {
@@ -3215,7 +3430,9 @@ class PlaybackController extends Notifier<PlaybackState> {
   void _showAutoNextOverlay() {
     _autoNextOverlayTimer?.cancel();
     _autoNextOverlayTimer = null;
-    if (_autoNextDismissed || state.autoNextVisible) return;
+    if (_autoNextDismissed || state.autoNextVisible || !state.confirmedEnded) {
+      return;
+    }
     debugPrint('[DEBUG] auto-next: overlay shown');
     state = state.copyWith(autoNextVisible: true);
   }
@@ -3225,11 +3442,14 @@ class PlaybackController extends Notifier<PlaybackState> {
   void _scheduleAutoNextOverlay() {
     if (_autoNextOverlayTimer != null ||
         _autoNextDismissed ||
-        state.autoNextVisible) {
+        state.autoNextVisible ||
+        !state.confirmedEnded) {
       return;
     }
+    final int generation = _playbackGeneration;
     _autoNextOverlayTimer = Timer(_autoNextOverlayDelay, () {
       _autoNextOverlayTimer = null;
+      if (generation != _playbackGeneration || !state.confirmedEnded) return;
       _showAutoNextOverlay();
     });
   }
@@ -3245,9 +3465,10 @@ class PlaybackController extends Notifier<PlaybackState> {
     MediaPlaybackItem item,
     PlayerEngine engine,
   ) async {
-    if (item.ignoreProgress) return;
+    if (item.ignoreProgress || !ref.mounted) return;
 
     final PlayerEngineState engineState = engine.state.value;
+    _trackMaxObservedPosition(engine);
     final bool hasPendingSeekTarget =
         (_queuedSeekEngine == engine && _queuedSeekTarget != null) ||
         (_settlingSeekEngine == engine && _settlingSeekTarget != null);
@@ -3264,12 +3485,10 @@ class PlaybackController extends Notifier<PlaybackState> {
       return;
     }
 
-    // Treat a latched seek-to-end the same as a backend-reported completion so
-    // the episode is still marked watched even when the position snapped to 0.
-    // The raw completion flag is validated against real progress so a premature
-    // EOF on a bad/reloaded stream doesn't mark the episode watched early.
-    final bool engineCompleted =
-        _engineReportsCompletion(engine) || _reachedNearEnd;
+    final PlaybackEndEvaluation end = _playbackEndEvaluation(engine);
+    // A watched mark at 85% is intentionally not completion. Resume resets to
+    // zero only after the strict end decision was latched for this generation.
+    final bool engineCompleted = end.confirmedEnded && _reachedNearEnd;
     final DateTime? guardUntil = _resumeGuardUntil;
     if (!engineCompleted &&
         guardUntil != null &&
@@ -3286,40 +3505,25 @@ class PlaybackController extends Notifier<PlaybackState> {
       return;
     }
 
-    final int? durationSeconds = engineState.duration.inSeconds > 0
-        ? engineState.duration.inSeconds
-        : null;
-
-    // Never treat very short reported durations as completion. Fragile HLS
-    // streams can briefly expose a 4-10 second media duration while the real
-    // playlist is still being parsed. Saving that as completed breaks resume
-    // and can trigger auto-next incorrectly.
-    final bool hasReliableCompletionDuration =
-        durationSeconds != null && durationSeconds >= 120;
+    final int? durationSeconds = end.authoritativeDuration?.inSeconds;
 
     // The episode counts as watched once playback crosses 85% (the common
     // anime convention) or the backend reports end-of-stream. Latched in
     // [_autoProgressMarked] so a later periodic save can never clear it back to
     // unwatched while the final 15% (ED/credits) is still playing.
-    final bool reachedWatchedFraction =
-        hasReliableCompletionDuration &&
-        position.inSeconds >= durationSeconds * _watchedFraction;
+    final bool reachedWatchedFraction = end.watchedThresholdReached;
     final bool watched =
         engineCompleted || reachedWatchedFraction || _autoProgressMarked;
 
     // Only snap the resume point back to 0:00 once the stream is essentially
     // finished. When we mark "watched" early (at 85%) the real position is kept
     // so reopening resumes in the final stretch instead of restarting.
-    final bool resetToStart =
-        engineCompleted ||
-        (hasReliableCompletionDuration &&
-            position.inSeconds >= durationSeconds - 20);
+    final bool resetToStart = engineCompleted;
     final int savePosition = resetToStart ? 0 : position.inSeconds;
-    final int? savedDurationSeconds = hasReliableCompletionDuration
-        ? durationSeconds
-        : null;
+    final int? savedDurationSeconds = durationSeconds;
 
     for (final String mediaId in _progressMediaIds(item)) {
+      if (!ref.mounted) return;
       await ref
           .read(localLibraryProvider.notifier)
           .saveEpisodeProgress(
@@ -3332,6 +3536,7 @@ class PlaybackController extends Notifier<PlaybackState> {
           );
     }
 
+    if (!ref.mounted) return;
     unawaited(
       ref
           .read(localLibraryProvider.notifier)
@@ -3347,6 +3552,7 @@ class PlaybackController extends Notifier<PlaybackState> {
           ),
     );
 
+    if (!ref.mounted) return;
     final bool syncEnabled =
         (ref.read(playerSettingsProvider).value ?? const PlayerSettings())
             .autoAnilistSync;

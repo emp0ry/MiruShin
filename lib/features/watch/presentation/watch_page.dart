@@ -162,6 +162,9 @@ class _WatchPageState extends ConsumerState<WatchPage> {
   final EpisodeAdvanceCoordinator _advanceCoordinator =
       EpisodeAdvanceCoordinator();
   _OnlineAdvanceSnapshot? _pendingAdvance;
+  SoraEpisode? _pendingAdvanceTarget;
+  final OnlineNextResolutionUiState _onlineNextResolutionUi =
+      OnlineNextResolutionUiState();
   VoidCallback? _retryPendingAdvance;
   String? _preferredServerId;
   String? _preferredServerTitle;
@@ -200,6 +203,8 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     _episodeDownloadMode = false;
     _advanceCoordinator.reset();
     _pendingAdvance = null;
+    _pendingAdvanceTarget = null;
+    _onlineNextResolutionUi.reset();
     _retryPendingAdvance = null;
   }
 
@@ -290,6 +295,8 @@ class _WatchPageState extends ConsumerState<WatchPage> {
       _streamResolutionState.clear();
       _advanceCoordinator.reset();
       _pendingAdvance = null;
+      _pendingAdvanceTarget = null;
+      _onlineNextResolutionUi.reset();
       _retryPendingAdvance = null;
       _session = _session!.copyWith(
         step: sourceSeasonFlow
@@ -417,6 +424,8 @@ class _WatchPageState extends ConsumerState<WatchPage> {
   }) {
     if (!isAutoNext) {
       _retryPendingAdvance = null;
+      _pendingAdvanceTarget = null;
+      _onlineNextResolutionUi.reset();
     }
     final String? requestKey = _streamRequestKey(_session?.source, episode);
     if (requestKey != null) {
@@ -595,19 +604,27 @@ class _WatchPageState extends ConsumerState<WatchPage> {
 
   void _failOnlineAdvance(int transitionId, String reason) {
     final _OnlineAdvanceSnapshot? snapshot = _pendingAdvance;
+    final SoraEpisode? target = _pendingAdvanceTarget;
     if (!_advanceCoordinator.fail(transitionId)) return;
+    _onlineNextResolutionUi.fail();
+    final bool retryAllowed = snapshot != null;
+    final String safeReason = reason.split(':').first.trim();
     debugPrint(
-      'OnlineNext: transition=$transitionId state=failed reason=$reason '
-      'retryAllowed=true',
+      'OnlineNext: transition=$transitionId state=failed reason=$safeReason '
+      'retryAllowed=$retryAllowed',
     );
     _clearAutoNextFullscreen();
     _retryPendingAdvance = snapshot == null
         ? null
-        : () => _requestOnlineAdvance(snapshot, reason: 'retry');
+        : () => _requestOnlineAdvance(
+            snapshot,
+            reason: 'retry',
+            forcedNext: target,
+          );
     if (!mounted) return;
     setState(() {
       _session = _session?.copyWith(
-        step: WatchStep.streamReady,
+        step: WatchStep.resolveStream,
         isResolving: false,
         error: 'Next episode failed: $reason',
       );
@@ -787,6 +804,8 @@ class _WatchPageState extends ConsumerState<WatchPage> {
       if (transitionId != null) {
         _advanceCoordinator.complete(transitionId);
         _pendingAdvance = null;
+        _pendingAdvanceTarget = null;
+        _onlineNextResolutionUi.reset();
         _retryPendingAdvance = null;
         debugPrint(
           'OnlineNext: transition=$transitionId state=completed '
@@ -900,6 +919,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
   Future<void> _requestOnlineAdvance(
     _OnlineAdvanceSnapshot snapshot, {
     required String reason,
+    SoraEpisode? forcedNext,
   }) async {
     final EpisodeAdvanceOperation? operation = _advanceCoordinator.begin(
       currentKey: snapshot.currentKey,
@@ -914,16 +934,29 @@ class _WatchPageState extends ConsumerState<WatchPage> {
       return;
     }
     _pendingAdvance = snapshot;
+    _pendingAdvanceTarget = forcedNext;
+    _onlineNextResolutionUi.begin();
     _retryPendingAdvance = null;
     _nextEpisodeInFullscreen = snapshot.startInFullscreen;
     _advanceCoordinator.move(operation.id, EpisodeAdvanceState.findingNext);
+    setState(() {
+      _session = _session?.copyWith(
+        step: WatchStep.resolveStream,
+        episode: forcedNext,
+        clearCandidate: true,
+        clearError: true,
+        isResolving: true,
+      );
+    });
     debugPrint(
       'OnlineNext: transition=${operation.id} '
       'current=S${snapshot.currentSeason}E${snapshot.current.displayNumber} '
       'state=findingNext',
     );
 
-    List<SoraEpisode>? episodes;
+    List<SoraEpisode>? episodes = forcedNext == null
+        ? null
+        : (_sourceEpisodes ?? <SoraEpisode>[forcedNext]);
     Object? lookupError;
     for (int attempt = 1; attempt <= 3 && episodes == null; attempt++) {
       try {
@@ -959,31 +992,56 @@ class _WatchPageState extends ConsumerState<WatchPage> {
       return;
     }
 
-    final SoraNextEpisodeLookup lookup = findNextSoraEpisode(
-      episodes: episodes,
-      currentHref: snapshot.current.href,
-      currentSeason: snapshot.currentSeason,
-      currentNumber: snapshot.current.number,
-    );
-    final SoraEpisode? rawNext = lookup.episode;
+    final SoraNextEpisodeLookup? lookup = forcedNext == null
+        ? findNextSoraEpisode(
+            episodes: episodes,
+            currentHref: snapshot.current.href,
+            currentSeason: snapshot.currentSeason,
+            currentNumber: snapshot.current.number,
+          )
+        : null;
+    final SoraEpisode? rawNext = forcedNext ?? lookup?.episode;
     if (rawNext == null) {
       _advanceCoordinator.noNext(operation.id);
       _pendingAdvance = null;
+      _pendingAdvanceTarget = null;
+      _onlineNextResolutionUi.reset();
       _retryPendingAdvance = null;
       debugPrint(
         'OnlineNext: transition=${operation.id} state=noNext '
-        'providerEpisodes=${episodes.length} reason=${lookup.reason}',
+        'providerEpisodes=${episodes.length} reason=${lookup?.reason}',
       );
       _clearAutoNextFullscreen();
-      if (mounted) setState(() {});
+      if (mounted) {
+        setState(() {
+          _session = _session?.copyWith(
+            step: WatchStep.streamReady,
+            isResolving: false,
+          );
+        });
+      }
       return;
     }
 
+    _pendingAdvanceTarget = rawNext;
+    _advanceCoordinator.move(operation.id, EpisodeAdvanceState.resolvingNext);
+    final bool rawUsesAddonSeason =
+        _usesSourceSeasonFlow(_lastItem) && rawNext.season > 0;
+    setState(() {
+      _session = _session?.copyWith(
+        step: WatchStep.resolveStream,
+        episode: rawNext,
+        seasonNumber: rawUsesAddonSeason ? rawNext.season : null,
+        clearCandidate: true,
+        clearError: true,
+        isResolving: true,
+      );
+    });
     debugPrint(
       'OnlineNext: transition=${operation.id} '
       'next=S${rawNext.season > 0 ? rawNext.season : snapshot.currentSeason}'
       'E${rawNext.displayNumber} providerEpisodes=${episodes.length} '
-      'state=resolvingNext resolutionAttempt=1',
+      'state=resolvingNext uiResolving=true resolutionAttempt=1',
     );
     final AnimeEpisodeMetadata? nextMetadata = await _metadataForAutoNext(
       snapshot.item,
@@ -995,7 +1053,6 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     }
     final SoraEpisode next = _episodeForPlayback(rawNext, nextMetadata, null);
     _sourceEpisodes = List<SoraEpisode>.unmodifiable(episodes);
-    _advanceCoordinator.move(operation.id, EpisodeAdvanceState.resolvingNext);
     _streamResolutionState.clear();
 
     // Auto-next owns its stream request directly. Rendering the generic
@@ -1005,12 +1062,12 @@ class _WatchPageState extends ConsumerState<WatchPage> {
         _usesSourceSeasonFlow(_lastItem) && next.season > 0;
     setState(() {
       _session = _session!.copyWith(
-        step: WatchStep.streamReady,
+        step: WatchStep.resolveStream,
         episode: next,
         seasonNumber: useAddonSeason ? next.season : null,
         clearCandidate: true,
         clearError: true,
-        isResolving: false,
+        isResolving: true,
       );
     });
 
@@ -1071,9 +1128,20 @@ class _WatchPageState extends ConsumerState<WatchPage> {
       );
       return;
     }
+    final NormalizedStreamBundle playableBundle = resolvedBundle;
 
+    setState(() {
+      _onlineNextResolutionUi.markStreamReady(
+        hasPlayableStream: playableBundle.activeUrl.trim().isNotEmpty,
+      );
+      _session = _session?.copyWith(
+        step: WatchStep.streamReady,
+        isResolving: false,
+        clearError: true,
+      );
+    });
     _playResolvedBundle(
-      resolvedBundle,
+      playableBundle,
       isAutoNext: true,
       transitionId: operation.id,
     );
@@ -1377,6 +1445,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     }
 
     final bool showContinueButton =
+        !_onlineNextResolutionUi.ownsDirectResolution &&
         _visibleTab == 1 &&
         !_episodeDownloadMode &&
         _continueEpisode != null &&
@@ -1434,7 +1503,9 @@ class _WatchPageState extends ConsumerState<WatchPage> {
 
                     // Tab bar (Find Sources / Choose Episode)
                     if (session.step != WatchStep.pickSeason &&
-                        session.step != WatchStep.pickSourceSeason) ...<Widget>[
+                        session.step != WatchStep.pickSourceSeason &&
+                        !_onlineNextResolutionUi
+                            .ownsDirectResolution) ...<Widget>[
                       _WatchTabBar(
                         selectedTab: _visibleTab,
                         hasEpisodes: session.source != null,
@@ -1450,6 +1521,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
                     // stop after picking a source and restart if the user returns)
                     if (session.step != WatchStep.pickSeason &&
                         session.step != WatchStep.pickSourceSeason &&
+                        !_onlineNextResolutionUi.ownsDirectResolution &&
                         _visibleTab == 0)
                       KeyedSubtree(
                         key: _sourceKey,
@@ -1463,6 +1535,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
                     // Tab 1: episode picker.
                     if (session.step != WatchStep.pickSeason &&
                         session.step != WatchStep.pickSourceSeason &&
+                        !_onlineNextResolutionUi.ownsDirectResolution &&
                         _visibleTab == 1 &&
                         session.source != null)
                       KeyedSubtree(
@@ -1490,12 +1563,17 @@ class _WatchPageState extends ConsumerState<WatchPage> {
                       const SizedBox(height: AppSpacing.xxl),
                       KeyedSubtree(
                         key: _streamKey,
-                        child: _StreamResolvingSection(
-                          source: session.source,
-                          episode: session.episode,
-                          onResolved: _onStreamResolved,
-                          onError: _onStreamError,
-                        ),
+                        child: _onlineNextResolutionUi.ownsDirectResolution
+                            ? _StreamResolvingStatus(
+                                isLoading: session.isResolving,
+                                hasError: session.error != null,
+                              )
+                            : _StreamResolvingSection(
+                                source: session.source,
+                                episode: session.episode,
+                                onResolved: _onStreamResolved,
+                                onError: _onStreamError,
+                              ),
                       ),
                     ],
 
@@ -4289,29 +4367,45 @@ class _StreamResolvingSection extends ConsumerWidget {
       },
     );
 
+    return _StreamResolvingStatus(
+      isLoading: bundleAsync.isLoading,
+      hasError: bundleAsync.hasError,
+    );
+  }
+}
+
+class _StreamResolvingStatus extends StatelessWidget {
+  const _StreamResolvingStatus({
+    required this.isLoading,
+    required this.hasError,
+  });
+
+  final bool isLoading;
+  final bool hasError;
+
+  @override
+  Widget build(BuildContext context) {
     return GlassCard(
       padding: const EdgeInsets.all(AppSpacing.xl),
       child: Row(
         children: <Widget>[
-          bundleAsync.isLoading
+          isLoading
               ? const SizedBox.square(
                   dimension: 20,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
               : Icon(
-                  bundleAsync.hasError
+                  hasError
                       ? Icons.error_outline_rounded
                       : Icons.check_circle_outline_rounded,
-                  color: bundleAsync.hasError
-                      ? AppColors.danger
-                      : AppColors.success,
+                  color: hasError ? AppColors.danger : AppColors.success,
                 ),
           const SizedBox(width: AppSpacing.md),
           Expanded(
             child: Text(
-              bundleAsync.isLoading
+              isLoading
                   ? context.t('Resolving stream…')
-                  : bundleAsync.hasError
+                  : hasError
                   ? context.t('Stream resolution failed')
                   : context.t('Choose stream'),
               style: Theme.of(context).textTheme.bodyMedium,

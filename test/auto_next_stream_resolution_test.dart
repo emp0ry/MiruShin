@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mirushin/features/addons/domain/sora_models.dart';
 import 'package:mirushin/features/watch/application/watch_session.dart';
@@ -42,6 +44,39 @@ void main() {
     expect(claim?.transitionId, 17);
     expect(claim?.resolutionAttempt, 2);
     expect(state.take('episode-4'), isNull);
+  });
+
+  test('delayed provider remains visibly resolving until playable', () async {
+    final OnlineNextResolutionUiState state = OnlineNextResolutionUiState();
+    final Completer<String> provider = Completer<String>();
+
+    final Future<void> resolution = () async {
+      state.begin();
+      final String url = await provider.future;
+      state.markStreamReady(hasPlayableStream: url.trim().isNotEmpty);
+    }();
+
+    expect(state.phase, OnlineNextResolutionUiPhase.resolving);
+    expect(state.ownsDirectResolution, isTrue);
+    provider.complete('https://example.invalid/episode-2.m3u8');
+    await resolution;
+
+    expect(state.phase, OnlineNextResolutionUiPhase.streamReady);
+    expect(state.ownsDirectResolution, isFalse);
+  });
+
+  test('failure stays owned for retry and cannot claim empty stream ready', () {
+    final OnlineNextResolutionUiState state = OnlineNextResolutionUiState();
+    state.begin();
+
+    expect(state.markStreamReady(hasPlayableStream: false), isFalse);
+    expect(state.phase, OnlineNextResolutionUiPhase.resolving);
+    state.fail();
+    expect(state.phase, OnlineNextResolutionUiPhase.failed);
+    expect(state.ownsDirectResolution, isTrue);
+
+    state.begin();
+    expect(state.phase, OnlineNextResolutionUiPhase.resolving);
   });
 
   test('duplicate active completion creates one transition', () {

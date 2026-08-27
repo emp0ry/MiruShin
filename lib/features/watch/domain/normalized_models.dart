@@ -57,9 +57,8 @@ class EpisodeProgress {
   final int positionSeconds;
   final int? durationSeconds;
   final DateTime updatedAt;
-  // true when the episode was watched to completion (near-end save).
-  // Kept separate from positionSeconds so isWatched stays true even
-  // though positionSeconds is reset to 0 for resume-from-start.
+  // True once the episode reaches the watched threshold. This is deliberately
+  // separate from real EOF: positionSeconds resets only after confirmed end.
   final bool completed;
 
   double get fraction {

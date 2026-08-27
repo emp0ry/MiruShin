@@ -1,22 +1,5 @@
 enum OfflinePlaybackStallDecision { inactive, progressed, waiting, recover }
 
-bool playbackCompletionIsCredible({
-  required bool isCompleted,
-  required bool isOfflineLocalSegmentedMedia,
-  required Duration duration,
-  required Duration maxObservedPosition,
-  Duration tinyHlsDurationLimit = const Duration(seconds: 30),
-  Duration reliableDurationThreshold = const Duration(minutes: 2),
-  Duration endProximityTolerance = const Duration(seconds: 5),
-}) {
-  if (!isCompleted) return false;
-  if (isOfflineLocalSegmentedMedia && duration < tinyHlsDurationLimit) {
-    return false;
-  }
-  if (duration < reliableDurationThreshold) return true;
-  return maxObservedPosition >= duration - endProximityTolerance;
-}
-
 OfflinePlaybackStallDecision offlinePlaybackStallDecision({
   required bool desiredPlaying,
   required bool isInitialized,

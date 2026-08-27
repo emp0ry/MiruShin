@@ -153,6 +153,33 @@ class AutoNextStreamResolutionClaim {
   final int resolutionAttempt;
 }
 
+enum OnlineNextResolutionUiPhase { idle, resolving, failed, streamReady }
+
+/// Keeps the watch page's direct auto-next request visually owned while its
+/// provider future is pending or retryable. `streamReady` is unreachable until
+/// the caller proves that a playable stream was resolved.
+class OnlineNextResolutionUiState {
+  OnlineNextResolutionUiPhase _phase = OnlineNextResolutionUiPhase.idle;
+
+  OnlineNextResolutionUiPhase get phase => _phase;
+  bool get ownsDirectResolution =>
+      _phase == OnlineNextResolutionUiPhase.resolving ||
+      _phase == OnlineNextResolutionUiPhase.failed;
+  bool get isResolving => _phase == OnlineNextResolutionUiPhase.resolving;
+
+  void begin() => _phase = OnlineNextResolutionUiPhase.resolving;
+
+  void fail() => _phase = OnlineNextResolutionUiPhase.failed;
+
+  bool markStreamReady({required bool hasPlayableStream}) {
+    if (!hasPlayableStream) return false;
+    _phase = OnlineNextResolutionUiPhase.streamReady;
+    return true;
+  }
+
+  void reset() => _phase = OnlineNextResolutionUiPhase.idle;
+}
+
 enum EpisodeAdvanceState {
   requested,
   findingNext,
