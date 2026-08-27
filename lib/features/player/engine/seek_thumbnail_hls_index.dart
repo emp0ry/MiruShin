@@ -131,7 +131,24 @@ class HlsMediaIndex {
   }
 }
 
+bool hasHlsPlaylistSignature(String playlist) {
+  String candidate = playlist;
+  if (candidate.startsWith('\uFEFF')) candidate = candidate.substring(1);
+  return candidate.trimLeft().toUpperCase().startsWith('#EXTM3U');
+}
+
 HlsMediaIndex parseHlsMediaIndex(String playlist, Uri playlistUri) {
+  if (!hasHlsPlaylistSignature(playlist)) {
+    return HlsMediaIndex(
+      playlistUri: playlistUri,
+      kind: HlsPlaylistKind.unknown,
+      segments: const <HlsMediaSegment>[],
+      mediaSequence: 0,
+      discontinuitySequence: 0,
+      targetDuration: Duration.zero,
+      hasEndList: false,
+    );
+  }
   final List<String> lines = playlist.split(RegExp(r'\r?\n'));
   final bool master = lines.any(
     (String line) =>

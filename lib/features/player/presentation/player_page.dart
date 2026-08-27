@@ -63,15 +63,6 @@ class PlayerPage extends ConsumerStatefulWidget {
     super.key,
   });
 
-  factory PlayerPage.fromDirectRouteArgs(
-    DirectPlayerRouteArgs args, {
-    Key? key,
-  }) => PlayerPage(
-    item: args.item,
-    startInFullscreen: args.startInFullscreen,
-    key: key,
-  );
-
   final MediaPlaybackItem item;
   final bool startInFullscreen;
 
@@ -722,18 +713,19 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
       }
     }
     final bool wasFullscreen = _isFullscreen;
-    final bool shouldStartNextFullscreen = fullscreenForPlayerAdvance(
-      currentFullscreen: wasFullscreen,
-      advancing: advancing,
-    );
-    final bool preserveFullscreenForNext = shouldStartNextFullscreen;
+    final bool shouldStartNextFullscreen =
+        advancing && (wasFullscreen || _shouldStartFullscreen);
+    final bool preserveFullscreenForNext =
+        _isMobile && shouldStartNextFullscreen;
     _preserveFullscreenForNextRoute = preserveFullscreenForNext;
     if (kDebugMode) {
       debugPrint(
-        'PlayerRoute: advancing=$advancing '
+        'PlayerFullscreen: releaseSemantic=true '
+        'advancing=$advancing '
         'wasFullscreen=$wasFullscreen '
-        'nextStartFullscreen=$shouldStartNextFullscreen '
-        'source=${widget.item.servers.any((MediaServer server) => server.id == 'offline') ? 'offline' : 'online'}.',
+        'shouldStartFullscreen=$_shouldStartFullscreen '
+        'isMobile=$_isMobile '
+        'preserveSystemUi=$preserveFullscreenForNext.',
       );
     }
     setState(() {
@@ -782,10 +774,16 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
             voiceoverLabel: playbackState.voiceover?.label,
           )
         : null;
-    // Wait for the final progress save before returning to the caller. The
-    // downloads page uses the persisted watched state to decide whether an
-    // offline episode should be auto-deleted.
-    await _stopPlayback();
+    final bool offlinePlayback = widget.item.servers.any(
+      (MediaServer server) => server.id == 'offline',
+    );
+    if (offlinePlayback) {
+      // Offline auto-delete must wait until preview decoder sessions and local
+      // file handles are closed. Online navigation keeps the release ordering.
+      await _stopPlayback();
+    } else {
+      unawaited(_stopPlayback());
+    }
 
     setState(() {
       _allowRoutePop = true;

@@ -116,6 +116,85 @@ void main() {
   );
 
   test(
+    'native bridge decodes extensionless direct media declared as HLS',
+    () async {
+      final List<int> videoBytes = await _download(
+        Uri.parse(
+          'https://flutter.github.io/assets-for-api-docs/assets/videos/'
+          'bee.mp4',
+        ),
+      );
+      final HttpServer server = await HttpServer.bind(
+        InternetAddress.loopbackIPv4,
+        0,
+      );
+      addTearDown(() => server.close(force: true));
+      int requestCount = 0;
+      bool sawRangeRequest = false;
+      bool retainedHeaders = false;
+      server.listen((HttpRequest request) {
+        requestCount += 1;
+        sawRangeRequest |=
+            request.headers.value(HttpHeaders.rangeHeader) != null;
+        retainedHeaders |=
+            request.headers.value(HttpHeaders.userAgentHeader) ==
+                'MiruShin native smoke' &&
+            request.headers.value(HttpHeaders.refererHeader) ==
+                'https://example.test/watch';
+        unawaited(_serveVideoBytes(request, videoBytes));
+      });
+
+      final String url =
+          'http://${server.address.address}:${server.port}/play?id=dynamic';
+      final SeekThumbnailSource source = SeekThumbnailSource(
+        source: PlayerSource(
+          url: url,
+          headers: const <String, String>{
+            'User-Agent': 'MiruShin native smoke',
+            'Referer': 'https://example.test/watch',
+          },
+          streamType: StreamType.unknown,
+        ),
+        sourceKey: 'extensionless-direct-smoke-source',
+        decoderKey: 'extensionless-direct-smoke-decoder',
+        label: '144p',
+        isOffline: false,
+        kind: SeekThumbnailSourceKind.networkUnknown,
+        declaredStreamType: StreamType.hls,
+      );
+      final SeekThumbnailService service = SeekThumbnailService(
+        extractorFactory: (_) => NativeSeekThumbnailExtractor(),
+      );
+      addTearDown(service.dispose);
+      final Stopwatch decode = Stopwatch()..start();
+      final SeekThumbnail? thumbnail = await service.request(
+        plan: SeekThumbnailPlan(
+          sessionKey: 'extensionless-direct-smoke-session',
+          candidates: <SeekThumbnailSource>[source],
+          isOffline: false,
+        ),
+        backend: PlayerBackend.fvp,
+        position: const Duration(seconds: 1),
+        duration: const Duration(seconds: 10),
+      );
+      decode.stop();
+
+      expect(thumbnail, isNotNull);
+      expect(thumbnail!.bytes.sublist(0, 2), <int>[0xff, 0xd8]);
+      expect(thumbnail.width, 240);
+      expect(requestCount, greaterThanOrEqualTo(2));
+      expect(sawRangeRequest, isTrue);
+      expect(retainedHeaders, isTrue);
+      // ignore: avoid_print
+      print(
+        'extensionless direct first=${decode.elapsedMicroseconds / 1000}ms '
+        'requests=$requestCount output=${thumbnail.width}x${thumbnail.height}',
+      );
+    },
+    skip: Platform.environment['MIRUSHIN_NATIVE_SEEK_SMOKE'] != '1',
+  );
+
+  test(
     'native bridge decodes and caches an offline local HLS segment',
     () async {
       final Directory directory = await Directory.systemTemp.createTemp(
@@ -202,9 +281,8 @@ segment.ts
         await directory
             .list()
             .where(
-              (FileSystemEntity entity) => p.basename(
-                entity.path,
-              ).startsWith('.mirushin_seek_preview_'),
+              (FileSystemEntity entity) =>
+                  p.basename(entity.path).startsWith('.mirushin_seek_preview_'),
             )
             .isEmpty,
         isTrue,
@@ -395,4 +473,43 @@ Future<List<int>> _download(Uri uri) async {
   } finally {
     client.close(force: true);
   }
+}
+
+Future<void> _serveVideoBytes(HttpRequest request, List<int> bytes) async {
+  final HttpResponse response = request.response;
+  response.headers.contentType = ContentType('video', 'mp4');
+  response.headers.set(HttpHeaders.acceptRangesHeader, 'bytes');
+  final String? rangeHeader = request.headers.value(HttpHeaders.rangeHeader);
+  final RegExpMatch? range = RegExp(
+    r'^bytes=(\d+)-(\d*)$',
+  ).firstMatch(rangeHeader ?? '');
+  if (range == null) {
+    response.contentLength = bytes.length;
+    response.add(bytes);
+    await response.close();
+    return;
+  }
+
+  final int start = int.parse(range.group(1)!);
+  if (start >= bytes.length) {
+    response.statusCode = HttpStatus.requestedRangeNotSatisfiable;
+    response.headers.set(
+      HttpHeaders.contentRangeHeader,
+      'bytes */${bytes.length}',
+    );
+    await response.close();
+    return;
+  }
+  final int requestedEnd =
+      int.tryParse(range.group(2) ?? '') ?? bytes.length - 1;
+  final int end = requestedEnd.clamp(start, bytes.length - 1);
+  final List<int> body = bytes.sublist(start, end + 1);
+  response.statusCode = HttpStatus.partialContent;
+  response.headers.set(
+    HttpHeaders.contentRangeHeader,
+    'bytes $start-$end/${bytes.length}',
+  );
+  response.contentLength = body.length;
+  response.add(body);
+  await response.close();
 }

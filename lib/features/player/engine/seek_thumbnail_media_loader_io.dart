@@ -4,9 +4,12 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
+import '../domain/player_models.dart';
 import 'local_hls_proxy.dart';
+import 'player_engine.dart';
 import 'seek_thumbnail.dart';
 import 'seek_thumbnail_hls.dart';
 import 'seek_thumbnail_hls_index.dart';
@@ -17,6 +20,7 @@ class PreparedThumbnailInput {
     required this.position,
     required this.headers,
     required this.windowSegmentCount,
+    this.resolvedSourceKind = SeekThumbnailSourceKind.unknown,
     this.indexLookupMicroseconds = 0,
     this.temporaryDirectory,
   });
@@ -25,6 +29,7 @@ class PreparedThumbnailInput {
   final Duration position;
   final Map<String, String> headers;
   final int windowSegmentCount;
+  final SeekThumbnailSourceKind resolvedSourceKind;
   final int indexLookupMicroseconds;
   final Directory? temporaryDirectory;
 
@@ -55,12 +60,17 @@ class SeekThumbnailMediaLoader {
   static const Duration _requestTimeout = Duration(seconds: 4);
   static const int _maxRedirects = 5;
   static const int _maxAttempts = 2;
+  static const int _networkProbeBytes = 64 * 1024;
+  static const int _maxSequentialDirectBytes = 24 * 1024 * 1024;
+  static const Duration _maxSequentialDirectPosition = Duration(seconds: 30);
 
   final HttpClient _client = HttpClient();
   final LocalHlsProxy _proxy = LocalHlsProxy();
   final Set<HttpClientRequest> _activeRequests = <HttpClientRequest>{};
   final Map<String, Future<_HlsSession>> _hlsSessions =
       <String, Future<_HlsSession>>{};
+  final Map<String, Future<_ResolvedNetworkSource>> _sourceProbes =
+      <String, Future<_ResolvedNetworkSource>>{};
   Directory? _temporaryRoot;
   int _requestSerial = 0;
   int _generation = 0;
@@ -77,8 +87,14 @@ class SeekThumbnailMediaLoader {
   }
 
   Future<void> warm(SeekThumbnailSource source) async {
-    if (_disposed || !_isHls(source)) return;
-    await _hlsSession(source);
+    if (_disposed) return;
+    final int generation = _generation;
+    final _ResolvedNetworkSource? resolved =
+        source.kind == SeekThumbnailSourceKind.networkUnknown
+        ? await _resolveNetworkSource(source, generation)
+        : null;
+    final SeekThumbnailSource effective = resolved?.source ?? source;
+    if (_isHls(effective)) await _hlsSession(effective);
   }
 
   Future<PreparedThumbnailInput?> prepare(
@@ -88,12 +104,30 @@ class SeekThumbnailMediaLoader {
   }) async {
     final int generation = _generation;
     if (_disposed) return null;
-    if (!_isHls(source)) {
-      String input = source.isOffline
-          ? _localPath(source.source.url)
-          : source.source.url;
-      Map<String, String> headers = source.source.headers;
-      if (source.kind == SeekThumbnailSourceKind.networkFile) {
+    final _ResolvedNetworkSource? resolved =
+        source.kind == SeekThumbnailSourceKind.networkUnknown
+        ? await _resolveNetworkSource(source, generation)
+        : null;
+    final SeekThumbnailSource effective = resolved?.source ?? source;
+    if (!_isHls(effective)) {
+      if (effective.kind == SeekThumbnailSourceKind.networkDirect &&
+          resolved != null &&
+          !resolved.supportsRanges &&
+          position > _maxSequentialDirectPosition &&
+          (resolved.contentLength == null ||
+              resolved.contentLength! > _maxSequentialDirectBytes)) {
+        throw const SeekThumbnailLoadException(
+          SeekThumbnailFailure(
+            scope: SeekThumbnailFailureScope.bucketSpecific,
+            reason: SeekThumbnailFailureReason.rangeUnsupported,
+          ),
+        );
+      }
+      String input = effective.isOffline
+          ? _localPath(effective.source.url)
+          : effective.source.url;
+      Map<String, String> headers = effective.source.headers;
+      if (effective.kind == SeekThumbnailSourceKind.networkFile) {
         await _proxy.start();
         input = _proxy.mediaUrl(Uri.parse(input), headers: headers);
         headers = const <String, String>{};
@@ -103,10 +137,11 @@ class SeekThumbnailMediaLoader {
         position: position,
         headers: headers,
         windowSegmentCount: 0,
+        resolvedSourceKind: effective.kind,
       );
     }
 
-    final _HlsSession session = await _hlsSession(source);
+    final _HlsSession session = await _hlsSession(effective);
     _throwIfCancelled(generation);
     final Stopwatch indexLookup = Stopwatch()..start();
     final List<HlsMediaSegment> decodeWindow = session.index.decodeWindowFor(
@@ -136,6 +171,77 @@ class SeekThumbnailMediaLoader {
     return source.kind == SeekThumbnailSourceKind.localHls ||
         source.kind == SeekThumbnailSourceKind.networkHls ||
         source.kind == SeekThumbnailSourceKind.networkDash;
+  }
+
+  Future<_ResolvedNetworkSource> _resolveNetworkSource(
+    SeekThumbnailSource source,
+    int generation,
+  ) {
+    final Future<_ResolvedNetworkSource>
+    pending = _sourceProbes.putIfAbsent(source.decoderKey, () async {
+      final _NetworkProbeResponse probe = await _probeNetworkSource(
+        Uri.parse(source.source.url),
+        source.source.headers,
+        generation,
+      );
+      final _NetworkProbeKind probeKind = _networkProbeKind(probe);
+      final SeekThumbnailSourceKind kind = switch (probeKind) {
+        _NetworkProbeKind.hls => SeekThumbnailSourceKind.networkHls,
+        _NetworkProbeKind.dash => SeekThumbnailSourceKind.networkDash,
+        _NetworkProbeKind.directMedia ||
+        _NetworkProbeKind.unknown => SeekThumbnailSourceKind.networkDirect,
+      };
+      final StreamType streamType = switch (probeKind) {
+        _NetworkProbeKind.hls => StreamType.hls,
+        _NetworkProbeKind.dash => StreamType.dash,
+        _NetworkProbeKind.directMedia => StreamType.mp4,
+        _NetworkProbeKind.unknown => StreamType.unknown,
+      };
+      final SeekThumbnailSource resolvedSource = SeekThumbnailSource(
+        source: PlayerSource(
+          url: source.source.url,
+          headers: source.source.headers,
+          streamType: streamType,
+          disableProxy: source.source.disableProxy,
+          allowDirectFallback: false,
+        ),
+        sourceKey: source.sourceKey,
+        decoderKey: source.decoderKey,
+        label: source.label,
+        isOffline: source.isOffline,
+        kind: kind,
+        declaredStreamType:
+            source.declaredStreamType ?? source.source.streamType,
+        inspectMasterPlaylist: source.inspectMasterPlaylist || probe.hlsMaster,
+      );
+      if (kDebugMode) {
+        final String selectedPath = switch (probeKind) {
+          _NetworkProbeKind.hls => 'indexed-hls',
+          _NetworkProbeKind.dash => 'indexed-dash',
+          _NetworkProbeKind.directMedia ||
+          _NetworkProbeKind.unknown => 'direct-libav',
+        };
+        debugPrint(
+          'SeekPreview source probe: '
+          'quality=${_safeDebugLabel(source.label)} '
+          'declaredType=${(source.declaredStreamType ?? source.source.streamType).name} '
+          'urlExtension=${_urlExtension(source.source.url)} '
+          'probe=${probeKind == _NetworkProbeKind.directMedia ? 'direct-media' : probeKind.name} '
+          'selectedPath=$selectedPath.',
+        );
+      }
+      return _ResolvedNetworkSource(
+        source: resolvedSource,
+        supportsRanges: probe.supportsRanges,
+        contentLength: probe.contentLength,
+      );
+    });
+    return pending.onError((Object error, StackTrace stackTrace) {
+      if (identical(_sourceProbes[source.decoderKey], pending)) {
+        _sourceProbes.remove(source.decoderKey);
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    });
   }
 
   Future<_HlsSession> _hlsSession(SeekThumbnailSource source) {
@@ -175,15 +281,21 @@ class SeekThumbnailMediaLoader {
           inspectMasterPlaylist = true;
         }
         Uri playlistUri = _sourceUri(playlistUrl);
-        String playlist = utf8.decode(
-          await _readResource(
-            playlistUri,
-            playlistHeaders,
-            generation: generation,
-            allowNetwork: !source.isOffline,
-          ),
-          allowMalformed: true,
+        final Uint8List playlistBytes = await _readResource(
+          playlistUri,
+          playlistHeaders,
+          generation: generation,
+          allowNetwork: !source.isOffline,
         );
+        if (!_hasHlsSignature(playlistBytes)) {
+          throw const SeekThumbnailLoadException(
+            SeekThumbnailFailure(
+              scope: SeekThumbnailFailureScope.permanentSource,
+              reason: SeekThumbnailFailureReason.notHlsPlaylist,
+            ),
+          );
+        }
+        String playlist = utf8.decode(playlistBytes, allowMalformed: true);
         HlsMediaIndex index = parseHlsMediaIndex(playlist, playlistUri);
 
         // An explicit quality URL is fetched exactly once before parsing. Only
@@ -213,22 +325,28 @@ class SeekThumbnailMediaLoader {
             );
           }
           playlistUri = variant.uri;
-          playlist = utf8.decode(
-            await _readResource(
-              playlistUri,
-              playlistHeaders,
-              generation: generation,
-              allowNetwork: !source.isOffline,
-            ),
-            allowMalformed: true,
+          final Uint8List variantBytes = await _readResource(
+            playlistUri,
+            playlistHeaders,
+            generation: generation,
+            allowNetwork: !source.isOffline,
           );
+          if (!_hasHlsSignature(variantBytes)) {
+            throw const SeekThumbnailLoadException(
+              SeekThumbnailFailure(
+                scope: SeekThumbnailFailureScope.permanentSource,
+                reason: SeekThumbnailFailureReason.notHlsPlaylist,
+              ),
+            );
+          }
+          playlist = utf8.decode(variantBytes, allowMalformed: true);
           index = parseHlsMediaIndex(playlist, playlistUri);
         }
         if (index.kind != HlsPlaylistKind.media || index.segments.isEmpty) {
           throw const SeekThumbnailLoadException(
             SeekThumbnailFailure(
               scope: SeekThumbnailFailureScope.permanentSource,
-              reason: SeekThumbnailFailureReason.invalidPlaylist,
+              reason: SeekThumbnailFailureReason.hlsParseFailure,
             ),
           );
         }
@@ -236,14 +354,15 @@ class SeekThumbnailMediaLoader {
           index: index,
           resourceHeaders: playlistHeaders,
           isOffline: source.isOffline,
+          sourceKind: source.kind,
         );
       } on SeekThumbnailLoadException {
         rethrow;
       } on Object {
         throw const SeekThumbnailLoadException(
           SeekThumbnailFailure(
-            scope: SeekThumbnailFailureScope.transient,
-            reason: SeekThumbnailFailureReason.network,
+            scope: SeekThumbnailFailureScope.permanentSource,
+            reason: SeekThumbnailFailureReason.hlsParseFailure,
           ),
         );
       }
@@ -254,6 +373,63 @@ class SeekThumbnailMediaLoader {
       }
       Error.throwWithStackTrace(error, stackTrace);
     });
+  }
+
+  Future<_NetworkProbeResponse> _probeNetworkSource(
+    Uri uri,
+    Map<String, String> headers,
+    int generation,
+  ) async {
+    Object? lastError;
+    for (int attempt = 0; attempt < _maxAttempts; attempt += 1) {
+      try {
+        final _NetworkProbeResponse result = await _probeHttp(
+          uri,
+          headers,
+          generation,
+        );
+        _throwIfCancelled(generation);
+        return result;
+      } on SeekThumbnailLoadException {
+        rethrow;
+      } on _PreviewHttpException catch (error) {
+        lastError = error;
+        if (error.statusCode == HttpStatus.notFound ||
+            error.statusCode == HttpStatus.gone ||
+            error.statusCode == HttpStatus.forbidden) {
+          break;
+        }
+      } on Object catch (error) {
+        lastError = error;
+      }
+    }
+    if (lastError is _PreviewHttpException) {
+      final int status = lastError.statusCode;
+      throw SeekThumbnailLoadException(
+        SeekThumbnailFailure(
+          scope: SeekThumbnailFailureScope.transient,
+          reason: status == HttpStatus.notFound || status == HttpStatus.gone
+              ? SeekThumbnailFailureReason.httpNotFound
+              : status == HttpStatus.forbidden
+              ? SeekThumbnailFailureReason.httpForbidden
+              : SeekThumbnailFailureReason.httpStatus,
+        ),
+      );
+    }
+    if (lastError is TimeoutException) {
+      throw const SeekThumbnailLoadException(
+        SeekThumbnailFailure(
+          scope: SeekThumbnailFailureScope.transient,
+          reason: SeekThumbnailFailureReason.networkTimeout,
+        ),
+      );
+    }
+    throw const SeekThumbnailLoadException(
+      SeekThumbnailFailure(
+        scope: SeekThumbnailFailureScope.transient,
+        reason: SeekThumbnailFailureReason.network,
+      ),
+    );
   }
 
   Future<PreparedThumbnailInput?> _materializeSegments(
@@ -398,6 +574,7 @@ class SeekThumbnailMediaLoader {
           : windowDuration - const Duration(milliseconds: 1),
       headers: const <String, String>{},
       windowSegmentCount: segments.length,
+      resolvedSourceKind: session.sourceKind,
       indexLookupMicroseconds: indexLookupMicroseconds,
       temporaryDirectory: requestDirectory,
     );
@@ -505,6 +682,7 @@ class SeekThumbnailMediaLoader {
       position: _localWindowPosition(segments, requestedPosition),
       headers: const <String, String>{},
       windowSegmentCount: segments.length,
+      resolvedSourceKind: session.sourceKind,
       indexLookupMicroseconds: indexLookupMicroseconds,
       temporaryDirectory: requestDirectory,
     );
@@ -676,7 +854,15 @@ class SeekThumbnailMediaLoader {
               ? SeekThumbnailFailureReason.httpNotFound
               : status == HttpStatus.forbidden
               ? SeekThumbnailFailureReason.httpForbidden
-              : SeekThumbnailFailureReason.network,
+              : SeekThumbnailFailureReason.httpStatus,
+        ),
+      );
+    }
+    if (lastError is TimeoutException) {
+      throw const SeekThumbnailLoadException(
+        SeekThumbnailFailure(
+          scope: SeekThumbnailFailureScope.transient,
+          reason: SeekThumbnailFailureReason.networkTimeout,
         ),
       );
     }
@@ -698,6 +884,84 @@ class SeekThumbnailMediaLoader {
     } finally {
       await handle.close();
     }
+  }
+
+  Future<_NetworkProbeResponse> _probeHttp(
+    Uri initialUri,
+    Map<String, String> headers,
+    int generation,
+  ) async {
+    Uri uri = initialUri;
+    for (int redirect = 0; redirect <= _maxRedirects; redirect += 1) {
+      _throwIfCancelled(generation);
+      final HttpClientRequest request = await _client
+          .getUrl(uri)
+          .timeout(_requestTimeout);
+      _activeRequests.add(request);
+      try {
+        headers.forEach((String key, String value) {
+          request.headers.set(key, value);
+        });
+        request.headers.set(
+          HttpHeaders.rangeHeader,
+          'bytes=0-${_networkProbeBytes - 1}',
+        );
+        request.followRedirects = false;
+        final HttpClientResponse response = await request.close().timeout(
+          _requestTimeout,
+          onTimeout: () {
+            request.abort();
+            throw TimeoutException('Preview probe response timed out.');
+          },
+        );
+        if (response.isRedirect) {
+          final String? location = response.headers.value(
+            HttpHeaders.locationHeader,
+          );
+          await response.drain<void>();
+          if (location == null || redirect == _maxRedirects) {
+            throw const HttpException('Invalid preview probe redirect.');
+          }
+          uri = uri.resolve(location);
+          continue;
+        }
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          await response.drain<void>();
+          throw _PreviewHttpException(response.statusCode);
+        }
+
+        final BytesBuilder bytes = BytesBuilder(copy: false);
+        await for (final List<int> chunk in response.timeout(_requestTimeout)) {
+          final int remaining = _networkProbeBytes - bytes.length;
+          if (remaining <= 0) break;
+          bytes.add(
+            chunk.length <= remaining ? chunk : chunk.sublist(0, remaining),
+          );
+          if (bytes.length >= _networkProbeBytes) break;
+        }
+        final String? acceptRanges = response.headers.value(
+          HttpHeaders.acceptRangesHeader,
+        );
+        final String? contentRange = response.headers.value(
+          HttpHeaders.contentRangeHeader,
+        );
+        return _NetworkProbeResponse(
+          bytes: bytes.takeBytes(),
+          contentType: response.headers.contentType?.mimeType.toLowerCase(),
+          supportsRanges:
+              response.statusCode == HttpStatus.partialContent ||
+              (acceptRanges?.toLowerCase().contains('bytes') ?? false),
+          contentLength: _probeContentLength(
+            contentRange,
+            response.contentLength,
+            response.statusCode,
+          ),
+        );
+      } finally {
+        _activeRequests.remove(request);
+      }
+    }
+    throw const HttpException('Too many preview probe redirects.');
   }
 
   Future<Uint8List> _readHttp(
@@ -778,6 +1042,7 @@ class SeekThumbnailMediaLoader {
     cancelPending();
     _client.close(force: true);
     _hlsSessions.clear();
+    _sourceProbes.clear();
     await _proxy.stop();
     final Directory? root = _temporaryRoot;
     _temporaryRoot = null;
@@ -796,6 +1061,7 @@ class _HlsSession {
     required this.index,
     required this.resourceHeaders,
     required this.isOffline,
+    required this.sourceKind,
   });
 
   static const int maxCacheEntries = 12;
@@ -804,9 +1070,137 @@ class _HlsSession {
   final HlsMediaIndex index;
   final Map<String, String> resourceHeaders;
   final bool isOffline;
+  final SeekThumbnailSourceKind sourceKind;
   final LinkedHashMap<String, Uint8List> resourceCache =
       LinkedHashMap<String, Uint8List>();
   int resourceCacheBytes = 0;
+}
+
+class _ResolvedNetworkSource {
+  const _ResolvedNetworkSource({
+    required this.source,
+    required this.supportsRanges,
+    required this.contentLength,
+  });
+
+  final SeekThumbnailSource source;
+  final bool supportsRanges;
+  final int? contentLength;
+}
+
+enum _NetworkProbeKind { hls, dash, directMedia, unknown }
+
+class _NetworkProbeResponse {
+  const _NetworkProbeResponse({
+    required this.bytes,
+    required this.contentType,
+    required this.supportsRanges,
+    required this.contentLength,
+  });
+
+  final Uint8List bytes;
+  final String? contentType;
+  final bool supportsRanges;
+  final int? contentLength;
+
+  bool get hlsMaster =>
+      _probeText(bytes).toUpperCase().contains('#EXT-X-STREAM-INF:');
+}
+
+_NetworkProbeKind _networkProbeKind(_NetworkProbeResponse probe) {
+  if (_hasHlsSignature(probe.bytes)) return _NetworkProbeKind.hls;
+  final String text = _probeText(probe.bytes);
+  if (RegExp(
+        r'<(?:[A-Za-z0-9_-]+:)?MPD\b',
+        caseSensitive: false,
+      ).hasMatch(text) ||
+      (probe.contentType == 'application/dash+xml' &&
+          text.trimLeft().startsWith('<'))) {
+    return _NetworkProbeKind.dash;
+  }
+  if (_looksLikeDirectMedia(probe.bytes, probe.contentType)) {
+    return _NetworkProbeKind.directMedia;
+  }
+  return _NetworkProbeKind.unknown;
+}
+
+bool _hasHlsSignature(Uint8List bytes) {
+  int offset = 0;
+  if (bytes.length >= 3 &&
+      bytes[0] == 0xef &&
+      bytes[1] == 0xbb &&
+      bytes[2] == 0xbf) {
+    offset = 3;
+  }
+  while (offset < bytes.length &&
+      (bytes[offset] == 0x20 ||
+          bytes[offset] == 0x09 ||
+          bytes[offset] == 0x0a ||
+          bytes[offset] == 0x0d)) {
+    offset += 1;
+  }
+  const List<int> signature = <int>[0x23, 0x45, 0x58, 0x54, 0x4d, 0x33, 0x55];
+  if (bytes.length - offset < signature.length) return false;
+  for (int index = 0; index < signature.length; index += 1) {
+    final int value = bytes[offset + index];
+    final int upper = value >= 0x61 && value <= 0x7a ? value - 0x20 : value;
+    if (upper != signature[index]) return false;
+  }
+  return true;
+}
+
+bool _looksLikeDirectMedia(Uint8List bytes, String? contentType) {
+  if (contentType?.startsWith('video/') ?? false) return true;
+  if (bytes.length >= 12 &&
+      bytes[4] == 0x66 &&
+      bytes[5] == 0x74 &&
+      bytes[6] == 0x79 &&
+      bytes[7] == 0x70) {
+    return true;
+  }
+  if (bytes.length >= 4 &&
+      bytes[0] == 0x1a &&
+      bytes[1] == 0x45 &&
+      bytes[2] == 0xdf &&
+      bytes[3] == 0xa3) {
+    return true;
+  }
+  if (bytes.length >= 4 &&
+      ((bytes[0] == 0x46 && bytes[1] == 0x4c && bytes[2] == 0x56) ||
+          (bytes[0] == 0x4f &&
+              bytes[1] == 0x67 &&
+              bytes[2] == 0x67 &&
+              bytes[3] == 0x53))) {
+    return true;
+  }
+  return bytes.length >= 377 &&
+      bytes[0] == 0x47 &&
+      bytes[188] == 0x47 &&
+      bytes[376] == 0x47;
+}
+
+String _probeText(Uint8List bytes) => latin1.decode(bytes, allowInvalid: true);
+
+int? _probeContentLength(String? contentRange, int responseLength, int status) {
+  final RegExpMatch? match = RegExp(
+    r'/(\d+)$',
+  ).firstMatch(contentRange?.trim() ?? '');
+  final int? total = match == null ? null : int.tryParse(match.group(1)!);
+  if (total != null && total >= 0) return total;
+  if (status == HttpStatus.ok && responseLength >= 0) return responseLength;
+  return null;
+}
+
+String _safeDebugLabel(String value) {
+  final String cleaned = value.replaceAll(RegExp(r'[\r\n\t]+'), ' ').trim();
+  return cleaned.length <= 40 ? cleaned : '${cleaned.substring(0, 40)}...';
+}
+
+String _urlExtension(String value) {
+  final Uri? uri = Uri.tryParse(value);
+  final String extension = p.extension(uri?.path ?? '').toLowerCase();
+  if (extension.isEmpty || extension.length > 12) return 'none';
+  return extension;
 }
 
 class _PreviewHttpException implements Exception {

@@ -110,11 +110,12 @@ class NativeSeekThumbnailExtractor implements SeekThumbnailExtractor {
     final Stopwatch total = Stopwatch()..start();
     int prepareMilliseconds = 0;
     int indexLookupMicroseconds = 0;
-    final bool segmented =
+    final bool mayBeSegmented =
         source.kind == SeekThumbnailSourceKind.localHls ||
         source.kind == SeekThumbnailSourceKind.networkHls ||
-        source.kind == SeekThumbnailSourceKind.networkDash;
-    final int attempts = segmented ? 4 : 1;
+        source.kind == SeekThumbnailSourceKind.networkDash ||
+        source.kind == SeekThumbnailSourceKind.networkUnknown;
+    final int attempts = mayBeSegmented ? 4 : 1;
     int lastWindowSize = 0;
     for (int index = 0; index < attempts; index += 1) {
       final Stopwatch prepare = Stopwatch()..start();
@@ -131,6 +132,7 @@ class NativeSeekThumbnailExtractor implements SeekThumbnailExtractor {
       prepare.stop();
       prepareMilliseconds += prepare.elapsedMilliseconds;
       if (input == null) continue;
+      final bool segmented = input.windowSegmentCount > 0;
       indexLookupMicroseconds += input.indexLookupMicroseconds;
       if (segmented && input.windowSegmentCount == lastWindowSize) {
         await input.dispose();
@@ -205,7 +207,10 @@ class NativeSeekThumbnailExtractor implements SeekThumbnailExtractor {
                       failure == DirectFrameFailureKind.streamInfo
                   ? SeekThumbnailFailureScope.transient
                   : SeekThumbnailFailureScope.bucketSpecific,
-              reason: _thumbnailReason(failure),
+              reason: _thumbnailReason(
+                failure,
+                sourceKind: input.resolvedSourceKind,
+              ),
             ),
           );
         }
@@ -213,7 +218,7 @@ class NativeSeekThumbnailExtractor implements SeekThumbnailExtractor {
           debugPrint(
             'SeekPreview: bucket=${position.inSeconds} '
             'window=${input.windowSegmentCount} '
-            'result=${_thumbnailReason(failure).name}.',
+            'result=${_thumbnailReason(failure, sourceKind: input.resolvedSourceKind).name}.',
           );
         }
       } finally {
@@ -283,8 +288,9 @@ const SeekThumbnailExtractionResult _cancelledResult =
     );
 
 SeekThumbnailFailureReason _thumbnailReason(
-  DirectFrameFailureKind failure,
-) => switch (failure) {
+  DirectFrameFailureKind failure, {
+  SeekThumbnailSourceKind sourceKind = SeekThumbnailSourceKind.unknown,
+}) => switch (failure) {
   DirectFrameFailureKind.cancelled => SeekThumbnailFailureReason.cancelled,
   DirectFrameFailureKind.noVideoTrack =>
     SeekThumbnailFailureReason.noVideoTrack,
@@ -292,8 +298,10 @@ SeekThumbnailFailureReason _thumbnailReason(
     SeekThumbnailFailureReason.unsupportedCodec,
   DirectFrameFailureKind.noFrame =>
     SeekThumbnailFailureReason.missingRandomAccessContext,
-  DirectFrameFailureKind.openInput ||
-  DirectFrameFailureKind.streamInfo => SeekThumbnailFailureReason.network,
+  DirectFrameFailureKind.openInput || DirectFrameFailureKind.streamInfo =>
+    sourceKind == SeekThumbnailSourceKind.networkDirect
+        ? SeekThumbnailFailureReason.decodeFailure
+        : SeekThumbnailFailureReason.network,
   DirectFrameFailureKind.seek ||
   DirectFrameFailureKind.scale ||
   DirectFrameFailureKind.unknown => SeekThumbnailFailureReason.decodeFailure,

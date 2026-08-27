@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -234,6 +235,32 @@ void main() {
       expect(plan.candidates.single.kind, SeekThumbnailSourceKind.networkHls);
     });
 
+    test('extensionless declared HLS stays ambiguous until probed', () {
+      const StreamQuality dynamicQuality = StreamQuality(
+        id: '144p',
+        label: '144p',
+        url: 'https://vd123.okcdn.example/?expires=1&id=2',
+        height: 144,
+      );
+      final MediaServer server = _onlineServer(const <StreamQuality>[
+        dynamicQuality,
+      ]);
+
+      final SeekThumbnailPlan plan = buildSeekThumbnailPlan(
+        item: _item(server),
+        server: server,
+        activeQuality: dynamicQuality,
+      );
+
+      expect(plan.candidates, hasLength(1));
+      expect(
+        plan.candidates.single.kind,
+        SeekThumbnailSourceKind.networkUnknown,
+      );
+      expect(plan.candidates.single.source.streamType, StreamType.unknown);
+      expect(plan.candidates.single.declaredStreamType, StreamType.hls);
+    });
+
     test('offline identity survives an absolute root path change', () {
       const Map<String, String> ids = <String, String>{
         'mirushin_offline_download_id': 'episode-1',
@@ -354,6 +381,18 @@ audio/index.m3u8
   });
 
   group('HLS media timeline index', () {
+    test('requires the HLS signature before parsing playlist structure', () {
+      expect(hasHlsPlaylistSignature('\uFEFF  #EXTM3U\n#EXTINF:5,'), isTrue);
+      expect(hasHlsPlaylistSignature('binary media payload'), isFalse);
+
+      final HlsMediaIndex index = parseHlsMediaIndex(
+        'binary media payload\n#EXTINF:5,\nsegment.ts',
+        Uri.parse('https://cdn.example/dynamic'),
+      );
+      expect(index.kind, HlsPlaylistKind.unknown);
+      expect(index.segments, isEmpty);
+    });
+
     test('uses variable durations and advances on exact boundaries', () {
       const String playlist = '''
 #EXTM3U
@@ -693,6 +732,7 @@ blob.bin
             '/key.bin',
           ]),
         );
+        expect(ranges[requests.indexOf('/media.m3u8')], isNull);
         expect(requests, isNot(contains('/segment-0.ts')));
         expect(ranges[requests.indexOf('/blob.bin')], 'bytes=4-7');
         expect(ranges[requests.indexOf('/init.mp4')], 'bytes=2-5');
@@ -721,6 +761,246 @@ blob.bin
         await serving.future;
       },
     );
+
+    test(
+      'extensionless declared HLS probes direct media and decodes the original URL',
+      () async {
+        final HttpServer server = await HttpServer.bind(
+          InternetAddress.loopbackIPv4,
+          0,
+        );
+        addTearDown(() => server.close(force: true));
+        final List<String?> ranges = <String?>[];
+        final Completer<void> serving = Completer<void>();
+        unawaited(() async {
+          try {
+            await for (final HttpRequest request in server) {
+              ranges.add(request.headers.value(HttpHeaders.rangeHeader));
+              expect(
+                request.headers.value('Referer'),
+                'https://provider.test/',
+              );
+              request.response
+                ..statusCode = HttpStatus.partialContent
+                ..headers.contentType = ContentType('video', 'mp4')
+                ..headers.set(
+                  HttpHeaders.contentRangeHeader,
+                  'bytes 0-15/1000000',
+                )
+                ..headers.set(HttpHeaders.acceptRangesHeader, 'bytes')
+                ..add(<int>[
+                  0,
+                  0,
+                  0,
+                  24,
+                  0x66,
+                  0x74,
+                  0x79,
+                  0x70,
+                  0x69,
+                  0x73,
+                  0x6f,
+                  0x6d,
+                  0,
+                  0,
+                  0,
+                  0,
+                ]);
+              await request.response.close();
+            }
+            serving.complete();
+          } on Object catch (error, stackTrace) {
+            serving.completeError(error, stackTrace);
+          }
+        }());
+        final String dynamicUrl =
+            'http://${server.address.address}:${server.port}/dynamic?id=2';
+        final StreamQuality quality = StreamQuality(
+          id: '144p',
+          label: '144p',
+          url: dynamicUrl,
+          headers: const <String, String>{
+            'Referer': 'https://provider.test/',
+            'Authorization': 'Bearer preview-test',
+          },
+          height: 144,
+        );
+        final MediaServer mediaServer = _onlineServer(<StreamQuality>[quality]);
+        final SeekThumbnailPlan plan = buildSeekThumbnailPlan(
+          item: _item(mediaServer),
+          server: mediaServer,
+          activeQuality: quality,
+        );
+        final _CapturingDecoder decoder = _CapturingDecoder();
+        final NativeSeekThumbnailExtractor extractor =
+            NativeSeekThumbnailExtractor(decoder: decoder);
+        addTearDown(extractor.dispose);
+
+        final SeekThumbnailExtractionResult result = await extractor.extract(
+          source: plan.candidates.first,
+          position: const Duration(seconds: 42),
+          duration: const Duration(minutes: 20),
+        );
+
+        expect(result.thumbnail, isNotNull);
+        expect(
+          plan.candidates.first.kind,
+          SeekThumbnailSourceKind.networkUnknown,
+        );
+        expect(decoder.requests, hasLength(1));
+        expect(decoder.requests.single.input, dynamicUrl);
+        expect(decoder.requests.single.headers, quality.headers);
+        expect(decoder.requests.single.reuseSession, isTrue);
+        expect(ranges, <String?>['bytes=0-65535']);
+        await server.close(force: true);
+        await serving.future;
+      },
+    );
+
+    test(
+      'extensionless HLS is probed then uses indexed segment extraction',
+      () async {
+        final HttpServer server = await HttpServer.bind(
+          InternetAddress.loopbackIPv4,
+          0,
+        );
+        addTearDown(() => server.close(force: true));
+        final List<({String path, String? range})> requests =
+            <({String path, String? range})>[];
+        final Completer<void> serving = Completer<void>();
+        const String playlist = '''
+#EXTM3U
+#EXT-X-TARGETDURATION:5
+#EXTINF:5,
+segment.ts
+#EXT-X-ENDLIST
+''';
+        unawaited(() async {
+          try {
+            await for (final HttpRequest request in server) {
+              final String? range = request.headers.value(
+                HttpHeaders.rangeHeader,
+              );
+              requests.add((path: request.uri.path, range: range));
+              if (request.uri.path == '/dynamic') {
+                final List<int> bytes = utf8.encode(playlist);
+                request.response.headers.contentType = ContentType(
+                  'application',
+                  'vnd.apple.mpegurl',
+                );
+                if (range != null) {
+                  request.response
+                    ..statusCode = HttpStatus.partialContent
+                    ..headers.set(
+                      HttpHeaders.contentRangeHeader,
+                      'bytes 0-${bytes.length - 1}/${bytes.length}',
+                    )
+                    ..headers.set(HttpHeaders.acceptRangesHeader, 'bytes');
+                }
+                request.response.add(bytes);
+              } else if (request.uri.path == '/segment.ts') {
+                request.response.add(<int>[1, 2, 3, 4]);
+              } else {
+                request.response.statusCode = HttpStatus.notFound;
+              }
+              await request.response.close();
+            }
+            serving.complete();
+          } on Object catch (error, stackTrace) {
+            serving.completeError(error, stackTrace);
+          }
+        }());
+        final String dynamicUrl =
+            'http://${server.address.address}:${server.port}/dynamic';
+        final StreamQuality quality = StreamQuality(
+          id: '144p',
+          label: '144p',
+          url: dynamicUrl,
+          height: 144,
+        );
+        final MediaServer mediaServer = _onlineServer(<StreamQuality>[quality]);
+        final SeekThumbnailPlan plan = buildSeekThumbnailPlan(
+          item: _item(mediaServer),
+          server: mediaServer,
+          activeQuality: quality,
+        );
+        final _WindowAwareDecoder decoder = _WindowAwareDecoder(
+          requiredSegments: 1,
+        );
+        final NativeSeekThumbnailExtractor extractor =
+            NativeSeekThumbnailExtractor(decoder: decoder);
+        addTearDown(extractor.dispose);
+
+        final SeekThumbnailExtractionResult result = await extractor.extract(
+          source: plan.candidates.first,
+          position: const Duration(seconds: 2),
+          duration: const Duration(seconds: 5),
+        );
+
+        expect(result.thumbnail, isNotNull);
+        expect(decoder.windowSizes, <int>[1]);
+        expect(
+          requests
+              .where((request) => request.path == '/dynamic')
+              .map((request) => request.range),
+          containsAll(<String?>['bytes=0-65535', null]),
+        );
+        expect(
+          requests.any((request) => request.path == '/segment.ts'),
+          isTrue,
+        );
+        await server.close(force: true);
+        await serving.future;
+      },
+    );
+
+    test('explicit m3u8 rejects binary content before HLS parsing', () async {
+      final HttpServer server = await HttpServer.bind(
+        InternetAddress.loopbackIPv4,
+        0,
+      );
+      addTearDown(() => server.close(force: true));
+      final Completer<void> serving = Completer<void>();
+      unawaited(() async {
+        try {
+          await for (final HttpRequest request in server) {
+            request.response
+              ..headers.contentType = ContentType('video', 'mp4')
+              ..add(<int>[0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70]);
+            await request.response.close();
+          }
+          serving.complete();
+        } on Object catch (error, stackTrace) {
+          serving.completeError(error, stackTrace);
+        }
+      }());
+      final SeekThumbnailMediaLoader loader = SeekThumbnailMediaLoader();
+      addTearDown(loader.dispose);
+      final SeekThumbnailSource source = SeekThumbnailSource(
+        source: PlayerSource(
+          url: 'http://${server.address.address}:${server.port}/playlist.m3u8',
+          streamType: StreamType.hls,
+        ),
+        sourceKey: 'binary-hls-source',
+        decoderKey: 'binary-hls-decoder',
+        label: '144p',
+        isOffline: false,
+        kind: SeekThumbnailSourceKind.networkHls,
+      );
+
+      await expectLater(
+        loader.prepare(source, Duration.zero),
+        throwsA(
+          isA<SeekThumbnailLoadException>().having(
+            (SeekThumbnailLoadException error) => error.failure.reason,
+            'reason',
+            SeekThumbnailFailureReason.notHlsPlaylist,
+          ),
+        ),
+      );
+      await server.close(force: true);
+      await serving.future;
+    });
 
     test('extractor expands from one segment until context decodes', () async {
       final Directory directory = await Directory.systemTemp.createTemp(
@@ -1454,6 +1734,37 @@ class _WindowAwareDecoder implements DirectFrameDecoder {
         DirectFrameFailureKind.noFrame,
       );
     }
+    return DirectFrameDecodeResult.success(
+      DirectFrame(
+        jpegBytes: Uint8List.fromList(<int>[1, 2, 3]),
+        position: request.position,
+        width: 240,
+        height: 135,
+      ),
+    );
+  }
+
+  @override
+  Future<void> dispose() async {}
+}
+
+class _CapturingDecoder implements DirectFrameDecoder {
+  final List<DirectFrameDecodeRequest> requests = <DirectFrameDecodeRequest>[];
+
+  @override
+  bool get isSupported => true;
+
+  @override
+  Future<void> warm() async {}
+
+  @override
+  void cancelPending() {}
+
+  @override
+  Future<DirectFrameDecodeResult> decode(
+    DirectFrameDecodeRequest request,
+  ) async {
+    requests.add(request);
     return DirectFrameDecodeResult.success(
       DirectFrame(
         jpegBytes: Uint8List.fromList(<int>[1, 2, 3]),

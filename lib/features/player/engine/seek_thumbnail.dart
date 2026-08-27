@@ -28,6 +28,8 @@ enum SeekThumbnailSourceKind {
   networkFile,
   networkHls,
   networkDash,
+  networkUnknown,
+  networkDirect,
   unknown,
 }
 
@@ -39,6 +41,7 @@ class SeekThumbnailSource {
     required this.label,
     required this.isOffline,
     this.kind = SeekThumbnailSourceKind.unknown,
+    this.declaredStreamType,
     this.inspectMasterPlaylist = false,
   });
 
@@ -48,6 +51,7 @@ class SeekThumbnailSource {
   final String label;
   final bool isOffline;
   final SeekThumbnailSourceKind kind;
+  final StreamType? declaredStreamType;
 
   /// True only when the URL may still be a master playlist. Explicit quality
   /// URLs are already renditions and must not incur a redundant master fetch.
@@ -77,13 +81,18 @@ enum SeekThumbnailFailureReason {
   cancelled,
   timeout,
   network,
+  networkTimeout,
+  httpStatus,
   httpNotFound,
   httpForbidden,
   noVideoTrack,
+  notHlsPlaylist,
+  hlsParseFailure,
   invalidPlaylist,
   unsupportedCodec,
   unsupportedEncryption,
   missingRandomAccessContext,
+  rangeUnsupported,
   decodeFailure,
   unavailable,
   unknown,

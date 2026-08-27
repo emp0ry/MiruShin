@@ -180,7 +180,10 @@ void main() {
         startInFullscreen: continuation.startInFullscreen,
       );
 
-      final PlayerPage page = PlayerPage.fromDirectRouteArgs(routeArgs);
+      final PlayerPage page = PlayerPage(
+        item: routeArgs.item,
+        startInFullscreen: routeArgs.startInFullscreen,
+      );
 
       expect(page.item.servers.single.id, 'offline');
       expect(page.item.servers.single.url, startsWith('file:'));
@@ -234,23 +237,6 @@ void main() {
           moduleEpisodes: <DownloadedEpisode>[episode],
         ),
         isNull,
-      );
-    });
-  });
-
-  group('player fullscreen state transfer', () {
-    test('advancing transfers the current fullscreen state only', () {
-      expect(
-        fullscreenForPlayerAdvance(currentFullscreen: true, advancing: true),
-        isTrue,
-      );
-      expect(
-        fullscreenForPlayerAdvance(currentFullscreen: false, advancing: true),
-        isFalse,
-      );
-      expect(
-        fullscreenForPlayerAdvance(currentFullscreen: true, advancing: false),
-        isFalse,
       );
     });
   });

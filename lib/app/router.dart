@@ -257,7 +257,7 @@ CustomTransitionPage<void> _playerPage(
     return _appPage(
       context,
       state,
-      PlayerPage.fromDirectRouteArgs(args),
+      PlayerPage(item: args.item, startInFullscreen: args.startInFullscreen),
       motion: AppPageMotion.immersiveFade,
     );
   }

@@ -280,11 +280,6 @@ class DirectPlayerRouteArgs {
   final bool startInFullscreen;
 }
 
-bool fullscreenForPlayerAdvance({
-  required bool currentFullscreen,
-  required bool advancing,
-}) => advancing && currentFullscreen;
-
 class PlayerSettings {
   const PlayerSettings({
     this.seekInterval = const Duration(seconds: 10),

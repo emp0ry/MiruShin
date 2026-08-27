@@ -3,6 +3,13 @@ import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'
+    show
+        MethodChannel,
+        MissingPluginException,
+        PlatformException,
+        SystemChrome,
+        SystemUiMode;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -23,7 +30,6 @@ import '../../../shared/models/media_item.dart';
 import '../../library/application/local_library_provider.dart';
 import '../../metadata/application/metadata_providers.dart';
 import '../../player/domain/player_models.dart';
-import '../../player/presentation/player_fullscreen_transfer.dart';
 import '../../watch/domain/normalized_models.dart';
 import '../application/download_episode_availability.dart';
 import '../application/download_episode_display.dart';
@@ -50,6 +56,8 @@ class OfflineTitlePage extends ConsumerStatefulWidget {
 }
 
 class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
+  static const MethodChannel _windowChannel = MethodChannel('mirushin/window');
+
   String? _selectedAddonId;
   final Map<String, int> _selectedSeasonByAddon = <String, int>{};
   Timer? _wakelockTimer;
@@ -807,6 +815,17 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
     }
   }
 
+  Future<void> _exitFullscreen() async {
+    try {
+      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+      await _windowChannel.invokeMethod<bool>('setFullscreen', false);
+    } on MissingPluginException {
+      // Mobile only needs the SystemChrome call above.
+    } on PlatformException {
+      // The window may already have left fullscreen mode.
+    }
+  }
+
   void _handlePlayerResult(
     Object? result,
     DownloadedEpisode current,
@@ -841,7 +860,7 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
       _ => false,
     };
     if (preservedButNoNext) {
-      unawaited(PlayerFullscreenTransfer.exitToPage());
+      unawaited(_exitFullscreen());
     }
     setState(() {});
   }

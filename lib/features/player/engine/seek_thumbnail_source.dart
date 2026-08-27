@@ -100,6 +100,7 @@ SeekThumbnailPlan buildSeekThumbnailPlan({
     final StreamType streamType = seekPreviewStreamTypeForUrl(
       trimmed,
       fallbackType,
+      ambiguousAsUnknown: true,
     );
     final PlayerSource source = PlayerSource(
       url: trimmed,
@@ -109,6 +110,8 @@ SeekThumbnailPlan buildSeekThumbnailPlan({
     );
     final Uri? uri = Uri.tryParse(trimmed);
     final String path = (uri?.path ?? trimmed).toLowerCase();
+    final String scheme = uri?.scheme.toLowerCase() ?? '';
+    final bool network = scheme == 'http' || scheme == 'https';
     final SeekThumbnailSourceKind kind =
         streamType == StreamType.hls || path.endsWith('.m3u8')
         ? SeekThumbnailSourceKind.networkHls
@@ -116,8 +119,13 @@ SeekThumbnailPlan buildSeekThumbnailPlan({
         ? SeekThumbnailSourceKind.networkDash
         : streamType == StreamType.mp4 ||
               path.endsWith('.mp4') ||
-              path.endsWith('.mkv')
+              path.endsWith('.mkv') ||
+              path.endsWith('.webm') ||
+              path.endsWith('.mov') ||
+              path.endsWith('.avi')
         ? SeekThumbnailSourceKind.networkFile
+        : network
+        ? SeekThumbnailSourceKind.networkUnknown
         : SeekThumbnailSourceKind.unknown;
     final String key = seekThumbnailSourceFingerprint(source);
     if (!seen.add(key)) return;
@@ -129,6 +137,7 @@ SeekThumbnailPlan buildSeekThumbnailPlan({
         label: label,
         isOffline: false,
         kind: kind,
+        declaredStreamType: fallbackType,
         inspectMasterPlaylist: inspectMasterPlaylist,
       ),
     );
@@ -206,7 +215,11 @@ int? seekPreviewQualityHeight(StreamQuality quality) {
   return null;
 }
 
-StreamType seekPreviewStreamTypeForUrl(String url, StreamType fallback) {
+StreamType seekPreviewStreamTypeForUrl(
+  String url,
+  StreamType fallback, {
+  bool ambiguousAsUnknown = false,
+}) {
   if (LocalHlsProxy.isInlineDashUrl(url)) return StreamType.dash;
   final Uri? uri = Uri.tryParse(url);
   if (uri?.scheme.toLowerCase() == 'file' && fallback == StreamType.dash) {
@@ -215,8 +228,16 @@ StreamType seekPreviewStreamTypeForUrl(String url, StreamType fallback) {
   final String lower = (uri?.path ?? url).toLowerCase();
   if (lower.endsWith('.m3u8')) return StreamType.hls;
   if (lower.endsWith('.mpd')) return StreamType.dash;
-  if (lower.endsWith('.mp4') || lower.endsWith('.mkv')) return StreamType.mp4;
-  return fallback;
+  if (lower.endsWith('.mp4') || lower.endsWith('.mkv')) {
+    return StreamType.mp4;
+  }
+  if (ambiguousAsUnknown &&
+      (lower.endsWith('.webm') ||
+          lower.endsWith('.mov') ||
+          lower.endsWith('.avi'))) {
+    return StreamType.mp4;
+  }
+  return ambiguousAsUnknown ? StreamType.unknown : fallback;
 }
 
 String seekThumbnailSourceFingerprint(PlayerSource source) {
