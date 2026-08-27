@@ -276,9 +276,9 @@ class PlaybackController extends Notifier<PlaybackState> {
   int _seekPreviewGeneration = 0;
   int _manualSeekEpoch = 0;
   int? _manualSeekEofEpoch;
-  int? _manualSeekEofFallbackEpoch;
   Duration? _manualSeekEofTarget;
-  Duration? _manualSeekEofOrigin;
+  int _engineStateEventEpoch = 0;
+  int? _manualSeekSettledAfterEngineEvent;
   Duration _resumeGuardPosition = Duration.zero;
   DateTime? _resumeGuardUntil;
   PlayerEngine? _queuedSeekEngine;
@@ -547,6 +547,7 @@ class PlaybackController extends Notifier<PlaybackState> {
 
   @visibleForTesting
   void debugEvaluatePlaybackProgress(PlayerEngine engine) {
+    _engineStateEventEpoch++;
     _evaluatePlaybackProgress(engine);
   }
 
@@ -805,7 +806,9 @@ class PlaybackController extends Notifier<PlaybackState> {
       server,
       explicitId: item.initialQualityId,
     );
-    final EpisodeProgress? prog = item.ignoreProgress
+    final EpisodeProgress? prog =
+        item.ignoreProgress ||
+            item.startPolicy == PlaybackStartPolicy.forceBeginning
         ? null
         : await _loadProgressForItem(item);
     final Duration startPos = _safeResumePosition(item, prog);
@@ -868,6 +871,19 @@ class PlaybackController extends Notifier<PlaybackState> {
     MediaPlaybackItem item,
     EpisodeProgress? progress,
   ) {
+    switch (item.startPolicy) {
+      case PlaybackStartPolicy.forceBeginning:
+        debugPrint('[DEBUG] _safeResumePosition: forceBeginning -> 0');
+        return Duration.zero;
+      case PlaybackStartPolicy.explicitPosition:
+        debugPrint(
+          '[DEBUG] _safeResumePosition: explicitPosition '
+          '-> ${item.startPosition}',
+        );
+        return item.startPosition;
+      case PlaybackStartPolicy.resumeSaved:
+        break;
+    }
     final int savedSeconds = progress?.positionSeconds ?? 0;
     // A finished episode is reset to 0:00 on save, so it restarts fresh. But an
     // episode marked watched early at 85% keeps its real position. Reopen in the
@@ -2242,34 +2258,15 @@ class PlaybackController extends Notifier<PlaybackState> {
     _lastStablePausePosition = target;
   }
 
-  // Treat a seek to the last few seconds of a reliable stream as completion:
-  // mark the episode watched right away (the backend may snap position back to
-  // 0:00 at end-of-stream, hiding it from the periodic saver) and surface the
-  // auto-next overlay. Seeking back well before the end clears the latch so a
-  // re-watch doesn't instantly re-trigger completion.
+  // A user-selected target is intent, not end-of-stream evidence. Completion
+  // remains disarmed until the native seek settles and a later engine event
+  // reports a credible strict end.
   void _noteManualSeekTarget(Duration target, Duration duration) {
     _durationEvidence.observe(duration);
-    final PlaybackEndEvaluation end = evaluatePlaybackEnd(
-      backendCompleted: false,
-      durationIsAuthoritative: duration >= const Duration(seconds: 30),
-      mediaKind: _mediaKindForCurrentSource(),
-      position: target,
-      maxObservedPosition: target,
-      duration: duration,
-      watchedFraction: _watchedFraction,
-    );
-    if (end.confirmedEnded) {
-      _resetManualSeekEofWindow();
-      if (_reachedNearEnd) return;
-      _reachedNearEnd = true;
-      state = state.copyWith(confirmedEnded: true);
-      _markCurrentCompleted(showNext: true);
-    } else {
-      _invalidateConfirmedEnd('manual seek moved before end');
-      // A backward seek starts a new completion-evidence window. Progress from
-      // before the seek must not validate a stale completed callback afterward.
-      if (_maxObservedPosition > target) _maxObservedPosition = target;
-    }
+    _invalidateConfirmedEnd('manual seek target accepted');
+    // A backward seek starts a new completion-evidence window. Progress from
+    // before the seek must not validate a stale completed callback afterward.
+    if (_maxObservedPosition > target) _maxObservedPosition = target;
   }
 
   /// Persist the current episode as watched immediately, bypassing the periodic
@@ -2501,13 +2498,6 @@ class PlaybackController extends Notifier<PlaybackState> {
 
   Duration _currentPositionFor(PlayerEngine? engine) {
     if (engine == null) return Duration.zero;
-    if (_manualSeekOwnsBackendEof(engine) &&
-        engine.state.value.isCompleted &&
-        _manualSeekEofOrigin != null) {
-      // Do not persist/reopen at a tail position that this seek interaction
-      // already proved unusable. Keep the last position that was playing.
-      return _manualSeekEofOrigin!;
-    }
     if (_queuedSeekEngine == engine && _queuedSeekTarget != null) {
       return _queuedSeekTarget!;
     }
@@ -2547,11 +2537,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     Duration target, {
     required Duration delay,
   }) {
-    _beginManualSeekEofWindow(
-      engine,
-      target,
-      from: engine.state.value.position,
-    );
+    _beginManualSeekEofWindow(engine, target);
     _cancelSeekSettle(clearPreview: false);
     _queuedSeekEngine = engine;
     _queuedSeekTarget = target;
@@ -2636,34 +2622,18 @@ class PlaybackController extends Notifier<PlaybackState> {
     );
   }
 
-  void _beginManualSeekEofWindow(
-    PlayerEngine engine,
-    Duration target, {
-    required Duration from,
-  }) {
+  void _beginManualSeekEofWindow(PlayerEngine engine, Duration target) {
+    if (!identical(state.engine, engine)) return;
     _manualSeekEpoch++;
     _manualSeekEofEpoch = _manualSeekEpoch;
-    _manualSeekEofFallbackEpoch = null;
     _manualSeekEofTarget = target;
-    _manualSeekEofOrigin = from;
+    _manualSeekSettledAfterEngineEvent = null;
     _prematureEofRecoveryAttempts = 0;
     _prematureEofRecoveryNeedsProgressFrom = null;
 
-    final Duration duration = engine.state.value.duration;
-    final PlaybackEndEvaluation targetEnd = evaluatePlaybackEnd(
-      backendCompleted: false,
-      durationIsAuthoritative: duration >= const Duration(seconds: 30),
-      mediaKind: _mediaKindForCurrentSource(),
-      position: target,
-      maxObservedPosition: target,
-      duration: duration,
-      watchedFraction: _watchedFraction,
-    );
-    if (!targetEnd.confirmedEnded) {
-      _invalidateConfirmedEnd('manual seek started before real end');
-      if (_maxObservedPosition > target) {
-        _maxObservedPosition = target;
-      }
+    _invalidateConfirmedEnd('manual seek started');
+    if (_maxObservedPosition > target) {
+      _maxObservedPosition = target;
     }
   }
 
@@ -2678,9 +2648,8 @@ class PlaybackController extends Notifier<PlaybackState> {
 
   void _resetManualSeekEofWindow() {
     _manualSeekEofEpoch = null;
-    _manualSeekEofFallbackEpoch = null;
     _manualSeekEofTarget = null;
-    _manualSeekEofOrigin = null;
+    _manualSeekSettledAfterEngineEvent = null;
   }
 
   void _settleSeekPreview() {
@@ -2733,6 +2702,10 @@ class PlaybackController extends Notifier<PlaybackState> {
 
     if (!engine.state.value.isCompleted) {
       _resetManualSeekEofWindow();
+    } else {
+      // A target near duration is not proof of EOF. Only a later engine event
+      // may confirm completion after this seek has actually settled.
+      _manualSeekSettledAfterEngineEvent = _engineStateEventEpoch;
     }
 
     final bool shouldClear = state.seekPreviewPosition == target;
@@ -3063,7 +3036,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     final Duration clampedTarget = _clampSeekPosition(target, duration);
     _clearResumeGuard();
     _clearInteractiveSeek();
-    _beginManualSeekEofWindow(engine, clampedTarget, from: from);
+    _beginManualSeekEofWindow(engine, clampedTarget);
     // Skip jumps (notably the auto ED-skip, which lands on the episode end) must
     // feed completion detection like slider and gesture seeks do. Otherwise, jumping
     // past the end leaves the episode unwatched and never triggers auto-next.
@@ -3115,7 +3088,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     );
     _clearResumeGuard();
     _clearInteractiveSeek();
-    _beginManualSeekEofWindow(engine, target, from: fromPosition);
+    _beginManualSeekEofWindow(engine, target);
     _notePausedResumeTarget(engine, target);
     _setSeekPreview(engine, target);
     bool seekCompleted = false;
@@ -3187,6 +3160,7 @@ class PlaybackController extends Notifier<PlaybackState> {
         engine.removeListener(listener);
         return;
       }
+      _engineStateEventEpoch++;
       _evaluatePlaybackProgress(engine);
     };
     engine.addListener(listener);
@@ -3331,18 +3305,26 @@ class PlaybackController extends Notifier<PlaybackState> {
     PlayerEngine engine,
     PlaybackEndEvaluation evaluation,
   ) {
-    // A completion callback delivered while the user's native seek is still
-    // pending belongs to that seek evidence window. Let the seek finish before
-    // issuing the single compatibility fallback; never overlap native seeks.
-    if (_seekInFlight ||
-        (_queuedSeekEngine == engine && _queuedSeekTarget != null)) {
-      return;
+    // Native END may remain asserted while a seek is pending or settling. It is
+    // deliberately non-actionable: the requested target stays authoritative,
+    // and no fallback seek, source reopen, or origin rollback is permitted.
+    if (kDebugMode && !_seekInFlight) {
+      debugPrint(
+        'PlaybackEnd: stale manual-seek EOF suppressed '
+        'target=${_manualSeekEofTarget?.inSeconds}s '
+        'decision=${evaluation.decision.name}',
+      );
     }
-    if (_prematureEofRecoveryActive ||
-        _manualSeekEofFallbackEpoch == _manualSeekEpoch) {
-      return;
+    if (state.confirmedEnded || state.autoNextVisible) {
+      state = state.copyWith(confirmedEnded: false, autoNextVisible: false);
     }
-    unawaited(_recoverManualSeekBackendEof(engine, evaluation));
+  }
+
+  bool _manualSeekHasPostSettleEndEvidence(PlayerEngine engine) {
+    final int? settledAfter = _manualSeekSettledAfterEngineEvent;
+    return _manualSeekOwnsBackendEof(engine) &&
+        settledAfter != null &&
+        _engineStateEventEpoch > settledAfter;
   }
 
   bool _isCurrentEofRecovery(
@@ -3353,120 +3335,6 @@ class PlaybackController extends Notifier<PlaybackState> {
     return generation == _playbackGeneration &&
         manualSeekEpoch == _manualSeekEpoch &&
         identical(state.engine, engine);
-  }
-
-  Future<void> _recoverManualSeekBackendEof(
-    PlayerEngine engine,
-    PlaybackEndEvaluation evaluation,
-  ) async {
-    if (_prematureEofRecoveryActive || !identical(state.engine, engine)) {
-      return;
-    }
-    final int generation = _playbackGeneration;
-    final int manualSeekEpoch = _manualSeekEpoch;
-    final Duration requestedTarget =
-        _manualSeekEofTarget ?? evaluation.observedPosition;
-    final Duration fallbackTarget = requestedTarget > const Duration(seconds: 8)
-        ? requestedTarget - const Duration(seconds: 8)
-        : Duration.zero;
-    final Duration? playableOrigin = _manualSeekEofOrigin;
-    final bool shouldPlay = state.desiredPlaying;
-    _prematureEofRecoveryActive = true;
-    _manualSeekEofFallbackEpoch = manualSeekEpoch;
-    _logPlaybackEnd(engine, evaluation);
-    debugPrint(
-      'PlaybackRecovery: reason=manual-seek-eof '
-      'target=${requestedTarget.inSeconds}s '
-      'fallback=${fallbackTarget.inSeconds}s attempt=1/1',
-    );
-
-    try {
-      await engine.seekTo(fallbackTarget);
-      if (!_isCurrentEofRecovery(engine, generation, manualSeekEpoch)) return;
-      if (shouldPlay) await engine.play();
-      if (!_isCurrentEofRecovery(engine, generation, manualSeekEpoch)) return;
-
-      _manualSeekEofTarget = fallbackTarget;
-      if (_maxObservedPosition > fallbackTarget) {
-        _maxObservedPosition = fallbackTarget;
-      }
-      state = state.copyWith(
-        clearError: true,
-        confirmedEnded: false,
-        autoNextVisible: false,
-      );
-      _beginSeekSettle(engine, fallbackTarget, from: requestedTarget);
-      await Future<void>.delayed(_seekSettleMinHold);
-      if (!_isCurrentEofRecovery(engine, generation, manualSeekEpoch)) return;
-
-      // If MDK still reports end at the compatibility target, roll back once
-      // to the position that was demonstrably playing before the user seek.
-      // This is not a source reopen and never becomes a fatal player error.
-      if (engine.state.value.isCompleted &&
-          playableOrigin != null &&
-          playableOrigin != fallbackTarget) {
-        await engine.seekTo(playableOrigin);
-        if (!_isCurrentEofRecovery(engine, generation, manualSeekEpoch)) {
-          return;
-        }
-        if (shouldPlay) await engine.play();
-        if (!_isCurrentEofRecovery(engine, generation, manualSeekEpoch)) {
-          return;
-        }
-        _manualSeekEofTarget = playableOrigin;
-        if (_maxObservedPosition > playableOrigin) {
-          _maxObservedPosition = playableOrigin;
-        }
-        _beginSeekSettle(engine, playableOrigin, from: fallbackTarget);
-        await Future<void>.delayed(_seekSettleMinHold);
-        if (!_isCurrentEofRecovery(engine, generation, manualSeekEpoch)) {
-          return;
-        }
-      }
-
-      final bool recovered =
-          !engine.state.value.isCompleted && !engine.state.value.hasError;
-      debugPrint(
-        'PlaybackRecovery: reason=manual-seek-eof '
-        'success=$recovered fatalError=false',
-      );
-      if (!engine.state.value.hasError) {
-        state = state.copyWith(
-          clearError: true,
-          confirmedEnded: false,
-          autoNextVisible: false,
-        );
-      }
-    } on Object catch (error) {
-      final bool isCurrent = _isCurrentEofRecovery(
-        engine,
-        generation,
-        manualSeekEpoch,
-      );
-      if (kDebugMode) {
-        debugPrint(
-          isCurrent
-              ? 'PlaybackRecovery: reason=manual-seek-eof success=false '
-                    'fatalError=false error=${error.runtimeType}'
-              : 'PlaybackRecovery: reason=manual-seek-eof cancelled=true',
-        );
-      }
-      if (isCurrent && !engine.state.value.hasError) {
-        state = state.copyWith(
-          clearError: true,
-          confirmedEnded: false,
-          autoNextVisible: false,
-        );
-      }
-    } finally {
-      if (generation == _playbackGeneration &&
-          identical(state.engine, engine)) {
-        _prematureEofRecoveryActive = false;
-        if (_queuedSeekTarget != null) {
-          unawaited(_flushInteractiveSeek());
-        }
-      }
-    }
   }
 
   Future<void> _recoverPrematureBackendEof(
@@ -3581,6 +3449,19 @@ class PlaybackController extends Notifier<PlaybackState> {
     // a seek-to-end or a 0:00 position-snap can never hide completion. The
     // completion signal is validated against real progress so a premature EOF on
     // a bad/reloaded stream can't latch the end minutes early.
+    if (_manualSeekOwnsBackendEof(engine)) {
+      if (es.isCompleted &&
+          end.confirmedEnded &&
+          _manualSeekHasPostSettleEndEvidence(engine)) {
+        // This is a later backend event after the accepted seek settled. The
+        // native engine has re-armed completion, so strict end evaluation may
+        // now proceed normally.
+        _resetManualSeekEofWindow();
+      } else if (es.isCompleted || end.confirmedEnded) {
+        _handleManualSeekBackendEof(engine, end);
+        return;
+      }
+    }
     if ((end.decision == PlaybackEndDecision.prematureBackendEof ||
             end.decision == PlaybackEndDecision.durationUnreliable) &&
         es.isCompleted) {

@@ -285,6 +285,7 @@ CustomTransitionPage<void> _playerPage(
     args.item,
     args.seasonNumber,
     startPosition: args.startPosition,
+    startPolicy: args.startPolicy,
     ignoreProgress: args.ignoreProgress,
     seasons: args.episodeSeasons,
     initialQualityId: args.initialQualityId,
@@ -345,6 +346,7 @@ class PlayerRouteArgs {
     required this.seasonNumber,
     this.startInFullscreen = false,
     this.startPosition = Duration.zero,
+    this.startPolicy = PlaybackStartPolicy.resumeSaved,
     this.ignoreProgress = false,
     this.episodeSeasons = const <Season>[],
     this.initialQualityId,
@@ -355,6 +357,7 @@ class PlayerRouteArgs {
   final int seasonNumber;
   final bool startInFullscreen;
   final Duration startPosition;
+  final PlaybackStartPolicy startPolicy;
   final bool ignoreProgress;
 
   /// Quality the user explicitly chose in the stream sheet, honored over the

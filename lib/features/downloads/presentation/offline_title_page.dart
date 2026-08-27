@@ -782,6 +782,7 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
     DownloadedEpisode ep,
     List<DownloadedEpisode> moduleEpisodes, {
     bool startInFullscreen = false,
+    PlaybackStartPolicy startPolicy = PlaybackStartPolicy.resumeSaved,
   }) {
     final String? rootPath = ref.read(downloadsProvider.notifier).rootPath;
     if (rootPath == null) {
@@ -794,6 +795,7 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
       episode: ep,
       rootPath: rootPath,
       moduleEpisodes: transitionSnapshot,
+      startPolicy: startPolicy,
     );
     unawaited(
       context
@@ -919,6 +921,7 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
         continuation.episode,
         nextSnapshot,
         startInFullscreen: continuation.startInFullscreen,
+        startPolicy: continuation.startPolicy,
       );
       return;
     }

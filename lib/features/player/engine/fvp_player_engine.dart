@@ -26,6 +26,7 @@ const int _startupRetryLimit = 0;
 const Duration _firstFramePollInterval = Duration(milliseconds: 250);
 const int _firstFramePollAttempts = 120;
 const Duration _invalidStatusGrace = Duration(seconds: 3);
+const Duration _nativeCompletionRearmDelay = Duration(milliseconds: 700);
 const List<Duration> _speedStartupReapplyDelays = <Duration>[
   Duration(milliseconds: 300),
   Duration(milliseconds: 900),
@@ -37,15 +38,34 @@ class _NativeSeekRequest {
   _NativeSeekRequest({
     required this.player,
     required this.openGeneration,
+    required this.seekEpoch,
     required this.targetMs,
     required this.flag,
   });
 
   final mdk.Player player;
   final int openGeneration;
+  final int seekEpoch;
   final int targetMs;
   final mdk.SeekFlag flag;
   final Completer<int> completion = Completer<int>();
+}
+
+@visibleForTesting
+bool shouldExposeFvpNativeCompletion({
+  required bool nativeEnded,
+  required bool initialized,
+  required bool nativeSeekActive,
+  required bool nativeSeekPending,
+  required bool completionSuppressed,
+  required bool completionRearmReady,
+  required bool acceptedPositionMatches,
+}) {
+  if (!nativeEnded || !initialized || nativeSeekActive || nativeSeekPending) {
+    return false;
+  }
+  if (!completionSuppressed) return true;
+  return completionRearmReady && acceptedPositionMatches;
 }
 
 /// Pure FVP/MDK implementation of MiruShin's PlayerEngine.
@@ -100,6 +120,12 @@ class FvpPlayerEngine extends PlayerEngine {
   _NativeSeekRequest? _activeNativeSeek;
   _NativeSeekRequest? _pendingNativeSeek;
   int? _nativeSeekLoopGeneration;
+  Timer? _completionRearmTimer;
+  int? _completionSuppressedOpenGeneration;
+  int? _completionSuppressedSeekEpoch;
+  int? _completionAcceptedSeekEpoch;
+  int? _completionAcceptedTargetMs;
+  bool _completionRearmReady = false;
   static int? _cachedMdkRuntimeVersion;
 
   @override
@@ -497,9 +523,9 @@ class FvpPlayerEngine extends PlayerEngine {
 
   @override
   Future<void> seekTo(Duration position) async {
-    _seekEpoch += 1;
+    final int seekEpoch = ++_seekEpoch;
     try {
-      await _seekToNative(position);
+      await _seekToNative(position, seekEpoch: seekEpoch);
     } finally {
       if (_player != null && _hasMedia) {
         _initialPositionSettled = true;
@@ -508,10 +534,18 @@ class FvpPlayerEngine extends PlayerEngine {
     }
   }
 
-  Future<void> _seekToNative(Duration position) async {
+  Future<void> _seekToNative(
+    Duration position, {
+    required int seekEpoch,
+  }) async {
     final mdk.Player? player = _player;
     if (player == null) return;
     final int targetMs = position.inMilliseconds.clamp(0, 1 << 62).toInt();
+    _beginNativeCompletionSuppression(
+      player,
+      openGeneration: _openGeneration,
+      seekEpoch: seekEpoch,
+    );
 
     // A network seek may remain pending while the selected HLS/fMP4 fragment is
     // downloaded. Keep exactly one native operation active and make every
@@ -519,7 +553,12 @@ class FvpPlayerEngine extends PlayerEngine {
     // completion contract without creating overlapping native callbacks.
     _publishPendingSeek(Duration(milliseconds: targetMs));
     final mdk.SeekFlag flag = _seekFlagFor(position);
-    final int resultMs = await _queueNativeSeek(player, targetMs, flag: flag);
+    final int resultMs = await _queueNativeSeek(
+      player,
+      targetMs,
+      flag: flag,
+      seekEpoch: seekEpoch,
+    );
     if (resultMs < 0) {
       throw StateError(
         'FVP native seek failed at ${position.inMilliseconds}ms '
@@ -527,6 +566,12 @@ class FvpPlayerEngine extends PlayerEngine {
       );
     }
     if (player != _player || _disposed || !_hasMedia) return;
+    _acceptNativeSeekForCompletion(
+      player,
+      openGeneration: _openGeneration,
+      seekEpoch: seekEpoch,
+      resultMs: resultMs,
+    );
     _syncState();
     if ((resultMs - targetMs).abs() > _seekAcceptanceTolerance.inMilliseconds) {
       throw StateError(
@@ -552,6 +597,71 @@ class FvpPlayerEngine extends PlayerEngine {
     _setState(current.copyWith(isBuffering: buffered ? false : true));
   }
 
+  void _beginNativeCompletionSuppression(
+    mdk.Player player, {
+    required int openGeneration,
+    required int seekEpoch,
+  }) {
+    if (player != _player || openGeneration != _openGeneration || !_hasMedia) {
+      return;
+    }
+    _completionRearmTimer?.cancel();
+    _completionRearmTimer = null;
+    _completionSuppressedOpenGeneration = openGeneration;
+    _completionSuppressedSeekEpoch = seekEpoch;
+    _completionAcceptedSeekEpoch = null;
+    _completionAcceptedTargetMs = null;
+    _completionRearmReady = false;
+  }
+
+  void _acceptNativeSeekForCompletion(
+    mdk.Player player, {
+    required int openGeneration,
+    required int seekEpoch,
+    required int resultMs,
+  }) {
+    if (player != _player ||
+        openGeneration != _openGeneration ||
+        seekEpoch != _seekEpoch ||
+        _completionSuppressedOpenGeneration != openGeneration ||
+        _completionSuppressedSeekEpoch != seekEpoch) {
+      return;
+    }
+    _completionAcceptedSeekEpoch = seekEpoch;
+    _completionAcceptedTargetMs = resultMs;
+    _completionRearmReady = false;
+    _completionRearmTimer?.cancel();
+    _completionRearmTimer = Timer(_nativeCompletionRearmDelay, () {
+      if (_disposed ||
+          player != _player ||
+          openGeneration != _openGeneration ||
+          seekEpoch != _seekEpoch ||
+          _completionSuppressedOpenGeneration != openGeneration ||
+          _completionSuppressedSeekEpoch != seekEpoch ||
+          _completionAcceptedSeekEpoch != seekEpoch) {
+        return;
+      }
+      _completionRearmReady = true;
+      _syncState();
+    });
+  }
+
+  void _clearNativeCompletionSuppression() {
+    _completionRearmTimer?.cancel();
+    _completionRearmTimer = null;
+    _completionSuppressedOpenGeneration = null;
+    _completionSuppressedSeekEpoch = null;
+    _completionAcceptedSeekEpoch = null;
+    _completionAcceptedTargetMs = null;
+    _completionRearmReady = false;
+  }
+
+  bool _isCurrentNativeSeek(_NativeSeekRequest? request, mdk.Player player) {
+    return request != null &&
+        request.player == player &&
+        request.openGeneration == _openGeneration;
+  }
+
   mdk.SeekFlag _seekFlagFor(Duration target) {
     final PlayerEngineState current = _state.value;
     return target > current.position &&
@@ -564,6 +674,7 @@ class FvpPlayerEngine extends PlayerEngine {
     mdk.Player player,
     int targetMs, {
     required mdk.SeekFlag flag,
+    required int seekEpoch,
   }) {
     if (_disposed || player != _player || !_hasMedia) {
       return Future<int>.value(-3);
@@ -573,6 +684,7 @@ class FvpPlayerEngine extends PlayerEngine {
     if (active != null &&
         active.player == player &&
         active.openGeneration == generation &&
+        active.seekEpoch == seekEpoch &&
         active.targetMs == targetMs) {
       return active.completion.future;
     }
@@ -580,6 +692,7 @@ class FvpPlayerEngine extends PlayerEngine {
     if (pending != null &&
         pending.player == player &&
         pending.openGeneration == generation &&
+        pending.seekEpoch == seekEpoch &&
         pending.targetMs == targetMs) {
       return pending.completion.future;
     }
@@ -590,6 +703,7 @@ class FvpPlayerEngine extends PlayerEngine {
     final _NativeSeekRequest request = _NativeSeekRequest(
       player: player,
       openGeneration: generation,
+      seekEpoch: seekEpoch,
       targetMs: targetMs,
       flag: flag,
     );
@@ -707,7 +821,7 @@ class FvpPlayerEngine extends PlayerEngine {
         );
         if (!startupSeekNeeded(requested: position, current: current)) return;
         try {
-          await _seekToNative(position);
+          await _seekToNative(position, seekEpoch: startupSeekEpoch);
         } on Object catch (error) {
           debugPrint('FVP initial seek failed: $error');
         }
@@ -1024,9 +1138,20 @@ class FvpPlayerEngine extends PlayerEngine {
     _stateSubscription = player.onStateChanged.listen(
       (dynamic _) => _syncState(),
     );
-    _mediaStatusSubscription = player.onMediaStatus.listen(
-      (dynamic _) => _syncState(),
-    );
+    _mediaStatusSubscription = player.onMediaStatus.listen((event) {
+      final bool freshNativeEnd =
+          !event.oldValue.test(mdk.MediaStatus.end) &&
+          event.newValue.test(mdk.MediaStatus.end);
+      if (freshNativeEnd &&
+          _completionSuppressedOpenGeneration == _openGeneration &&
+          _completionSuppressedSeekEpoch == _seekEpoch &&
+          _completionAcceptedSeekEpoch == _seekEpoch &&
+          !_isCurrentNativeSeek(_activeNativeSeek, player) &&
+          !_isCurrentNativeSeek(_pendingNativeSeek, player)) {
+        _completionRearmReady = true;
+      }
+      _syncState();
+    });
   }
 
   void _startPositionTimer() {
@@ -1156,6 +1281,47 @@ class FvpPlayerEngine extends PlayerEngine {
       position,
       duration,
     );
+    final bool nativeSeekActive = _isCurrentNativeSeek(
+      _activeNativeSeek,
+      player,
+    );
+    final bool nativeSeekPending = _isCurrentNativeSeek(
+      _pendingNativeSeek,
+      player,
+    );
+    bool completionSuppressed =
+        _completionSuppressedOpenGeneration == _openGeneration &&
+        _completionSuppressedSeekEpoch == _seekEpoch;
+    final bool acceptedForCurrentSeek =
+        completionSuppressed &&
+        _completionAcceptedSeekEpoch == _seekEpoch &&
+        _completionAcceptedTargetMs != null;
+    if (acceptedForCurrentSeek &&
+        !nativeSeekActive &&
+        !nativeSeekPending &&
+        !nativeEnded) {
+      // The accepted seek has produced a normal post-seek state. A later END
+      // is therefore a fresh backend event and can use the normal EOF path.
+      _clearNativeCompletionSuppression();
+      completionSuppressed = false;
+    }
+    final int? acceptedTargetMs = _completionAcceptedTargetMs;
+    final bool acceptedPositionMatches =
+        acceptedTargetMs != null &&
+        (position.inMilliseconds - acceptedTargetMs).abs() <=
+            _seekAcceptanceTolerance.inMilliseconds;
+    final bool exposeNativeCompletion = shouldExposeFvpNativeCompletion(
+      nativeEnded: nativeEnded,
+      initialized: initialized,
+      nativeSeekActive: nativeSeekActive,
+      nativeSeekPending: nativeSeekPending,
+      completionSuppressed: completionSuppressed,
+      completionRearmReady: _completionRearmReady,
+      acceptedPositionMatches: acceptedPositionMatches,
+    );
+    if (exposeNativeCompletion && completionSuppressed) {
+      _clearNativeCompletionSuppression();
+    }
 
     _setState(
       PlayerEngineState(
@@ -1172,7 +1338,7 @@ class FvpPlayerEngine extends PlayerEngine {
             !initialized ||
             (status.test(mdk.MediaStatus.seeking) && !seekIsBuffered) ||
             (isPlaying && nativeBuffering),
-        isCompleted: nativeEnded && initialized,
+        isCompleted: exposeNativeCompletion,
         hasVideoSurface: hasTexture,
         hasError: hasError,
         errorDescription: _lastError ?? (invalid ? status.toString() : null),
@@ -1281,6 +1447,7 @@ class FvpPlayerEngine extends PlayerEngine {
   Future<void> _disposePlayerOnly() async {
     _openGeneration += 1;
     _seekEpoch += 1;
+    _clearNativeCompletionSuppression();
     _initialPositionSettled = true;
     final _NativeSeekRequest? pendingSeek = _pendingNativeSeek;
     if (pendingSeek != null && !pendingSeek.completion.isCompleted) {

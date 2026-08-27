@@ -211,12 +211,14 @@ class EpisodeAdvanceOperation {
   const EpisodeAdvanceOperation({
     required this.id,
     required this.currentKey,
+    required this.playbackGeneration,
     required this.reason,
     required this.state,
   });
 
   final int id;
   final String currentKey;
+  final int playbackGeneration;
   final String reason;
   final EpisodeAdvanceState state;
 
@@ -224,6 +226,7 @@ class EpisodeAdvanceOperation {
       EpisodeAdvanceOperation(
         id: id,
         currentKey: currentKey,
+        playbackGeneration: playbackGeneration,
         reason: reason,
         state: value,
       );
@@ -232,20 +235,26 @@ class EpisodeAdvanceOperation {
 class EpisodeAdvanceCoordinator {
   int _nextId = 0;
   EpisodeAdvanceOperation? _active;
-  final Set<String> _committedCurrentKeys = <String>{};
+  final Set<String> _committedPlaybackKeys = <String>{};
 
   EpisodeAdvanceOperation? get active => _active;
 
   EpisodeAdvanceOperation? begin({
     required String currentKey,
+    required int playbackGeneration,
     required String reason,
   }) {
     final EpisodeAdvanceOperation? active = _active;
-    if (active != null) return null;
-    if (_committedCurrentKeys.contains(currentKey)) return null;
+    if (active != null) {
+      if (active.playbackGeneration == playbackGeneration) return null;
+      _active = null;
+    }
+    final String playbackKey = _playbackKey(currentKey, playbackGeneration);
+    if (_committedPlaybackKeys.contains(playbackKey)) return null;
     return _active = EpisodeAdvanceOperation(
       id: ++_nextId,
       currentKey: currentKey,
+      playbackGeneration: playbackGeneration,
       reason: reason,
       state: EpisodeAdvanceState.requested,
     );
@@ -261,7 +270,9 @@ class EpisodeAdvanceCoordinator {
   bool complete(int id) {
     final EpisodeAdvanceOperation? current = _active;
     if (current == null || current.id != id) return false;
-    _committedCurrentKeys.add(current.currentKey);
+    _committedPlaybackKeys.add(
+      _playbackKey(current.currentKey, current.playbackGeneration),
+    );
     _active = null;
     return true;
   }
@@ -281,8 +292,11 @@ class EpisodeAdvanceCoordinator {
 
   void reset() {
     _active = null;
-    _committedCurrentKeys.clear();
+    _committedPlaybackKeys.clear();
   }
+
+  String _playbackKey(String currentKey, int playbackGeneration) =>
+      '$playbackGeneration|$currentKey';
 }
 
 class SoraNextEpisodeLookup {

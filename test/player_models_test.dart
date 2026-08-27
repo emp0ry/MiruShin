@@ -31,6 +31,30 @@ void main() {
       expect(isSamePlaybackRouteItem(current, routeItem), isTrue);
     },
   );
+
+  test('speed menu preserves existing choices and adds 2.25x and 2.75x', () {
+    expect(playerPlaybackSpeedOptions, <double>[
+      0.25,
+      0.5,
+      0.75,
+      1,
+      1.25,
+      1.5,
+      1.75,
+      2,
+      2.25,
+      2.5,
+      2.75,
+      3,
+    ]);
+  });
+
+  test('next episode result forces a fresh start by default', () {
+    expect(
+      const PlayerNextEpisodeResult().startPolicy,
+      PlaybackStartPolicy.forceBeginning,
+    );
+  });
 }
 
 MediaPlaybackItem _item({

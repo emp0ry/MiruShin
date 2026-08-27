@@ -241,9 +241,36 @@ class MediaServer {
   final List<SubtitleTrack> subtitles;
 }
 
+enum PlaybackStartPolicy {
+  /// Resume the newest saved position, preserving an explicit later start.
+  resumeSaved,
+
+  /// Start this playback at 00:00 without deleting previously saved progress.
+  forceBeginning,
+
+  /// Use [MediaPlaybackItem.startPosition] exactly.
+  explicitPosition,
+}
+
+const List<double> playerPlaybackSpeedOptions = <double>[
+  0.25,
+  0.5,
+  0.75,
+  1,
+  1.25,
+  1.5,
+  1.75,
+  2,
+  2.25,
+  2.5,
+  2.75,
+  3,
+];
+
 class PlayerNextEpisodeResult {
   const PlayerNextEpisodeResult({
     this.startInFullscreen = false,
+    this.startPolicy = PlaybackStartPolicy.forceBeginning,
     this.serverId,
     this.serverTitle,
     this.voiceoverId,
@@ -251,6 +278,7 @@ class PlayerNextEpisodeResult {
   });
 
   final bool startInFullscreen;
+  final PlaybackStartPolicy startPolicy;
   final String? serverId;
   final String? serverTitle;
   final String? voiceoverId;
@@ -524,6 +552,7 @@ class MediaPlaybackItem {
     this.currentEpisodeId,
     this.skipMarkers = const SkipMarkers(),
     this.startPosition = Duration.zero,
+    this.startPolicy = PlaybackStartPolicy.resumeSaved,
     this.seasonNumber = 1,
     this.episodeNumber = 1.0,
     this.episodeCount,
@@ -544,6 +573,7 @@ class MediaPlaybackItem {
   final String? currentEpisodeId;
   final SkipMarkers skipMarkers;
   final Duration startPosition;
+  final PlaybackStartPolicy startPolicy;
   final int seasonNumber;
   final double episodeNumber;
   final int? episodeCount;
@@ -567,6 +597,7 @@ class MediaPlaybackItem {
     MediaItem item,
     int seasonNumber, {
     Duration startPosition = Duration.zero,
+    PlaybackStartPolicy startPolicy = PlaybackStartPolicy.resumeSaved,
     bool ignoreProgress = false,
     List<Season> seasons = const <Season>[],
     String? initialQualityId,
@@ -657,6 +688,7 @@ class MediaPlaybackItem {
       currentEpisodeId: '${seasonNumber}_$episodeNumber',
       skipMarkers: _skipMarkersFromBundle(bundle),
       startPosition: startPosition,
+      startPolicy: startPolicy,
       seasonNumber: seasonNumber,
       episodeNumber: episodeNumber,
       episodeCount: _episodeCountForPlayback(item, seasonNumber),

@@ -140,10 +140,12 @@ void main() {
 
     final EpisodeAdvanceOperation? first = coordinator.begin(
       currentKey: 'addon|media|s1e1',
+      playbackGeneration: 1,
       reason: 'completion',
     );
     final EpisodeAdvanceOperation? duplicate = coordinator.begin(
       currentKey: 'addon|media|s1e1',
+      playbackGeneration: 1,
       reason: 'position-tick',
     );
 
@@ -156,12 +158,14 @@ void main() {
     final EpisodeAdvanceCoordinator coordinator = EpisodeAdvanceCoordinator();
     final EpisodeAdvanceOperation first = coordinator.begin(
       currentKey: 'addon|media|s1e1',
+      playbackGeneration: 1,
       reason: 'completion',
     )!;
 
     expect(coordinator.fail(first.id), isTrue);
     final EpisodeAdvanceOperation? retry = coordinator.begin(
       currentKey: 'addon|media|s1e1',
+      playbackGeneration: 1,
       reason: 'retry',
     );
 
@@ -175,6 +179,7 @@ void main() {
         AutoNextStreamResolutionState();
     final EpisodeAdvanceOperation first = coordinator.begin(
       currentKey: 'addon|media|s1e1',
+      playbackGeneration: 1,
       reason: 'completion',
     )!;
     streams.begin(
@@ -190,29 +195,50 @@ void main() {
     expect(
       coordinator.begin(
         currentKey: 'addon|media|s1e1',
+        playbackGeneration: 1,
         reason: 'retry-stream-resolution',
       ),
       isNotNull,
     );
   });
 
-  test('committed transition blocks a stale duplicate for old episode', () {
+  test('dedupe is scoped to episode and player generation', () {
     final EpisodeAdvanceCoordinator coordinator = EpisodeAdvanceCoordinator();
     final EpisodeAdvanceOperation first = coordinator.begin(
-      currentKey: 'addon|media|s1e1',
+      currentKey: 'addon|media|s1e2',
+      playbackGeneration: 100,
       reason: 'completion',
     )!;
 
     expect(coordinator.complete(first.id), isTrue);
     expect(
       coordinator.begin(
-        currentKey: 'addon|media|s1e1',
+        currentKey: 'addon|media|s1e2',
+        playbackGeneration: 100,
         reason: 'stale-completion',
       ),
       isNull,
     );
+
+    final EpisodeAdvanceOperation episode3 = coordinator.begin(
+      currentKey: 'addon|media|s1e3',
+      playbackGeneration: 101,
+      reason: 'completion',
+    )!;
+    expect(coordinator.complete(episode3.id), isTrue);
+
+    final EpisodeAdvanceOperation replayedEpisode2 = coordinator.begin(
+      currentKey: 'addon|media|s1e2',
+      playbackGeneration: 102,
+      reason: 'completion',
+    )!;
+    expect(coordinator.complete(replayedEpisode2.id), isTrue);
     expect(
-      coordinator.begin(currentKey: 'addon|media|s1e2', reason: 'completion'),
+      coordinator.begin(
+        currentKey: 'addon|media|s1e3',
+        playbackGeneration: 103,
+        reason: 'completion-after-replay',
+      ),
       isNotNull,
     );
   });

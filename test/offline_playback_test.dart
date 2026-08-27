@@ -157,6 +157,7 @@ void main() {
 
       expect(continuation?.episode.id, episodes.last.id);
       expect(continuation?.startInFullscreen, isTrue);
+      expect(continuation?.startPolicy, PlaybackStartPolicy.forceBeginning);
     });
 
     test('offline next route builds a fullscreen player page', () {
@@ -174,6 +175,7 @@ void main() {
         episode: continuation.episode,
         rootPath: r'C:\downloads',
         moduleEpisodes: episodes,
+        startPolicy: continuation.startPolicy,
       );
       final DirectPlayerRouteArgs routeArgs = DirectPlayerRouteArgs(
         item: nextItem,
@@ -187,6 +189,7 @@ void main() {
 
       expect(page.item.servers.single.id, 'offline');
       expect(page.item.servers.single.url, startsWith('file:'));
+      expect(page.item.startPolicy, PlaybackStartPolicy.forceBeginning);
       expect(page.startInFullscreen, isTrue);
     });
 
@@ -205,6 +208,7 @@ void main() {
 
       expect(continuation?.episode.id, episodes.last.id);
       expect(continuation?.startInFullscreen, isFalse);
+      expect(continuation?.startPolicy, PlaybackStartPolicy.forceBeginning);
     });
 
     test('in-player selection preserves fullscreen state', () {
@@ -225,6 +229,7 @@ void main() {
 
       expect(continuation?.episode.id, episodes.last.id);
       expect(continuation?.startInFullscreen, isTrue);
+      expect(continuation?.startPolicy, PlaybackStartPolicy.resumeSaved);
     });
 
     test('missing next episode produces no continuation', () {

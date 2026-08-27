@@ -127,6 +127,8 @@ class _OnlineAdvanceSnapshot {
     required this.currentSeason,
     required this.item,
     required this.currentKey,
+    required this.playbackGeneration,
+    required this.startPolicy,
     required this.startInFullscreen,
   });
 
@@ -135,6 +137,8 @@ class _OnlineAdvanceSnapshot {
   final int currentSeason;
   final MediaItem item;
   final String currentKey;
+  final int playbackGeneration;
+  final PlaybackStartPolicy startPolicy;
   final bool startInFullscreen;
 }
 
@@ -156,6 +160,8 @@ class _WatchPageState extends ConsumerState<WatchPage> {
   String? _lastWatchDebugSignature;
   String? _activePlayerEpisodeKey;
   bool _playerRouteInFlight = false;
+  int _playerPlaybackGeneration = 0;
+  int? _activePlayerPlaybackGeneration;
   bool _nextEpisodeInFullscreen = false;
   final AutoNextStreamResolutionState _streamResolutionState =
       AutoNextStreamResolutionState();
@@ -198,6 +204,11 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     _sourceEpisodes = null;
     _continueEpisode = null;
     _continueEpisodeMeta = null;
+    _playerPlaybackGeneration++;
+    _activePlayerPlaybackGeneration = null;
+    _playerRouteInFlight = false;
+    _activePlayerEpisodeKey = null;
+    _advanceCoordinator.reset();
     _continueTmdbEpisodeMeta = null;
     _continueDisplayNum = 0;
     _episodeDownloadMode = false;
@@ -468,9 +479,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     );
     if (claim == null) return;
     final bool isAutoNext = claim.isAutoNext;
-    if (isAutoNext &&
-        (_advanceCoordinator.active?.id != claim.transitionId ||
-            claim.transitionId == null)) {
+    if (isAutoNext && !_isCurrentAdvance(claim.transitionId)) {
       debugPrint(
         'OnlineNext: transition=${claim.transitionId} state=cancelled '
         'reason=stale-stream-resolution',
@@ -505,7 +514,9 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     if (canAutoPlay) {
       _playResolvedBundle(
         resolvedBundle,
-        isAutoNext: isAutoNext,
+        startPolicy: isAutoNext
+            ? PlaybackStartPolicy.forceBeginning
+            : PlaybackStartPolicy.resumeSaved,
         transitionId: claim.transitionId,
       );
     } else {
@@ -563,7 +574,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     final EpisodeAdvanceOperation? active = _advanceCoordinator.active;
     final SoraEpisode? target = _session?.episode;
     final SoraSearchResult? source = _session?.source;
-    if (active == null || active.id != transitionId || target == null) {
+    if (active == null || !_isCurrentAdvance(transitionId) || target == null) {
       debugPrint(
         'OnlineNext: transition=$transitionId state=cancelled '
         'reason=stale-stream-error',
@@ -584,7 +595,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     Future<void>.delayed(
       Duration(milliseconds: 300 * claim.resolutionAttempt),
       () {
-        if (!mounted || _advanceCoordinator.active?.id != transitionId) {
+        if (!mounted || !_isCurrentAdvance(transitionId)) {
           return;
         }
         ref.invalidate(
@@ -629,6 +640,13 @@ class _WatchPageState extends ConsumerState<WatchPage> {
         error: 'Next episode failed: $reason',
       );
     });
+  }
+
+  bool _isCurrentAdvance(int? transitionId) {
+    final EpisodeAdvanceOperation? active = _advanceCoordinator.active;
+    return transitionId != null &&
+        active?.id == transitionId &&
+        active?.playbackGeneration == _activePlayerPlaybackGeneration;
   }
 
   NormalizedStreamBundle _applyStreamPreferences(
@@ -721,10 +739,11 @@ class _WatchPageState extends ConsumerState<WatchPage> {
 
   void _playResolvedBundle(
     NormalizedStreamBundle bundle, {
-    bool isAutoNext = false,
+    PlaybackStartPolicy startPolicy = PlaybackStartPolicy.resumeSaved,
     String? explicitQualityLabel,
     int? transitionId,
   }) {
+    final bool isAutoNext = startPolicy == PlaybackStartPolicy.forceBeginning;
     _preferredServerId = bundle.selectedServer.id;
     _preferredServerTitle = bundle.selectedServer.title;
     _preferredVoiceOverId = bundle.selectedVoiceOver?.id;
@@ -765,6 +784,9 @@ class _WatchPageState extends ConsumerState<WatchPage> {
         }
         return;
       }
+      if (transitionId != null && !_isCurrentAdvance(transitionId)) {
+        return;
+      }
       final String episodeKey = '${bundle.addonId}:${bundle.episode.href}';
       if (_playerRouteInFlight && _activePlayerEpisodeKey == episodeKey) {
         if (transitionId != null) {
@@ -777,6 +799,8 @@ class _WatchPageState extends ConsumerState<WatchPage> {
       }
       _playerRouteInFlight = true;
       _activePlayerEpisodeKey = episodeKey;
+      final int playbackGeneration = ++_playerPlaybackGeneration;
+      _activePlayerPlaybackGeneration = playbackGeneration;
       final bool startFs = _nextEpisodeInFullscreen;
       _nextEpisodeInFullscreen = false;
       if (transitionId != null) {
@@ -794,6 +818,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
           seasonNumber: _session!.seasonNumber,
           startInFullscreen: startFs,
           startPosition: startPosition,
+          startPolicy: startPolicy,
           initialQualityId: explicitQualityLabel,
           // Auto-loaded episodes are real playback the user is watching:
           // they must track progress and be able to chain the next auto-next.
@@ -814,7 +839,10 @@ class _WatchPageState extends ConsumerState<WatchPage> {
       }
       route.then(
         (Object? result) {
-          if (!mounted) return;
+          if (!mounted ||
+              _activePlayerPlaybackGeneration != playbackGeneration) {
+            return;
+          }
           _playerRouteInFlight = false;
           _activePlayerEpisodeKey = null;
           setState(() {});
@@ -830,7 +858,10 @@ class _WatchPageState extends ConsumerState<WatchPage> {
             _rememberPlayerStreamPreferences(nextResult);
             _nextEpisodeInFullscreen = nextResult.startInFullscreen;
             final _OnlineAdvanceSnapshot? snapshot =
-                _captureOnlineAdvanceSnapshot();
+                _captureOnlineAdvanceSnapshot(
+                  playbackGeneration: playbackGeneration,
+                  startPolicy: nextResult.startPolicy,
+                );
             if (snapshot == null) {
               debugPrint(
                 'OnlineNext: transition=none state=failed '
@@ -843,7 +874,10 @@ class _WatchPageState extends ConsumerState<WatchPage> {
           }
         },
         onError: (Object error, StackTrace stackTrace) {
-          if (!mounted) return;
+          if (!mounted ||
+              _activePlayerPlaybackGeneration != playbackGeneration) {
+            return;
+          }
           _playerRouteInFlight = false;
           _activePlayerEpisodeKey = null;
           debugPrint('Player route failed after launch: $error');
@@ -891,7 +925,10 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     }
   }
 
-  _OnlineAdvanceSnapshot? _captureOnlineAdvanceSnapshot() {
+  _OnlineAdvanceSnapshot? _captureOnlineAdvanceSnapshot({
+    required int playbackGeneration,
+    required PlaybackStartPolicy startPolicy,
+  }) {
     final WatchSession? session = _session;
     final MediaItem? item = _lastItem;
     final SoraSearchResult? source = session?.source;
@@ -912,6 +949,8 @@ class _WatchPageState extends ConsumerState<WatchPage> {
       currentSeason: session.seasonNumber,
       item: item,
       currentKey: currentKey,
+      playbackGeneration: playbackGeneration,
+      startPolicy: startPolicy,
       startInFullscreen: _nextEpisodeInFullscreen,
     );
   }
@@ -921,8 +960,16 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     required String reason,
     SoraEpisode? forcedNext,
   }) async {
+    if (_activePlayerPlaybackGeneration != snapshot.playbackGeneration) {
+      debugPrint(
+        'OnlineNext: transition=none state=cancelled '
+        'reason=stale-player-generation',
+      );
+      return;
+    }
     final EpisodeAdvanceOperation? operation = _advanceCoordinator.begin(
       currentKey: snapshot.currentKey,
+      playbackGeneration: snapshot.playbackGeneration,
       reason: reason,
     );
     if (operation == null) {
@@ -1047,7 +1094,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
       snapshot.item,
       rawNext,
     );
-    if (!mounted || _advanceCoordinator.active?.id != operation.id) {
+    if (!mounted || !_isCurrentAdvance(operation.id)) {
       _advanceCoordinator.cancel(operation.id);
       return;
     }
@@ -1078,7 +1125,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     NormalizedStreamBundle? resolvedBundle;
     Object? resolutionError;
     for (int attempt = 1; attempt <= 3 && resolvedBundle == null; attempt++) {
-      if (!mounted || _advanceCoordinator.active?.id != operation.id) {
+      if (!mounted || !_isCurrentAdvance(operation.id)) {
         _advanceCoordinator.cancel(operation.id);
         return;
       }
@@ -1117,7 +1164,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
         }
       }
     }
-    if (!mounted || _advanceCoordinator.active?.id != operation.id) {
+    if (!mounted || !_isCurrentAdvance(operation.id)) {
       _advanceCoordinator.cancel(operation.id);
       return;
     }
@@ -1142,7 +1189,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     });
     _playResolvedBundle(
       playableBundle,
-      isAutoNext: true,
+      startPolicy: snapshot.startPolicy,
       transitionId: operation.id,
     );
   }

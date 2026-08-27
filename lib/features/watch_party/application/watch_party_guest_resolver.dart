@@ -147,6 +147,7 @@ class WatchPartyGuestResolver {
       media,
       descriptor.seasonNumber,
       startPosition: startPosition,
+      startPolicy: PlaybackStartPolicy.explicitPosition,
       // The guest mirrors the host; it shouldn't drive auto-next or persist its
       // own progress for the shared session.
       ignoreProgress: true,

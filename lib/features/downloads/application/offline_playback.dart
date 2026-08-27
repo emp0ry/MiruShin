@@ -13,6 +13,7 @@ MediaPlaybackItem buildOfflinePlaybackItem({
   required DownloadedEpisode episode,
   required String rootPath,
   List<DownloadedEpisode> moduleEpisodes = const <DownloadedEpisode>[],
+  PlaybackStartPolicy startPolicy = PlaybackStartPolicy.resumeSaved,
 }) {
   final String videoPath = p.join(
     rootPath,
@@ -85,6 +86,7 @@ MediaPlaybackItem buildOfflinePlaybackItem({
     seasonNumber: episode.seasonNumber,
     episodeNumber: episode.episodeNumber,
     episodeCount: media.episodeCount,
+    startPolicy: startPolicy,
   );
 }
 
@@ -158,10 +160,12 @@ class OfflinePlayerContinuation {
   const OfflinePlayerContinuation({
     required this.episode,
     required this.startInFullscreen,
+    required this.startPolicy,
   });
 
   final DownloadedEpisode episode;
   final bool startInFullscreen;
+  final PlaybackStartPolicy startPolicy;
 }
 
 OfflinePlayerContinuation? offlinePlayerContinuationForResult({
@@ -179,6 +183,7 @@ OfflinePlayerContinuation? offlinePlayerContinuationForResult({
         : OfflinePlayerContinuation(
             episode: selected,
             startInFullscreen: result.startInFullscreen,
+            startPolicy: PlaybackStartPolicy.resumeSaved,
           );
   }
   if (result is PlayerNextEpisodeResult) {
@@ -191,6 +196,7 @@ OfflinePlayerContinuation? offlinePlayerContinuationForResult({
         : OfflinePlayerContinuation(
             episode: next,
             startInFullscreen: result.startInFullscreen,
+            startPolicy: result.startPolicy,
           );
   }
   return null;

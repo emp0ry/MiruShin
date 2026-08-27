@@ -256,7 +256,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     await _playbackNotifier.saveNativeProgress(
       positionMs: positionMs,
       durationMs: durationMs,
-      completed: true,
+      completed: confirmed,
     );
     if (!mounted) return;
     if (confirmed) {
@@ -4176,22 +4176,10 @@ Future<void> _showSubtitleMenu(BuildContext context, WidgetRef ref) async {
 
 Future<void> _showSpeedMenu(BuildContext context, WidgetRef ref) async {
   final NavigatorState navigator = Navigator.of(context);
-  final List<double> speeds = <double>[
-    0.25,
-    0.5,
-    0.75,
-    1,
-    1.25,
-    1.5,
-    1.75,
-    2,
-    2.5,
-    3,
-  ];
   final double active =
       ref.read(playerSettingsProvider).value?.playbackSpeed ?? 1;
   await _showMenuSheet(context, 'Speed', <Widget>[
-    for (final double speed in speeds)
+    for (final double speed in playerPlaybackSpeedOptions)
       ListTile(
         selected: active == speed,
         leading: const Icon(Icons.speed_rounded),
