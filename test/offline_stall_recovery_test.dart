@@ -26,6 +26,32 @@ void main() {
         isTrue,
       );
     });
+
+    test('accepts the released online EOF tolerance without reopening', () {
+      expect(
+        playbackCompletionIsCredible(
+          isCompleted: true,
+          isOfflineLocalSegmentedMedia: false,
+          duration: const Duration(seconds: 1434),
+          maxObservedPosition: const Duration(seconds: 1403),
+          endProximityTolerance: const Duration(seconds: 60),
+        ),
+        isTrue,
+      );
+    });
+
+    test('accepts the released offline EOF tolerance without reopening', () {
+      expect(
+        playbackCompletionIsCredible(
+          isCompleted: true,
+          isOfflineLocalSegmentedMedia: true,
+          duration: const Duration(seconds: 1246),
+          maxObservedPosition: const Duration(seconds: 1194),
+          endProximityTolerance: const Duration(seconds: 60),
+        ),
+        isTrue,
+      );
+    });
   });
 
   group('offlinePlaybackStallDecision', () {

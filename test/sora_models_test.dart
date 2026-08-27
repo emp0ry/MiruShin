@@ -6,6 +6,34 @@ import 'package:mirushin/features/watch/domain/normalized_models.dart';
 import 'package:mirushin/shared/models/media_item.dart';
 
 void main() {
+  test('stream request identity separates episode numbers and seasons', () {
+    SoraEpisode episode(double number, int season) => SoraEpisode(
+      number: number,
+      href: '/shared-episode-href',
+      title: 'Episode $number',
+      image: '',
+      description: '',
+      duration: '',
+      raw: <String, dynamic>{'season': season},
+    );
+
+    final SoraStreamRequest seasonOneEpisodeOne = SoraStreamRequest(
+      addonId: 'addon',
+      episode: episode(1, 1),
+    );
+    final SoraStreamRequest seasonOneEpisodeTwo = SoraStreamRequest(
+      addonId: 'addon',
+      episode: episode(2, 1),
+    );
+    final SoraStreamRequest seasonTwoEpisodeOne = SoraStreamRequest(
+      addonId: 'addon',
+      episode: episode(1, 2),
+    );
+
+    expect(seasonOneEpisodeOne, isNot(seasonOneEpisodeTwo));
+    expect(seasonOneEpisodeOne, isNot(seasonTwoEpisodeOne));
+  });
+
   test('manifest parser accepts scriptURL and preserves unknown fields', () {
     final SoraAddonManifest manifest = SoraAddonManifest.fromJson(
       <String, dynamic>{

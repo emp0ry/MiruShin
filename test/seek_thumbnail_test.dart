@@ -261,6 +261,37 @@ void main() {
       expect(plan.candidates.single.declaredStreamType, StreamType.hls);
     });
 
+    test('proven main direct route bypasses ambiguous HTTP probing', () {
+      const StreamQuality dynamicQuality = StreamQuality(
+        id: '144p',
+        label: '144p',
+        url: 'https://vd752.okcdn.example/?expires=1&id=2',
+        headers: <String, String>{'Referer': 'https://provider.test/'},
+        height: 144,
+      );
+      final MediaServer server = _onlineServer(const <StreamQuality>[
+        dynamicQuality,
+      ]);
+
+      final SeekThumbnailPlan plan = buildSeekThumbnailPlan(
+        item: _item(server),
+        server: server,
+        activeQuality: dynamicQuality,
+        preferDirectNetwork: true,
+      );
+
+      expect(plan.candidates, isNotEmpty);
+      expect(
+        plan.candidates.every(
+          (SeekThumbnailSource source) =>
+              source.kind == SeekThumbnailSourceKind.networkDirect,
+        ),
+        isTrue,
+      );
+      expect(plan.candidates.first.source.url, dynamicQuality.url);
+      expect(plan.candidates.first.source.headers, dynamicQuality.headers);
+    });
+
     test('offline identity survives an absolute root path change', () {
       const Map<String, String> ids = <String, String>{
         'mirushin_offline_download_id': 'episode-1',
@@ -856,6 +887,178 @@ blob.bin
         await serving.future;
       },
     );
+
+    test('Range rejection falls back to a bounded normal GET', () async {
+      final HttpServer server = await HttpServer.bind(
+        InternetAddress.loopbackIPv4,
+        0,
+      );
+      addTearDown(() => server.close(force: true));
+      final List<String?> ranges = <String?>[];
+      unawaited(() async {
+        await for (final HttpRequest request in server) {
+          final String? range = request.headers.value(HttpHeaders.rangeHeader);
+          ranges.add(range);
+          if (range != null) {
+            request.response.statusCode =
+                HttpStatus.requestedRangeNotSatisfiable;
+          } else {
+            request.response
+              ..statusCode = HttpStatus.ok
+              ..headers.contentType = ContentType('video', 'mp4')
+              ..add(<int>[
+                0,
+                0,
+                0,
+                24,
+                0x66,
+                0x74,
+                0x79,
+                0x70,
+                0x69,
+                0x73,
+                0x6f,
+                0x6d,
+              ]);
+          }
+          await request.response.close();
+        }
+      }());
+      final String url =
+          'http://${server.address.address}:${server.port}/dynamic?id=2';
+      final StreamQuality quality = StreamQuality(
+        id: '144p',
+        label: '144p',
+        url: url,
+        height: 144,
+      );
+      final MediaServer mediaServer = _onlineServer(<StreamQuality>[quality]);
+      final SeekThumbnailPlan plan = buildSeekThumbnailPlan(
+        item: _item(mediaServer),
+        server: mediaServer,
+        activeQuality: quality,
+      );
+      final _CapturingDecoder decoder = _CapturingDecoder();
+      final NativeSeekThumbnailExtractor extractor =
+          NativeSeekThumbnailExtractor(decoder: decoder);
+      addTearDown(extractor.dispose);
+
+      final SeekThumbnailExtractionResult result = await extractor.extract(
+        source: plan.candidates.first,
+        position: const Duration(seconds: 42),
+        duration: const Duration(minutes: 20),
+      );
+
+      expect(result.thumbnail, isNotNull);
+      expect(ranges, <String?>['bytes=0-65535', null]);
+      expect(decoder.requests.single.input, url);
+    });
+
+    test('failed Range and normal probes still attempt direct libav', () async {
+      final HttpServer server = await HttpServer.bind(
+        InternetAddress.loopbackIPv4,
+        0,
+      );
+      addTearDown(() => server.close(force: true));
+      final List<String?> ranges = <String?>[];
+      unawaited(() async {
+        await for (final HttpRequest request in server) {
+          ranges.add(request.headers.value(HttpHeaders.rangeHeader));
+          request.response.statusCode = HttpStatus.forbidden;
+          await request.response.close();
+        }
+      }());
+      final String url =
+          'http://${server.address.address}:${server.port}/dynamic?id=3';
+      final StreamQuality quality = StreamQuality(
+        id: '144p',
+        label: '144p',
+        url: url,
+        headers: const <String, String>{
+          'Referer': 'https://provider.test/',
+          'Authorization': 'Bearer preview-test',
+        },
+        height: 144,
+      );
+      final MediaServer mediaServer = _onlineServer(<StreamQuality>[quality]);
+      final SeekThumbnailPlan plan = buildSeekThumbnailPlan(
+        item: _item(mediaServer),
+        server: mediaServer,
+        activeQuality: quality,
+      );
+      final _CapturingDecoder decoder = _CapturingDecoder();
+      final NativeSeekThumbnailExtractor extractor =
+          NativeSeekThumbnailExtractor(decoder: decoder);
+      addTearDown(extractor.dispose);
+
+      final SeekThumbnailExtractionResult result = await extractor.extract(
+        source: plan.candidates.first,
+        position: const Duration(seconds: 42),
+        duration: const Duration(minutes: 20),
+      );
+
+      expect(result.thumbnail, isNotNull);
+      expect(ranges, <String?>['bytes=0-65535', null]);
+      expect(decoder.requests, hasLength(1));
+      expect(decoder.requests.single.input, url);
+      expect(decoder.requests.single.headers, quality.headers);
+    });
+
+    test('Range rejection is remembered across quality fallback', () async {
+      final HttpServer server = await HttpServer.bind(
+        InternetAddress.loopbackIPv4,
+        0,
+      );
+      addTearDown(() => server.close(force: true));
+      final List<String?> ranges = <String?>[];
+      unawaited(() async {
+        await for (final HttpRequest request in server) {
+          final String? range = request.headers.value(HttpHeaders.rangeHeader);
+          ranges.add(range);
+          request.response.statusCode = range == null
+              ? HttpStatus.forbidden
+              : HttpStatus.requestedRangeNotSatisfiable;
+          await request.response.close();
+        }
+      }());
+      final String origin = 'http://${server.address.address}:${server.port}';
+      final List<StreamQuality> qualities = <StreamQuality>[
+        StreamQuality(
+          id: '144p',
+          label: '144p',
+          url: '$origin/144?id=1',
+          height: 144,
+        ),
+        StreamQuality(
+          id: '240p',
+          label: '240p',
+          url: '$origin/240?id=2',
+          height: 240,
+        ),
+      ];
+      final MediaServer mediaServer = _onlineServer(qualities);
+      final SeekThumbnailPlan plan = buildSeekThumbnailPlan(
+        item: _item(mediaServer),
+        server: mediaServer,
+        activeQuality: qualities.first,
+      );
+      final _FirstOpenFailsDecoder decoder = _FirstOpenFailsDecoder();
+      final SeekThumbnailService service = SeekThumbnailService(
+        extractorFactory: (_) => NativeSeekThumbnailExtractor(decoder: decoder),
+      );
+      addTearDown(service.dispose);
+
+      final SeekThumbnail? thumbnail = await service.request(
+        plan: plan,
+        backend: PlayerBackend.fvp,
+        position: const Duration(seconds: 42),
+        duration: const Duration(minutes: 20),
+      );
+
+      expect(thumbnail, isNotNull);
+      expect(decoder.requests, hasLength(2));
+      expect(ranges, <String?>['bytes=0-65535', null, null]);
+    });
 
     test(
       'extensionless HLS is probed then uses indexed segment extraction',
@@ -1777,4 +1980,26 @@ class _CapturingDecoder implements DirectFrameDecoder {
 
   @override
   Future<void> dispose() async {}
+}
+
+class _FirstOpenFailsDecoder extends _CapturingDecoder {
+  @override
+  Future<DirectFrameDecodeResult> decode(
+    DirectFrameDecodeRequest request,
+  ) async {
+    requests.add(request);
+    if (requests.length == 1) {
+      return const DirectFrameDecodeResult.failure(
+        DirectFrameFailureKind.openInput,
+      );
+    }
+    return DirectFrameDecodeResult.success(
+      DirectFrame(
+        jpegBytes: Uint8List.fromList(<int>[1, 2, 3]),
+        position: request.position,
+        width: 240,
+        height: 135,
+      ),
+    );
+  }
 }

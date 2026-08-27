@@ -95,9 +95,7 @@ DownloadedEpisode? nextDownloadedEpisode(
   List<DownloadedEpisode> moduleEpisodes,
 ) {
   final List<DownloadedEpisode> sorted = _sortedCompleted(moduleEpisodes);
-  final int index = sorted.indexWhere(
-    (DownloadedEpisode e) => e.id == current.id,
-  );
+  final int index = _currentDownloadIndex(current, sorted);
   if (index < 0 || index + 1 >= sorted.length) return null;
   return sorted[index + 1];
 }
@@ -106,10 +104,54 @@ DownloadedEpisode? downloadedEpisodeByHref(
   String href,
   List<DownloadedEpisode> moduleEpisodes,
 ) {
+  final String normalizedHref = normalizeDownloadedEpisodeHref(href);
   for (final DownloadedEpisode e in moduleEpisodes) {
-    if (e.episodeHref == href && e.isComplete) return e;
+    if (e.isComplete &&
+        (e.episodeHref == href ||
+            normalizeDownloadedEpisodeHref(e.episodeHref) == normalizedHref)) {
+      return e;
+    }
   }
   return null;
+}
+
+int _currentDownloadIndex(
+  DownloadedEpisode current,
+  List<DownloadedEpisode> episodes,
+) {
+  int index = episodes.indexWhere((DownloadedEpisode e) => e.id == current.id);
+  if (index >= 0) return index;
+  final String href = normalizeDownloadedEpisodeHref(current.episodeHref);
+  if (href.isNotEmpty) {
+    index = episodes.indexWhere(
+      (DownloadedEpisode e) =>
+          normalizeDownloadedEpisodeHref(e.episodeHref) == href,
+    );
+    if (index >= 0) return index;
+  }
+  return episodes.indexWhere(
+    (DownloadedEpisode e) =>
+        e.addonId == current.addonId &&
+        e.seasonNumber == current.seasonNumber &&
+        e.episodeNumber == current.episodeNumber,
+  );
+}
+
+String normalizeDownloadedEpisodeHref(String value) {
+  final String trimmed = value.trim();
+  final Uri? uri = Uri.tryParse(trimmed);
+  if (uri == null || !uri.hasScheme) {
+    return trimmed.replaceFirst(RegExp(r'/+$'), '');
+  }
+  final String path = uri.path.replaceFirst(RegExp(r'/+$'), '');
+  return uri
+      .replace(
+        scheme: uri.scheme.toLowerCase(),
+        host: uri.host.toLowerCase(),
+        path: path,
+        fragment: '',
+      )
+      .toString();
 }
 
 class OfflinePlayerContinuation {

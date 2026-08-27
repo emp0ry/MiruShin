@@ -11,6 +11,7 @@ SeekThumbnailPlan buildSeekThumbnailPlan({
   required MediaPlaybackItem item,
   required MediaServer server,
   required StreamQuality activeQuality,
+  bool preferDirectNetwork = false,
 }) {
   final bool offline = server.id == 'offline';
   if (offline) {
@@ -125,7 +126,9 @@ SeekThumbnailPlan buildSeekThumbnailPlan({
               path.endsWith('.avi')
         ? SeekThumbnailSourceKind.networkFile
         : network
-        ? SeekThumbnailSourceKind.networkUnknown
+        ? preferDirectNetwork
+              ? SeekThumbnailSourceKind.networkDirect
+              : SeekThumbnailSourceKind.networkUnknown
         : SeekThumbnailSourceKind.unknown;
     final String key = seekThumbnailSourceFingerprint(source);
     if (!seen.add(key)) return;

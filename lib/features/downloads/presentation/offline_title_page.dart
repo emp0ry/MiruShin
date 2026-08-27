@@ -39,6 +39,18 @@ import '../application/offline_playback.dart';
 import '../domain/download_models.dart';
 import 'downloaded_artwork_image.dart';
 
+class _OfflineDeleteResult {
+  const _OfflineDeleteResult({
+    required this.enabled,
+    required this.deleted,
+    required this.reason,
+  });
+
+  final bool enabled;
+  final bool deleted;
+  final String reason;
+}
+
 /// Offline detail page for a downloaded title: pick a module, then play its
 /// downloaded episodes (non-downloaded episodes are shown disabled).
 class OfflineTitlePage extends ConsumerStatefulWidget {
@@ -772,11 +784,16 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
     bool startInFullscreen = false,
   }) {
     final String? rootPath = ref.read(downloadsProvider.notifier).rootPath;
-    if (rootPath == null) return;
+    if (rootPath == null) {
+      debugPrint('OfflineNext: pushNext=false reason=download-root-missing');
+      return;
+    }
+    final List<DownloadedEpisode> transitionSnapshot =
+        List<DownloadedEpisode>.unmodifiable(moduleEpisodes);
     final MediaPlaybackItem item = buildOfflinePlaybackItem(
       episode: ep,
       rootPath: rootPath,
-      moduleEpisodes: moduleEpisodes,
+      moduleEpisodes: transitionSnapshot,
     );
     unawaited(
       context
@@ -787,31 +804,90 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
               startInFullscreen: startInFullscreen,
             ),
           )
-          .then((Object? result) async {
-            if (!mounted) return;
-            await _deleteWatchedDownloadIfEnabled(ep);
-            if (!mounted) return;
-            _handlePlayerResult(result, ep, moduleEpisodes);
-          }),
+          .then(
+            (Object? result) async {
+              if (!mounted) return;
+              // Resolve continuation synchronously from the immutable snapshot
+              // before deleting or refreshing any download provider state.
+              final OfflinePlayerContinuation? continuation =
+                  offlinePlayerContinuationForResult(
+                    result: result,
+                    current: ep,
+                    moduleEpisodes: transitionSnapshot,
+                  );
+              debugPrint(
+                'OfflineNext: current=S${ep.seasonNumber}E${ep.displayNumber} '
+                'result=${result.runtimeType} '
+                'snapshotEpisodes=${transitionSnapshot.length} '
+                'candidate=${continuation == null ? 'none' : 'S${continuation.episode.seasonNumber}E${continuation.episode.displayNumber}'} '
+                'continuationFound=${continuation != null}',
+              );
+              final _OfflineDeleteResult deletion =
+                  await _deleteWatchedDownloadIfEnabled(ep);
+              if (!mounted) return;
+              final List<DownloadedEpisode> nextSnapshot = deletion.deleted
+                  ? List<DownloadedEpisode>.unmodifiable(
+                      transitionSnapshot.where(
+                        (DownloadedEpisode episode) => episode.id != ep.id,
+                      ),
+                    )
+                  : transitionSnapshot;
+              debugPrint(
+                'OfflineNext: oldResourcesReleased=true '
+                'autoDelete=${deletion.enabled} '
+                'deleteCurrent=${deletion.reason} '
+                'pushNext=${continuation != null} '
+                'startFullscreen=${continuation?.startInFullscreen ?? false}',
+              );
+              _handlePlayerResult(result, continuation, nextSnapshot);
+            },
+            onError: (Object error, StackTrace stackTrace) {
+              debugPrint(
+                'OfflineNext: pushNext=false reason=route-error $error',
+              );
+              if (mounted) setState(() {});
+            },
+          ),
     );
   }
 
-  Future<void> _deleteWatchedDownloadIfEnabled(
+  Future<_OfflineDeleteResult> _deleteWatchedDownloadIfEnabled(
     DownloadedEpisode episode,
   ) async {
     try {
       final bool enabled = await ref.read(downloadSettingsProvider.future);
-      if (!enabled || !mounted) return;
+      if (!enabled || !mounted) {
+        return _OfflineDeleteResult(
+          enabled: enabled,
+          deleted: false,
+          reason: enabled ? 'cancelled' : 'disabled',
+        );
+      }
       final EpisodeProgress? progress = _localProgress(episode);
       if (!shouldAutoDeleteWatchedEpisode(
         enabled: enabled,
         isWatched: progress?.isWatched == true,
       )) {
-        return;
+        return const _OfflineDeleteResult(
+          enabled: true,
+          deleted: false,
+          reason: 'not-watched',
+        );
       }
       await ref.read(downloadsProvider.notifier).delete(episode.id);
-    } catch (_) {
+      return const _OfflineDeleteResult(
+        enabled: true,
+        deleted: true,
+        reason: 'success',
+      );
+    } on Object catch (error) {
       // A preference/filesystem failure must never block next-episode routing.
+      debugPrint('OfflineNext: deleteCurrent=failed error=$error');
+      return const _OfflineDeleteResult(
+        enabled: true,
+        deleted: false,
+        reason: 'failed',
+      );
     }
   }
 
@@ -828,15 +904,9 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
 
   void _handlePlayerResult(
     Object? result,
-    DownloadedEpisode current,
-    List<DownloadedEpisode> moduleEpisodes,
+    OfflinePlayerContinuation? continuation,
+    List<DownloadedEpisode> nextSnapshot,
   ) {
-    final OfflinePlayerContinuation? continuation =
-        offlinePlayerContinuationForResult(
-          result: result,
-          current: current,
-          moduleEpisodes: moduleEpisodes,
-        );
     if (continuation != null) {
       if (kDebugMode) {
         debugPrint(
@@ -847,7 +917,7 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
       }
       _play(
         continuation.episode,
-        moduleEpisodes,
+        nextSnapshot,
         startInFullscreen: continuation.startInFullscreen,
       );
       return;

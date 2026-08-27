@@ -297,12 +297,14 @@ SeekThumbnailFailureReason _thumbnailReason(
   DirectFrameFailureKind.unsupportedCodec =>
     SeekThumbnailFailureReason.unsupportedCodec,
   DirectFrameFailureKind.noFrame =>
-    SeekThumbnailFailureReason.missingRandomAccessContext,
+    sourceKind == SeekThumbnailSourceKind.networkDirect
+        ? SeekThumbnailFailureReason.libavNoFrame
+        : SeekThumbnailFailureReason.missingRandomAccessContext,
   DirectFrameFailureKind.openInput || DirectFrameFailureKind.streamInfo =>
     sourceKind == SeekThumbnailSourceKind.networkDirect
-        ? SeekThumbnailFailureReason.decodeFailure
+        ? SeekThumbnailFailureReason.libavOpenFailure
         : SeekThumbnailFailureReason.network,
-  DirectFrameFailureKind.seek ||
+  DirectFrameFailureKind.seek => SeekThumbnailFailureReason.libavSeekFailure,
   DirectFrameFailureKind.scale ||
   DirectFrameFailureKind.unknown => SeekThumbnailFailureReason.decodeFailure,
   DirectFrameFailureKind.unavailable => SeekThumbnailFailureReason.unavailable,

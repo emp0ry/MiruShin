@@ -1015,10 +1015,12 @@ class PlaybackController extends Notifier<PlaybackState> {
         : attempts[attemptIndex];
     final PlayerBackend backend = attempt?.backend ?? PlayerBackend.auto;
     final PlayerBackend engineBackend = resolvePlayerEngineBackend(backend);
+    final bool disableProxy = attempt?.disableProxy ?? false;
     final SeekThumbnailPlan thumbnailPlan = buildSeekThumbnailPlan(
       item: item,
       server: server,
       activeQuality: quality,
+      preferDirectNetwork: disableProxy,
     );
     final PlayerBackend thumbnailBackend = seekThumbnailExtractionBackend(
       engineBackend,
@@ -1027,7 +1029,6 @@ class PlaybackController extends Notifier<PlaybackState> {
     if (generation != _playbackGeneration) return;
     _seekThumbnailPlan = thumbnailPlan;
     _seekThumbnailBackend = thumbnailBackend;
-    final bool disableProxy = attempt?.disableProxy ?? false;
     if (attempt != null) {
       debugPrint(
         'Playback attempt ${attemptIndex + 1}/${attempts.length}: '
@@ -3117,7 +3118,6 @@ class PlaybackController extends Notifier<PlaybackState> {
     // check: fragile HLS/DASH streams briefly expose a few-second duration while
     // the full manifest is still being parsed.
     final bool reliableDuration = dur >= const Duration(minutes: 2);
-
     // (1) Auto-progress: mark the episode watched the instant playback crosses
     // 85%, independent of ever reaching the very end. This is what makes the
     // watched mark + AniList sync fire mid-playback instead of only on exit.

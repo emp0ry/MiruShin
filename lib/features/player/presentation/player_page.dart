@@ -687,7 +687,15 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     bool playNext = false,
     String? selectEpisodeHref,
   }) async {
-    if (_exitingPlayer) return;
+    final String exitReason = selectEpisodeHref != null
+        ? 'episodeSelection'
+        : playNext
+        ? 'nextEpisode'
+        : 'userClose';
+    if (_exitingPlayer) {
+      debugPrint('PlayerExit: reason=$exitReason duplicate=true');
+      return;
+    }
     final bool advancing = playNext || selectEpisodeHref != null;
     // When fully exiting the player (not advancing to the next episode) and the
     // local device is a GUEST in a watch party, leave the party automatically
@@ -784,6 +792,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     } else {
       unawaited(_stopPlayback());
     }
+
+    debugPrint(
+      'PlayerExit: reason=$exitReason resultType=${result.runtimeType} '
+      'startFullscreen=$shouldStartNextFullscreen '
+      'currentEpisode=${widget.item.currentEpisodeId}',
+    );
 
     setState(() {
       _allowRoutePop = true;

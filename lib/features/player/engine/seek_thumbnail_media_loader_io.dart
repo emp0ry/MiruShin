@@ -61,8 +61,6 @@ class SeekThumbnailMediaLoader {
   static const int _maxRedirects = 5;
   static const int _maxAttempts = 2;
   static const int _networkProbeBytes = 64 * 1024;
-  static const int _maxSequentialDirectBytes = 24 * 1024 * 1024;
-  static const Duration _maxSequentialDirectPosition = Duration(seconds: 30);
 
   final HttpClient _client = HttpClient();
   final LocalHlsProxy _proxy = LocalHlsProxy();
@@ -71,6 +69,7 @@ class SeekThumbnailMediaLoader {
       <String, Future<_HlsSession>>{};
   final Map<String, Future<_ResolvedNetworkSource>> _sourceProbes =
       <String, Future<_ResolvedNetworkSource>>{};
+  final Set<String> _rangeRejectedOrigins = <String>{};
   Directory? _temporaryRoot;
   int _requestSerial = 0;
   int _generation = 0;
@@ -110,19 +109,6 @@ class SeekThumbnailMediaLoader {
         : null;
     final SeekThumbnailSource effective = resolved?.source ?? source;
     if (!_isHls(effective)) {
-      if (effective.kind == SeekThumbnailSourceKind.networkDirect &&
-          resolved != null &&
-          !resolved.supportsRanges &&
-          position > _maxSequentialDirectPosition &&
-          (resolved.contentLength == null ||
-              resolved.contentLength! > _maxSequentialDirectBytes)) {
-        throw const SeekThumbnailLoadException(
-          SeekThumbnailFailure(
-            scope: SeekThumbnailFailureScope.bucketSpecific,
-            reason: SeekThumbnailFailureReason.rangeUnsupported,
-          ),
-        );
-      }
       String input = effective.isOffline
           ? _localPath(effective.source.url)
           : effective.source.url;
@@ -226,15 +212,13 @@ class SeekThumbnailMediaLoader {
           'quality=${_safeDebugLabel(source.label)} '
           'declaredType=${(source.declaredStreamType ?? source.source.streamType).name} '
           'urlExtension=${_urlExtension(source.source.url)} '
+          'rangeProbe=${probe.rangeProbe} '
+          'plainProbe=${probe.plainProbe} '
           'probe=${probeKind == _NetworkProbeKind.directMedia ? 'direct-media' : probeKind.name} '
           'selectedPath=$selectedPath.',
         );
       }
-      return _ResolvedNetworkSource(
-        source: resolvedSource,
-        supportsRanges: probe.supportsRanges,
-        contentLength: probe.contentLength,
-      );
+      return _ResolvedNetworkSource(source: resolvedSource);
     });
     return pending.onError((Object error, StackTrace stackTrace) {
       if (identical(_sourceProbes[source.decoderKey], pending)) {
@@ -380,56 +364,93 @@ class SeekThumbnailMediaLoader {
     Map<String, String> headers,
     int generation,
   ) async {
-    Object? lastError;
-    for (int attempt = 0; attempt < _maxAttempts; attempt += 1) {
+    final String origin =
+        '${uri.scheme.toLowerCase()}://${uri.host}:${uri.port}';
+    Object? rangeError;
+    if (!_rangeRejectedOrigins.contains(origin)) {
       try {
-        final _NetworkProbeResponse result = await _probeHttp(
+        final _NetworkProbeResponse result = await _probeWithRetries(
           uri,
           headers,
           generation,
+          useRange: true,
         );
         _throwIfCancelled(generation);
-        return result;
+        return result.withProbeResults(
+          rangeProbe: 'success',
+          plainProbe: 'not-needed',
+        );
+      } on SeekThumbnailLoadException {
+        rethrow;
+      } on _PreviewHttpException catch (error) {
+        rangeError = error;
+        if (error.statusCode == HttpStatus.badRequest ||
+            error.statusCode == HttpStatus.methodNotAllowed ||
+            error.statusCode == HttpStatus.requestedRangeNotSatisfiable) {
+          _rangeRejectedOrigins.add(origin);
+        }
+      } on Object catch (error) {
+        rangeError = error;
+      }
+    } else {
+      rangeError = const _ProbeSkippedException('cached-origin-rejection');
+    }
+
+    Object? plainError;
+    try {
+      final _NetworkProbeResponse result = await _probeWithRetries(
+        uri,
+        headers,
+        generation,
+        useRange: false,
+      );
+      _throwIfCancelled(generation);
+      return result.withProbeResults(
+        rangeProbe: _probeErrorLabel(rangeError),
+        plainProbe: 'success',
+        clearSupportsRanges: true,
+      );
+    } on SeekThumbnailLoadException {
+      rethrow;
+    } on Object catch (error) {
+      plainError = error;
+    }
+
+    _throwIfCancelled(generation);
+    // Classification probes are advisory. The original URL and every provider
+    // header are deliberately retained so libav can perform its own HTTP
+    // redirects, format probing, and native seek.
+    return _NetworkProbeResponse(
+      bytes: Uint8List(0),
+      contentType: null,
+      supportsRanges: null,
+      contentLength: null,
+      rangeProbe: _probeErrorLabel(rangeError),
+      plainProbe: _probeErrorLabel(plainError),
+    );
+  }
+
+  Future<_NetworkProbeResponse> _probeWithRetries(
+    Uri uri,
+    Map<String, String> headers,
+    int generation, {
+    required bool useRange,
+  }) async {
+    Object? lastError;
+    for (int attempt = 0; attempt < _maxAttempts; attempt += 1) {
+      try {
+        return await _probeHttp(uri, headers, generation, useRange: useRange);
       } on SeekThumbnailLoadException {
         rethrow;
       } on _PreviewHttpException catch (error) {
         lastError = error;
-        if (error.statusCode == HttpStatus.notFound ||
-            error.statusCode == HttpStatus.gone ||
-            error.statusCode == HttpStatus.forbidden) {
-          break;
-        }
+        if (error.statusCode >= 400 && error.statusCode < 500) break;
       } on Object catch (error) {
         lastError = error;
       }
     }
-    if (lastError is _PreviewHttpException) {
-      final int status = lastError.statusCode;
-      throw SeekThumbnailLoadException(
-        SeekThumbnailFailure(
-          scope: SeekThumbnailFailureScope.transient,
-          reason: status == HttpStatus.notFound || status == HttpStatus.gone
-              ? SeekThumbnailFailureReason.httpNotFound
-              : status == HttpStatus.forbidden
-              ? SeekThumbnailFailureReason.httpForbidden
-              : SeekThumbnailFailureReason.httpStatus,
-        ),
-      );
-    }
-    if (lastError is TimeoutException) {
-      throw const SeekThumbnailLoadException(
-        SeekThumbnailFailure(
-          scope: SeekThumbnailFailureScope.transient,
-          reason: SeekThumbnailFailureReason.networkTimeout,
-        ),
-      );
-    }
-    throw const SeekThumbnailLoadException(
-      SeekThumbnailFailure(
-        scope: SeekThumbnailFailureScope.transient,
-        reason: SeekThumbnailFailureReason.network,
-      ),
-    );
+    if (lastError != null) throw lastError;
+    throw const HttpException('Preview probe failed.');
   }
 
   Future<PreparedThumbnailInput?> _materializeSegments(
@@ -889,8 +910,9 @@ class SeekThumbnailMediaLoader {
   Future<_NetworkProbeResponse> _probeHttp(
     Uri initialUri,
     Map<String, String> headers,
-    int generation,
-  ) async {
+    int generation, {
+    required bool useRange,
+  }) async {
     Uri uri = initialUri;
     for (int redirect = 0; redirect <= _maxRedirects; redirect += 1) {
       _throwIfCancelled(generation);
@@ -900,12 +922,16 @@ class SeekThumbnailMediaLoader {
       _activeRequests.add(request);
       try {
         headers.forEach((String key, String value) {
-          request.headers.set(key, value);
+          if (useRange || key.toLowerCase() != HttpHeaders.rangeHeader) {
+            request.headers.set(key, value);
+          }
         });
-        request.headers.set(
-          HttpHeaders.rangeHeader,
-          'bytes=0-${_networkProbeBytes - 1}',
-        );
+        if (useRange) {
+          request.headers.set(
+            HttpHeaders.rangeHeader,
+            'bytes=0-${_networkProbeBytes - 1}',
+          );
+        }
         request.followRedirects = false;
         final HttpClientResponse response = await request.close().timeout(
           _requestTimeout,
@@ -948,9 +974,10 @@ class SeekThumbnailMediaLoader {
         return _NetworkProbeResponse(
           bytes: bytes.takeBytes(),
           contentType: response.headers.contentType?.mimeType.toLowerCase(),
-          supportsRanges:
-              response.statusCode == HttpStatus.partialContent ||
-              (acceptRanges?.toLowerCase().contains('bytes') ?? false),
+          supportsRanges: useRange
+              ? response.statusCode == HttpStatus.partialContent ||
+                    (acceptRanges?.toLowerCase().contains('bytes') ?? false)
+              : null,
           contentLength: _probeContentLength(
             contentRange,
             response.contentLength,
@@ -1077,15 +1104,9 @@ class _HlsSession {
 }
 
 class _ResolvedNetworkSource {
-  const _ResolvedNetworkSource({
-    required this.source,
-    required this.supportsRanges,
-    required this.contentLength,
-  });
+  const _ResolvedNetworkSource({required this.source});
 
   final SeekThumbnailSource source;
-  final bool supportsRanges;
-  final int? contentLength;
 }
 
 enum _NetworkProbeKind { hls, dash, directMedia, unknown }
@@ -1096,15 +1117,46 @@ class _NetworkProbeResponse {
     required this.contentType,
     required this.supportsRanges,
     required this.contentLength,
+    this.rangeProbe = 'unknown',
+    this.plainProbe = 'unknown',
   });
 
   final Uint8List bytes;
   final String? contentType;
-  final bool supportsRanges;
+  final bool? supportsRanges;
   final int? contentLength;
+  final String rangeProbe;
+  final String plainProbe;
+
+  _NetworkProbeResponse withProbeResults({
+    required String rangeProbe,
+    required String plainProbe,
+    bool clearSupportsRanges = false,
+  }) => _NetworkProbeResponse(
+    bytes: bytes,
+    contentType: contentType,
+    supportsRanges: clearSupportsRanges ? null : supportsRanges,
+    contentLength: contentLength,
+    rangeProbe: rangeProbe,
+    plainProbe: plainProbe,
+  );
 
   bool get hlsMaster =>
       _probeText(bytes).toUpperCase().contains('#EXT-X-STREAM-INF:');
+}
+
+class _ProbeSkippedException implements Exception {
+  const _ProbeSkippedException(this.reason);
+
+  final String reason;
+}
+
+String _probeErrorLabel(Object? error) {
+  if (error == null) return 'not-attempted';
+  if (error is _ProbeSkippedException) return error.reason;
+  if (error is _PreviewHttpException) return 'http-${error.statusCode}';
+  if (error is TimeoutException) return 'timeout';
+  return error.runtimeType.toString();
 }
 
 _NetworkProbeKind _networkProbeKind(_NetworkProbeResponse probe) {

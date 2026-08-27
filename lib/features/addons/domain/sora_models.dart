@@ -651,6 +651,8 @@ class SoraStreamRequest {
     return other is SoraStreamRequest &&
         other.addonId == addonId &&
         other.episode.href == episode.href &&
+        other.episode.number == episode.number &&
+        other.episode.season == episode.season &&
         other.episode.metadataTitle == episode.metadataTitle &&
         other.episode.tvdbTitle == episode.tvdbTitle &&
         other.voiceover == voiceover;
@@ -660,6 +662,8 @@ class SoraStreamRequest {
   int get hashCode => Object.hash(
     addonId,
     episode.href,
+    episode.number,
+    episode.season,
     episode.metadataTitle,
     episode.tvdbTitle,
     voiceover,

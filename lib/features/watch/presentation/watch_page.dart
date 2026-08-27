@@ -120,6 +120,24 @@ final _titleFallbackDetailsProvider =
 const String _nextEpisodeSignal = 'next_episode';
 const String _nextEpisodeFullscreenSignal = 'next_episode_fullscreen';
 
+class _OnlineAdvanceSnapshot {
+  const _OnlineAdvanceSnapshot({
+    required this.source,
+    required this.current,
+    required this.currentSeason,
+    required this.item,
+    required this.currentKey,
+    required this.startInFullscreen,
+  });
+
+  final SoraSearchResult source;
+  final SoraEpisode current;
+  final int currentSeason;
+  final MediaItem item;
+  final String currentKey;
+  final bool startInFullscreen;
+}
+
 class WatchPage extends ConsumerStatefulWidget {
   const WatchPage({required this.id, this.initialItem, super.key});
 
@@ -136,17 +154,19 @@ class _WatchPageState extends ConsumerState<WatchPage> {
   WatchSession? _session;
   MediaItem? _lastItem;
   String? _lastWatchDebugSignature;
-  String? _lastAutoNextFromEpisodeHref;
   String? _activePlayerEpisodeKey;
   bool _playerRouteInFlight = false;
   bool _nextEpisodeInFullscreen = false;
   final AutoNextStreamResolutionState _streamResolutionState =
       AutoNextStreamResolutionState();
+  final EpisodeAdvanceCoordinator _advanceCoordinator =
+      EpisodeAdvanceCoordinator();
+  _OnlineAdvanceSnapshot? _pendingAdvance;
+  VoidCallback? _retryPendingAdvance;
   String? _preferredServerId;
   String? _preferredServerTitle;
   String? _preferredVoiceOverId;
   String? _preferredVoiceOverLabel;
-  DateTime? _lastAutoNextAt;
   final ScrollController _scrollController = ScrollController();
   final GlobalKey _sourceKey = GlobalKey();
   final GlobalKey _episodeKey = GlobalKey();
@@ -178,6 +198,9 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     _continueTmdbEpisodeMeta = null;
     _continueDisplayNum = 0;
     _episodeDownloadMode = false;
+    _advanceCoordinator.reset();
+    _pendingAdvance = null;
+    _retryPendingAdvance = null;
   }
 
   @override
@@ -265,6 +288,9 @@ class _WatchPageState extends ConsumerState<WatchPage> {
       _sourceEpisodesFuture = episodesFuture;
       _sourceEpisodes = null;
       _streamResolutionState.clear();
+      _advanceCoordinator.reset();
+      _pendingAdvance = null;
+      _retryPendingAdvance = null;
       _session = _session!.copyWith(
         step: sourceSeasonFlow
             ? WatchStep.pickSourceSeason
@@ -383,10 +409,23 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     _scrollToKey(_episodeKey);
   }
 
-  void _pickEpisode(SoraEpisode episode, {bool isAutoNext = false}) {
+  void _pickEpisode(
+    SoraEpisode episode, {
+    bool isAutoNext = false,
+    int? transitionId,
+    int resolutionAttempt = 1,
+  }) {
+    if (!isAutoNext) {
+      _retryPendingAdvance = null;
+    }
     final String? requestKey = _streamRequestKey(_session?.source, episode);
     if (requestKey != null) {
-      _streamResolutionState.begin(requestKey, autoNext: isAutoNext);
+      _streamResolutionState.begin(
+        requestKey,
+        autoNext: isAutoNext,
+        transitionId: transitionId,
+        resolutionAttempt: resolutionAttempt,
+      );
     }
     // In the TMDB source-season flow, follow the addon's own season for the
     // picked episode so progress is saved under the correct season. This matters
@@ -415,7 +454,20 @@ class _WatchPageState extends ConsumerState<WatchPage> {
       return;
     }
 
-    final bool isAutoNext = _streamResolutionState.takeAutoNext(requestKey);
+    final AutoNextStreamResolutionClaim? claim = _streamResolutionState.take(
+      requestKey,
+    );
+    if (claim == null) return;
+    final bool isAutoNext = claim.isAutoNext;
+    if (isAutoNext &&
+        (_advanceCoordinator.active?.id != claim.transitionId ||
+            claim.transitionId == null)) {
+      debugPrint(
+        'OnlineNext: transition=${claim.transitionId} state=cancelled '
+        'reason=stale-stream-resolution',
+      );
+      return;
+    }
 
     NormalizedStreamBundle resolvedBundle = bundle;
     if (isAutoNext) {
@@ -426,7 +478,11 @@ class _WatchPageState extends ConsumerState<WatchPage> {
         resolvedBundle.activeUrl.trim().isNotEmpty &&
         (isAutoNext || !_bundleRequiresManualChoice(resolvedBundle));
     if (isAutoNext && !canAutoPlay) {
-      _clearAutoNextFullscreen();
+      _failOnlineAdvance(
+        claim.transitionId!,
+        'resolved-stream-requires-manual-choice',
+      );
+      return;
     }
 
     setState(() {
@@ -438,7 +494,11 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     });
 
     if (canAutoPlay) {
-      _playResolvedBundle(resolvedBundle, isAutoNext: isAutoNext);
+      _playResolvedBundle(
+        resolvedBundle,
+        isAutoNext: isAutoNext,
+        transitionId: claim.transitionId,
+      );
     } else {
       _showStreamSheet(resolvedBundle);
     }
@@ -452,10 +512,29 @@ class _WatchPageState extends ConsumerState<WatchPage> {
       _streamResolutionState.forget(requestKey);
       return;
     }
-    final bool wasAutoNext = _streamResolutionState.takeAutoNext(requestKey);
-    if (wasAutoNext) {
-      _clearAutoNextFullscreen();
+    final AutoNextStreamResolutionClaim? claim = _streamResolutionState.take(
+      requestKey,
+    );
+    final bool wasAutoNext = claim?.isAutoNext ?? false;
+    if (wasAutoNext && claim?.transitionId != null) {
+      _retryOnlineStreamResolution(claim!, error);
+      return;
     }
+    final SoraEpisode? failedEpisode = _session?.episode;
+    final SoraSearchResult? failedSource = _session?.source;
+    _retryPendingAdvance = failedEpisode == null || failedSource == null
+        ? null
+        : () {
+            ref.invalidate(
+              soraStreamBundleProvider(
+                SoraStreamRequest(
+                  addonId: failedSource.addonId,
+                  episode: failedEpisode,
+                ),
+              ),
+            );
+            _pickEpisode(failedEpisode);
+          };
     setState(() {
       _session = _session!.copyWith(
         // On auto-next failures keep streamReady so the user stays on the
@@ -463,6 +542,74 @@ class _WatchPageState extends ConsumerState<WatchPage> {
         step: wasAutoNext ? WatchStep.streamReady : WatchStep.pickEpisode,
         isResolving: false,
         error: error.toString(),
+      );
+    });
+  }
+
+  void _retryOnlineStreamResolution(
+    AutoNextStreamResolutionClaim claim,
+    Object error,
+  ) {
+    final int transitionId = claim.transitionId!;
+    final EpisodeAdvanceOperation? active = _advanceCoordinator.active;
+    final SoraEpisode? target = _session?.episode;
+    final SoraSearchResult? source = _session?.source;
+    if (active == null || active.id != transitionId || target == null) {
+      debugPrint(
+        'OnlineNext: transition=$transitionId state=cancelled '
+        'reason=stale-stream-error',
+      );
+      return;
+    }
+    if (claim.resolutionAttempt >= 3 || source == null) {
+      _failOnlineAdvance(transitionId, 'stream-resolution: $error');
+      return;
+    }
+
+    final int nextAttempt = claim.resolutionAttempt + 1;
+    _advanceCoordinator.move(transitionId, EpisodeAdvanceState.resolvingNext);
+    debugPrint(
+      'OnlineNext: transition=$transitionId state=resolvingNext '
+      'resolutionAttempt=$nextAttempt previousFailure=${error.runtimeType} ',
+    );
+    Future<void>.delayed(
+      Duration(milliseconds: 300 * claim.resolutionAttempt),
+      () {
+        if (!mounted || _advanceCoordinator.active?.id != transitionId) {
+          return;
+        }
+        ref.invalidate(
+          soraStreamBundleProvider(
+            SoraStreamRequest(addonId: source.addonId, episode: target),
+          ),
+        );
+        _pickEpisode(
+          target,
+          isAutoNext: true,
+          transitionId: transitionId,
+          resolutionAttempt: nextAttempt,
+        );
+      },
+    );
+  }
+
+  void _failOnlineAdvance(int transitionId, String reason) {
+    final _OnlineAdvanceSnapshot? snapshot = _pendingAdvance;
+    if (!_advanceCoordinator.fail(transitionId)) return;
+    debugPrint(
+      'OnlineNext: transition=$transitionId state=failed reason=$reason '
+      'retryAllowed=true',
+    );
+    _clearAutoNextFullscreen();
+    _retryPendingAdvance = snapshot == null
+        ? null
+        : () => _requestOnlineAdvance(snapshot, reason: 'retry');
+    if (!mounted) return;
+    setState(() {
+      _session = _session?.copyWith(
+        step: WatchStep.streamReady,
+        isResolving: false,
+        error: 'Next episode failed: $reason',
       );
     });
   }
@@ -559,6 +706,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     NormalizedStreamBundle bundle, {
     bool isAutoNext = false,
     String? explicitQualityLabel,
+    int? transitionId,
   }) {
     _preferredServerId = bundle.selectedServer.id;
     _preferredServerTitle = bundle.selectedServer.title;
@@ -595,51 +743,100 @@ class _WatchPageState extends ConsumerState<WatchPage> {
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || _lastItem == null || _session == null) {
+        if (transitionId != null) {
+          _failOnlineAdvance(transitionId, 'route-context-unavailable');
+        }
         return;
       }
       final String episodeKey = '${bundle.addonId}:${bundle.episode.href}';
       if (_playerRouteInFlight && _activePlayerEpisodeKey == episodeKey) {
+        if (transitionId != null) {
+          debugPrint(
+            'OnlineNext: transition=$transitionId state=openingNext '
+            'duplicateRoute=true',
+          );
+        }
         return;
       }
       _playerRouteInFlight = true;
       _activePlayerEpisodeKey = episodeKey;
       final bool startFs = _nextEpisodeInFullscreen;
       _nextEpisodeInFullscreen = false;
-      context
-          .push(
-            AppRoutes.watchPlay,
-            extra: PlayerRouteArgs(
-              bundle: bundle,
-              item: _playerRouteItem(_lastItem!, _session!),
-              seasonNumber: _session!.seasonNumber,
-              startInFullscreen: startFs,
-              startPosition: startPosition,
-              initialQualityId: explicitQualityLabel,
-              // Auto-loaded episodes are real playback the user is watching:
-              // they must track progress and be able to chain the next auto-next.
-              ignoreProgress: false,
-              episodeSeasons: _playerEpisodeSeasons(),
-            ),
-          )
-          .then((Object? result) {
-            if (!mounted) return;
-            _playerRouteInFlight = false;
-            _activePlayerEpisodeKey = null;
-            setState(() {});
-            if (result is PlayerEpisodeSelectionResult) {
-              _nextEpisodeInFullscreen = result.startInFullscreen;
-              unawaited(_playEpisodeFromPlayer(result.episodeHref));
+      if (transitionId != null) {
+        _advanceCoordinator.move(transitionId, EpisodeAdvanceState.openingNext);
+        debugPrint(
+          'OnlineNext: transition=$transitionId state=openingNext '
+          'fullscreen=$startFs pushNext=true',
+        );
+      }
+      final Future<Object?> route = context.push(
+        AppRoutes.watchPlay,
+        extra: PlayerRouteArgs(
+          bundle: bundle,
+          item: _playerRouteItem(_lastItem!, _session!),
+          seasonNumber: _session!.seasonNumber,
+          startInFullscreen: startFs,
+          startPosition: startPosition,
+          initialQualityId: explicitQualityLabel,
+          // Auto-loaded episodes are real playback the user is watching:
+          // they must track progress and be able to chain the next auto-next.
+          ignoreProgress: false,
+          episodeSeasons: _playerEpisodeSeasons(),
+        ),
+      );
+      if (transitionId != null) {
+        _advanceCoordinator.complete(transitionId);
+        _pendingAdvance = null;
+        _retryPendingAdvance = null;
+        debugPrint(
+          'OnlineNext: transition=$transitionId state=completed '
+          'streamResolved=true pushNext=true',
+        );
+      }
+      route.then(
+        (Object? result) {
+          if (!mounted) return;
+          _playerRouteInFlight = false;
+          _activePlayerEpisodeKey = null;
+          setState(() {});
+          if (result is PlayerEpisodeSelectionResult) {
+            _nextEpisodeInFullscreen = result.startInFullscreen;
+            unawaited(_playEpisodeFromPlayer(result.episodeHref));
+            return;
+          }
+          final PlayerNextEpisodeResult? nextResult = _nextEpisodeResultFrom(
+            result,
+          );
+          if (nextResult != null) {
+            _rememberPlayerStreamPreferences(nextResult);
+            _nextEpisodeInFullscreen = nextResult.startInFullscreen;
+            final _OnlineAdvanceSnapshot? snapshot =
+                _captureOnlineAdvanceSnapshot();
+            if (snapshot == null) {
+              debugPrint(
+                'OnlineNext: transition=none state=failed '
+                'reason=current-snapshot-unavailable retryAllowed=false',
+              );
+              _clearAutoNextFullscreen();
               return;
             }
-            final PlayerNextEpisodeResult? nextResult = _nextEpisodeResultFrom(
-              result,
+            unawaited(_requestOnlineAdvance(snapshot, reason: 'player-next'));
+          }
+        },
+        onError: (Object error, StackTrace stackTrace) {
+          if (!mounted) return;
+          _playerRouteInFlight = false;
+          _activePlayerEpisodeKey = null;
+          debugPrint('Player route failed after launch: $error');
+          setState(() {
+            _session = _session?.copyWith(
+              step: WatchStep.streamReady,
+              isResolving: false,
+              error: 'Player route failed: $error',
             );
-            if (nextResult != null) {
-              _rememberPlayerStreamPreferences(nextResult);
-              _nextEpisodeInFullscreen = nextResult.startInFullscreen;
-              unawaited(_playNextEpisodeFromPlayer());
-            }
           });
+        },
+      );
     });
   }
 
@@ -675,80 +872,211 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     }
   }
 
-  Future<void> _playNextEpisodeFromPlayer() async {
+  _OnlineAdvanceSnapshot? _captureOnlineAdvanceSnapshot() {
     final WatchSession? session = _session;
     final MediaItem? item = _lastItem;
-    if (session == null || item == null) return;
-    final SoraSearchResult? source = session.source;
-    final SoraEpisode? current = session.episode;
-    if (source == null || current == null) return;
-    final DateTime now = DateTime.now();
-    final DateTime? lastAt = _lastAutoNextAt;
-    if (lastAt != null && now.difference(lastAt) < const Duration(seconds: 8)) {
-      return;
+    final SoraSearchResult? source = session?.source;
+    final SoraEpisode? current = session?.episode;
+    if (session == null || item == null || source == null || current == null) {
+      return null;
     }
-    if (_lastAutoNextFromEpisodeHref == current.href) return;
-    _lastAutoNextFromEpisodeHref = current.href;
-    _lastAutoNextAt = now;
+    final String currentKey = <String>[
+      source.addonId,
+      item.id,
+      normalizeEpisodeHref(current.href),
+      session.seasonNumber.toString(),
+      current.number.toString(),
+    ].join('|');
+    return _OnlineAdvanceSnapshot(
+      source: source,
+      current: current,
+      currentSeason: session.seasonNumber,
+      item: item,
+      currentKey: currentKey,
+      startInFullscreen: _nextEpisodeInFullscreen,
+    );
+  }
 
-    final List<SoraEpisode> episodes;
-    try {
-      final SoraInstalledAddon? addon = ref
-          .read(soraAddonsProvider)
-          .byId(source.addonId);
-      if (addon == null) {
-        throw const SoraAddonException('Addon is no longer installed.');
-      }
-      episodes = await ref
-          .read(soraJsRuntimeProvider)
-          .extractEpisodes(addon: addon, result: source);
-    } on Object catch (error) {
-      if (!mounted) return;
-      _clearAutoNextFullscreen();
-      setState(() {
-        _session = _session?.copyWith(
-          step: WatchStep.streamReady,
-          isResolving: false,
-          error: error.toString(),
-        );
-      });
-      return;
-    }
-    if (!mounted) return;
-
-    if (episodes.isEmpty) {
-      _clearAutoNextFullscreen();
-      return;
-    }
-    int index = episodes.indexWhere((SoraEpisode e) => e.href == current.href);
-    if (index < 0) {
-      index = episodes.indexWhere(
-        (SoraEpisode e) => e.number == current.number,
+  Future<void> _requestOnlineAdvance(
+    _OnlineAdvanceSnapshot snapshot, {
+    required String reason,
+  }) async {
+    final EpisodeAdvanceOperation? operation = _advanceCoordinator.begin(
+      currentKey: snapshot.currentKey,
+      reason: reason,
+    );
+    if (operation == null) {
+      debugPrint(
+        'OnlineNext: transition=${_advanceCoordinator.active?.id} '
+        'state=duplicate current=S${snapshot.currentSeason}'
+        'E${snapshot.current.displayNumber}',
       );
+      return;
     }
-    if (index < 0 || index + 1 >= episodes.length) {
-      // Exit fullscreen after the final episode if the player kept the window
-      // transition, exit fullscreen now since there's nothing to play next.
-      _clearAutoNextFullscreen();
+    _pendingAdvance = snapshot;
+    _retryPendingAdvance = null;
+    _nextEpisodeInFullscreen = snapshot.startInFullscreen;
+    _advanceCoordinator.move(operation.id, EpisodeAdvanceState.findingNext);
+    debugPrint(
+      'OnlineNext: transition=${operation.id} '
+      'current=S${snapshot.currentSeason}E${snapshot.current.displayNumber} '
+      'state=findingNext',
+    );
+
+    List<SoraEpisode>? episodes;
+    Object? lookupError;
+    for (int attempt = 1; attempt <= 3 && episodes == null; attempt++) {
+      try {
+        final SoraInstalledAddon? addon = ref
+            .read(soraAddonsProvider)
+            .byId(snapshot.source.addonId);
+        if (addon == null) {
+          throw const SoraAddonException('Addon is no longer installed.');
+        }
+        episodes = await ref
+            .read(soraJsRuntimeProvider)
+            .extractEpisodes(addon: addon, result: snapshot.source);
+      } on Object catch (error) {
+        lookupError = error;
+        debugPrint(
+          'OnlineNext: transition=${operation.id} state=findingNext '
+          'episodeListAttempt=$attempt failed=${error.runtimeType}',
+        );
+        if (attempt < 3) {
+          await Future<void>.delayed(Duration(milliseconds: 300 * attempt));
+        }
+      }
+    }
+    if (!mounted) {
+      _advanceCoordinator.cancel(operation.id);
+      return;
+    }
+    if (episodes == null) {
+      _failOnlineAdvance(
+        operation.id,
+        'episode-list: ${lookupError ?? 'unknown'}',
+      );
       return;
     }
 
-    final SoraEpisode rawNext = episodes[index + 1];
+    final SoraNextEpisodeLookup lookup = findNextSoraEpisode(
+      episodes: episodes,
+      currentHref: snapshot.current.href,
+      currentSeason: snapshot.currentSeason,
+      currentNumber: snapshot.current.number,
+    );
+    final SoraEpisode? rawNext = lookup.episode;
+    if (rawNext == null) {
+      _advanceCoordinator.noNext(operation.id);
+      _pendingAdvance = null;
+      _retryPendingAdvance = null;
+      debugPrint(
+        'OnlineNext: transition=${operation.id} state=noNext '
+        'providerEpisodes=${episodes.length} reason=${lookup.reason}',
+      );
+      _clearAutoNextFullscreen();
+      if (mounted) setState(() {});
+      return;
+    }
+
+    debugPrint(
+      'OnlineNext: transition=${operation.id} '
+      'next=S${rawNext.season > 0 ? rawNext.season : snapshot.currentSeason}'
+      'E${rawNext.displayNumber} providerEpisodes=${episodes.length} '
+      'state=resolvingNext resolutionAttempt=1',
+    );
     final AnimeEpisodeMetadata? nextMetadata = await _metadataForAutoNext(
-      item,
+      snapshot.item,
       rawNext,
     );
-    if (!mounted) return;
-
+    if (!mounted || _advanceCoordinator.active?.id != operation.id) {
+      _advanceCoordinator.cancel(operation.id);
+      return;
+    }
     final SoraEpisode next = _episodeForPlayback(rawNext, nextMetadata, null);
-    // Discard any stale cached stream for the next episode so resolution
-    // always uses a fresh URL (avoids instant failure from expired cache).
-    ref.invalidate(
-      soraStreamBundleProvider(
-        SoraStreamRequest(addonId: source.addonId, episode: next),
-      ),
+    _sourceEpisodes = List<SoraEpisode>.unmodifiable(episodes);
+    _advanceCoordinator.move(operation.id, EpisodeAdvanceState.resolvingNext);
+    _streamResolutionState.clear();
+
+    // Auto-next owns its stream request directly. Rendering the generic
+    // resolving section here allowed a previously queued provider callback to
+    // consume the new transition and reopen the episode that just ended.
+    final bool useAddonSeason =
+        _usesSourceSeasonFlow(_lastItem) && next.season > 0;
+    setState(() {
+      _session = _session!.copyWith(
+        step: WatchStep.streamReady,
+        episode: next,
+        seasonNumber: useAddonSeason ? next.season : null,
+        clearCandidate: true,
+        clearError: true,
+        isResolving: false,
+      );
+    });
+
+    final SoraStreamRequest request = SoraStreamRequest(
+      addonId: snapshot.source.addonId,
+      episode: next,
     );
-    _pickEpisode(next, isAutoNext: true);
+    NormalizedStreamBundle? resolvedBundle;
+    Object? resolutionError;
+    for (int attempt = 1; attempt <= 3 && resolvedBundle == null; attempt++) {
+      if (!mounted || _advanceCoordinator.active?.id != operation.id) {
+        _advanceCoordinator.cancel(operation.id);
+        return;
+      }
+      try {
+        // The bundle provider depends on the lower-level resolve provider.
+        // Invalidating only the bundle can preserve a stale resolved episode.
+        ref.invalidate(soraStreamResolveProvider(request));
+        ref.invalidate(soraStreamBundleProvider(request));
+        final NormalizedStreamBundle candidate = await ref.read(
+          soraStreamBundleProvider(request).future,
+        );
+        if (!sameSoraPlaybackEpisode(next, candidate.episode)) {
+          throw SoraAddonException(
+            'Resolved S${candidate.episode.season}'
+            'E${candidate.episode.displayNumber} while requesting '
+            'S${next.season}E${next.displayNumber}.',
+          );
+        }
+        final NormalizedStreamBundle preferred = _applyStreamPreferences(
+          candidate,
+        );
+        if (preferred.activeUrl.trim().isEmpty) {
+          throw const SoraAddonException(
+            'Next episode did not return a playable stream.',
+          );
+        }
+        resolvedBundle = preferred;
+      } on Object catch (error) {
+        resolutionError = error;
+        debugPrint(
+          'OnlineNext: transition=${operation.id} state=resolvingNext '
+          'resolutionAttempt=$attempt failed=${error.runtimeType}',
+        );
+        if (attempt < 3) {
+          await Future<void>.delayed(Duration(milliseconds: 300 * attempt));
+        }
+      }
+    }
+    if (!mounted || _advanceCoordinator.active?.id != operation.id) {
+      _advanceCoordinator.cancel(operation.id);
+      return;
+    }
+    if (resolvedBundle == null) {
+      _failOnlineAdvance(
+        operation.id,
+        'stream-resolution: ${resolutionError ?? 'unknown'}',
+      );
+      return;
+    }
+
+    _playResolvedBundle(
+      resolvedBundle,
+      isAutoNext: true,
+      transitionId: operation.id,
+    );
   }
 
   /// Builds the season-grouped episode list handed to the player so its
@@ -790,44 +1118,68 @@ class _WatchPageState extends ConsumerState<WatchPage> {
   Future<void> _playEpisodeFromPlayer(String href) async {
     final WatchSession? session = _session;
     final MediaItem? item = _lastItem;
-    if (session == null || item == null) return;
+    if (session == null || item == null) {
+      debugPrint(
+        'OnlineNext: transition=selection state=failed '
+        'reason=session-unavailable retryAllowed=false',
+      );
+      _clearAutoNextFullscreen();
+      return;
+    }
     final SoraSearchResult? source = session.source;
-    if (source == null) return;
-    if (href.trim().isEmpty) return;
+    if (source == null || href.trim().isEmpty) {
+      _failOnlineEpisodeSelection(href, 'invalid-selection-context');
+      return;
+    }
 
-    // Manual selection must never be blocked by the auto-next de-dupe guard.
-    _lastAutoNextFromEpisodeHref = null;
+    debugPrint(
+      'OnlineNext: transition=selection state=findingNext '
+      'fullscreen=$_nextEpisodeInFullscreen',
+    );
 
     List<SoraEpisode> episodes = _sourceEpisodes ?? const <SoraEpisode>[];
     if (episodes.isEmpty) {
-      try {
-        final SoraInstalledAddon? addon = ref
-            .read(soraAddonsProvider)
-            .byId(source.addonId);
-        if (addon == null) {
-          throw const SoraAddonException('Addon is no longer installed.');
+      Object? lastError;
+      for (int attempt = 1; attempt <= 3 && episodes.isEmpty; attempt++) {
+        try {
+          final SoraInstalledAddon? addon = ref
+              .read(soraAddonsProvider)
+              .byId(source.addonId);
+          if (addon == null) {
+            throw const SoraAddonException('Addon is no longer installed.');
+          }
+          episodes = await ref
+              .read(soraJsRuntimeProvider)
+              .extractEpisodes(addon: addon, result: source);
+        } on Object catch (error) {
+          lastError = error;
+          if (attempt < 3) {
+            await Future<void>.delayed(Duration(milliseconds: 300 * attempt));
+          }
         }
-        episodes = await ref
-            .read(soraJsRuntimeProvider)
-            .extractEpisodes(addon: addon, result: source);
-      } on Object catch (error) {
-        if (!mounted) return;
-        _clearAutoNextFullscreen();
-        setState(() {
-          _session = _session?.copyWith(
-            step: WatchStep.streamReady,
-            isResolving: false,
-            error: error.toString(),
-          );
-        });
+      }
+      if (episodes.isEmpty) {
+        _failOnlineEpisodeSelection(
+          href,
+          'episode-list: ${lastError ?? 'empty'}',
+        );
         return;
       }
-      if (!mounted) return;
+      if (!mounted) {
+        debugPrint(
+          'OnlineNext: transition=selection state=cancelled reason=unmounted',
+        );
+        return;
+      }
     }
 
-    final int index = episodes.indexWhere((SoraEpisode e) => e.href == href);
+    final String normalizedHref = normalizeEpisodeHref(href);
+    final int index = episodes.indexWhere(
+      (SoraEpisode e) =>
+          e.href == href || normalizeEpisodeHref(e.href) == normalizedHref,
+    );
     if (index < 0) {
-      _clearAutoNextFullscreen();
+      _failOnlineEpisodeSelection(href, 'selected-episode-not-found');
       return;
     }
 
@@ -836,7 +1188,12 @@ class _WatchPageState extends ConsumerState<WatchPage> {
       item,
       rawSelected,
     );
-    if (!mounted) return;
+    if (!mounted) {
+      debugPrint(
+        'OnlineNext: transition=selection state=cancelled reason=unmounted',
+      );
+      return;
+    }
 
     final SoraEpisode selected = _episodeForPlayback(
       rawSelected,
@@ -850,6 +1207,25 @@ class _WatchPageState extends ConsumerState<WatchPage> {
       ),
     );
     _pickEpisode(selected);
+  }
+
+  void _failOnlineEpisodeSelection(String href, String reason) {
+    debugPrint(
+      'OnlineNext: transition=selection state=failed reason=$reason '
+      'retryAllowed=${href.trim().isNotEmpty}',
+    );
+    _clearAutoNextFullscreen();
+    _retryPendingAdvance = href.trim().isEmpty
+        ? null
+        : () => unawaited(_playEpisodeFromPlayer(href));
+    if (!mounted || _session == null) return;
+    setState(() {
+      _session = _session!.copyWith(
+        step: WatchStep.streamReady,
+        isResolving: false,
+        error: 'Episode selection failed: $reason',
+      );
+    });
   }
 
   Future<AnimeEpisodeMetadata?> _metadataForAutoNext(
@@ -1125,7 +1501,10 @@ class _WatchPageState extends ConsumerState<WatchPage> {
 
                     if (session.error != null) ...<Widget>[
                       const SizedBox(height: AppSpacing.lg),
-                      _ErrorBanner(message: session.error!),
+                      _ErrorBanner(
+                        message: session.error!,
+                        onRetry: _retryPendingAdvance,
+                      ),
                     ],
                   ],
                 ],
@@ -3836,7 +4215,8 @@ String _episodeImageUrl({
 
 String? _streamRequestKey(SoraSearchResult? source, SoraEpisode? episode) {
   if (source == null || episode == null) return null;
-  return '${source.addonId}:${episode.href}';
+  return '${source.addonId}:${episode.season}:${episode.number}:'
+      '${episode.href}';
 }
 
 SoraEpisode _episodeForPlayback(
@@ -4168,9 +4548,10 @@ class _StreamReadySheetState extends State<_StreamReadySheet> {
 // Error banner
 
 class _ErrorBanner extends StatelessWidget {
-  const _ErrorBanner({required this.message});
+  const _ErrorBanner({required this.message, this.onRetry});
 
   final String message;
+  final VoidCallback? onRetry;
 
   @override
   Widget build(BuildContext context) {
@@ -4188,6 +4569,10 @@ class _ErrorBanner extends StatelessWidget {
           Expanded(
             child: Text(message, style: Theme.of(context).textTheme.bodyMedium),
           ),
+          if (onRetry != null) ...<Widget>[
+            const SizedBox(width: AppSpacing.md),
+            TextButton(onPressed: onRetry, child: Text(context.t('Retry'))),
+          ],
         ],
       ),
     );

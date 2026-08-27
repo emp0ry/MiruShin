@@ -239,6 +239,78 @@ void main() {
         isNull,
       );
     });
+
+    test('captures next from snapshot before current is deleted', () {
+      final List<DownloadedEpisode> snapshot =
+          List<DownloadedEpisode>.unmodifiable(<DownloadedEpisode>[
+            _episode(1),
+            _episode(2),
+          ]);
+      final OfflinePlayerContinuation? continuation =
+          offlinePlayerContinuationForResult(
+            result: const PlayerNextEpisodeResult(startInFullscreen: true),
+            current: snapshot.first,
+            moduleEpisodes: snapshot,
+          );
+      final List<DownloadedEpisode> afterDelete = snapshot
+          .where((DownloadedEpisode episode) => episode.id != snapshot.first.id)
+          .toList(growable: false);
+
+      expect(afterDelete, hasLength(1));
+      expect(continuation?.episode.id, snapshot.last.id);
+      expect(continuation?.startInFullscreen, isTrue);
+    });
+
+    test('changed download id falls back to normalized episode href', () {
+      final DownloadedEpisode current = _episode(
+        1,
+        id: 'new-generated-id',
+        href: 'https://provider.test/episode-1/',
+      );
+      final List<DownloadedEpisode> snapshot = <DownloadedEpisode>[
+        _episode(
+          1,
+          id: 'old-generated-id',
+          href: 'https://PROVIDER.test/episode-1',
+        ),
+        _episode(2),
+      ];
+
+      expect(nextDownloadedEpisode(current, snapshot)?.episodeNumber, 2);
+    });
+
+    test('missing id and href fall back to addon season and number', () {
+      final DownloadedEpisode current = _episode(
+        1,
+        id: 'changed-id',
+        href: '/changed-href',
+      );
+      final List<DownloadedEpisode> snapshot = <DownloadedEpisode>[
+        _episode(1, id: 'snapshot-id', href: '/original-href'),
+        _episode(2),
+      ];
+
+      expect(nextDownloadedEpisode(current, snapshot)?.episodeNumber, 2);
+    });
+
+    test('episode selection accepts normalized href', () {
+      final List<DownloadedEpisode> episodes = <DownloadedEpisode>[
+        _episode(1),
+        _episode(2, href: 'https://provider.test/episode-2/'),
+      ];
+
+      final OfflinePlayerContinuation? continuation =
+          offlinePlayerContinuationForResult(
+            result: const PlayerEpisodeSelectionResult(
+              episodeHref: 'https://PROVIDER.test/episode-2',
+              startInFullscreen: false,
+            ),
+            current: episodes.first,
+            moduleEpisodes: episodes,
+          );
+
+      expect(continuation?.episode.episodeNumber, 2);
+    });
   });
 }
 
@@ -269,15 +341,17 @@ DownloadedEpisode _episode(
   List<DownloadedSubtitle> subtitles = const <DownloadedSubtitle>[],
   DownloadKind kind = DownloadKind.mp4,
   String videoFileName = 'video.mp4',
+  String? id,
+  String? href,
 }) {
   final DateTime now = DateTime(2026);
   return DownloadedEpisode(
-    id: 'episode-$season-$number',
+    id: id ?? 'episode-$season-$number',
     mediaId: _media.id,
     media: _media,
     addonId: 'addon',
     addonName: 'Addon',
-    episodeHref: '/episode-$number',
+    episodeHref: href ?? '/episode-$number',
     episodeNumber: number.toDouble(),
     seasonNumber: season,
     episodeTitle: 'Episode $number',
