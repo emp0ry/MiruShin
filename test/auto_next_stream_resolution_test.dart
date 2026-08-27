@@ -79,6 +79,62 @@ void main() {
     expect(state.phase, OnlineNextResolutionUiPhase.resolving);
   });
 
+  test('resolving keeps episode context and target selection visible', () {
+    const SoraSearchResult source = SoraSearchResult(
+      addonId: 'addon',
+      addonName: 'Provider',
+      title: 'Show',
+      image: '',
+      href: '/show',
+      languageCode: 'en',
+      query: 'Show',
+      score: 1,
+    );
+    final SoraEpisode target = _episode(2, '/show/2', season: 1);
+    final WatchSession resolving = WatchSession(
+      step: WatchStep.resolveStream,
+      source: source,
+      episode: target,
+      isResolving: true,
+    );
+
+    expect(watchTabsRemainVisible(resolving.step), isTrue);
+    expect(
+      watchEpisodePickerRemainsVisible(
+        step: resolving.step,
+        visibleTab: 1,
+        hasSource: resolving.source != null,
+      ),
+      isTrue,
+    );
+    expect(resolving.episode?.href, target.href);
+    expect(
+      watchEpisodeIsSelected(resolving.episode?.href, target.href),
+      isTrue,
+    );
+
+    final WatchSession failed = resolving.copyWith(
+      isResolving: false,
+      error: 'Next episode failed',
+    );
+    expect(
+      watchEpisodePickerRemainsVisible(
+        step: failed.step,
+        visibleTab: 1,
+        hasSource: failed.source != null,
+      ),
+      isTrue,
+    );
+    expect(failed.episode?.href, target.href);
+
+    final WatchSession retried = failed.copyWith(
+      isResolving: true,
+      clearError: true,
+    );
+    expect(retried.episode?.href, target.href);
+    expect(retried.isResolving, isTrue);
+  });
+
   test('duplicate active completion creates one transition', () {
     final EpisodeAdvanceCoordinator coordinator = EpisodeAdvanceCoordinator();
 

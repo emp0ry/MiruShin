@@ -10,6 +10,22 @@ enum WatchStep {
   streamReady,
 }
 
+bool watchTabsRemainVisible(WatchStep step) {
+  return step != WatchStep.pickSeason && step != WatchStep.pickSourceSeason;
+}
+
+bool watchEpisodePickerRemainsVisible({
+  required WatchStep step,
+  required int visibleTab,
+  required bool hasSource,
+}) {
+  return watchTabsRemainVisible(step) && visibleTab == 1 && hasSource;
+}
+
+bool watchEpisodeIsSelected(String? selectedHref, String episodeHref) {
+  return selectedHref != null && selectedHref == episodeHref;
+}
+
 class WatchSession {
   const WatchSession({
     required this.step,

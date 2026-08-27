@@ -257,6 +257,7 @@ class PlaybackController extends Notifier<PlaybackState> {
   final PlaybackDurationEvidence _durationEvidence = PlaybackDurationEvidence();
   bool _prematureEofRecoveryActive = false;
   int _prematureEofRecoveryAttempts = 0;
+  Duration? _prematureEofRecoveryNeedsProgressFrom;
   // Latched once the current episode crosses the watched threshold (85%). The
   // engine listener fires on every position tick, so this guarantees the
   // watched mark + AniList sync run exactly once and can't be cleared by a
@@ -274,6 +275,10 @@ class PlaybackController extends Notifier<PlaybackState> {
   int _playbackGeneration = 0;
   int _seekPreviewGeneration = 0;
   int _manualSeekEpoch = 0;
+  int? _manualSeekEofEpoch;
+  int? _manualSeekEofFallbackEpoch;
+  Duration? _manualSeekEofTarget;
+  Duration? _manualSeekEofOrigin;
   Duration _resumeGuardPosition = Duration.zero;
   DateTime? _resumeGuardUntil;
   PlayerEngine? _queuedSeekEngine;
@@ -745,6 +750,11 @@ class PlaybackController extends Notifier<PlaybackState> {
       '[DEBUG] load: S${item.seasonNumber}E${item.episodeNumber} ignoreProgress=${item.ignoreProgress}',
     );
     await _waitForFinalProgressSaveBarrier();
+    // Invalidate listeners and EOF recovery immediately when a new item starts
+    // loading. Resolution/progress lookup can await before _open creates the
+    // replacement engine, so waiting until _open would leave a stale recovery
+    // free to mutate the outgoing session during that gap.
+    _playbackGeneration++;
     _stopOfflineStallWatch();
     _progressTimer?.cancel();
     _undoTimer?.cancel();
@@ -754,6 +764,8 @@ class PlaybackController extends Notifier<PlaybackState> {
     _durationEvidence.reset();
     _prematureEofRecoveryActive = false;
     _prematureEofRecoveryAttempts = 0;
+    _prematureEofRecoveryNeedsProgressFrom = null;
+    _resetManualSeekEofWindow();
     _autoProgressMarked = false;
     _autoNextDismissed = false;
     _playPauseIntentEpoch++;
@@ -950,6 +962,8 @@ class PlaybackController extends Notifier<PlaybackState> {
     _durationEvidence.reset();
     _prematureEofRecoveryActive = false;
     _prematureEofRecoveryAttempts = 0;
+    _prematureEofRecoveryNeedsProgressFrom = null;
+    _resetManualSeekEofWindow();
     final int generation = ++_playbackGeneration;
     _clearInteractiveSeek();
     _cancelSeekThumbnailRequests();
@@ -1597,6 +1611,8 @@ class PlaybackController extends Notifier<PlaybackState> {
     final bool confirmedEnded = state.confirmedEnded;
     final bool interactionInProgress =
         _offlineStallRecoveryActive ||
+        _prematureEofRecoveryActive ||
+        (value.isCompleted && !confirmedEnded) ||
         state.loading ||
         state.playPauseOperationInFlight ||
         state.resumeStabilizing ||
@@ -1748,6 +1764,10 @@ class PlaybackController extends Notifier<PlaybackState> {
     _autoNextOverlayTimer?.cancel();
     _clearInteractiveSeek();
     _cancelSeekThumbnailRequests();
+    _prematureEofRecoveryActive = false;
+    _prematureEofRecoveryAttempts = 0;
+    _prematureEofRecoveryNeedsProgressFrom = null;
+    _resetManualSeekEofWindow();
     _engineForDispose = null;
     state = const PlaybackState();
     try {
@@ -2239,14 +2259,15 @@ class PlaybackController extends Notifier<PlaybackState> {
       watchedFraction: _watchedFraction,
     );
     if (end.confirmedEnded) {
+      _resetManualSeekEofWindow();
       if (_reachedNearEnd) return;
       _reachedNearEnd = true;
       state = state.copyWith(confirmedEnded: true);
       _markCurrentCompleted(showNext: true);
-    } else if (target < duration - const Duration(seconds: 30)) {
+    } else {
       _invalidateConfirmedEnd('manual seek moved before end');
-      // Lower the high-water mark to the rewatch point so a spurious EOF during
-      // the re-watch isn't validated against progress from before the seek.
+      // A backward seek starts a new completion-evidence window. Progress from
+      // before the seek must not validate a stale completed callback afterward.
       if (_maxObservedPosition > target) _maxObservedPosition = target;
     }
   }
@@ -2480,6 +2501,13 @@ class PlaybackController extends Notifier<PlaybackState> {
 
   Duration _currentPositionFor(PlayerEngine? engine) {
     if (engine == null) return Duration.zero;
+    if (_manualSeekOwnsBackendEof(engine) &&
+        engine.state.value.isCompleted &&
+        _manualSeekEofOrigin != null) {
+      // Do not persist/reopen at a tail position that this seek interaction
+      // already proved unusable. Keep the last position that was playing.
+      return _manualSeekEofOrigin!;
+    }
     if (_queuedSeekEngine == engine && _queuedSeekTarget != null) {
       return _queuedSeekTarget!;
     }
@@ -2519,7 +2547,11 @@ class PlaybackController extends Notifier<PlaybackState> {
     Duration target, {
     required Duration delay,
   }) {
-    _manualSeekEpoch++;
+    _beginManualSeekEofWindow(
+      engine,
+      target,
+      from: engine.state.value.position,
+    );
     _cancelSeekSettle(clearPreview: false);
     _queuedSeekEngine = engine;
     _queuedSeekTarget = target;
@@ -2538,7 +2570,7 @@ class PlaybackController extends Notifier<PlaybackState> {
   }
 
   Future<void> _flushInteractiveSeek() async {
-    if (_seekInFlight) return;
+    if (_seekInFlight || _prematureEofRecoveryActive) return;
     final PlayerEngine? engine = _queuedSeekEngine;
     final Duration? target = _queuedSeekTarget;
     if (engine == null || target == null || state.engine != engine) {
@@ -2571,6 +2603,9 @@ class PlaybackController extends Notifier<PlaybackState> {
         if (seekCompleted) {
           _noteManualSeekTarget(target, engine.state.value.duration);
           _beginSeekSettle(engine, target, from: from);
+          if (engine.state.value.isCompleted) {
+            _evaluatePlaybackProgress(engine);
+          }
         } else {
           _cancelSeekSettle(clearPreview: true);
         }
@@ -2599,6 +2634,53 @@ class PlaybackController extends Notifier<PlaybackState> {
       _seekSettleTick,
       (_) => _settleSeekPreview(),
     );
+  }
+
+  void _beginManualSeekEofWindow(
+    PlayerEngine engine,
+    Duration target, {
+    required Duration from,
+  }) {
+    _manualSeekEpoch++;
+    _manualSeekEofEpoch = _manualSeekEpoch;
+    _manualSeekEofFallbackEpoch = null;
+    _manualSeekEofTarget = target;
+    _manualSeekEofOrigin = from;
+    _prematureEofRecoveryAttempts = 0;
+    _prematureEofRecoveryNeedsProgressFrom = null;
+
+    final Duration duration = engine.state.value.duration;
+    final PlaybackEndEvaluation targetEnd = evaluatePlaybackEnd(
+      backendCompleted: false,
+      durationIsAuthoritative: duration >= const Duration(seconds: 30),
+      mediaKind: _mediaKindForCurrentSource(),
+      position: target,
+      maxObservedPosition: target,
+      duration: duration,
+      watchedFraction: _watchedFraction,
+    );
+    if (!targetEnd.confirmedEnded) {
+      _invalidateConfirmedEnd('manual seek started before real end');
+      if (_maxObservedPosition > target) {
+        _maxObservedPosition = target;
+      }
+    }
+  }
+
+  bool _manualSeekOwnsBackendEof(PlayerEngine engine) {
+    return identical(state.engine, engine) &&
+        _manualSeekEofEpoch == _manualSeekEpoch &&
+        (_seekInFlight ||
+            (_queuedSeekEngine == engine && _queuedSeekTarget != null) ||
+            _settlingSeekEngine == engine ||
+            _manualSeekEofTarget != null);
+  }
+
+  void _resetManualSeekEofWindow() {
+    _manualSeekEofEpoch = null;
+    _manualSeekEofFallbackEpoch = null;
+    _manualSeekEofTarget = null;
+    _manualSeekEofOrigin = null;
   }
 
   void _settleSeekPreview() {
@@ -2647,6 +2729,10 @@ class PlaybackController extends Notifier<PlaybackState> {
     if (!timedOut &&
         (!settled || !heldLongEnough || !canClearRememberedBuffer)) {
       return;
+    }
+
+    if (!engine.state.value.isCompleted) {
+      _resetManualSeekEofWindow();
     }
 
     final bool shouldClear = state.seekPreviewPosition == target;
@@ -2975,9 +3061,9 @@ class PlaybackController extends Notifier<PlaybackState> {
     final Duration from = _currentPositionFor(engine);
     final Duration duration = engine.state.value.duration;
     final Duration clampedTarget = _clampSeekPosition(target, duration);
-    _manualSeekEpoch++;
     _clearResumeGuard();
     _clearInteractiveSeek();
+    _beginManualSeekEofWindow(engine, clampedTarget, from: from);
     // Skip jumps (notably the auto ED-skip, which lands on the episode end) must
     // feed completion detection like slider and gesture seeks do. Otherwise, jumping
     // past the end leaves the episode unwatched and never triggers auto-next.
@@ -3003,6 +3089,9 @@ class PlaybackController extends Notifier<PlaybackState> {
     _noteManualSeekTarget(clampedTarget, duration);
     _notePausedResumeTarget(engine, clampedTarget);
     _beginSeekSettle(engine, clampedTarget, from: from);
+    if (engine.state.value.isCompleted) {
+      _evaluatePlaybackProgress(engine);
+    }
     state = state.copyWith(lastSkippedFrom: from);
     _undoTimer?.cancel();
     _undoTimer = Timer(
@@ -3024,9 +3113,9 @@ class PlaybackController extends Notifier<PlaybackState> {
       from,
       engine.state.value.duration,
     );
-    _manualSeekEpoch++;
     _clearResumeGuard();
     _clearInteractiveSeek();
+    _beginManualSeekEofWindow(engine, target, from: fromPosition);
     _notePausedResumeTarget(engine, target);
     _setSeekPreview(engine, target);
     bool seekCompleted = false;
@@ -3116,11 +3205,27 @@ class PlaybackController extends Notifier<PlaybackState> {
     if (durationGrew) {
       _invalidateConfirmedEnd('authoritative duration grew');
     }
+    final Duration? manualTarget = _manualSeekEofTarget;
+    if (_manualSeekEofEpoch == _manualSeekEpoch &&
+        manualTarget != null &&
+        !_seekInFlight &&
+        _queuedSeekTarget == null &&
+        !es.isCompleted &&
+        es.position >= manualTarget + const Duration(milliseconds: 250)) {
+      _resetManualSeekEofWindow();
+    }
     final Duration pos = es.position;
-    if (pos <= _maxObservedPosition) return;
     final Duration dur = es.duration;
-    if (dur > Duration.zero && pos > dur + const Duration(seconds: 5)) return;
-    _maxObservedPosition = pos;
+    if (pos > _maxObservedPosition &&
+        !(dur > Duration.zero && pos > dur + const Duration(seconds: 5))) {
+      _maxObservedPosition = pos;
+    }
+    final Duration? recoveryPosition = _prematureEofRecoveryNeedsProgressFrom;
+    if (recoveryPosition != null &&
+        _maxObservedPosition >= recoveryPosition + const Duration(seconds: 1)) {
+      _prematureEofRecoveryAttempts = 0;
+      _prematureEofRecoveryNeedsProgressFrom = null;
+    }
   }
 
   PlaybackMediaKind _mediaKindForCurrentSource() {
@@ -3212,21 +3317,156 @@ class PlaybackController extends Notifier<PlaybackState> {
     PlaybackEndEvaluation evaluation,
   ) {
     _invalidateConfirmedEnd(evaluation.decision.name);
-    if (_prematureEofRecoveryActive || _prematureEofRecoveryAttempts >= 2) {
-      if (_prematureEofRecoveryAttempts >= 2 && state.error == null) {
-        state = state.copyWith(
-          error: const PlayerError(
-            title: 'Playback stopped early',
-            message:
-                'The stream ended before the episode finished. Retry to continue from the last position.',
-            canRetry: true,
-          ),
-          desiredPlaying: false,
-        );
-      }
+    if (_manualSeekOwnsBackendEof(engine)) {
+      _handleManualSeekBackendEof(engine, evaluation);
+      return;
+    }
+    if (_prematureEofRecoveryActive || _prematureEofRecoveryAttempts >= 1) {
       return;
     }
     unawaited(_recoverPrematureBackendEof(engine, evaluation));
+  }
+
+  void _handleManualSeekBackendEof(
+    PlayerEngine engine,
+    PlaybackEndEvaluation evaluation,
+  ) {
+    // A completion callback delivered while the user's native seek is still
+    // pending belongs to that seek evidence window. Let the seek finish before
+    // issuing the single compatibility fallback; never overlap native seeks.
+    if (_seekInFlight ||
+        (_queuedSeekEngine == engine && _queuedSeekTarget != null)) {
+      return;
+    }
+    if (_prematureEofRecoveryActive ||
+        _manualSeekEofFallbackEpoch == _manualSeekEpoch) {
+      return;
+    }
+    unawaited(_recoverManualSeekBackendEof(engine, evaluation));
+  }
+
+  bool _isCurrentEofRecovery(
+    PlayerEngine engine,
+    int generation,
+    int manualSeekEpoch,
+  ) {
+    return generation == _playbackGeneration &&
+        manualSeekEpoch == _manualSeekEpoch &&
+        identical(state.engine, engine);
+  }
+
+  Future<void> _recoverManualSeekBackendEof(
+    PlayerEngine engine,
+    PlaybackEndEvaluation evaluation,
+  ) async {
+    if (_prematureEofRecoveryActive || !identical(state.engine, engine)) {
+      return;
+    }
+    final int generation = _playbackGeneration;
+    final int manualSeekEpoch = _manualSeekEpoch;
+    final Duration requestedTarget =
+        _manualSeekEofTarget ?? evaluation.observedPosition;
+    final Duration fallbackTarget = requestedTarget > const Duration(seconds: 8)
+        ? requestedTarget - const Duration(seconds: 8)
+        : Duration.zero;
+    final Duration? playableOrigin = _manualSeekEofOrigin;
+    final bool shouldPlay = state.desiredPlaying;
+    _prematureEofRecoveryActive = true;
+    _manualSeekEofFallbackEpoch = manualSeekEpoch;
+    _logPlaybackEnd(engine, evaluation);
+    debugPrint(
+      'PlaybackRecovery: reason=manual-seek-eof '
+      'target=${requestedTarget.inSeconds}s '
+      'fallback=${fallbackTarget.inSeconds}s attempt=1/1',
+    );
+
+    try {
+      await engine.seekTo(fallbackTarget);
+      if (!_isCurrentEofRecovery(engine, generation, manualSeekEpoch)) return;
+      if (shouldPlay) await engine.play();
+      if (!_isCurrentEofRecovery(engine, generation, manualSeekEpoch)) return;
+
+      _manualSeekEofTarget = fallbackTarget;
+      if (_maxObservedPosition > fallbackTarget) {
+        _maxObservedPosition = fallbackTarget;
+      }
+      state = state.copyWith(
+        clearError: true,
+        confirmedEnded: false,
+        autoNextVisible: false,
+      );
+      _beginSeekSettle(engine, fallbackTarget, from: requestedTarget);
+      await Future<void>.delayed(_seekSettleMinHold);
+      if (!_isCurrentEofRecovery(engine, generation, manualSeekEpoch)) return;
+
+      // If MDK still reports end at the compatibility target, roll back once
+      // to the position that was demonstrably playing before the user seek.
+      // This is not a source reopen and never becomes a fatal player error.
+      if (engine.state.value.isCompleted &&
+          playableOrigin != null &&
+          playableOrigin != fallbackTarget) {
+        await engine.seekTo(playableOrigin);
+        if (!_isCurrentEofRecovery(engine, generation, manualSeekEpoch)) {
+          return;
+        }
+        if (shouldPlay) await engine.play();
+        if (!_isCurrentEofRecovery(engine, generation, manualSeekEpoch)) {
+          return;
+        }
+        _manualSeekEofTarget = playableOrigin;
+        if (_maxObservedPosition > playableOrigin) {
+          _maxObservedPosition = playableOrigin;
+        }
+        _beginSeekSettle(engine, playableOrigin, from: fallbackTarget);
+        await Future<void>.delayed(_seekSettleMinHold);
+        if (!_isCurrentEofRecovery(engine, generation, manualSeekEpoch)) {
+          return;
+        }
+      }
+
+      final bool recovered =
+          !engine.state.value.isCompleted && !engine.state.value.hasError;
+      debugPrint(
+        'PlaybackRecovery: reason=manual-seek-eof '
+        'success=$recovered fatalError=false',
+      );
+      if (!engine.state.value.hasError) {
+        state = state.copyWith(
+          clearError: true,
+          confirmedEnded: false,
+          autoNextVisible: false,
+        );
+      }
+    } on Object catch (error) {
+      final bool isCurrent = _isCurrentEofRecovery(
+        engine,
+        generation,
+        manualSeekEpoch,
+      );
+      if (kDebugMode) {
+        debugPrint(
+          isCurrent
+              ? 'PlaybackRecovery: reason=manual-seek-eof success=false '
+                    'fatalError=false error=${error.runtimeType}'
+              : 'PlaybackRecovery: reason=manual-seek-eof cancelled=true',
+        );
+      }
+      if (isCurrent && !engine.state.value.hasError) {
+        state = state.copyWith(
+          clearError: true,
+          confirmedEnded: false,
+          autoNextVisible: false,
+        );
+      }
+    } finally {
+      if (generation == _playbackGeneration &&
+          identical(state.engine, engine)) {
+        _prematureEofRecoveryActive = false;
+        if (_queuedSeekTarget != null) {
+          unawaited(_flushInteractiveSeek());
+        }
+      }
+    }
   }
 
   Future<void> _recoverPrematureBackendEof(
@@ -3238,27 +3478,21 @@ class PlaybackController extends Notifier<PlaybackState> {
     }
     _prematureEofRecoveryActive = true;
     final int generation = _playbackGeneration;
-    final int attempt = ++_prematureEofRecoveryAttempts;
+    final int manualSeekEpoch = _manualSeekEpoch;
+    _prematureEofRecoveryAttempts = 1;
     final Duration resumeAt =
-        evaluation.observedPosition > const Duration(milliseconds: 750)
-        ? evaluation.observedPosition - const Duration(milliseconds: 750)
+        evaluation.observedPosition > const Duration(seconds: 5)
+        ? evaluation.observedPosition - const Duration(seconds: 5)
         : Duration.zero;
     bool recoveryOperationFailed = false;
     _logPlaybackEnd(engine, evaluation);
     try {
       await engine.pause();
-      if (generation != _playbackGeneration ||
-          !identical(state.engine, engine)) {
-        return;
-      }
+      if (!_isCurrentEofRecovery(engine, generation, manualSeekEpoch)) return;
       await engine.seekTo(resumeAt);
-      if (generation != _playbackGeneration ||
-          !identical(state.engine, engine)) {
-        return;
-      }
+      if (!_isCurrentEofRecovery(engine, generation, manualSeekEpoch)) return;
       await engine.play();
-      if (generation == _playbackGeneration &&
-          identical(state.engine, engine)) {
+      if (_isCurrentEofRecovery(engine, generation, manualSeekEpoch)) {
         state = state.copyWith(
           desiredPlaying: true,
           clearError: true,
@@ -3271,7 +3505,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       recoveryOperationFailed = true;
       if (kDebugMode) {
         debugPrint(
-          'PlaybackRecovery: reason=premature-eof attempt=$attempt/2 '
+          'PlaybackRecovery: reason=premature-eof attempt=1/1 '
           'resume=${resumeAt.inSeconds}s success=false '
           'error=${error.runtimeType}',
         );
@@ -3280,35 +3514,21 @@ class PlaybackController extends Notifier<PlaybackState> {
       if (generation == _playbackGeneration &&
           identical(state.engine, engine)) {
         _prematureEofRecoveryActive = false;
+        final bool stillCurrentSeek = manualSeekEpoch == _manualSeekEpoch;
         final PlayerEngineState value = engine.state.value;
-        if (!recoveryOperationFailed && !value.hasError) {
+        if (stillCurrentSeek && !recoveryOperationFailed && !value.hasError) {
           debugPrint(
-            'PlaybackRecovery: reason=premature-eof attempt=$attempt/2 '
+            'PlaybackRecovery: reason=premature-eof attempt=1/1 '
             'resume=${resumeAt.inSeconds}s success=${!value.isCompleted}',
           );
         }
-        if (value.isCompleted || value.hasError) {
-          if (_prematureEofRecoveryAttempts >= 2) {
-            state = state.copyWith(
-              error: const PlayerError(
-                title: 'Playback stopped early',
-                message:
-                    'The stream ended before the episode finished. Retry to continue from the last position.',
-                canRetry: true,
-              ),
-              desiredPlaying: false,
-            );
-          } else {
-            _trackMaxObservedPosition(engine);
-            final PlaybackEndEvaluation evaluation = _playbackEndEvaluation(
-              engine,
-            );
-            if (evaluation.confirmedEnded) {
-              _evaluatePlaybackProgress(engine);
-            } else {
-              _handlePrematureBackendEof(engine, evaluation);
-            }
-          }
+        if (stillCurrentSeek && !value.isCompleted && !value.hasError) {
+          _prematureEofRecoveryNeedsProgressFrom = evaluation.observedPosition;
+        }
+        if (_queuedSeekTarget != null) {
+          unawaited(_flushInteractiveSeek());
+        } else if (!stillCurrentSeek && value.isCompleted) {
+          _evaluatePlaybackProgress(engine);
         }
       }
     }

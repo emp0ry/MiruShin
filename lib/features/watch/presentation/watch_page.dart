@@ -1502,10 +1502,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
                       ),
 
                     // Tab bar (Find Sources / Choose Episode)
-                    if (session.step != WatchStep.pickSeason &&
-                        session.step != WatchStep.pickSourceSeason &&
-                        !_onlineNextResolutionUi
-                            .ownsDirectResolution) ...<Widget>[
+                    if (watchTabsRemainVisible(session.step)) ...<Widget>[
                       _WatchTabBar(
                         selectedTab: _visibleTab,
                         hasEpisodes: session.source != null,
@@ -1521,7 +1518,6 @@ class _WatchPageState extends ConsumerState<WatchPage> {
                     // stop after picking a source and restart if the user returns)
                     if (session.step != WatchStep.pickSeason &&
                         session.step != WatchStep.pickSourceSeason &&
-                        !_onlineNextResolutionUi.ownsDirectResolution &&
                         _visibleTab == 0)
                       KeyedSubtree(
                         key: _sourceKey,
@@ -1533,11 +1529,11 @@ class _WatchPageState extends ConsumerState<WatchPage> {
                       ),
 
                     // Tab 1: episode picker.
-                    if (session.step != WatchStep.pickSeason &&
-                        session.step != WatchStep.pickSourceSeason &&
-                        !_onlineNextResolutionUi.ownsDirectResolution &&
-                        _visibleTab == 1 &&
-                        session.source != null)
+                    if (watchEpisodePickerRemainsVisible(
+                      step: session.step,
+                      visibleTab: _visibleTab,
+                      hasSource: session.source != null,
+                    ))
                       KeyedSubtree(
                         key: _episodeKey,
                         child: _EpisodePickerSection(
@@ -3615,7 +3611,10 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
                       item: widget.item,
                       allowExternalVisuals: externalVisualsEnabled,
                     ),
-                    isSelected: widget.selectedEpisodeHref == episode.href,
+                    isSelected: watchEpisodeIsSelected(
+                      widget.selectedEpisodeHref,
+                      episode.href,
+                    ),
                     isWatched: isWatched,
                     isContinue: isContinue,
                     localProgress: localProg,

@@ -280,19 +280,453 @@ void main() {
       expect(c.read(playbackControllerProvider).seekPreviewPosition, isNull);
     });
 
-    test('premature EOF is bounded and never exposes auto-next', () async {
+    test(
+      'natural premature EOF is bounded and never exposes auto-next',
+      () async {
+        final ProviderContainer c = container();
+        final PlaybackController controller = c.read(
+          playbackControllerProvider.notifier,
+        );
+        final MediaPlaybackItem item = _testPlaybackItem('premature-eof');
+        final _FakePlayerEngine engine = _FakePlayerEngine(
+          const PlayerEngineState(
+            isInitialized: true,
+            isPlaying: true,
+            position: Duration(seconds: 1403),
+            duration: Duration(seconds: 1434),
+          ),
+        );
+        controller.debugSetPlaybackState(
+          PlaybackState(
+            item: item,
+            engine: engine,
+            server: item.servers.first,
+            desiredPlaying: true,
+          ),
+        );
+        controller.debugEvaluatePlaybackProgress(engine);
+        controller.debugEvaluatePlaybackProgress(engine);
+        engine.setState(engine.value.copyWith(isCompleted: true));
+        controller.debugEvaluatePlaybackProgress(engine);
+
+        await Future<void>.delayed(const Duration(milliseconds: 900));
+
+        final PlaybackState state = c.read(playbackControllerProvider);
+        expect(state.confirmedEnded, isFalse);
+        expect(state.autoNextVisible, isFalse);
+        expect(state.error, isNull);
+        expect(engine.seekCalls, 1);
+        expect(engine.disposeCalls, 0);
+      },
+    );
+
+    test('seek 1419 of 1434 uses one fallback without fatal error', () async {
       final ProviderContainer c = container();
       final PlaybackController controller = c.read(
         playbackControllerProvider.notifier,
       );
-      final MediaPlaybackItem item = _testPlaybackItem('premature-eof');
+      final MediaPlaybackItem item = _testPlaybackItem('seek-1419');
       final _FakePlayerEngine engine = _FakePlayerEngine(
         const PlayerEngineState(
           isInitialized: true,
           isPlaying: true,
-          position: Duration(seconds: 1403),
+          position: Duration(seconds: 1300),
           duration: Duration(seconds: 1434),
         ),
+        stateAfterSeek: (PlayerEngineState current, Duration position) =>
+            current.copyWith(
+              position: position,
+              isCompleted: position == const Duration(seconds: 1419),
+              hasError: false,
+            ),
+      );
+      controller.debugSetPlaybackState(
+        PlaybackState(
+          item: item,
+          engine: engine,
+          server: item.servers.first,
+          desiredPlaying: true,
+        ),
+      );
+      controller.debugEvaluatePlaybackProgress(engine);
+      controller.debugEvaluatePlaybackProgress(engine);
+
+      await controller.seekTo(const Duration(seconds: 1419));
+      await Future<void>.delayed(const Duration(milliseconds: 900));
+
+      final PlaybackState state = c.read(playbackControllerProvider);
+      expect(engine.seekCalls, 2);
+      expect(engine.value.position, const Duration(seconds: 1411));
+      expect(engine.value.isCompleted, isFalse);
+      expect(state.error, isNull);
+      expect(state.confirmedEnded, isFalse);
+      expect(state.autoNextVisible, isFalse);
+      expect(
+        engine.disposeCalls,
+        0,
+        reason: 'a seek must not reopen the source',
+      );
+    });
+
+    test('seek 1416 of 1434 can roll back without fatal error', () async {
+      final ProviderContainer c = container();
+      final PlaybackController controller = c.read(
+        playbackControllerProvider.notifier,
+      );
+      final MediaPlaybackItem item = _testPlaybackItem('seek-1416');
+      final _FakePlayerEngine engine = _FakePlayerEngine(
+        const PlayerEngineState(
+          isInitialized: true,
+          isPlaying: true,
+          position: Duration(seconds: 1390),
+          duration: Duration(seconds: 1434),
+        ),
+        stateAfterSeek: (PlayerEngineState current, Duration position) =>
+            current.copyWith(
+              position: position,
+              isCompleted: true,
+              hasError: false,
+            ),
+      );
+      controller.debugSetPlaybackState(
+        PlaybackState(
+          item: item,
+          engine: engine,
+          server: item.servers.first,
+          desiredPlaying: true,
+        ),
+      );
+      controller.debugEvaluatePlaybackProgress(engine);
+      controller.debugEvaluatePlaybackProgress(engine);
+
+      await controller.seekTo(const Duration(seconds: 1416));
+      await Future<void>.delayed(const Duration(milliseconds: 1600));
+
+      final PlaybackState state = c.read(playbackControllerProvider);
+      expect(engine.seekCalls, 3, reason: 'seek, one fallback, one rollback');
+      expect(engine.value.position, const Duration(seconds: 1390));
+      expect(state.error, isNull);
+      expect(state.confirmedEnded, isFalse);
+      expect(state.autoNextVisible, isFalse);
+      expect(engine.disposeCalls, 0);
+    });
+
+    test('near-end seek that keeps playing needs no fallback', () async {
+      final ProviderContainer c = container();
+      final PlaybackController controller = c.read(
+        playbackControllerProvider.notifier,
+      );
+      final MediaPlaybackItem item = _testPlaybackItem('seek-playing');
+      final _FakePlayerEngine engine = _FakePlayerEngine(
+        const PlayerEngineState(
+          isInitialized: true,
+          isPlaying: true,
+          position: Duration(seconds: 1300),
+          duration: Duration(seconds: 1434),
+        ),
+        stateAfterSeek: (PlayerEngineState current, Duration position) =>
+            current.copyWith(
+              position: position,
+              isCompleted: false,
+              hasError: false,
+            ),
+      );
+      controller.debugSetPlaybackState(
+        PlaybackState(
+          item: item,
+          engine: engine,
+          server: item.servers.first,
+          desiredPlaying: true,
+        ),
+      );
+      controller.debugEvaluatePlaybackProgress(engine);
+      controller.debugEvaluatePlaybackProgress(engine);
+
+      await controller.seekTo(const Duration(seconds: 1419));
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      expect(engine.seekCalls, 1);
+      expect(engine.value.position, const Duration(seconds: 1419));
+      expect(c.read(playbackControllerProvider).error, isNull);
+      expect(c.read(playbackControllerProvider).confirmedEnded, isFalse);
+    });
+
+    test('seek to the actual final second may confirm real end', () async {
+      final ProviderContainer c = container();
+      final PlaybackController controller = c.read(
+        playbackControllerProvider.notifier,
+      );
+      final MediaPlaybackItem item = _testPlaybackItem('seek-real-end');
+      final _FakePlayerEngine engine = _FakePlayerEngine(
+        const PlayerEngineState(
+          isInitialized: true,
+          isPlaying: true,
+          position: Duration(seconds: 1300),
+          duration: Duration(seconds: 1434),
+        ),
+        stateAfterSeek: (PlayerEngineState current, Duration position) =>
+            current.copyWith(position: position, isCompleted: true),
+      );
+      controller.debugSetPlaybackState(
+        PlaybackState(
+          item: item,
+          engine: engine,
+          server: item.servers.first,
+          desiredPlaying: true,
+        ),
+      );
+      controller.debugEvaluatePlaybackProgress(engine);
+      controller.debugEvaluatePlaybackProgress(engine);
+
+      await controller.seekTo(const Duration(milliseconds: 1433500));
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      final PlaybackState state = c.read(playbackControllerProvider);
+      expect(engine.seekCalls, 1);
+      expect(state.confirmedEnded, isTrue);
+      expect(state.autoNextVisible, isTrue);
+    });
+
+    test('stale completed callback during seek is quarantined', () async {
+      final ProviderContainer c = container();
+      final PlaybackController controller = c.read(
+        playbackControllerProvider.notifier,
+      );
+      final MediaPlaybackItem item = _testPlaybackItem('stale-seek-eof');
+      final Completer<void> seekGate = Completer<void>();
+      final _FakePlayerEngine engine = _FakePlayerEngine(
+        const PlayerEngineState(
+          isInitialized: true,
+          isPlaying: true,
+          position: Duration(seconds: 1300),
+          duration: Duration(seconds: 1434),
+        ),
+        onSeek: (_) => seekGate.future,
+        stateAfterSeek: (PlayerEngineState current, Duration position) =>
+            current.copyWith(position: position, isCompleted: false),
+      );
+      controller.debugSetPlaybackState(
+        PlaybackState(
+          item: item,
+          engine: engine,
+          server: item.servers.first,
+          desiredPlaying: true,
+        ),
+      );
+      controller.debugEvaluatePlaybackProgress(engine);
+      controller.debugEvaluatePlaybackProgress(engine);
+
+      await controller.seekTo(const Duration(seconds: 1419));
+      await Future<void>.delayed(Duration.zero);
+      engine.setState(engine.value.copyWith(isCompleted: true));
+      controller.debugEvaluatePlaybackProgress(engine);
+      expect(engine.seekCalls, 1);
+      expect(c.read(playbackControllerProvider).error, isNull);
+
+      seekGate.complete();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(engine.seekCalls, 1);
+      expect(c.read(playbackControllerProvider).confirmedEnded, isFalse);
+      expect(c.read(playbackControllerProvider).autoNextVisible, isFalse);
+    });
+
+    test('a new user seek cancels a pending compatibility fallback', () async {
+      final ProviderContainer c = container();
+      final PlaybackController controller = c.read(
+        playbackControllerProvider.notifier,
+      );
+      final MediaPlaybackItem item = _testPlaybackItem('seek-cancels-fallback');
+      final Completer<void> fallbackStarted = Completer<void>();
+      final Completer<void> fallbackGate = Completer<void>();
+      final _FakePlayerEngine engine = _FakePlayerEngine(
+        const PlayerEngineState(
+          isInitialized: true,
+          isPlaying: true,
+          position: Duration(seconds: 1300),
+          duration: Duration(seconds: 1434),
+        ),
+        onSeek: (Duration position) {
+          if (position == const Duration(seconds: 1411)) {
+            if (!fallbackStarted.isCompleted) fallbackStarted.complete();
+            return fallbackGate.future;
+          }
+          return Future<void>.value();
+        },
+        stateAfterSeek: (PlayerEngineState current, Duration position) =>
+            current.copyWith(
+              position: position,
+              isCompleted:
+                  position == const Duration(seconds: 1419) ||
+                  position == const Duration(seconds: 1411),
+            ),
+      );
+      controller.debugSetPlaybackState(
+        PlaybackState(
+          item: item,
+          engine: engine,
+          server: item.servers.first,
+          desiredPlaying: true,
+        ),
+      );
+      controller.debugEvaluatePlaybackProgress(engine);
+      controller.debugEvaluatePlaybackProgress(engine);
+
+      await controller.seekTo(const Duration(seconds: 1419));
+      await fallbackStarted.future;
+      await controller.seekTo(const Duration(seconds: 1000));
+      fallbackGate.complete();
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+
+      expect(engine.seekCalls, 3);
+      expect(engine.value.position, const Duration(seconds: 1000));
+      expect(engine.value.isCompleted, isFalse);
+      expect(c.read(playbackControllerProvider).error, isNull);
+      expect(c.read(playbackControllerProvider).confirmedEnded, isFalse);
+    });
+
+    test('engine change cancels a pending compatibility fallback', () async {
+      final ProviderContainer c = container();
+      final PlaybackController controller = c.read(
+        playbackControllerProvider.notifier,
+      );
+      final MediaPlaybackItem oldItem = _testPlaybackItem(
+        'seek-fallback-old-source',
+      );
+      final MediaPlaybackItem newItem = _testPlaybackItem(
+        'seek-fallback-new-source',
+      );
+      final Completer<void> fallbackStarted = Completer<void>();
+      final Completer<void> fallbackGate = Completer<void>();
+      final _FakePlayerEngine oldEngine = _FakePlayerEngine(
+        const PlayerEngineState(
+          isInitialized: true,
+          isPlaying: true,
+          position: Duration(seconds: 1300),
+          duration: Duration(seconds: 1434),
+        ),
+        onSeek: (Duration position) {
+          if (position == const Duration(seconds: 1411)) {
+            if (!fallbackStarted.isCompleted) fallbackStarted.complete();
+            return fallbackGate.future;
+          }
+          return Future<void>.value();
+        },
+        stateAfterSeek: (PlayerEngineState current, Duration position) =>
+            current.copyWith(position: position, isCompleted: true),
+      );
+      final _FakePlayerEngine newEngine = _FakePlayerEngine(
+        const PlayerEngineState(
+          isInitialized: true,
+          isPlaying: true,
+          position: Duration(seconds: 20),
+          duration: Duration(seconds: 1200),
+        ),
+      );
+      controller.debugSetPlaybackState(
+        PlaybackState(
+          item: oldItem,
+          engine: oldEngine,
+          server: oldItem.servers.first,
+          desiredPlaying: true,
+        ),
+      );
+      controller.debugEvaluatePlaybackProgress(oldEngine);
+      controller.debugEvaluatePlaybackProgress(oldEngine);
+
+      await controller.seekTo(const Duration(seconds: 1419));
+      await fallbackStarted.future;
+      final Future<void> stopFuture = controller.stop();
+      controller.debugSetPlaybackState(
+        PlaybackState(
+          item: newItem,
+          engine: newEngine,
+          server: newItem.servers.first,
+          desiredPlaying: true,
+        ),
+      );
+      await stopFuture;
+      fallbackGate.complete();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      final PlaybackState state = c.read(playbackControllerProvider);
+      expect(state.item, same(newItem));
+      expect(state.engine, same(newEngine));
+      expect(state.error, isNull);
+      expect(state.confirmedEnded, isFalse);
+      expect(state.autoNextVisible, isFalse);
+      expect(newEngine.seekCalls, 0);
+      expect(newEngine.playCalls, 0);
+      expect(newEngine.disposeCalls, 0);
+    });
+
+    test('offline seek-induced EOF cannot request continuation', () async {
+      final ProviderContainer c = container();
+      final PlaybackController controller = c.read(
+        playbackControllerProvider.notifier,
+      );
+      const MediaServer offlineServer = MediaServer(
+        id: 'offline',
+        name: 'Downloaded',
+        sourceName: 'Offline',
+        url: 'file:///downloaded/episode.m3u8',
+        streamType: StreamType.hls,
+      );
+      const MediaPlaybackItem item = MediaPlaybackItem(
+        id: 'offline-seek-eof',
+        title: 'Offline seek EOF',
+        mediaType: MediaType.anime,
+        servers: <MediaServer>[offlineServer],
+      );
+      final _FakePlayerEngine engine = _FakePlayerEngine(
+        const PlayerEngineState(
+          isInitialized: true,
+          isPlaying: true,
+          position: Duration(seconds: 1300),
+          duration: Duration(seconds: 1434),
+        ),
+        stateAfterSeek: (PlayerEngineState current, Duration position) =>
+            current.copyWith(
+              position: position,
+              isCompleted: position == const Duration(seconds: 1419),
+              hasError: false,
+            ),
+      );
+      controller.debugSetPlaybackState(
+        PlaybackState(
+          item: item,
+          engine: engine,
+          server: offlineServer,
+          desiredPlaying: true,
+        ),
+      );
+      controller.debugEvaluatePlaybackProgress(engine);
+      controller.debugEvaluatePlaybackProgress(engine);
+
+      await controller.seekTo(const Duration(seconds: 1419));
+      await Future<void>.delayed(const Duration(milliseconds: 900));
+
+      final PlaybackState state = c.read(playbackControllerProvider);
+      expect(state.error, isNull);
+      expect(state.confirmedEnded, isFalse);
+      expect(state.autoNextVisible, isFalse);
+      expect(engine.disposeCalls, 0);
+    });
+
+    test('natural premature EOF recovery can resume playback', () async {
+      final ProviderContainer c = container();
+      final PlaybackController controller = c.read(
+        playbackControllerProvider.notifier,
+      );
+      final MediaPlaybackItem item = _testPlaybackItem('natural-recovered');
+      final _FakePlayerEngine engine = _FakePlayerEngine(
+        const PlayerEngineState(
+          isInitialized: true,
+          isPlaying: true,
+          position: Duration(seconds: 1300),
+          duration: Duration(seconds: 1434),
+        ),
+        stateAfterSeek: (PlayerEngineState current, Duration position) =>
+            current.copyWith(position: position, isCompleted: false),
       );
       controller.debugSetPlaybackState(
         PlaybackState(
@@ -307,14 +741,15 @@ void main() {
       engine.setState(engine.value.copyWith(isCompleted: true));
       controller.debugEvaluatePlaybackProgress(engine);
 
-      await Future<void>.delayed(const Duration(milliseconds: 1600));
+      await Future<void>.delayed(const Duration(milliseconds: 900));
 
       final PlaybackState state = c.read(playbackControllerProvider);
+      expect(engine.seekCalls, 1);
+      expect(engine.value.position, const Duration(seconds: 1295));
+      expect(engine.value.isCompleted, isFalse);
+      expect(state.error, isNull);
       expect(state.confirmedEnded, isFalse);
       expect(state.autoNextVisible, isFalse);
-      expect(state.error?.title, 'Playback stopped early');
-      expect(engine.seekCalls, 2);
-      expect(engine.disposeCalls, 0);
     });
 
     test('false EOF recovery can later confirm exactly the real end', () async {
@@ -343,7 +778,7 @@ void main() {
       controller.debugEvaluatePlaybackProgress(engine);
       engine.setState(engine.value.copyWith(isCompleted: true));
       controller.debugEvaluatePlaybackProgress(engine);
-      await Future<void>.delayed(const Duration(milliseconds: 1600));
+      await Future<void>.delayed(const Duration(milliseconds: 900));
       expect(c.read(playbackControllerProvider).confirmedEnded, isFalse);
 
       engine.setState(
@@ -622,12 +1057,21 @@ MediaPlaybackItem _testPlaybackItem(String id) {
 }
 
 class _FakePlayerEngine extends PlayerEngine {
-  _FakePlayerEngine(this.initialState, {this.onPlay, this.onSeek})
-    : _state = ValueNotifier<PlayerEngineState>(initialState);
+  _FakePlayerEngine(
+    this.initialState, {
+    this.onPlay,
+    this.onSeek,
+    this.stateAfterSeek,
+  }) : _state = ValueNotifier<PlayerEngineState>(initialState);
 
   final PlayerEngineState initialState;
   final Future<void> Function()? onPlay;
   final Future<void> Function(Duration position)? onSeek;
+  final PlayerEngineState Function(
+    PlayerEngineState current,
+    Duration position,
+  )?
+  stateAfterSeek;
   final ValueNotifier<PlayerEngineState> _state;
   int playCalls = 0;
   int pauseCalls = 0;
@@ -671,7 +1115,9 @@ class _FakePlayerEngine extends PlayerEngine {
   Future<void> seekTo(Duration position) async {
     seekCalls += 1;
     await onSeek?.call(position);
-    _state.value = _state.value.copyWith(position: position);
+    _state.value =
+        stateAfterSeek?.call(_state.value, position) ??
+        _state.value.copyWith(position: position);
   }
 
   void setPosition(Duration position) {
