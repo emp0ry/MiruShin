@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.6.7",
+          "date": "2026-08-28",
+          "localizedDescription": "- Fixed Cloudflare security verification getting stuck in a refresh loop.\n- Fixed source parsing starting before verification was complete.\n- Removed duplicate WebView navigation events on Windows.\n- Improved Cloudflare reliability across Windows, Android, iOS, and macOS.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.6.7/MiruShin-ios-v2.6.7.ipa",
+          "size": 28768996,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.6.6",
           "date": "2026-08-28",
           "localizedDescription": "- Added seek thumbnail previews for faster and more accurate timeline navigation\n- Improved timeline hover and seek behavior without moving the real playback position\n- Significantly improved auto-next reliability for online and downloaded episodes\n- Auto-next now always starts the next episode from 00:00 while manual episode selection still resumes saved progress\n- Fixed auto-next failing after returning to and rewatching a previous episode\n- Fixed episodes occasionally getting stuck at the end instead of advancing\n- Added stricter end-of-episode detection to prevent premature auto-next\n- Fixed manual seeking occasionally jumping back to the previous playback position\n- Improved FVP/MDK handling of stale end-of-stream events during and after seeking\n- Improved playback recovery for premature or inconsistent stream EOF states\n- Fixed fullscreen state being incorrectly carried to the next episode on desktop\n- Fullscreen transitions now follow the player's actual current fullscreen state\n- Improved next-episode stream resolution and retry handling\n- Episode selection now remains visible while the next stream is being resolved\n- Improved offline episode continuation and auto-delete reliability\n- Added safer playback generation tracking to prevent stale callbacks and duplicate episode transitions\n- Added 2.25x and 2.75x playback speed options\n- Improved native PiP completion and progress handling\n- iOS Home Indicator now stays auto-hidden across player navigation and auto-next transitions\n- Various playback stability improvements, race-condition fixes, and regression tests",
@@ -463,11 +471,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.6.6",
+      "version": "2.6.7",
       "versionDate": "2026-08-28",
-      "versionDescription": "- Added seek thumbnail previews for faster and more accurate timeline navigation\n- Improved timeline hover and seek behavior without moving the real playback position\n- Significantly improved auto-next reliability for online and downloaded episodes\n- Auto-next now always starts the next episode from 00:00 while manual episode selection still resumes saved progress\n- Fixed auto-next failing after returning to and rewatching a previous episode\n- Fixed episodes occasionally getting stuck at the end instead of advancing\n- Added stricter end-of-episode detection to prevent premature auto-next\n- Fixed manual seeking occasionally jumping back to the previous playback position\n- Improved FVP/MDK handling of stale end-of-stream events during and after seeking\n- Improved playback recovery for premature or inconsistent stream EOF states\n- Fixed fullscreen state being incorrectly carried to the next episode on desktop\n- Fullscreen transitions now follow the player's actual current fullscreen state\n- Improved next-episode stream resolution and retry handling\n- Episode selection now remains visible while the next stream is being resolved\n- Improved offline episode continuation and auto-delete reliability\n- Added safer playback generation tracking to prevent stale callbacks and duplicate episode transitions\n- Added 2.25x and 2.75x playback speed options\n- Improved native PiP completion and progress handling\n- iOS Home Indicator now stays auto-hidden across player navigation and auto-next transitions\n- Various playback stability improvements, race-condition fixes, and regression tests",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.6.6/MiruShin-ios-v2.6.6.ipa",
-      "size": 28759929,
+      "versionDescription": "- Fixed Cloudflare security verification getting stuck in a refresh loop.\n- Fixed source parsing starting before verification was complete.\n- Removed duplicate WebView navigation events on Windows.\n- Improved Cloudflare reliability across Windows, Android, iOS, and macOS.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.6.7/MiruShin-ios-v2.6.7.ipa",
+      "size": 28768996,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
