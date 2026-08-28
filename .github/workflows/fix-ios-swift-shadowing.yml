@@ -24,12 +24,21 @@ jobs:
 
           path = Path('ios/Runner/AppDelegate.swift')
           text = path.read_text()
-          needle = '''  } catch {\n    mirushinWriteThumbnailError("AVFoundation thumbnail decode failed.", error, errorCapacity)'''
-          replacement = '''  } catch let caughtError {\n    _ = caughtError\n    mirushinWriteThumbnailError("AVFoundation thumbnail decode failed.", error, errorCapacity)'''
-          count = text.count(needle)
-          if count != 2:
-              raise SystemExit(f'Expected exactly 2 shadowing sites, found {count}')
-          path.write_text(text.replace(needle, replacement))
+
+          needle1 = '''  } catch {\n    mirushinWriteThumbnailError("AVFoundation thumbnail decode failed.", error, errorCapacity)'''
+          replacement1 = '''  } catch let caughtError {\n    _ = caughtError\n    mirushinWriteThumbnailError("AVFoundation thumbnail decode failed.", error, errorCapacity)'''
+
+          needle2 = '''  } catch {\n    if session.state().1 { return -20 }\n    mirushinWriteThumbnailError("AVFoundation thumbnail decode failed.", error, errorCapacity)'''
+          replacement2 = '''  } catch let caughtError {\n    _ = caughtError\n    if session.state().1 { return -20 }\n    mirushinWriteThumbnailError("AVFoundation thumbnail decode failed.", error, errorCapacity)'''
+
+          count1 = text.count(needle1)
+          count2 = text.count(needle2)
+          if count1 != 1 or count2 != 1:
+              raise SystemExit(f'Expected shadowing sites 1+1, found {count1}+{count2}')
+
+          text = text.replace(needle1, replacement1)
+          text = text.replace(needle2, replacement2)
+          path.write_text(text)
           PY
       - name: Commit fix
         shell: bash
