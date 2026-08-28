@@ -1,0 +1,41 @@
+name: One-shot iOS Swift shadowing fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/fix-ios-swift-shadowing.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Fix Swift catch shadowing
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('ios/Runner/AppDelegate.swift')
+          text = path.read_text()
+          needle = '''  } catch {\n    mirushinWriteThumbnailError("AVFoundation thumbnail decode failed.", error, errorCapacity)'''
+          replacement = '''  } catch let caughtError {\n    _ = caughtError\n    mirushinWriteThumbnailError("AVFoundation thumbnail decode failed.", error, errorCapacity)'''
+          count = text.count(needle)
+          if count != 2:
+              raise SystemExit(f'Expected exactly 2 shadowing sites, found {count}')
+          path.write_text(text.replace(needle, replacement))
+          PY
+      - name: Commit fix
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ios/Runner/AppDelegate.swift
+          git commit -m "fix(ios): avoid Swift catch error shadowing"
+          git push origin HEAD:main
