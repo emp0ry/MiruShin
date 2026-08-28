@@ -22,6 +22,9 @@ MiruShin carries Windows bridge fixes:
 - Platform-view creation no longer force-unwraps a missing texture ID. Native
   startup failures complete the creation/disposal lifecycle safely instead of
   escaping as an uncaught asynchronous exception.
+- Document requests are intercepted through the DevTools `Fetch` domain only
+  when `shouldOverrideUrlLoading` is enabled. Normal WebViews keep native
+  navigation timing and emit one load-start event per navigation.
 
 Android, iOS, and macOS continue to use the unmodified stable packages resolved
 from pub.dev.

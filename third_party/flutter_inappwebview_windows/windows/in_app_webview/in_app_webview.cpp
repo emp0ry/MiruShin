@@ -247,14 +247,19 @@ namespace flutter_inappwebview_plugin
       }
     ).Get()));
 
-    // required to use Fetch domain and implement the shouldOverrideUrlLoading event correctly
-    failedLog(webView->CallDevToolsProtocolMethod(L"Fetch.enable", L"{\"patterns\": [{\"resourceType\": \"Document\", \"requestStage\": \"Request\"}]}", Callback<ICoreWebView2CallDevToolsProtocolMethodCompletedHandler>(
-      [this](HRESULT errorCode, LPCWSTR returnObjectAsJson)
-      {
-        failedLog(errorCode);
-        return S_OK;
-      }
-    ).Get()));
+    // Fetch interception pauses every document request until Dart/native code
+    // explicitly resumes it. Only enable it when shouldOverrideUrlLoading is
+    // actually requested; otherwise ordinary pages (including Cloudflare
+    // challenges) must retain WebView2's native navigation behavior.
+    if (settings->useShouldOverrideUrlLoading) {
+      failedLog(webView->CallDevToolsProtocolMethod(L"Fetch.enable", L"{\"patterns\": [{\"resourceType\": \"Document\", \"requestStage\": \"Request\"}]}", Callback<ICoreWebView2CallDevToolsProtocolMethodCompletedHandler>(
+        [this](HRESULT errorCode, LPCWSTR returnObjectAsJson)
+        {
+          failedLog(errorCode);
+          return S_OK;
+        }
+      ).Get()));
+    }
 
     failedLog(webView->CallDevToolsProtocolMethod(L"Page.getFrameTree", L"{}", Callback<ICoreWebView2CallDevToolsProtocolMethodCompletedHandler>(
       [this](HRESULT errorCode, LPCWSTR returnObjectAsJson)

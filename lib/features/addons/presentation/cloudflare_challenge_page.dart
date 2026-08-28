@@ -7,6 +7,7 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import '../../../app/localization/app_localizations.dart';
 import '../application/cloudflare_challenge_service.dart';
+import '../data/cloudflare_challenge.dart';
 
 /// Interactive Cloudflare challenge solver.
 ///
@@ -84,6 +85,9 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
   CloudflareSolveResult? _pendingFinishResult;
   bool _completed = false;
   bool _loading = true;
+  bool _mainFrameLoading = true;
+  int? _mainFrameHttpStatus;
+  String _observedDocumentTitle = '';
   // Becomes true once the pre-navigation cookie flush is done (or timed out).
   // Only then is the InAppWebView widget inserted with initialUrlRequest so
   // the first navigation already starts clean, without an async loadUrl call
@@ -402,6 +406,19 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
     if (_finishRequested || _clearanceCheckInFlight) return;
     _clearanceCheckInFlight = true;
     try {
+      // Do not inspect cookies or evaluate the challenge DOM while Cloudflare
+      // is still running. Besides being unnecessary, repeatedly driving the
+      // DevTools/runtime domains makes an embedded browser look automated and
+      // can keep modern Cloudflare precursor checks in a verification loop.
+      final bool stillChallenging = await _stillOnChallenge();
+      if (_completed || _finishRequested) return;
+      if (stillChallenging) {
+        _clearanceSeen = 0;
+        _clearanceFirstSeenAt = null;
+        _cleanPageSeen = 0;
+        return;
+      }
+
       final List<Cookie> cookies = await _readCookies();
       // Re-check after the await: dispose may have run while we were waiting.
       if (_completed || _finishRequested) return;
@@ -423,15 +440,6 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
         _clearanceFirstSeenAt = null;
       }
 
-      // A cookie alone is not proof that the visible Turnstile/CAPTCHA has
-      // completed. Conversely, some platforms do not expose HttpOnly clearance
-      // cookies to Dart at all. Verify the document state on every platform.
-      final bool stillChallenging = await _stillOnChallenge();
-      if (stillChallenging) {
-        _cleanPageSeen = 0;
-        if (cleared) _clearanceSettled();
-        return;
-      }
       _cleanPageSeen++;
       final bool cookieReady = cleared && _clearanceSettled();
       final bool browserSessionReady =
@@ -607,8 +615,12 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
       final String text = '${state['text']}'.toLowerCase();
       final String html = '${state['html']}'.toLowerCase();
       final bool hasSelector = state['hasSelector'] == true;
-      final String haystack = '$title\n$href\n$text\n$html';
-      final bool hasMarker = _challengeMarkers.any(haystack.contains);
+      final bool hasMarker = CloudflareChallenge.isChallengeDocument(
+        title: title,
+        url: href,
+        text: text,
+        html: html,
+      );
 
       if (kDebugMode) {
         debugPrint(
@@ -618,8 +630,14 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
         );
       }
 
-      if (readyState == 'loading') return true;
-      if (hasSelector || hasMarker) {
+      if (CloudflareChallenge.isChallengeDocument(
+        title: title,
+        url: href,
+        text: text,
+        html: html,
+        hasSelector: hasSelector,
+        isLoading: readyState == 'loading',
+      )) {
         _challengeObserved = true;
         return true;
       }
@@ -632,29 +650,6 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
       return null;
     }
   }
-
-  static const List<String> _challengeMarkers = <String>[
-    'cdn-cgi/challenge-platform',
-    '__cf_chl',
-    'cf_chl',
-    'cf-browser-verification',
-    'cf-turnstile',
-    'turnstile',
-    'just a moment',
-    'verify you are human',
-    'verifying you are human',
-    'confirm you are human',
-    'this may take a few seconds',
-    'verification is taking longer',
-    'please stand by',
-    'checking your browser',
-    'checking if the site connection is secure',
-    'review the security of your connection',
-    'needs to review the security',
-    'enable javascript and cookies to continue',
-    'cloudflare ray id',
-    'performance & security by cloudflare',
-  ];
 
   Map<String, dynamic>? _objectMap(Object? raw) {
     if (raw is Map) {
@@ -678,13 +673,17 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
   Future<bool> _stillOnChallenge() async {
     final InAppWebViewController? controller = _controller;
     if (controller == null) return true;
+    if (_mainFrameLoading) return true;
     try {
-      final String title =
-          (await controller.getTitle().timeout(
-            const Duration(milliseconds: 1000),
-            onTimeout: () => '',
-          ))?.toLowerCase() ??
-          '';
+      String title = _observedDocumentTitle.trim().toLowerCase();
+      if (title.isEmpty) {
+        title =
+            (await controller.getTitle().timeout(
+              const Duration(milliseconds: 1000),
+              onTimeout: () => '',
+            ))?.toLowerCase() ??
+            '';
+      }
       final String url =
           (await controller.getUrl().timeout(
             const Duration(milliseconds: 1000),
@@ -692,15 +691,15 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
           ))?.toString() ??
           '';
       if (kDebugMode) {
-        debugPrint('[Cloudflare] state: title="$title" url="$url"');
+        debugPrint(
+          '[Cloudflare] state: title="$title" url="$url" '
+          'status=$_mainFrameHttpStatus',
+        );
       }
       if (title.isEmpty) return true;
-      // Cloudflare's interstitial title is "Just a moment..." in all locales.
-      if (title.contains('just a moment')) {
-        _challengeObserved = true;
-        return true;
-      }
-      if (url.contains('__cf_chl')) {
+      if (CloudflareChallenge.isChallengeDocument(title: title, url: url) ||
+          _mainFrameHttpStatus == 403 ||
+          _mainFrameHttpStatus == 503) {
         _challengeObserved = true;
         return true;
       }
@@ -863,6 +862,9 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
                   onCreateWindow: _handleCreateWindow,
                   onLoadStart: (_, WebUri? url) {
                     _markWebViewActivity();
+                    _mainFrameLoading = true;
+                    _mainFrameHttpStatus = null;
+                    _observedDocumentTitle = '';
                     if (kDebugMode) {
                       debugPrint('[Cloudflare] onLoadStart: $url');
                     }
@@ -870,6 +872,8 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
                   },
                   onLoadStop: (_, WebUri? url) {
                     _markWebViewActivity();
+                    _mainFrameLoading = false;
+                    _mainFrameHttpStatus = null;
                     if (kDebugMode) {
                       debugPrint('[Cloudflare] onLoadStop: $url');
                     }
@@ -878,6 +882,7 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
                   },
                   onProgressChanged: (_, int progress) {
                     if (progress < 100) _markWebViewActivity();
+                    _mainFrameLoading = progress < 100;
                     if (mounted) {
                       setState(() => _loading = progress < 100);
                     }
@@ -886,6 +891,23 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
                     _markWebViewActivity();
                     if (kDebugMode) {
                       debugPrint('[Cloudflare] history: $url');
+                    }
+                  },
+                  onTitleChanged: (_, String? title) {
+                    _observedDocumentTitle = title?.trim() ?? '';
+                    _markWebViewActivity();
+                    if (CloudflareChallenge.isChallengeDocument(
+                      title: _observedDocumentTitle,
+                    )) {
+                      _challengeObserved = true;
+                    }
+                    unawaited(_checkForClearance());
+                  },
+                  onReceivedHttpError: (_, request, errorResponse) {
+                    if (request.isForMainFrame != false) {
+                      _mainFrameLoading = false;
+                      _mainFrameHttpStatus = errorResponse.statusCode;
+                      _markWebViewActivity();
                     }
                   },
                   onReceivedError: (_, _, WebResourceError error) {

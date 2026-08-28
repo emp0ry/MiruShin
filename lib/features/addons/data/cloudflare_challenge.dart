@@ -23,6 +23,32 @@ class CloudflareChallenge {
     'enable javascript and cookies to continue',
   ];
 
+  /// Markers used by the interactive browser while an interstitial is live.
+  /// This list is intentionally broader than [_bodyMarkers], because the
+  /// browser probe already knows it is inspecting a challenge navigation.
+  static const List<String> _documentMarkers = <String>[
+    'cdn-cgi/challenge-platform',
+    '__cf_chl',
+    'cf_chl',
+    'cf-browser-verification',
+    'cf-turnstile',
+    'turnstile',
+    'just a moment',
+    'verify you are human',
+    'verifying you are human',
+    'confirm you are human',
+    'this may take a few seconds',
+    'verification is taking longer',
+    'please stand by',
+    'checking your browser',
+    'checking if the site connection is secure',
+    'review the security of your connection',
+    'needs to review the security',
+    'enable javascript and cookies to continue',
+    'cloudflare ray id',
+    'performance & security by cloudflare',
+  ];
+
   /// Whether [status] + [headers] + [body] look like a Cloudflare challenge
   /// (as opposed to a genuine 403/503 from the origin).
   ///
@@ -49,6 +75,22 @@ class CloudflareChallenge {
       if (haystack.contains(marker)) return true;
     }
     return false;
+  }
+
+  /// Whether the current browser document still looks like a Cloudflare
+  /// interstitial. Keeping this classification pure lets the interactive
+  /// solver use native title/navigation events before resorting to a DOM probe.
+  static bool isChallengeDocument({
+    String title = '',
+    String url = '',
+    String text = '',
+    String html = '',
+    bool hasSelector = false,
+    bool isLoading = false,
+  }) {
+    if (isLoading || hasSelector) return true;
+    final String haystack = '$title\n$url\n$text\n$html'.toLowerCase();
+    return _documentMarkers.any(haystack.contains);
   }
 
   static String _header(Map<String, dynamic> headers, String name) {
