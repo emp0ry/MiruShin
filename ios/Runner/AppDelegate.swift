@@ -286,7 +286,8 @@ func mirushinSeekThumbnailDecode(
     let seconds = CMTimeGetSeconds(actual)
     decodedMs.pointee = seconds.isFinite ? Int64((seconds * 1000).rounded()) : targetMs
     return 0
-  } catch {
+  } catch let caughtError {
+    _ = caughtError
     mirushinWriteThumbnailError("AVFoundation thumbnail decode failed.", error, errorCapacity)
     return -5
   }
@@ -492,7 +493,8 @@ func mirushinSeekThumbnailSessionDecode(
     rotationDegrees.pointee = 0
     displayAspectRatio.pointee = Double(image.width) / Double(image.height)
     return 0
-  } catch {
+  } catch let caughtError {
+    _ = caughtError
     if session.state().1 { return -20 }
     mirushinWriteThumbnailError("AVFoundation thumbnail decode failed.", error, errorCapacity)
     return -15
