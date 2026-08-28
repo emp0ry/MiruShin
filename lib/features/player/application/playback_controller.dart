@@ -198,6 +198,9 @@ class PlaybackController extends Notifier<PlaybackState> {
   static const Duration _onlineSeekPreviewDebounce = Duration(
     milliseconds: 100,
   );
+  static const Duration _progressiveSeekPreviewYield = Duration(
+    milliseconds: 40,
+  );
   static const Duration _seekSettleTick = Duration(milliseconds: 80);
   static const Duration _seekSettleMinHold = Duration(milliseconds: 700);
   static const Duration _seekSettleTimeout = Duration(seconds: 12);
@@ -308,9 +311,17 @@ class PlaybackController extends Notifier<PlaybackState> {
       SeekThumbnailRequestTracker();
   final SeekThumbnailService _seekThumbnailService = SeekThumbnailService(
     extractorFactory: createSeekThumbnailExtractor,
+    // A typical episode needs roughly 240 entries at five-to-six-second
+    // coverage. Keep enough room for long movies without making the cache
+    // unbounded for unusually long streams.
+    maxCacheEntries: 2400,
+    maxCacheBytes: 96 * 1024 * 1024,
   );
   SeekThumbnailPlan? _seekThumbnailPlan;
   PlayerBackend _seekThumbnailBackend = PlayerBackend.auto;
+  int _progressiveSeekPreviewGeneration = 0;
+  int? _progressiveSeekPreviewActiveRequest;
+  String? _progressiveSeekPreviewSession;
   PlayerEngine? _settlingSeekEngine;
   Duration? _settlingSeekTarget;
   Duration? _settlingSeekFrom;
@@ -514,6 +525,15 @@ class PlaybackController extends Notifier<PlaybackState> {
       next,
     ) {
       _updateMediaSession();
+      final SeekPreviewMode? previousMode = previous?.value?.seekPreviewMode;
+      final SeekPreviewMode? nextMode = next.value?.seekPreviewMode;
+      if (previousMode != nextMode) {
+        if (nextMode == SeekPreviewMode.progressive) {
+          _maybeStartProgressiveSeekPreviews();
+        } else {
+          _cancelProgressiveSeekPreviews(cancelActiveRequest: true);
+        }
+      }
     });
     ref.onDispose(() {
       _playbackGeneration++;
@@ -1240,6 +1260,136 @@ class PlaybackController extends Notifier<PlaybackState> {
       return;
     }
     await _seekThumbnailService.warm(plan, backend);
+    if (generation == _playbackGeneration) {
+      _maybeStartProgressiveSeekPreviews();
+    }
+  }
+
+  void _maybeStartProgressiveSeekPreviews() {
+    final PlayerEngine? engine = state.engine;
+    final SeekThumbnailPlan? plan = _seekThumbnailPlan;
+    if (!seekThumbnailExtractionSupported ||
+        engine == null ||
+        !engine.state.value.isInitialized ||
+        plan == null) {
+      return;
+    }
+    final PlayerSettings settings =
+        ref.read(playerSettingsProvider).value ?? const PlayerSettings();
+    if (!_progressiveSeekPreviewsEnabled(plan, settings: settings)) {
+      _cancelProgressiveSeekPreviews(cancelActiveRequest: true);
+      return;
+    }
+    final Duration duration = engine.state.value.duration;
+    if (duration <= Duration.zero) return;
+
+    final String session = '${plan.sessionKey}|${duration.inMilliseconds}';
+    if (_progressiveSeekPreviewSession == session) return;
+    _cancelProgressiveSeekPreviews(cancelActiveRequest: true);
+    _progressiveSeekPreviewSession = session;
+    final int generation = ++_progressiveSeekPreviewGeneration;
+    unawaited(
+      _refineSeekPreviewsAcrossTimeline(
+        engine: engine,
+        plan: plan,
+        duration: duration,
+        generation: generation,
+      ),
+    );
+  }
+
+  Future<void> _refineSeekPreviewsAcrossTimeline({
+    required PlayerEngine engine,
+    required SeekThumbnailPlan plan,
+    required Duration duration,
+    required int generation,
+  }) async {
+    for (final Duration target in progressiveSeekThumbnailPositions(duration)) {
+      if (!_isProgressiveSeekPreviewCurrent(generation, engine, plan)) return;
+      if (_seekThumbnailService.cachedFor(plan, target, duration: duration) !=
+          null) {
+        continue;
+      }
+      _progressiveSeekPreviewActiveRequest = generation;
+      SeekThumbnail? thumbnail;
+      try {
+        thumbnail = await _seekThumbnailService.request(
+          plan: plan,
+          backend: _seekThumbnailBackend,
+          position: target,
+          duration: duration,
+        );
+      } on Object {
+        // Background refinement is opportunistic. An interactive request can
+        // retry the same bucket and remains independent from playback.
+      } finally {
+        if (_progressiveSeekPreviewActiveRequest == generation) {
+          _progressiveSeekPreviewActiveRequest = null;
+        }
+      }
+      if (!_isProgressiveSeekPreviewCurrent(generation, engine, plan)) return;
+      if (thumbnail != null) {
+        _refreshVisibleProgressiveSeekPreview(plan, duration);
+      }
+      await Future<void>.delayed(_progressiveSeekPreviewYield);
+    }
+  }
+
+  bool _isProgressiveSeekPreviewCurrent(
+    int generation,
+    PlayerEngine engine,
+    SeekThumbnailPlan plan,
+  ) {
+    final PlayerSettings settings =
+        ref.read(playerSettingsProvider).value ?? const PlayerSettings();
+    return generation == _progressiveSeekPreviewGeneration &&
+        identical(state.engine, engine) &&
+        _seekThumbnailPlan?.sessionKey == plan.sessionKey &&
+        _progressiveSeekPreviewsEnabled(plan, settings: settings);
+  }
+
+  bool _progressiveSeekPreviewsEnabled(
+    SeekThumbnailPlan plan, {
+    PlayerSettings? settings,
+  }) {
+    final PlayerSettings effectiveSettings =
+        settings ??
+        ref.read(playerSettingsProvider).value ??
+        const PlayerSettings();
+    return shouldProgressivelyGenerateSeekThumbnails(
+      mode: effectiveSettings.seekPreviewMode,
+      plan: plan,
+    );
+  }
+
+  void _refreshVisibleProgressiveSeekPreview(
+    SeekThumbnailPlan plan,
+    Duration duration,
+  ) {
+    final Duration? visiblePosition = state.seekPreviewPosition;
+    if (visiblePosition == null || !_progressiveSeekPreviewsEnabled(plan)) {
+      return;
+    }
+    final SeekThumbnail? nearest = _seekThumbnailService.nearestCachedFor(
+      plan,
+      visiblePosition,
+      duration: duration,
+      maxDistance: duration,
+    );
+    if (nearest == null) return;
+    state = state.copyWith(
+      seekPreviewThumbnail: nearest,
+      seekPreviewLoading: false,
+      seekPreviewImageSurface: true,
+    );
+  }
+
+  void _cancelProgressiveSeekPreviews({required bool cancelActiveRequest}) {
+    _progressiveSeekPreviewGeneration++;
+    _progressiveSeekPreviewSession = null;
+    if (cancelActiveRequest && _progressiveSeekPreviewActiveRequest != null) {
+      _seekThumbnailService.cancelPending();
+    }
   }
 
   double? _safeAspectRatio(double? value) {
@@ -2319,23 +2469,33 @@ class PlaybackController extends Notifier<PlaybackState> {
         seekThumbnailExtractionSupported &&
         plan != null &&
         plan.candidates.isNotEmpty;
+    final bool progressiveTimeline =
+        imageSurface && _progressiveSeekPreviewsEnabled(plan);
     final SeekThumbnail? cached = imageSurface
         ? _seekThumbnailService.cachedFor(plan, clamped, duration: duration)
         : null;
-    final SeekThumbnail? visibleThumbnail =
-        cached ??
-        (imageSurface
-            ? state.seekPreviewThumbnail ??
-                  _seekThumbnailService.nearestCachedFor(
-                    plan,
-                    clamped,
-                    duration: duration,
-                  )
-            : null);
+    final SeekThumbnail? visibleThumbnail = progressiveTimeline
+        ? cached ??
+              _seekThumbnailService.nearestCachedFor(
+                plan,
+                clamped,
+                duration: duration,
+                maxDistance: duration,
+              ) ??
+              state.seekPreviewThumbnail
+        : cached ??
+              (imageSurface
+                  ? state.seekPreviewThumbnail ??
+                        _seekThumbnailService.nearestCachedFor(
+                          plan,
+                          clamped,
+                          duration: duration,
+                        )
+                  : null);
     state = state.copyWith(
       seekPreviewThumbnail: visibleThumbnail,
       clearSeekPreviewThumbnail: !imageSurface,
-      seekPreviewLoading: false,
+      seekPreviewLoading: progressiveTimeline && visibleThumbnail == null,
       seekPreviewImageSurface: imageSurface,
     );
     if (cached != null) {
@@ -2343,7 +2503,11 @@ class PlaybackController extends Notifier<PlaybackState> {
       _pendingSeekPreviewTarget = null;
       return;
     }
-    if (imageSurface) _queueSeekPreviewFrame(clamped);
+    if (progressiveTimeline) {
+      _maybeStartProgressiveSeekPreviews();
+    } else if (imageSurface) {
+      _queueSeekPreviewFrame(clamped);
+    }
   }
 
   /// Starts a hover/drag preview session without mutating the main engine.
@@ -2353,7 +2517,10 @@ class PlaybackController extends Notifier<PlaybackState> {
     _seekPreviewTimer = null;
     _pendingSeekPreviewTarget = null;
     _seekThumbnailRequests.invalidate();
-    _seekThumbnailService.cancelPending();
+    final SeekThumbnailPlan? plan = _seekThumbnailPlan;
+    if (plan == null || !_progressiveSeekPreviewsEnabled(plan)) {
+      _seekThumbnailService.cancelPending();
+    }
   }
 
   /// Ends slider interaction. The committed seek remains a separate operation.
@@ -2363,10 +2530,14 @@ class PlaybackController extends Notifier<PlaybackState> {
     _seekPreviewTimer = null;
     _pendingSeekPreviewTarget = null;
     _seekThumbnailRequests.invalidate();
-    _seekThumbnailService.cancelPending();
+    final SeekThumbnailPlan? plan = _seekThumbnailPlan;
+    if (plan == null || !_progressiveSeekPreviewsEnabled(plan)) {
+      _seekThumbnailService.cancelPending();
+    }
     if (state.seekPreviewLoading) {
       state = state.copyWith(seekPreviewLoading: false);
     }
+    _maybeStartProgressiveSeekPreviews();
   }
 
   /// Ends a desktop hover preview without committing a seek.
@@ -2483,11 +2654,16 @@ class PlaybackController extends Notifier<PlaybackState> {
     } finally {
       _seekPreviewInFlight = false;
       final Duration? pending = _pendingSeekPreviewTarget;
-      if (pending != null) _queueSeekPreviewFrame(pending);
+      if (pending != null) {
+        _queueSeekPreviewFrame(pending);
+      } else {
+        _maybeStartProgressiveSeekPreviews();
+      }
     }
   }
 
   void _cancelSeekThumbnailRequests() {
+    _cancelProgressiveSeekPreviews(cancelActiveRequest: false);
     _seekPreviewGeneration++;
     _seekPreviewTimer?.cancel();
     _seekPreviewTimer = null;
@@ -3273,9 +3449,11 @@ class PlaybackController extends Notifier<PlaybackState> {
       }
       _engineStateEventEpoch++;
       _evaluatePlaybackProgress(engine);
+      _maybeStartProgressiveSeekPreviews();
     };
     engine.addListener(listener);
     _evaluatePlaybackProgress(engine);
+    _maybeStartProgressiveSeekPreviews();
   }
 
   // Records the furthest point playback has genuinely reached. A lower reading

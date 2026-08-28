@@ -24,6 +24,26 @@ void main() {
     });
   });
 
+  group('PlayerSettings seek preview mode', () {
+    test('defaults older settings to progressive timeline generation', () {
+      final PlayerSettings settings = PlayerSettings.fromJson(
+        const <String, Object?>{},
+      );
+
+      expect(settings.seekPreviewMode, SeekPreviewMode.progressive);
+    });
+
+    test('round-trips the existing on-demand behavior', () {
+      final PlayerSettings restored = PlayerSettings.fromJson(
+        const PlayerSettings(
+          seekPreviewMode: SeekPreviewMode.onDemand,
+        ).toJson(),
+      );
+
+      expect(restored.seekPreviewMode, SeekPreviewMode.onDemand);
+    });
+  });
+
   group('PlayerSettings volume memory', () {
     test('migrates an older audible volume into the unmute value', () {
       final PlayerSettings settings = PlayerSettings.fromJson(

@@ -7,6 +7,79 @@ import '../domain/player_models.dart';
 import 'player_engine.dart';
 
 const Duration defaultSeekThumbnailInterval = Duration(seconds: 5);
+const Duration progressiveSeekThumbnailTargetInterval = Duration(seconds: 6);
+
+/// Produces whole-timeline preview targets breadth-first.
+///
+/// The first pass covers 0%, 20%, ... 100%. Every later pass bisects all gaps
+/// that are still wider than [targetInterval]. Targets that land in the same
+/// decoder bucket are emitted once, and completion is based on the distance
+/// between the actual decoder buckets rather than only the ideal percentages.
+Iterable<Duration> progressiveSeekThumbnailPositions(
+  Duration duration, {
+  Duration targetInterval = progressiveSeekThumbnailTargetInterval,
+}) sync* {
+  final int durationMs = duration.inMilliseconds;
+  final int targetMs = targetInterval.inMilliseconds;
+  if (durationMs <= 0) return;
+  if (targetMs <= 0) {
+    throw ArgumentError.value(
+      targetInterval,
+      'targetInterval',
+      'Must be positive.',
+    );
+  }
+
+  final List<int> positions = <int>[
+    for (int index = 0; index <= 5; index++) (durationMs * index / 5).round(),
+  ];
+  final Set<int> emittedBuckets = <int>{};
+
+  Iterable<Duration> uniqueTargets(Iterable<int> values) sync* {
+    for (final int value in values) {
+      final Duration target = Duration(milliseconds: value);
+      final int bucket = quantizeSeekThumbnailPosition(
+        target,
+        duration: duration,
+      ).inMilliseconds;
+      if (emittedBuckets.add(bucket)) yield target;
+    }
+  }
+
+  yield* uniqueTargets(positions);
+  while (true) {
+    final List<int> midpoints = <int>[];
+    for (int index = 0; index < positions.length - 1; index++) {
+      final int start = positions[index];
+      final int end = positions[index + 1];
+      final int startBucket = quantizeSeekThumbnailPosition(
+        Duration(milliseconds: start),
+        duration: duration,
+      ).inMilliseconds;
+      final int endBucket = quantizeSeekThumbnailPosition(
+        Duration(milliseconds: end),
+        duration: duration,
+      ).inMilliseconds;
+      if (endBucket - startBucket <= targetMs) continue;
+      final int midpoint = start + ((end - start) ~/ 2);
+      if (midpoint > start && midpoint < end) midpoints.add(midpoint);
+    }
+    if (midpoints.isEmpty) return;
+    yield* uniqueTargets(midpoints);
+    positions
+      ..addAll(midpoints)
+      ..sort();
+  }
+}
+
+bool shouldProgressivelyGenerateSeekThumbnails({
+  required SeekPreviewMode mode,
+  required SeekThumbnailPlan plan,
+}) {
+  return mode == SeekPreviewMode.progressive &&
+      !plan.isOffline &&
+      plan.candidates.isNotEmpty;
+}
 
 class SeekThumbnail {
   const SeekThumbnail({
@@ -348,6 +421,9 @@ class SeekThumbnailService {
 
   void cancelPending() {
     _extractor?.cancelPending();
+    // A replacement interactive request must not coalesce with work that was
+    // just cancelled by the progressive background scheduler.
+    _inFlight.clear();
   }
 
   Future<SeekThumbnail?> request({

@@ -14,6 +14,22 @@ enum StreamType { mp4, hls, dash, unknown }
 /// sequence.
 enum PlayerBackend { auto, mpv, fvp }
 
+enum SeekPreviewMode { progressive, onDemand }
+
+extension SeekPreviewModeLabel on SeekPreviewMode {
+  String get title => switch (this) {
+    SeekPreviewMode.progressive => 'Progressive timeline',
+    SeekPreviewMode.onDemand => 'On demand',
+  };
+
+  String get description => switch (this) {
+    SeekPreviewMode.progressive =>
+      'Builds previews across the online timeline in the background.',
+    SeekPreviewMode.onDemand =>
+      'Builds a preview only when you move across the timeline.',
+  };
+}
+
 List<PlayerBackend> availablePlayerBackends({
   TargetPlatform? platform,
   bool isWeb = kIsWeb,
@@ -339,6 +355,7 @@ class PlayerSettings {
     this.autoAnilistSync = true,
     this.debugStreamInfo = false,
     this.playerBackend = PlayerBackend.auto,
+    this.seekPreviewMode = SeekPreviewMode.progressive,
   });
 
   final Duration seekInterval;
@@ -373,6 +390,7 @@ class PlayerSettings {
   final bool autoAnilistSync;
   final bool debugStreamInfo;
   final PlayerBackend playerBackend;
+  final SeekPreviewMode seekPreviewMode;
 
   PlayerSettings copyWith({
     Duration? seekInterval,
@@ -404,6 +422,7 @@ class PlayerSettings {
     bool? autoAnilistSync,
     bool? debugStreamInfo,
     PlayerBackend? playerBackend,
+    SeekPreviewMode? seekPreviewMode,
   }) {
     return PlayerSettings(
       seekInterval: seekInterval ?? this.seekInterval,
@@ -441,6 +460,7 @@ class PlayerSettings {
       autoAnilistSync: autoAnilistSync ?? this.autoAnilistSync,
       debugStreamInfo: debugStreamInfo ?? this.debugStreamInfo,
       playerBackend: playerBackend ?? this.playerBackend,
+      seekPreviewMode: seekPreviewMode ?? this.seekPreviewMode,
     );
   }
 
@@ -474,6 +494,7 @@ class PlayerSettings {
     'autoAnilistSync': autoAnilistSync,
     'debugStreamInfo': debugStreamInfo,
     'playerBackend': playerBackend.name,
+    'seekPreviewMode': seekPreviewMode.name,
   };
 
   factory PlayerSettings.fromJson(Map<String, Object?> json) {
@@ -532,6 +553,10 @@ class PlayerSettings {
       playerBackend: PlayerBackend.values.firstWhere(
         (PlayerBackend value) => value.name == json['playerBackend'],
         orElse: () => PlayerBackend.auto,
+      ),
+      seekPreviewMode: SeekPreviewMode.values.firstWhere(
+        (SeekPreviewMode value) => value.name == json['seekPreviewMode'],
+        orElse: () => SeekPreviewMode.progressive,
       ),
     );
   }

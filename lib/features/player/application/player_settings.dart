@@ -56,6 +56,11 @@ class PlayerSettingsController extends AsyncNotifier<PlayerSettings> {
     await _update(current.copyWith(playerBackend: backend));
   }
 
+  Future<void> setSeekPreviewMode(SeekPreviewMode mode) async {
+    final PlayerSettings current = state.value ?? const PlayerSettings();
+    await _update(current.copyWith(seekPreviewMode: mode));
+  }
+
   Future<void> setVerticalStretch(bool value) async {
     final PlayerSettings current = state.value ?? const PlayerSettings();
     await _update(current.copyWith(verticalStretch: value));

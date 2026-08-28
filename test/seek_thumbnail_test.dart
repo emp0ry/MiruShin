@@ -91,6 +91,116 @@ void main() {
     });
   });
 
+  group('progressive seek thumbnail scheduling', () {
+    test('covers the timeline in percentage and midpoint passes', () {
+      final List<Duration> positions = progressiveSeekThumbnailPositions(
+        const Duration(seconds: 100),
+      ).toList(growable: false);
+
+      expect(positions.take(6), <Duration>[
+        Duration.zero,
+        const Duration(seconds: 20),
+        const Duration(seconds: 40),
+        const Duration(seconds: 60),
+        const Duration(seconds: 80),
+        const Duration(seconds: 100),
+      ]);
+      expect(positions.skip(6).take(5), <Duration>[
+        const Duration(seconds: 10),
+        const Duration(seconds: 30),
+        const Duration(seconds: 50),
+        const Duration(seconds: 70),
+        const Duration(seconds: 90),
+      ]);
+      expect(positions.skip(11), <Duration>[
+        const Duration(seconds: 5),
+        const Duration(seconds: 15),
+        const Duration(seconds: 25),
+        const Duration(seconds: 35),
+        const Duration(seconds: 45),
+        const Duration(seconds: 55),
+        const Duration(seconds: 65),
+        const Duration(seconds: 75),
+        const Duration(seconds: 85),
+        const Duration(seconds: 95),
+      ]);
+    });
+
+    test('finishes with no decoder-bucket gap wider than six seconds', () {
+      const Duration duration = Duration(minutes: 24);
+      final List<Duration> buckets =
+          progressiveSeekThumbnailPositions(duration)
+              .map(
+                (Duration target) =>
+                    quantizeSeekThumbnailPosition(target, duration: duration),
+              )
+              .toSet()
+              .toList()
+            ..sort();
+
+      expect(buckets.first, Duration.zero);
+      expect(
+        buckets.last,
+        quantizeSeekThumbnailPosition(duration, duration: duration),
+      );
+      for (int index = 1; index < buckets.length; index++) {
+        expect(
+          buckets[index] - buckets[index - 1],
+          lessThanOrEqualTo(progressiveSeekThumbnailTargetInterval),
+        );
+      }
+    });
+
+    test('runs only for online progressive plans', () {
+      const SeekThumbnailSource onlineSource = SeekThumbnailSource(
+        source: PlayerSource(url: 'https://cdn.example/video.m3u8'),
+        sourceKey: 'online',
+        decoderKey: 'online',
+        label: '144p',
+        isOffline: false,
+      );
+      const SeekThumbnailSource offlineSource = SeekThumbnailSource(
+        source: PlayerSource(url: 'C:/downloads/video.mp4'),
+        sourceKey: 'offline',
+        decoderKey: 'offline',
+        label: 'Downloaded',
+        isOffline: true,
+      );
+      const SeekThumbnailPlan onlinePlan = SeekThumbnailPlan(
+        sessionKey: 'online-session',
+        candidates: <SeekThumbnailSource>[onlineSource],
+        isOffline: false,
+      );
+      const SeekThumbnailPlan offlinePlan = SeekThumbnailPlan(
+        sessionKey: 'offline-session',
+        candidates: <SeekThumbnailSource>[offlineSource],
+        isOffline: true,
+      );
+
+      expect(
+        shouldProgressivelyGenerateSeekThumbnails(
+          mode: SeekPreviewMode.progressive,
+          plan: onlinePlan,
+        ),
+        isTrue,
+      );
+      expect(
+        shouldProgressivelyGenerateSeekThumbnails(
+          mode: SeekPreviewMode.progressive,
+          plan: offlinePlan,
+        ),
+        isFalse,
+      );
+      expect(
+        shouldProgressivelyGenerateSeekThumbnails(
+          mode: SeekPreviewMode.onDemand,
+          plan: onlinePlan,
+        ),
+        isFalse,
+      );
+    });
+  });
+
   group('seek thumbnail source selection', () {
     test('online playback uses the lowest explicit video quality', () {
       final MediaServer server = _onlineServer(<StreamQuality>[
@@ -1625,6 +1735,42 @@ segment-5.ts
       );
       expect(extractor.urls, hasLength(4));
     });
+
+    test(
+      'progressive lookup exposes a coarse frame across the timeline',
+      () async {
+        final _FakeExtractor extractor = _FakeExtractor();
+        final SeekThumbnailService service = _service(extractor);
+        addTearDown(service.dispose);
+        final SeekThumbnailPlan plan = _singlePlan();
+        const Duration duration = Duration(seconds: 100);
+
+        await service.request(
+          plan: plan,
+          backend: PlayerBackend.mpv,
+          position: Duration.zero,
+          duration: duration,
+        );
+
+        expect(
+          service.nearestCachedFor(
+            plan,
+            const Duration(seconds: 90),
+            duration: duration,
+          ),
+          isNull,
+        );
+        expect(
+          service.nearestCachedFor(
+            plan,
+            const Duration(seconds: 90),
+            duration: duration,
+            maxDistance: duration,
+          ),
+          isNotNull,
+        );
+      },
+    );
 
     test('identical simultaneous requests are coalesced', () async {
       final Completer<void> gate = Completer<void>();
