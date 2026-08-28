@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.6.8",
+          "date": "2026-08-28",
+          "localizedDescription": "- Added progressive seek previews for online videos.\n- Previews generate across the entire timeline in multiple refinement passes.\n- The closest available preview appears immediately and improves as more frames generate.\n- Generation continues in the background while the player is open.\n- Choose between **Progressive timeline** (default) and **On demand** in Player Settings.\n- Offline seek previews remain unchanged.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.6.8/MiruShin-ios-v2.6.8.ipa",
+          "size": 28776851,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.6.7",
           "date": "2026-08-28",
           "localizedDescription": "- Fixed Cloudflare security verification getting stuck in a refresh loop.\n- Fixed source parsing starting before verification was complete.\n- Removed duplicate WebView navigation events on Windows.\n- Improved Cloudflare reliability across Windows, Android, iOS, and macOS.",
@@ -471,11 +479,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.6.7",
+      "version": "2.6.8",
       "versionDate": "2026-08-28",
-      "versionDescription": "- Fixed Cloudflare security verification getting stuck in a refresh loop.\n- Fixed source parsing starting before verification was complete.\n- Removed duplicate WebView navigation events on Windows.\n- Improved Cloudflare reliability across Windows, Android, iOS, and macOS.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.6.7/MiruShin-ios-v2.6.7.ipa",
-      "size": 28768996,
+      "versionDescription": "- Added progressive seek previews for online videos.\n- Previews generate across the entire timeline in multiple refinement passes.\n- The closest available preview appears immediately and improves as more frames generate.\n- Generation continues in the background while the player is open.\n- Choose between **Progressive timeline** (default) and **On demand** in Player Settings.\n- Offline seek previews remain unchanged.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.6.8/MiruShin-ios-v2.6.8.ipa",
+      "size": 28776851,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
