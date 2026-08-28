@@ -59,13 +59,17 @@ bool shouldExposeFvpNativeCompletion({
   required bool nativeSeekPending,
   required bool completionSuppressed,
   required bool completionRearmReady,
-  required bool acceptedPositionMatches,
+  required bool nativeSeekAccepted,
 }) {
   if (!nativeEnded || !initialized || nativeSeekActive || nativeSeekPending) {
     return false;
   }
   if (!completionSuppressed) return true;
-  return completionRearmReady && acceptedPositionMatches;
+  // Native seek acceptance is captured from the seek result itself. Do not
+  // require the later playback position to remain near that result: at higher
+  // speeds it can legitimately advance beyond the tolerance before the short
+  // re-arm delay elapses, leaving a latched MDK END suppressed forever.
+  return completionRearmReady && nativeSeekAccepted;
 }
 
 /// Pure FVP/MDK implementation of MiruShin's PlayerEngine.
@@ -1305,11 +1309,6 @@ class FvpPlayerEngine extends PlayerEngine {
       _clearNativeCompletionSuppression();
       completionSuppressed = false;
     }
-    final int? acceptedTargetMs = _completionAcceptedTargetMs;
-    final bool acceptedPositionMatches =
-        acceptedTargetMs != null &&
-        (position.inMilliseconds - acceptedTargetMs).abs() <=
-            _seekAcceptanceTolerance.inMilliseconds;
     final bool exposeNativeCompletion = shouldExposeFvpNativeCompletion(
       nativeEnded: nativeEnded,
       initialized: initialized,
@@ -1317,7 +1316,7 @@ class FvpPlayerEngine extends PlayerEngine {
       nativeSeekPending: nativeSeekPending,
       completionSuppressed: completionSuppressed,
       completionRearmReady: _completionRearmReady,
-      acceptedPositionMatches: acceptedPositionMatches,
+      nativeSeekAccepted: acceptedForCurrentSeek,
     );
     if (exposeNativeCompletion && completionSuppressed) {
       _clearNativeCompletionSuppression();

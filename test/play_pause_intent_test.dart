@@ -567,6 +567,143 @@ void main() {
       expect(state.autoNextVisible, isTrue);
     });
 
+    test(
+      'confirmed end after near-end seek cannot remain quarantined',
+      () async {
+        final ProviderContainer c = container();
+        final PlaybackController controller = c.read(
+          playbackControllerProvider.notifier,
+        );
+        final MediaPlaybackItem item = _testPlaybackItem(
+          'seek-quarantine-real-end',
+        );
+        final _FakePlayerEngine engine = _FakePlayerEngine(
+          const PlayerEngineState(
+            isInitialized: true,
+            isPlaying: true,
+            position: Duration(seconds: 1100),
+            duration: Duration(seconds: 1249),
+          ),
+          stateAfterSeek: (PlayerEngineState current, Duration position) =>
+              current.copyWith(position: position, isCompleted: true),
+        );
+        controller.debugSetPlaybackState(
+          PlaybackState(
+            item: item,
+            engine: engine,
+            server: item.servers.first,
+            desiredPlaying: true,
+          ),
+        );
+        controller.debugEvaluatePlaybackProgress(engine);
+        controller.debugEvaluatePlaybackProgress(engine);
+
+        await controller.seekTo(const Duration(seconds: 1247));
+        await Future<void>.delayed(const Duration(milliseconds: 1700));
+
+        final PlaybackState state = c.read(playbackControllerProvider);
+        expect(controller.debugManualSeekOwnsBackendEof(engine), isFalse);
+        expect(state.confirmedEnded, isTrue);
+        expect(state.autoNextVisible, isTrue);
+        expect(engine.seekCalls, 1);
+        expect(engine.pauseCalls, 0);
+        expect(engine.playCalls, 0);
+      },
+    );
+
+    test(
+      'offline near-end seek reaches true EOF without interaction',
+      () async {
+        final ProviderContainer c = container();
+        final PlaybackController controller = c.read(
+          playbackControllerProvider.notifier,
+        );
+        const MediaServer offlineServer = MediaServer(
+          id: 'offline',
+          name: 'Downloaded',
+          sourceName: 'Offline',
+          url: 'file:///downloaded/episode.m3u8',
+          streamType: StreamType.hls,
+        );
+        const MediaPlaybackItem item = MediaPlaybackItem(
+          id: 'offline-seek-quarantine-real-end',
+          title: 'Offline seek quarantine real end',
+          mediaType: MediaType.anime,
+          servers: <MediaServer>[offlineServer],
+        );
+        final _FakePlayerEngine engine = _FakePlayerEngine(
+          const PlayerEngineState(
+            isInitialized: true,
+            isPlaying: true,
+            position: Duration(seconds: 1100),
+            duration: Duration(seconds: 1249),
+          ),
+          stateAfterSeek: (PlayerEngineState current, Duration position) =>
+              current.copyWith(position: position, isCompleted: true),
+        );
+        controller.debugSetPlaybackState(
+          PlaybackState(
+            item: item,
+            engine: engine,
+            server: offlineServer,
+            desiredPlaying: true,
+          ),
+        );
+        controller.debugEvaluatePlaybackProgress(engine);
+
+        await controller.seekTo(const Duration(seconds: 1247));
+        await Future<void>.delayed(const Duration(milliseconds: 1700));
+
+        final PlaybackState state = c.read(playbackControllerProvider);
+        expect(controller.debugManualSeekOwnsBackendEof(engine), isFalse);
+        expect(state.confirmedEnded, isTrue);
+        expect(state.autoNextVisible, isTrue);
+        expect(engine.seekCalls, 1);
+        expect(engine.pauseCalls, 0);
+        expect(engine.playCalls, 0);
+      },
+    );
+
+    test('far-from-end seek quarantine expires without rollback', () async {
+      final ProviderContainer c = container();
+      final PlaybackController controller = c.read(
+        playbackControllerProvider.notifier,
+      );
+      final MediaPlaybackItem item = _testPlaybackItem(
+        'seek-quarantine-premature-end',
+      );
+      final _FakePlayerEngine engine = _FakePlayerEngine(
+        const PlayerEngineState(
+          isInitialized: true,
+          isPlaying: true,
+          position: Duration(seconds: 1200),
+          duration: Duration(seconds: 1477),
+        ),
+        stateAfterSeek: (PlayerEngineState current, Duration position) =>
+            current.copyWith(position: position, isCompleted: true),
+      );
+      controller.debugSetPlaybackState(
+        PlaybackState(
+          item: item,
+          engine: engine,
+          server: item.servers.first,
+          desiredPlaying: true,
+        ),
+      );
+      controller.debugEvaluatePlaybackProgress(engine);
+      controller.debugEvaluatePlaybackProgress(engine);
+
+      await controller.seekTo(const Duration(seconds: 1401));
+      await Future<void>.delayed(const Duration(milliseconds: 1700));
+
+      final PlaybackState state = c.read(playbackControllerProvider);
+      expect(controller.debugManualSeekOwnsBackendEof(engine), isFalse);
+      expect(state.confirmedEnded, isFalse);
+      expect(state.autoNextVisible, isFalse);
+      expect(engine.value.position, const Duration(seconds: 1401));
+      expect(engine.seekCalls, 1);
+    });
+
     test('stale completed callback during seek is quarantined', () async {
       final ProviderContainer c = container();
       final PlaybackController controller = c.read(
@@ -824,7 +961,7 @@ void main() {
 
       final PlaybackState state = c.read(playbackControllerProvider);
       expect(engine.seekCalls, 1);
-      expect(engine.value.position, const Duration(seconds: 1295));
+      expect(engine.value.position, const Duration(seconds: 1300));
       expect(engine.value.isCompleted, isFalse);
       expect(state.error, isNull);
       expect(state.confirmedEnded, isFalse);

@@ -52,6 +52,45 @@ void main() {
     );
   });
 
+  test('desktop continuation inherits the last actual fullscreen state', () {
+    for (final ({bool routeStart, bool current}) scenario
+        in <({bool routeStart, bool current})>[
+          (routeStart: false, current: false),
+          (routeStart: true, current: false),
+          (routeStart: false, current: true),
+          (routeStart: true, current: true),
+        ]) {
+      expect(
+        playerContinuationStartsFullscreen(
+          advancing: true,
+          isMobile: false,
+          currentFullscreen: scenario.current,
+        ),
+        scenario.current,
+        reason:
+            'routeStart=${scenario.routeStart} must not override '
+            'current=${scenario.current}',
+      );
+    }
+    expect(
+      playerContinuationStartsFullscreen(
+        advancing: false,
+        isMobile: false,
+        currentFullscreen: true,
+      ),
+      isFalse,
+    );
+    expect(
+      playerContinuationStartsFullscreen(
+        advancing: true,
+        isMobile: true,
+        currentFullscreen: false,
+      ),
+      isTrue,
+      reason: 'mobile immersive continuation keeps its existing semantics',
+    );
+  });
+
   testWidgets(
     'release sequence carries start fullscreen through player exit and next result',
     (WidgetTester tester) async {
@@ -142,7 +181,7 @@ void main() {
       expect(routeResult, isA<PlayerNextEpisodeResult>());
       expect(
         (routeResult! as PlayerNextEpisodeResult).startInFullscreen,
-        isTrue,
+        isFalse,
       );
       expect(controller.stopCalls, greaterThanOrEqualTo(1));
       expect(setFullscreenCalls, contains(true));
@@ -234,11 +273,22 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 4900));
     expect(find.byType(PlayerPage), findsOneWidget);
+    controller.bumpPlaybackGeneration();
     await tester.pump(const Duration(milliseconds: 200));
+    expect(find.byType(PlayerPage), findsOneWidget);
+    expect(routeResult, isNull);
+
+    controller.showFalseAutoNext();
+    await tester.pump();
+    controller.showAutoNext();
+    controller.showAutoNext();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 5100));
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(routeResult, isA<PlayerNextEpisodeResult>());
-    expect(controller.stopCalls, greaterThanOrEqualTo(1));
+    expect(controller.markWatchedCalls, 1);
+    expect(controller.stopCalls, 1);
     await tester.pump(const Duration(seconds: 3));
     debugDefaultTargetPlatformOverride = null;
   });
@@ -255,6 +305,11 @@ class _FullscreenTestPlaybackController extends PlaybackController {
   final MediaPlaybackItem item;
   final PlayerEngine engine;
   int stopCalls = 0;
+  int markWatchedCalls = 0;
+  int testPlaybackGeneration = 0;
+
+  @override
+  int get playbackGeneration => testPlaybackGeneration;
 
   @override
   PlaybackState build() => PlaybackState(
@@ -274,12 +329,21 @@ class _FullscreenTestPlaybackController extends PlaybackController {
     state = state.copyWith(autoNextVisible: true, confirmedEnded: false);
   }
 
+  void bumpPlaybackGeneration() {
+    testPlaybackGeneration += 1;
+  }
+
   @override
   Future<void> load(MediaPlaybackItem item) async {}
 
   @override
   Future<void> stop() async {
     stopCalls += 1;
+  }
+
+  @override
+  Future<void> markCurrentEpisodeWatched() async {
+    markWatchedCalls += 1;
   }
 
   @override

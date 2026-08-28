@@ -56,6 +56,15 @@ Future<void> _ignorePlayerTeardownErrors(Future<void> future) async {
   }
 }
 
+@visibleForTesting
+bool playerContinuationStartsFullscreen({
+  required bool advancing,
+  required bool isMobile,
+  required bool currentFullscreen,
+}) {
+  return advancing && (isMobile || currentFullscreen);
+}
+
 class PlayerPage extends ConsumerStatefulWidget {
   const PlayerPage({
     required this.item,
@@ -556,12 +565,24 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
         state.autoNextVisible &&
         state.confirmedEnded;
     if (shouldAutoNext && _autoNextTimer == null) {
-      debugPrint('AutoNext: confirmedEnd=true countdown=start');
+      final int playbackGeneration = _playbackNotifier.playbackGeneration;
+      debugPrint(
+        'AutoNext: generation=$playbackGeneration confirmed=true '
+        'countdown=start',
+      );
       debugPrint('[DEBUG] auto-next: scheduling advance in 5s');
       _autoNextTimer = Timer(const Duration(seconds: 5), () {
-        if (!mounted) return;
+        if (!mounted || _exitingPlayer) return;
+        final PlaybackController notifier = ref.read(
+          playbackControllerProvider.notifier,
+        );
         final PlaybackState currentState = ref.read(playbackControllerProvider);
-        if (!isSamePlaybackRouteItem(currentState.item, widget.item) ||
+        final PlayerSettings currentSettings =
+            ref.read(playerSettingsProvider).value ?? const PlayerSettings();
+        if (!identical(notifier, _playbackNotifier) ||
+            notifier.playbackGeneration != playbackGeneration ||
+            !currentSettings.autoplayNext ||
+            !isSamePlaybackRouteItem(currentState.item, widget.item) ||
             !currentState.confirmedEnded ||
             !currentState.autoNextVisible) {
           _autoNextTimer?.cancel();
@@ -570,26 +591,49 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
         }
         _autoNextTimer?.cancel();
         _autoNextTimer = null;
-        debugPrint('AutoNext: countdown=complete transition=requested');
+        debugPrint(
+          'AutoNext: generation=$playbackGeneration countdown=complete '
+          'exit=requested',
+        );
         debugPrint(
           '[DEBUG] auto-next: timer fired -> advancing to next episode',
-        );
-        final PlaybackController notifier = ref.read(
-          playbackControllerProvider.notifier,
         );
         notifier.dismissAutoNext();
         // Mark the finishing episode watched before advancing, so it is never
         // left unwatched when the next episode starts.
-        unawaited(
-          notifier.markCurrentEpisodeWatched().whenComplete(
-            () => unawaited(_exitPlayer(playNext: true)),
-          ),
-        );
+        unawaited(_finishScheduledAutoNext(notifier, playbackGeneration));
       });
     } else if (!shouldAutoNext && _autoNextTimer != null) {
       _autoNextTimer?.cancel();
       _autoNextTimer = null;
     }
+  }
+
+  Future<void> _finishScheduledAutoNext(
+    PlaybackController notifier,
+    int playbackGeneration,
+  ) async {
+    try {
+      await notifier.markCurrentEpisodeWatched().timeout(_exitCleanupTimeout);
+    } on Object {
+      // Progress is also saved during player teardown. Persistence must not
+      // strand a confirmed route transition forever.
+    }
+    if (!mounted ||
+        _exitingPlayer ||
+        !identical(notifier, _playbackNotifier) ||
+        notifier.playbackGeneration != playbackGeneration) {
+      return;
+    }
+    final PlaybackState currentState = ref.read(playbackControllerProvider);
+    final PlayerSettings currentSettings =
+        ref.read(playerSettingsProvider).value ?? const PlayerSettings();
+    if (!currentSettings.autoplayNext ||
+        !currentState.confirmedEnded ||
+        !isSamePlaybackRouteItem(currentState.item, widget.item)) {
+      return;
+    }
+    await _exitPlayer(playNext: true);
   }
 
   void _setTimelineInteractionActive(bool active) {
@@ -755,18 +799,22 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
       }
     }
     final bool wasFullscreen = _isFullscreen;
-    final bool shouldStartNextFullscreen =
-        advancing && (wasFullscreen || _shouldStartFullscreen);
+    final int playbackGeneration = _playbackNotifier.playbackGeneration;
+    final bool shouldStartNextFullscreen = playerContinuationStartsFullscreen(
+      advancing: advancing,
+      isMobile: _isMobile,
+      currentFullscreen: wasFullscreen,
+    );
     final bool preserveFullscreenForNext =
         _isMobile && shouldStartNextFullscreen;
     _preserveFullscreenForNextRoute = preserveFullscreenForNext;
     if (kDebugMode) {
       debugPrint(
-        'PlayerFullscreen: releaseSemantic=true '
+        'PlayerFullscreen: platform=${defaultTargetPlatform.name} '
+        'routeStartFullscreen=${widget.startInFullscreen} '
+        'currentFullscreen=$wasFullscreen '
         'advancing=$advancing '
-        'wasFullscreen=$wasFullscreen '
-        'shouldStartFullscreen=$_shouldStartFullscreen '
-        'isMobile=$_isMobile '
+        'nextFullscreen=$shouldStartNextFullscreen '
         'preserveSystemUi=$preserveFullscreenForNext.',
       );
     }
@@ -829,6 +877,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
 
     debugPrint(
       'PlayerExit: reason=$exitReason resultType=${result.runtimeType} '
+      'generation=$playbackGeneration '
       'startFullscreen=$shouldStartNextFullscreen '
       'currentEpisode=${widget.item.currentEpisodeId}',
     );

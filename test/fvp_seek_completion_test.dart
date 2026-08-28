@@ -12,7 +12,7 @@ void main() {
           nativeSeekPending: false,
           completionSuppressed: true,
           completionRearmReady: true,
-          acceptedPositionMatches: true,
+          nativeSeekAccepted: true,
         ),
         isFalse,
       );
@@ -24,13 +24,13 @@ void main() {
           nativeSeekPending: true,
           completionSuppressed: true,
           completionRearmReady: true,
-          acceptedPositionMatches: true,
+          nativeSeekAccepted: true,
         ),
         isFalse,
       );
     });
 
-    test('requires accepted post-seek position and re-arm evidence', () {
+    test('requires accepted native seek and re-arm evidence', () {
       expect(
         shouldExposeFvpNativeCompletion(
           nativeEnded: true,
@@ -39,7 +39,7 @@ void main() {
           nativeSeekPending: false,
           completionSuppressed: true,
           completionRearmReady: false,
-          acceptedPositionMatches: true,
+          nativeSeekAccepted: true,
         ),
         isFalse,
       );
@@ -51,7 +51,7 @@ void main() {
           nativeSeekPending: false,
           completionSuppressed: true,
           completionRearmReady: true,
-          acceptedPositionMatches: false,
+          nativeSeekAccepted: false,
         ),
         isFalse,
       );
@@ -63,7 +63,7 @@ void main() {
           nativeSeekPending: false,
           completionSuppressed: true,
           completionRearmReady: true,
-          acceptedPositionMatches: true,
+          nativeSeekAccepted: true,
         ),
         isTrue,
       );
@@ -78,9 +78,27 @@ void main() {
           nativeSeekPending: false,
           completionSuppressed: false,
           completionRearmReady: false,
-          acceptedPositionMatches: false,
+          nativeSeekAccepted: false,
         ),
         isTrue,
+      );
+    });
+
+    test('re-arms a latched END after playback advances past seek result', () {
+      expect(
+        shouldExposeFvpNativeCompletion(
+          nativeEnded: true,
+          initialized: true,
+          nativeSeekActive: false,
+          nativeSeekPending: false,
+          completionSuppressed: true,
+          completionRearmReady: true,
+          nativeSeekAccepted: true,
+        ),
+        isTrue,
+        reason:
+            'native acceptance belongs to the seek result; the later position '
+            'must not keep completion suppressed forever',
       );
     });
   });

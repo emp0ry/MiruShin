@@ -205,6 +205,7 @@ class PlaybackController extends Notifier<PlaybackState> {
   static const Duration _seekSettleForwardTolerance = Duration(
     milliseconds: 2500,
   );
+  static const Duration _manualSeekEofQuarantine = Duration(milliseconds: 700);
   static const Duration _engineSeekTimeout = Duration(seconds: 30);
   static const Duration _resumeSeekRetryInterval = Duration(milliseconds: 650);
   static const Duration _resumeSeekRetryTimeout = Duration(seconds: 75);
@@ -271,6 +272,7 @@ class PlaybackController extends Notifier<PlaybackState> {
   Timer? _interactiveSeekTimer;
   Timer? _seekPreviewTimer;
   Timer? _seekSettleTimer;
+  Timer? _manualSeekEofQuarantineTimer;
   int _retryCount = 0;
   int _playbackGeneration = 0;
   int _seekPreviewGeneration = 0;
@@ -279,6 +281,10 @@ class PlaybackController extends Notifier<PlaybackState> {
   Duration? _manualSeekEofTarget;
   int _engineStateEventEpoch = 0;
   int? _manualSeekSettledAfterEngineEvent;
+  DateTime? _manualSeekEofQuarantineUntil;
+  int? _manualSeekRejectedBackendEofEpoch;
+  bool _manualSeekOperationActive = false;
+  String? _lastManualSeekEofLogKey;
   Duration _resumeGuardPosition = Duration.zero;
   DateTime? _resumeGuardUntil;
   PlayerEngine? _queuedSeekEngine;
@@ -520,6 +526,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       _interactiveSeekTimer?.cancel();
       _seekPreviewTimer?.cancel();
       _seekSettleTimer?.cancel();
+      _manualSeekEofQuarantineTimer?.cancel();
       unawaited(_ignorePlaybackTeardownErrors(DiscordRpcService.dispose()));
       unawaited(_ignorePlaybackTeardownErrors(_seekThumbnailService.dispose()));
       final PlayerEngine? engine = _engineForDispose;
@@ -533,6 +540,8 @@ class PlaybackController extends Notifier<PlaybackState> {
   void setNextEpisodeHandler(void Function()? handler) {
     _nextEpisodeHandler = handler;
   }
+
+  int get playbackGeneration => _playbackGeneration;
 
   @visibleForTesting
   void debugSetPlaybackState(PlaybackState value) {
@@ -549,6 +558,11 @@ class PlaybackController extends Notifier<PlaybackState> {
   void debugEvaluatePlaybackProgress(PlayerEngine engine) {
     _engineStateEventEpoch++;
     _evaluatePlaybackProgress(engine);
+  }
+
+  @visibleForTesting
+  bool debugManualSeekOwnsBackendEof(PlayerEngine engine) {
+    return _manualSeekOwnsBackendEof(engine);
   }
 
   @visibleForTesting
@@ -2568,6 +2582,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     _interactiveSeekTimer = null;
     _queuedSeekTarget = null;
     _seekInFlight = true;
+    final int manualSeekEpoch = _manualSeekEpoch;
     final Duration from = engine.state.value.position;
     bool seekCompleted = false;
 
@@ -2582,6 +2597,9 @@ class PlaybackController extends Notifier<PlaybackState> {
       // the native player rejects a stale target during stream transitions.
     } finally {
       _seekInFlight = false;
+      if (manualSeekEpoch == _manualSeekEpoch) {
+        _manualSeekOperationActive = false;
+      }
       if (_queuedSeekTarget != null) {
         unawaited(_flushInteractiveSeek());
       } else if (state.engine == engine) {
@@ -2594,6 +2612,7 @@ class PlaybackController extends Notifier<PlaybackState> {
           }
         } else {
           _cancelSeekSettle(clearPreview: true);
+          _resetManualSeekEofWindow();
         }
       } else if (_queuedSeekEngine == engine) {
         _clearInteractiveSeek();
@@ -2624,10 +2643,14 @@ class PlaybackController extends Notifier<PlaybackState> {
 
   void _beginManualSeekEofWindow(PlayerEngine engine, Duration target) {
     if (!identical(state.engine, engine)) return;
+    _resetManualSeekEofWindow();
     _manualSeekEpoch++;
     _manualSeekEofEpoch = _manualSeekEpoch;
     _manualSeekEofTarget = target;
     _manualSeekSettledAfterEngineEvent = null;
+    _manualSeekOperationActive = true;
+    _manualSeekRejectedBackendEofEpoch = null;
+    _lastManualSeekEofLogKey = null;
     _prematureEofRecoveryAttempts = 0;
     _prematureEofRecoveryNeedsProgressFrom = null;
 
@@ -2638,18 +2661,30 @@ class PlaybackController extends Notifier<PlaybackState> {
   }
 
   bool _manualSeekOwnsBackendEof(PlayerEngine engine) {
+    final DateTime? quarantineUntil = _manualSeekEofQuarantineUntil;
+    final bool quarantineActive =
+        quarantineUntil != null && DateTime.now().isBefore(quarantineUntil);
     return identical(state.engine, engine) &&
         _manualSeekEofEpoch == _manualSeekEpoch &&
-        (_seekInFlight ||
+        (_manualSeekOperationActive ||
+            _seekInFlight ||
             (_queuedSeekEngine == engine && _queuedSeekTarget != null) ||
             _settlingSeekEngine == engine ||
-            _manualSeekEofTarget != null);
+            quarantineActive);
   }
 
-  void _resetManualSeekEofWindow() {
+  void _resetManualSeekEofWindow({bool clearRejectedBackendEof = true}) {
+    _manualSeekEofQuarantineTimer?.cancel();
+    _manualSeekEofQuarantineTimer = null;
     _manualSeekEofEpoch = null;
     _manualSeekEofTarget = null;
     _manualSeekSettledAfterEngineEvent = null;
+    _manualSeekEofQuarantineUntil = null;
+    _manualSeekOperationActive = false;
+    _lastManualSeekEofLogKey = null;
+    if (clearRejectedBackendEof) {
+      _manualSeekRejectedBackendEofEpoch = null;
+    }
   }
 
   void _settleSeekPreview() {
@@ -2692,6 +2727,11 @@ class PlaybackController extends Notifier<PlaybackState> {
         );
       }
       _cancelSeekSettle(clearPreview: true);
+      if (engine.state.value.isCompleted) {
+        _armManualSeekEofQuarantine(engine, delay: Duration.zero);
+      } else {
+        _resetManualSeekEofWindow();
+      }
       return;
     }
 
@@ -2702,10 +2742,15 @@ class PlaybackController extends Notifier<PlaybackState> {
 
     if (!engine.state.value.isCompleted) {
       _resetManualSeekEofWindow();
+      debugPrint(
+        'SeekEOF: epoch=$_manualSeekEpoch state=settled '
+        'backendEnd=false action=quarantine-ended',
+      );
     } else {
       // A target near duration is not proof of EOF. Only a later engine event
-      // may confirm completion after this seek has actually settled.
-      _manualSeekSettledAfterEngineEvent = _engineStateEventEpoch;
+      // or the bounded quarantine deadline may confirm completion after this
+      // seek has actually settled.
+      _armManualSeekEofQuarantine(engine);
     }
 
     final bool shouldClear = state.seekPreviewPosition == target;
@@ -2713,6 +2758,64 @@ class PlaybackController extends Notifier<PlaybackState> {
     if (shouldClear && state.engine == engine) {
       state = state.copyWith(clearSeekPreviewPosition: true);
     }
+    if (!engine.state.value.isCompleted && state.engine == engine) {
+      _evaluatePlaybackProgress(engine);
+    }
+  }
+
+  void _armManualSeekEofQuarantine(
+    PlayerEngine engine, {
+    Duration delay = _manualSeekEofQuarantine,
+  }) {
+    if (!identical(state.engine, engine) ||
+        _manualSeekEofEpoch != _manualSeekEpoch) {
+      return;
+    }
+    final int generation = _playbackGeneration;
+    final int manualSeekEpoch = _manualSeekEpoch;
+    _manualSeekOperationActive = false;
+    _manualSeekSettledAfterEngineEvent = _engineStateEventEpoch;
+    _manualSeekEofQuarantineUntil = DateTime.now().add(delay);
+    _manualSeekEofQuarantineTimer?.cancel();
+    debugPrint(
+      'SeekEOF: epoch=$manualSeekEpoch state=settled '
+      'target=${_manualSeekEofTarget?.inSeconds}s '
+      'backendEnd=${engine.state.value.isCompleted} '
+      'action=quarantine-start',
+    );
+    _manualSeekEofQuarantineTimer = Timer(delay, () {
+      if (generation != _playbackGeneration ||
+          manualSeekEpoch != _manualSeekEpoch ||
+          !identical(state.engine, engine)) {
+        return;
+      }
+      _evaluatePlaybackProgress(engine);
+    });
+  }
+
+  void _expireManualSeekEofQuarantineIfDue(
+    PlayerEngine engine,
+    PlaybackEndEvaluation evaluation,
+  ) {
+    final DateTime? until = _manualSeekEofQuarantineUntil;
+    if (_manualSeekEofEpoch != _manualSeekEpoch ||
+        until == null ||
+        DateTime.now().isBefore(until)) {
+      return;
+    }
+    final int manualSeekEpoch = _manualSeekEpoch;
+    final Duration? target = _manualSeekEofTarget;
+    final bool rejectedStaleBackendEof =
+        engine.state.value.isCompleted && !evaluation.confirmedEnded;
+    _resetManualSeekEofWindow(clearRejectedBackendEof: false);
+    _manualSeekRejectedBackendEofEpoch = rejectedStaleBackendEof
+        ? manualSeekEpoch
+        : null;
+    debugPrint(
+      'SeekEOF: epoch=$manualSeekEpoch state=settled '
+      'target=${target?.inSeconds}s action=quarantine-ended '
+      'decision=${evaluation.decision.name}',
+    );
   }
 
   bool _isSeekSettled(
@@ -2749,6 +2852,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     _queuedSeekEngine = null;
     _queuedSeekTarget = null;
     _seekInFlight = false;
+    _resetManualSeekEofWindow();
     if (state.seekPreviewPosition != null) {
       state = state.copyWith(clearSeekPreviewPosition: true);
     }
@@ -3037,6 +3141,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     _clearResumeGuard();
     _clearInteractiveSeek();
     _beginManualSeekEofWindow(engine, clampedTarget);
+    final int manualSeekEpoch = _manualSeekEpoch;
     // Skip jumps (notably the auto ED-skip, which lands on the episode end) must
     // feed completion detection like slider and gesture seeks do. Otherwise, jumping
     // past the end leaves the episode unwatched and never triggers auto-next.
@@ -3052,7 +3157,13 @@ class PlaybackController extends Notifier<PlaybackState> {
       // Native backends may reject stale skip targets during stream changes.
       if (kDebugMode) debugPrint('Skip seek failed: $error');
     }
+    if (manualSeekEpoch == _manualSeekEpoch) {
+      _manualSeekOperationActive = false;
+    }
     if (!seekCompleted || state.engine != engine) {
+      if (state.engine == engine && manualSeekEpoch == _manualSeekEpoch) {
+        _resetManualSeekEofWindow();
+      }
       if (state.engine == engine &&
           state.seekPreviewPosition == clampedTarget) {
         state = state.copyWith(clearSeekPreviewPosition: true);
@@ -3179,14 +3290,9 @@ class PlaybackController extends Notifier<PlaybackState> {
     if (durationGrew) {
       _invalidateConfirmedEnd('authoritative duration grew');
     }
-    final Duration? manualTarget = _manualSeekEofTarget;
-    if (_manualSeekEofEpoch == _manualSeekEpoch &&
-        manualTarget != null &&
-        !_seekInFlight &&
-        _queuedSeekTarget == null &&
-        !es.isCompleted &&
-        es.position >= manualTarget + const Duration(milliseconds: 250)) {
-      _resetManualSeekEofWindow();
+    if (_manualSeekRejectedBackendEofEpoch == _manualSeekEpoch &&
+        !es.isCompleted) {
+      _manualSeekRejectedBackendEofEpoch = null;
     }
     final Duration pos = es.position;
     final Duration dur = es.duration;
@@ -3295,6 +3401,13 @@ class PlaybackController extends Notifier<PlaybackState> {
       _handleManualSeekBackendEof(engine, evaluation);
       return;
     }
+    if (_manualSeekRejectedBackendEofEpoch == _manualSeekEpoch) {
+      // The bounded manual-seek quarantine already classified this still-
+      // latched END as stale. Do not turn it into a target rollback or source
+      // reopen. A cleared backend END, a newer seek, or strict final-position
+      // evidence re-arms the normal completion path.
+      return;
+    }
     if (_prematureEofRecoveryActive || _prematureEofRecoveryAttempts >= 1) {
       return;
     }
@@ -3308,10 +3421,19 @@ class PlaybackController extends Notifier<PlaybackState> {
     // Native END may remain asserted while a seek is pending or settling. It is
     // deliberately non-actionable: the requested target stays authoritative,
     // and no fallback seek, source reopen, or origin rollback is permitted.
-    if (kDebugMode && !_seekInFlight) {
+    final String phase = _manualSeekOperationActive || _seekInFlight
+        ? 'inFlight'
+        : _settlingSeekEngine == engine
+        ? 'settling'
+        : 'quarantine';
+    final String logKey =
+        '$_manualSeekEpoch|$phase|${evaluation.decision.name}';
+    if (kDebugMode && logKey != _lastManualSeekEofLogKey) {
+      _lastManualSeekEofLogKey = logKey;
       debugPrint(
-        'PlaybackEnd: stale manual-seek EOF suppressed '
+        'SeekEOF: epoch=$_manualSeekEpoch state=$phase '
         'target=${_manualSeekEofTarget?.inSeconds}s '
+        'backendEnd=${engine.state.value.isCompleted} action=suppress '
         'decision=${evaluation.decision.name}',
       );
     }
@@ -3322,7 +3444,8 @@ class PlaybackController extends Notifier<PlaybackState> {
 
   bool _manualSeekHasPostSettleEndEvidence(PlayerEngine engine) {
     final int? settledAfter = _manualSeekSettledAfterEngineEvent;
-    return _manualSeekOwnsBackendEof(engine) &&
+    return identical(state.engine, engine) &&
+        _manualSeekEofEpoch == _manualSeekEpoch &&
         settledAfter != null &&
         _engineStateEventEpoch > settledAfter;
   }
@@ -3348,10 +3471,10 @@ class PlaybackController extends Notifier<PlaybackState> {
     final int generation = _playbackGeneration;
     final int manualSeekEpoch = _manualSeekEpoch;
     _prematureEofRecoveryAttempts = 1;
-    final Duration resumeAt =
-        evaluation.observedPosition > const Duration(seconds: 5)
-        ? evaluation.observedPosition - const Duration(seconds: 5)
-        : Duration.zero;
+    // Re-assert the last authoritative position exactly. Recovery must never
+    // move playback behind the user's latest target (the old target-minus-
+    // several-seconds fallback looked like a seek rollback in real playback).
+    final Duration resumeAt = evaluation.observedPosition;
     bool recoveryOperationFailed = false;
     _logPlaybackEnd(engine, evaluation);
     try {
@@ -3431,6 +3554,7 @@ class PlaybackController extends Notifier<PlaybackState> {
 
     _trackMaxObservedPosition(engine);
     final PlaybackEndEvaluation end = _playbackEndEvaluation(engine);
+    _expireManualSeekEofQuarantineIfDue(engine, end);
     // (1) Auto-progress: mark the episode watched the instant playback crosses
     // 85%, independent of ever reaching the very end. This is what makes the
     // watched mark + AniList sync fire mid-playback instead of only on exit.
@@ -3450,12 +3574,10 @@ class PlaybackController extends Notifier<PlaybackState> {
     // completion signal is validated against real progress so a premature EOF on
     // a bad/reloaded stream can't latch the end minutes early.
     if (_manualSeekOwnsBackendEof(engine)) {
-      if (es.isCompleted &&
-          end.confirmedEnded &&
-          _manualSeekHasPostSettleEndEvidence(engine)) {
+      if (end.confirmedEnded && _manualSeekHasPostSettleEndEvidence(engine)) {
         // This is a later backend event after the accepted seek settled. The
-        // native engine has re-armed completion, so strict end evaluation may
-        // now proceed normally.
+        // native engine or strict position oracle has re-armed completion, so
+        // end evaluation may now proceed normally.
         _resetManualSeekEofWindow();
       } else if (es.isCompleted || end.confirmedEnded) {
         _handleManualSeekBackendEof(engine, end);
