@@ -50,7 +50,7 @@ abstract interface class PlaybackSyncSink {
     bool playing, {
     bool temporary = false,
   });
-  void onHostSourceChanged();
+  void onHostSourceChanged({required bool userInitiated});
 }
 
 final playbackControllerProvider =
@@ -122,6 +122,7 @@ class PlaybackState {
     MediaServer? server,
     StreamQuality? quality,
     VoiceOverTrack? voiceover,
+    bool clearVoiceover = false,
     SubtitleTrack? subtitle,
     bool clearSubtitle = false,
     List<SubtitleCue>? subtitleCues,
@@ -152,7 +153,7 @@ class PlaybackState {
       engine: clearEngine ? null : engine ?? this.engine,
       server: server ?? this.server,
       quality: quality ?? this.quality,
-      voiceover: voiceover ?? this.voiceover,
+      voiceover: clearVoiceover ? null : voiceover ?? this.voiceover,
       subtitle: clearSubtitle ? null : subtitle ?? this.subtitle,
       subtitleCues: subtitleCues ?? this.subtitleCues,
       loading: loading ?? this.loading,
@@ -346,6 +347,7 @@ class PlaybackController extends Notifier<PlaybackState> {
   bool _guestCanControlPlayback = false;
   bool _guestCanSeek = false;
   bool _guestCanChangeSpeed = false;
+  bool _guestCanChangeStream = false;
   bool _applyingRemote = false;
   double? _remoteTemporaryPlaybackSpeed;
 
@@ -360,6 +362,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       _guestCanControlPlayback = false;
       _guestCanSeek = false;
       _guestCanChangeSpeed = false;
+      _guestCanChangeStream = false;
     }
   }
 
@@ -367,10 +370,12 @@ class PlaybackController extends Notifier<PlaybackState> {
     required bool canControlPlayback,
     required bool canSeek,
     required bool canChangeSpeed,
+    required bool canChangeStream,
   }) {
     _guestCanControlPlayback = canControlPlayback;
     _guestCanSeek = canSeek;
     _guestCanChangeSpeed = canChangeSpeed;
+    _guestCanChangeStream = canChangeStream;
   }
 
   bool get _guestControlLocked => _guestLocked && !_applyingRemote;
@@ -379,6 +384,8 @@ class PlaybackController extends Notifier<PlaybackState> {
   bool get _suppressSeekControl => _guestControlLocked && !_guestCanSeek;
   bool get _suppressSpeedControl =>
       _guestControlLocked && !_guestCanChangeSpeed;
+  bool get _suppressStreamControl =>
+      _guestControlLocked && !_guestCanChangeStream;
   bool get _suppressGuestGlobalControl => _guestControlLocked;
 
   /// Current engine position, for the host heartbeat and guest drift checks.
@@ -424,9 +431,9 @@ class PlaybackController extends Notifier<PlaybackState> {
     );
   }
 
-  void _broadcastSourceChanged() {
+  void _broadcastSourceChanged({required bool userInitiated}) {
     if (_syncSink == null || _applyingRemote) return;
-    _syncSink!.onHostSourceChanged();
+    _syncSink!.onHostSourceChanged(userInitiated: userInitiated);
   }
 
   /// Apply a host play/pause without re-broadcasting (guest side).
@@ -840,6 +847,10 @@ class PlaybackController extends Notifier<PlaybackState> {
       server,
       explicitId: item.initialQualityId,
     );
+    final VoiceOverTrack? voiceover = _voiceoverById(
+      server.voiceovers,
+      item.initialVoiceoverId,
+    );
     final EpisodeProgress? prog =
         item.ignoreProgress ||
             item.startPolicy == PlaybackStartPolicy.forceBeginning
@@ -852,10 +863,13 @@ class PlaybackController extends Notifier<PlaybackState> {
       quality: quality,
       position: startPos,
       autoplay: true,
+      voiceover: voiceover,
+      clearVoiceover: voiceover == null,
     );
-    // Host: a freshly loaded episode is a global source/episode change. (Guests
-    // have no sink registered, so this is a no-op on the receiving side.)
-    _broadcastSourceChanged();
+    // A host load is a global source/episode change. Guest loads caused by
+    // synchronization are marked non-user-initiated and ignored by the party
+    // controller, so they cannot loop back as stream-change requests.
+    _broadcastSourceChanged(userInitiated: false);
   }
 
   Future<void> _waitForFinalProgressSaveBarrier() async {
@@ -994,6 +1008,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     required Duration position,
     required bool autoplay,
     VoiceOverTrack? voiceover,
+    bool clearVoiceover = false,
     SubtitleTrack? subtitle,
     double? preserveAspectRatio,
     PlayerBackend? backendOverride,
@@ -1031,6 +1046,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       server: server,
       quality: quality,
       voiceover: voiceover,
+      clearVoiceover: clearVoiceover,
       subtitle: subtitle,
       clearSubtitle: subtitle == null,
       subtitleCues: subtitle == null ? const <SubtitleCue>[] : null,
@@ -2007,6 +2023,15 @@ class PlaybackController extends Notifier<PlaybackState> {
       (StreamQuality q) => q.isAuto,
       orElse: () => server.qualities.first,
     );
+  }
+
+  VoiceOverTrack? _voiceoverById(List<VoiceOverTrack> voiceovers, String? id) {
+    final String cleanId = id?.trim() ?? '';
+    if (cleanId.isEmpty) return null;
+    for (final VoiceOverTrack voiceover in voiceovers) {
+      if (voiceover.id.trim() == cleanId) return voiceover;
+    }
+    return null;
   }
 
   Future<void> pause() async {
@@ -3145,7 +3170,7 @@ class PlaybackController extends Notifier<PlaybackState> {
   }
 
   Future<void> switchServer(MediaServer server) async {
-    if (_suppressGuestGlobalControl) return;
+    if (_suppressStreamControl) return;
     final MediaPlaybackItem? item = state.item;
     final PlayerEngine? current = state.engine;
     if (item == null) return;
@@ -3155,12 +3180,12 @@ class PlaybackController extends Notifier<PlaybackState> {
       quality: _initialQuality(server),
       position: _currentPositionFor(current),
       autoplay: _autoplayForSourceChange(current),
+      clearVoiceover: true,
     );
-    _broadcastSourceChanged();
+    _broadcastSourceChanged(userInitiated: true);
   }
 
   Future<void> switchQuality(StreamQuality quality) async {
-    if (_suppressGuestGlobalControl) return;
     final MediaPlaybackItem? item = state.item;
     final MediaServer? server = state.server;
     final PlayerEngine? current = state.engine;
@@ -3175,7 +3200,6 @@ class PlaybackController extends Notifier<PlaybackState> {
       subtitle: state.subtitle,
       preserveAspectRatio: current?.state.value.aspectRatio,
     );
-    _broadcastSourceChanged();
   }
 
   Future<void> reloadWithBackend(PlayerBackend backend) async {
@@ -3203,7 +3227,7 @@ class PlaybackController extends Notifier<PlaybackState> {
   }
 
   Future<void> switchVoiceover(VoiceOverTrack voiceover) async {
-    if (_suppressGuestGlobalControl) return;
+    if (_suppressStreamControl) return;
     final MediaPlaybackItem? item = state.item;
     final MediaServer? currentServer = state.server;
     final PlayerEngine? current = state.engine;
@@ -3213,7 +3237,7 @@ class PlaybackController extends Notifier<PlaybackState> {
         voiceUrl == null ||
         voiceUrl.isEmpty) {
       state = state.copyWith(voiceover: voiceover);
-      _broadcastSourceChanged();
+      _broadcastSourceChanged(userInitiated: true);
       return;
     }
 
@@ -3245,7 +3269,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       voiceover: voiceover,
       subtitle: state.subtitle,
     );
-    _broadcastSourceChanged();
+    _broadcastSourceChanged(userInitiated: true);
   }
 
   Future<void> selectSubtitle(

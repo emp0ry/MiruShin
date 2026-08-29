@@ -50,6 +50,7 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
   bool _signalingDone = false;
   // Latest source descriptor the guest applied, to avoid redundant reloads.
   SourceDescriptor? _lastAppliedSource;
+  SourceDescriptor? _pendingGuestStreamRequest;
 
   @override
   WatchPartyRoomState build() {
@@ -72,6 +73,7 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
     final WebRtcSyncService webrtc = WebRtcSyncService();
     _signaling = signaling;
     _webrtc = webrtc;
+    _resolver = WatchPartyGuestResolver(ref, ignoreProgress: false);
     _bindWebrtc(webrtc, role: 'host');
 
     try {
@@ -119,6 +121,7 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
       canControlPlayback: state.permissions.canControlPlayback,
       canSeek: state.permissions.canSeek,
       canChangeSpeed: state.permissions.canChangeSpeed,
+      canChangeStream: state.permissions.canChangeStream,
     );
 
     try {
@@ -155,6 +158,10 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
 
   void setGuestSpeedAllowed(bool allowed) {
     _updatePermissions(state.permissions.copyWith(canChangeSpeed: allowed));
+  }
+
+  void setGuestStreamChangeAllowed(bool allowed) {
+    _updatePermissions(state.permissions.copyWith(canChangeStream: allowed));
   }
 
   // PlaybackSyncSink (host -> guests)
@@ -218,16 +225,25 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
   }
 
   @override
-  void onHostSourceChanged() {
-    if (!state.isHost || !state.isConnected) return;
+  void onHostSourceChanged({required bool userInitiated}) {
+    if (!state.isConnected) return;
+    if (state.isGuest &&
+        (!userInitiated || !state.permissions.canChangeStream)) {
+      return;
+    }
     final SourceDescriptor? descriptor = _currentDescriptor();
     if (descriptor == null) return;
+    if (state.isGuest) {
+      _pendingGuestStreamRequest = descriptor;
+    }
     final PlaybackController playback = ref.read(
       playbackControllerProvider.notifier,
     );
     _send(
       WatchPartyEvent(
-        type: WatchPartyEventType.sourceChanged,
+        type: state.isHost
+            ? WatchPartyEventType.sourceChanged
+            : WatchPartyEventType.streamChangeRequested,
         position: playback.currentEnginePosition,
         speed: playback.currentPlaybackSpeed,
         isPlaying: playback.isEnginePlaying,
@@ -320,7 +336,6 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
     if (state.isHost) {
       if (event.type == WatchPartyEventType.helloRequest) {
         _sendPermissions();
-        onHostSourceChanged();
         _send(_snapshotEvent());
       } else if (event.type == WatchPartyEventType.play ||
           event.type == WatchPartyEventType.pause) {
@@ -342,6 +357,8 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
                 ),
           );
         }
+      } else if (event.type == WatchPartyEventType.streamChangeRequested) {
+        unawaited(_handleGuestStreamChange(event));
       }
       return;
     }
@@ -371,6 +388,7 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
       case WatchPartyEventType.episodeChanged:
       case WatchPartyEventType.stateSnapshot:
         unawaited(_applySource(event));
+      case WatchPartyEventType.streamChangeRequested:
       case WatchPartyEventType.helloRequest:
       case WatchPartyEventType.permissionsChanged:
         break;
@@ -401,7 +419,56 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
           canControlPlayback: permissions.canControlPlayback,
           canSeek: permissions.canSeek,
           canChangeSpeed: permissions.canChangeSpeed,
+          canChangeStream: permissions.canChangeStream,
         );
+  }
+
+  Future<void> _handleGuestStreamChange(WatchPartyEvent event) async {
+    final SourceDescriptor? requested = event.source;
+    final SourceDescriptor? current = _currentDescriptor();
+    if (!state.permissions.canChangeStream ||
+        requested == null ||
+        current == null ||
+        !requested.sameEpisodeAs(current)) {
+      // Reassert the authoritative host selection so a request made just as
+      // permission was revoked cannot leave the guest on a private fork.
+      onHostSourceChanged(userInitiated: false);
+      return;
+    }
+
+    final WatchPartyGuestResolver? resolver = _resolver;
+    if (resolver == null) {
+      onHostSourceChanged(userInitiated: false);
+      return;
+    }
+    final PlaybackController playback = ref.read(
+      playbackControllerProvider.notifier,
+    );
+    final Duration position = playback.currentEnginePosition;
+    final double speed = playback.currentPlaybackSpeed;
+    final bool playing = playback.isEnginePlaying;
+    final bool temporarySpeedActive = ref
+        .read(playbackControllerProvider)
+        .temporarySpeedActive;
+    final bool alreadySelected = requested.sameStreamAs(current);
+    try {
+      await resolver.apply(
+        requested,
+        position: position,
+        speed: speed,
+        temporarySpeedActive: temporarySpeedActive,
+        playing: playing,
+        syncQuality: false,
+        forceReload: !alreadySelected,
+      );
+      // A real reload broadcasts from PlaybackController.load(). An unchanged
+      // request still needs an acknowledgement to clear the guest's pending
+      // request and reassert the host's authoritative selection.
+      if (alreadySelected) onHostSourceChanged(userInitiated: false);
+    } on Object catch (error) {
+      state = state.copyWith(lastError: 'Could not change stream: $error');
+      onHostSourceChanged(userInitiated: false);
+    }
   }
 
   Future<void> _applyPlayPause(WatchPartyEvent event) async {
@@ -491,10 +558,15 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
     final SourceDescriptor? descriptor = event.source;
     final WatchPartyGuestResolver? resolver = _resolver;
     if (descriptor == null || resolver == null) return;
-    if (descriptor.sameSelectionAs(_lastAppliedSource) &&
+    final bool hasPendingGuestStreamRequest =
+        _pendingGuestStreamRequest != null;
+    final bool syncInitialQuality = _lastAppliedSource == null;
+    if (!hasPendingGuestStreamRequest &&
+        descriptor.sameStreamAs(_lastAppliedSource) &&
         event.type != WatchPartyEventType.stateSnapshot) {
       return;
     }
+    _pendingGuestStreamRequest = null;
     _lastAppliedSource = descriptor;
     try {
       await resolver.apply(
@@ -503,6 +575,8 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
         speed: event.speed,
         temporarySpeedActive: event.temporarySpeedActive,
         playing: event.isPlaying,
+        syncQuality: syncInitialQuality,
+        forceReload: hasPendingGuestStreamRequest,
       );
     } on Object catch (error) {
       // Non-fatal: the party stays connected, the host keeps playing.
@@ -713,6 +787,7 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
     _remoteAnswerSet = false;
     _signalingDone = false;
     _lastAppliedSource = null;
+    _pendingGuestStreamRequest = null;
   }
 
   Future<void> _disposePeerAfterFailure() async {

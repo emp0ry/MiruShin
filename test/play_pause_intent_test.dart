@@ -125,6 +125,55 @@ void main() {
       expect(sink.pauseCalls, 0);
     });
 
+    test('guest stream changes require the host permission', () async {
+      final ProviderContainer c = container();
+      final PlaybackController controller = c.read(
+        playbackControllerProvider.notifier,
+      );
+      const VoiceOverTrack dub = VoiceOverTrack(id: 'dub', label: 'Dub');
+      const MediaServer server = MediaServer(
+        id: 'server',
+        name: 'Server',
+        sourceName: 'Test',
+        url: 'https://example.invalid/video.m3u8',
+        streamType: StreamType.hls,
+        voiceovers: <VoiceOverTrack>[dub],
+      );
+      const MediaPlaybackItem item = MediaPlaybackItem(
+        id: 'item',
+        title: 'Item',
+        mediaType: MediaType.anime,
+        servers: <MediaServer>[server],
+      );
+      final _FakePlaybackSyncSink sink = _FakePlaybackSyncSink();
+      controller
+        ..debugSetPlaybackState(const PlaybackState(item: item, server: server))
+        ..setPlaybackSyncSink(sink)
+        ..setGuestLocked(true)
+        ..setGuestPermissions(
+          canControlPlayback: false,
+          canSeek: false,
+          canChangeSpeed: false,
+          canChangeStream: false,
+        );
+
+      await controller.switchVoiceover(dub);
+      expect(c.read(playbackControllerProvider).voiceover, isNull);
+      expect(sink.sourceChangeCalls, 0);
+
+      controller.setGuestPermissions(
+        canControlPlayback: false,
+        canSeek: false,
+        canChangeSpeed: false,
+        canChangeStream: true,
+      );
+      await controller.switchVoiceover(dub);
+
+      expect(c.read(playbackControllerProvider).voiceover?.id, 'dub');
+      expect(sink.sourceChangeCalls, 1);
+      expect(sink.lastSourceChangeWasUserInitiated, isTrue);
+    });
+
     test(
       'resume recovery retries seek and user pause cancels recovery',
       () async {
@@ -1560,6 +1609,8 @@ class _FakePlayerEngine extends PlayerEngine {
 class _FakePlaybackSyncSink implements PlaybackSyncSink {
   int playCalls = 0;
   int pauseCalls = 0;
+  int sourceChangeCalls = 0;
+  bool? lastSourceChangeWasUserInitiated;
 
   @override
   void onHostPause(Duration position, double speed) {
@@ -1575,7 +1626,10 @@ class _FakePlaybackSyncSink implements PlaybackSyncSink {
   void onHostSeek(Duration position, double speed, bool playing) {}
 
   @override
-  void onHostSourceChanged() {}
+  void onHostSourceChanged({required bool userInitiated}) {
+    sourceChangeCalls += 1;
+    lastSourceChangeWasUserInitiated = userInitiated;
+  }
 
   @override
   void onHostSpeed(

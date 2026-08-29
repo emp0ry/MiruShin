@@ -14,13 +14,15 @@ import '../../player/domain/player_models.dart';
 import '../../watch/domain/normalized_models.dart';
 import '../domain/watch_party_models.dart';
 
-/// Loads the host's selected episode/source on the guest by re-resolving it
-/// **locally** through the guest's own Sora addon (no stream URL is shared), then
-/// brings the guest into the player and aligns position/speed/play state.
+/// Re-resolves a watch-party episode/source **locally** through this device's
+/// own Sora addon (no stream URL is shared), then loads and aligns the player.
+/// Guests use [ignoreProgress] while the host keeps normal progress persistence
+/// when accepting a permitted guest stream request.
 class WatchPartyGuestResolver {
-  WatchPartyGuestResolver(this._ref);
+  WatchPartyGuestResolver(this._ref, {this.ignoreProgress = true});
 
   final Ref _ref;
+  final bool ignoreProgress;
 
   /// Applies [descriptor]: re-resolves the stream locally and, if it is a new
   /// episode/source, swaps it into the player (or navigates into the player when
@@ -32,6 +34,8 @@ class WatchPartyGuestResolver {
     required double speed,
     required bool temporarySpeedActive,
     required bool playing,
+    bool syncQuality = true,
+    bool forceReload = false,
   }) async {
     final PlaybackController playback = _ref.read(
       playbackControllerProvider.notifier,
@@ -40,7 +44,8 @@ class WatchPartyGuestResolver {
     // Realign without reloading when the exact episode and source are active.
     final PlaybackState currentState = _ref.read(playbackControllerProvider);
     final MediaPlaybackItem? current = currentState.item;
-    if (_isSameSource(currentState, descriptor)) {
+    if (!forceReload &&
+        _isSameSource(currentState, descriptor, syncQuality: syncQuality)) {
       await _align(
         playback,
         position: position,
@@ -54,6 +59,7 @@ class WatchPartyGuestResolver {
     final MediaPlaybackItem item = await _buildPlaybackItem(
       descriptor,
       startPosition: position,
+      initialQualityId: syncQuality ? descriptor.qualityId : null,
     );
 
     if (current == null) {
@@ -81,13 +87,19 @@ class WatchPartyGuestResolver {
         item.episodeNumber == d.episodeNumber;
   }
 
-  bool _isSameSource(PlaybackState state, SourceDescriptor descriptor) {
+  bool _isSameSource(
+    PlaybackState state,
+    SourceDescriptor descriptor, {
+    required bool syncQuality,
+  }) {
     final MediaPlaybackItem? item = state.item;
     if (item == null || !_isSameEpisode(item, descriptor)) return false;
-    return _sameOptionalId(descriptor.serverId, state.server?.id) &&
-        _sameOptionalId(descriptor.voiceoverId, state.voiceover?.id) &&
-        (_sameOptionalId(descriptor.qualityId, state.quality?.id) ||
-            _sameOptionalId(descriptor.qualityId, state.quality?.label));
+    final bool sameStream =
+        _sameOptionalId(descriptor.serverId, state.server?.id) &&
+        _sameOptionalId(descriptor.voiceoverId, state.voiceover?.id);
+    if (!sameStream || !syncQuality) return sameStream;
+    return _sameOptionalId(descriptor.qualityId, state.quality?.id) ||
+        _sameOptionalId(descriptor.qualityId, state.quality?.label);
   }
 
   bool _sameOptionalId(String? left, String? right) {
@@ -97,6 +109,7 @@ class WatchPartyGuestResolver {
   Future<MediaPlaybackItem> _buildPlaybackItem(
     SourceDescriptor descriptor, {
     required Duration startPosition,
+    required String? initialQualityId,
   }) async {
     final MediaItem media = MediaItem(
       id: descriptor.mediaId,
@@ -150,8 +163,10 @@ class WatchPartyGuestResolver {
       startPolicy: PlaybackStartPolicy.explicitPosition,
       // The guest mirrors the host; it shouldn't drive auto-next or persist its
       // own progress for the shared session.
-      ignoreProgress: true,
-      initialQualityId: descriptor.qualityId,
+      ignoreProgress: ignoreProgress,
+      initialQualityId: initialQualityId,
+      initialVoiceoverId: descriptor.voiceoverId,
+      useBundleSelectedVoiceover: false,
     );
   }
 

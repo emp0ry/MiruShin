@@ -31,6 +31,11 @@ class WatchPartyPermissionControls extends ConsumerWidget {
           label: context.t('Speed'),
           enabled: party.permissions.canChangeSpeed,
         ),
+        _PermissionChip(
+          icon: Icons.dns_rounded,
+          label: context.t('Change stream'),
+          enabled: party.permissions.canChangeStream,
+        ),
       ];
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -82,6 +87,13 @@ class WatchPartyPermissionControls extends ConsumerWidget {
           title: Text(context.t('Speed')),
           value: party.permissions.canChangeSpeed,
           onChanged: controller.setGuestSpeedAllowed,
+        ),
+        SwitchListTile.adaptive(
+          contentPadding: EdgeInsets.zero,
+          secondary: const Icon(Icons.dns_rounded),
+          title: Text(context.t('Change stream')),
+          value: party.permissions.canChangeStream,
+          onChanged: controller.setGuestStreamChangeAllowed,
         ),
       ],
     );

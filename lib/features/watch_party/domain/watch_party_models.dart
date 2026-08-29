@@ -24,6 +24,7 @@ enum WatchPartyEventType {
   seek,
   speed,
   sourceChanged,
+  streamChangeRequested,
   episodeChanged,
   positionSync,
   helloRequest,
@@ -91,6 +92,14 @@ class SourceDescriptor {
         qualityId == other?.qualityId;
   }
 
+  /// The shared stream choice. Quality is deliberately excluded because each
+  /// watch-party device may change quality independently after the first sync.
+  bool sameStreamAs(SourceDescriptor? other) {
+    return sameEpisodeAs(other) &&
+        serverId == other?.serverId &&
+        voiceoverId == other?.voiceoverId;
+  }
+
   Map<String, dynamic> toJson() => <String, dynamic>{
     'mediaId': mediaId,
     'title': title,
@@ -149,21 +158,25 @@ class WatchPartyPermissions {
     this.canControlPlayback = false,
     this.canSeek = false,
     this.canChangeSpeed = false,
+    this.canChangeStream = false,
   });
 
   final bool canControlPlayback;
   final bool canSeek;
   final bool canChangeSpeed;
+  final bool canChangeStream;
 
   WatchPartyPermissions copyWith({
     bool? canControlPlayback,
     bool? canSeek,
     bool? canChangeSpeed,
+    bool? canChangeStream,
   }) {
     return WatchPartyPermissions(
       canControlPlayback: canControlPlayback ?? this.canControlPlayback,
       canSeek: canSeek ?? this.canSeek,
       canChangeSpeed: canChangeSpeed ?? this.canChangeSpeed,
+      canChangeStream: canChangeStream ?? this.canChangeStream,
     );
   }
 
@@ -171,6 +184,7 @@ class WatchPartyPermissions {
     'canControlPlayback': canControlPlayback,
     'canSeek': canSeek,
     'canChangeSpeed': canChangeSpeed,
+    'canChangeStream': canChangeStream,
   };
 
   factory WatchPartyPermissions.fromJson(Map<String, dynamic> json) {
@@ -178,6 +192,7 @@ class WatchPartyPermissions {
       canControlPlayback: json['canControlPlayback'] == true,
       canSeek: json['canSeek'] == true,
       canChangeSpeed: json['canChangeSpeed'] == true,
+      canChangeStream: json['canChangeStream'] == true,
     );
   }
 

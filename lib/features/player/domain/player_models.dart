@@ -583,6 +583,7 @@ class MediaPlaybackItem {
     this.episodeCount,
     this.ignoreProgress = false,
     this.initialQualityId,
+    this.initialVoiceoverId,
   });
 
   final String id;
@@ -608,6 +609,9 @@ class MediaPlaybackItem {
   /// over the saved global preferred quality. Null falls back to the preference.
   final String? initialQualityId;
 
+  /// Voiceover already resolved into this item's stream URLs, when applicable.
+  final String? initialVoiceoverId;
+
   Episode? get currentEpisode {
     for (final Season season in seasons) {
       for (final Episode episode in season.episodes) {
@@ -626,6 +630,8 @@ class MediaPlaybackItem {
     bool ignoreProgress = false,
     List<Season> seasons = const <Season>[],
     String? initialQualityId,
+    String? initialVoiceoverId,
+    bool useBundleSelectedVoiceover = true,
   }) {
     final StreamType streamType = streamTypeFrom(bundle.streamType);
 
@@ -722,6 +728,9 @@ class MediaPlaybackItem {
       // carried; the auto-play/auto-next paths pass null so the saved global
       // preferred quality still applies.
       initialQualityId: initialQualityId,
+      initialVoiceoverId:
+          initialVoiceoverId ??
+          (useBundleSelectedVoiceover ? bundle.selectedVoiceOver?.id : null),
     );
   }
 }
