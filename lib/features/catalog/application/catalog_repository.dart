@@ -121,7 +121,7 @@ class TmdbCatalogRepository implements CatalogRepository {
 
   @override
   Future<MediaItem?> details(String id) {
-    return _networkFirst(
+    return _cachedThenRefresh(
       cache: cache,
       key: '$cacheScope.details.${_safe(id)}',
       operation: 'details',
@@ -263,7 +263,7 @@ class AniListCatalogRepository implements CatalogRepository {
 
   @override
   Future<MediaItem?> details(String id) {
-    return _networkFirst(
+    return _cachedThenRefresh(
       cache: cache,
       key: '$cacheScope.details.${_safe(id)}',
       operation: 'details',
@@ -384,6 +384,82 @@ Future<void> _refreshBoardCache({
   } catch (error) {
     try {
       onOffline?.call(error, operation: 'board', usingCache: true);
+    } catch (_) {
+      // Keep background refresh errors from escaping as unhandled futures.
+    }
+  }
+}
+
+/// Returns a complete saved value first, then refreshes the persisted snapshot
+/// in the background. This keeps detail pages instant across app restarts while
+/// still allowing the provider to replace stale text and artwork URLs.
+Future<T> _cachedThenRefresh<T>({
+  required MetadataCacheStore cache,
+  required String key,
+  required String operation,
+  required T fallback,
+  required Future<T> Function() fetch,
+  required T Function(Map<String, dynamic> json) decode,
+  required Map<String, dynamic> Function(T value) encode,
+  CatalogOfflineCallback? onOffline,
+  CatalogOnlineCallback? onOnline,
+}) async {
+  final Map<String, dynamic>? cachedJson = await cache.read(key);
+  if (cachedJson != null) {
+    try {
+      final T cached = decode(cachedJson);
+      if (cached != null) {
+        unawaited(
+          _refreshCachedValue(
+            cache: cache,
+            key: key,
+            operation: operation,
+            fetch: fetch,
+            encode: encode,
+            onOffline: onOffline,
+            onOnline: onOnline,
+          ),
+        );
+        return cached;
+      }
+    } catch (_) {
+      // Treat an invalid or incomplete snapshot as a cold cache.
+    }
+  }
+
+  return _networkFirst(
+    cache: cache,
+    key: key,
+    operation: operation,
+    fallback: fallback,
+    fetch: fetch,
+    decode: decode,
+    encode: encode,
+    onOffline: onOffline,
+    onOnline: onOnline,
+  );
+}
+
+Future<void> _refreshCachedValue<T>({
+  required MetadataCacheStore cache,
+  required String key,
+  required String operation,
+  required Future<T> Function() fetch,
+  required Map<String, dynamic> Function(T value) encode,
+  CatalogOfflineCallback? onOffline,
+  CatalogOnlineCallback? onOnline,
+}) async {
+  try {
+    final T fresh = await fetch();
+    await cache.write(key, encode(fresh));
+    try {
+      onOnline?.call(operation: operation);
+    } catch (_) {
+      // The provider may have been disposed while this refresh was running.
+    }
+  } catch (error) {
+    try {
+      onOffline?.call(error, operation: operation, usingCache: true);
     } catch (_) {
       // Keep background refresh errors from escaping as unhandled futures.
     }

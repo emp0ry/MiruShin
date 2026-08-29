@@ -82,6 +82,11 @@ class File extends FileSystemEntity {
     final String? value = prefs.getString(_key(path));
     return value == null ? 0 : utf8.encode(value).length;
   }
+
+  Future<DateTime> lastModified() async =>
+      DateTime.fromMillisecondsSinceEpoch(0);
+
+  Future<File> setLastModified(DateTime time) async => this;
 }
 
 class Directory extends FileSystemEntity {

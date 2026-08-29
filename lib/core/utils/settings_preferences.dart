@@ -22,7 +22,7 @@ class SettingsPreferences {
   static const String tmdbRegionKey = 'settings.tmdbRegion';
   static const String tmdbShowAdultContentKey = 'settings.tmdbShowAdultContent';
   static const String cacheLimitMbKey = 'settings.cacheLimitMb';
-  static const String metadataCacheEnabledKey = 'settings.metadataCacheEnabled';
+  static const String cacheRetentionKey = 'settings.cacheRetention';
   static const String anilistMobileClientIdKey =
       'settings.anilistMobileClientId';
   static const String anilistDesktopClientIdKey =
@@ -97,8 +97,7 @@ class SettingsPreferences {
 
   int readCacheLimitMb() => _preferences.getInt(cacheLimitMbKey) ?? 2048;
 
-  bool readMetadataCacheEnabled() =>
-      _preferences.getBool(metadataCacheEnabledKey) ?? true;
+  String? readCacheRetention() => _preferences.getString(cacheRetentionKey);
 
   String readAniListMobileClientId() =>
       _preferences.getString(anilistMobileClientIdKey) ??
@@ -209,8 +208,8 @@ class SettingsPreferences {
     return _preferences.setInt(cacheLimitMbKey, value);
   }
 
-  Future<void> saveMetadataCacheEnabled(bool value) {
-    return _preferences.setBool(metadataCacheEnabledKey, value);
+  Future<void> saveCacheRetention(String value) {
+    return _preferences.setString(cacheRetentionKey, value);
   }
 
   Future<void> saveAniListMobileClientId(String value) {

@@ -61,20 +61,16 @@ void main() {
     });
   });
 
-  test('metadata cache can be disabled without clearing stored data', () async {
+  test('metadata cache remains available across store instances', () async {
     SharedPreferences.setMockInitialValues(<String, Object>{});
-    const MetadataCacheStore enabled = MetadataCacheStore();
-    const MetadataCacheStore disabled = MetadataCacheStore(enabled: false);
+    const MetadataCacheStore first = MetadataCacheStore();
+    const MetadataCacheStore restored = MetadataCacheStore();
 
-    await enabled.write('tmdb.disabled-toggle.demo', <String, dynamic>{
+    await first.write('tmdb.always-on.demo', <String, dynamic>{
       'value': 'cached',
     });
 
-    expect(await disabled.read('tmdb.disabled-toggle.demo'), isNull);
-    await disabled.write('tmdb.disabled-toggle.demo', <String, dynamic>{
-      'value': 'ignored',
-    });
-    expect(await enabled.read('tmdb.disabled-toggle.demo'), <String, dynamic>{
+    expect(await restored.read('tmdb.always-on.demo'), <String, dynamic>{
       'value': 'cached',
     });
   });

@@ -116,6 +116,83 @@ void main() {
       );
     });
   });
+
+  group('details metadata cache', () {
+    test(
+      'TMDB restores the complete details page before refreshing it',
+      () async {
+        final _RecordingCacheStore cache = _RecordingCacheStore();
+        const String id = 'tmdb:movie:42';
+        final MediaItem? firstLoad = await TmdbCatalogRepository(
+          tmdb: _ImmediateDetailsTmdbProvider('cached'),
+          cache: cache,
+          cacheScope: 'test.tmdb',
+        ).details(id);
+
+        expect(firstLoad?.overview, 'cached overview');
+        expect(firstLoad?.posterUrl, 'https://example.com/cached-poster.jpg');
+        expect(
+          firstLoad?.backdropUrl,
+          'https://example.com/cached-backdrop.jpg',
+        );
+        expect(firstLoad?.seasons.single.name, 'cached season');
+
+        final _BlockingDetailsTmdbProvider refresh =
+            _BlockingDetailsTmdbProvider();
+        final Future<void> refreshWritten = cache.nextWrite;
+        final MediaItem? restored = await TmdbCatalogRepository(
+          tmdb: refresh,
+          cache: cache,
+          cacheScope: 'test.tmdb',
+        ).details(id);
+
+        expect(restored?.title, 'cached title');
+        expect(restored?.originalTitle, 'cached original title');
+        expect(restored?.genres, const <String>['Drama', 'Mystery']);
+        expect(restored?.statusLabel, 'RELEASING');
+        expect(restored?.aliases, const <String>['cached alias']);
+        expect(restored?.trailer?.id, 'cached-trailer');
+        expect(refresh.callCount, 1);
+
+        refresh.complete(_detailsItem('fresh', id));
+        await refreshWritten.timeout(const Duration(seconds: 1));
+
+        final _BlockingDetailsTmdbProvider nextRefresh =
+            _BlockingDetailsTmdbProvider();
+        final MediaItem? nextLaunch = await TmdbCatalogRepository(
+          tmdb: nextRefresh,
+          cache: cache,
+          cacheScope: 'test.tmdb',
+        ).details(id);
+        expect(nextLaunch?.title, 'fresh title');
+        expect(nextLaunch?.seasons.single.overview, 'fresh season overview');
+        expect(nextRefresh.callCount, 1);
+      },
+    );
+
+    test('AniList details use the same cache-first restart policy', () async {
+      final _RecordingCacheStore cache = _RecordingCacheStore();
+      const String id = 'anilist:42';
+      await AniListCatalogRepository(
+        client: _ImmediateDetailsAniListClient('cached'),
+        cache: cache,
+        cacheScope: 'test.anilist',
+      ).details(id);
+
+      final _BlockingDetailsAniListClient refresh =
+          _BlockingDetailsAniListClient();
+      final MediaItem? restored = await AniListCatalogRepository(
+        client: refresh,
+        cache: cache,
+        cacheScope: 'test.anilist',
+      ).details(id);
+
+      expect(restored?.title, 'cached title');
+      expect(restored?.overview, 'cached overview');
+      expect(restored?.seasons.single.episodeCount, 12);
+      expect(refresh.callCount, 1);
+    });
+  });
 }
 
 class _RecordingCacheStore extends MetadataCacheStore {
@@ -188,6 +265,30 @@ class _BlockingTmdbProvider extends TmdbMetadataProvider {
       _requests[type]!.complete(_items('$prefix-${type.name}', type));
     }
   }
+}
+
+class _ImmediateDetailsTmdbProvider extends TmdbMetadataProvider {
+  _ImmediateDetailsTmdbProvider(this.prefix) : super(readAccessToken: 'test');
+
+  final String prefix;
+
+  @override
+  Future<MediaItem?> getDetails(String id) async => _detailsItem(prefix, id);
+}
+
+class _BlockingDetailsTmdbProvider extends TmdbMetadataProvider {
+  _BlockingDetailsTmdbProvider() : super(readAccessToken: 'test');
+
+  final Completer<MediaItem?> _request = Completer<MediaItem?>();
+  int callCount = 0;
+
+  @override
+  Future<MediaItem?> getDetails(String id) {
+    callCount += 1;
+    return _request.future;
+  }
+
+  void complete(MediaItem item) => _request.complete(item);
 }
 
 class _ImmediateAniListClient extends AniListApiClient {
@@ -265,6 +366,59 @@ class _BlockingAniListClient extends AniListApiClient {
     _requests['popular']!.complete(_items('$prefix-popular', MediaType.anime));
     _requests['top']!.complete(_items('$prefix-top', MediaType.anime));
   }
+}
+
+class _ImmediateDetailsAniListClient extends AniListApiClient {
+  _ImmediateDetailsAniListClient(this.prefix);
+
+  final String prefix;
+
+  @override
+  Future<MediaItem?> getCatalogDetails(String id) async =>
+      _detailsItem(prefix, id);
+}
+
+class _BlockingDetailsAniListClient extends AniListApiClient {
+  final Completer<MediaItem?> _request = Completer<MediaItem?>();
+  int callCount = 0;
+
+  @override
+  Future<MediaItem?> getCatalogDetails(String id) {
+    callCount += 1;
+    return _request.future;
+  }
+}
+
+MediaItem _detailsItem(String prefix, String id) {
+  return MediaItem(
+    id: id,
+    title: '$prefix title',
+    originalTitle: '$prefix original title',
+    overview: '$prefix overview',
+    type: MediaType.anime,
+    year: 2026,
+    posterUrl: 'https://example.com/$prefix-poster.jpg',
+    backdropUrl: 'https://example.com/$prefix-backdrop.jpg',
+    rating: 9.1,
+    genres: const <String>['Drama', 'Mystery'],
+    sourceProvider: 'test',
+    externalIds: const <String, String>{'anilist': '42', 'tmdb': '84'},
+    runtimeMinutes: 24,
+    episodeCount: 12,
+    seasons: <MediaSeason>[
+      MediaSeason(
+        seasonNumber: 1,
+        name: '$prefix season',
+        episodeCount: 12,
+        posterUrl: 'https://example.com/$prefix-season.jpg',
+        overview: '$prefix season overview',
+      ),
+    ],
+    statusLabel: 'RELEASING',
+    aliases: <String>['$prefix alias'],
+    originalLanguage: 'ja',
+    trailer: MediaTrailer(id: '$prefix-trailer', site: 'youtube'),
+  );
 }
 
 List<MediaItem> _items(String prefix, MediaType type) {

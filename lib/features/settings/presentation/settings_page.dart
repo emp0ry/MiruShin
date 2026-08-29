@@ -15,9 +15,9 @@ import '../../../app/localization/supported_languages.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_radius.dart';
 import '../../../app/theme/app_spacing.dart';
+import '../../../core/cache/artwork_cache_manager.dart';
 import '../../../core/cache/metadata_cache_store.dart';
 import '../../../core/constants/app_constants.dart';
-import '../../../core/platform/io_compat.dart' if (dart.library.io) 'dart:io';
 import '../../../core/platform/tv_platform.dart';
 import '../../../core/platform/url_opener.dart';
 import '../../../core/widgets/adaptive_page.dart';
@@ -1790,44 +1790,17 @@ String _formatCacheBytes(int bytes) {
   return '${mb.toStringAsFixed(1)} MB';
 }
 
-final _imageCacheSizeProvider = FutureProvider.autoDispose<String>((
-  Ref ref,
-) async {
+final _cacheSizeProvider = FutureProvider.autoDispose<String>((Ref ref) async {
   if (kIsWeb) return '—';
   try {
-    final dynamic tmp = await getTemporaryDirectory();
-    int bytes = 0;
-    await for (final dynamic entity in tmp.list(
-      recursive: true,
-      followLinks: false,
-    )) {
-      if (entity is File) {
-        bytes += await entity.length().catchError((_) => 0);
-      }
-    }
-    return _formatCacheBytes(bytes);
-  } catch (_) {
-    return '—';
-  }
-});
-
-final _metadataCacheSizeProvider = FutureProvider.autoDispose<String>((
-  Ref ref,
-) async {
-  if (kIsWeb) return '0 MB';
-  try {
-    final dynamic base = await getApplicationSupportDirectory();
-    final Directory dir = Directory('${base.path}/metadata_cache');
-    if (!await dir.exists()) return '0 MB';
-    int bytes = 0;
-    await for (final FileSystemEntity entity in dir.list(
-      recursive: true,
-      followLinks: false,
-    )) {
-      if (entity is File) {
-        bytes += await entity.length().catchError((_) => 0);
-      }
-    }
+    final MetadataCacheStore metadataCache = ref.watch(
+      metadataCacheStoreProvider,
+    );
+    await metadataCache.enforceCachePolicy();
+    await miruShinArtworkCacheManager.enforceCachePolicy();
+    final int bytes =
+        await miruShinArtworkCacheManager.cacheSizeBytes() +
+        await metadataCache.cacheSizeBytes();
     return _formatCacheBytes(bytes);
   } catch (_) {
     return '—';
@@ -1922,11 +1895,8 @@ class _CacheSection extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final String imageCacheLabel = ref
-        .watch(_imageCacheSizeProvider)
-        .when(data: (String s) => s, loading: () => '…', error: (_, _) => '—');
-    final String metadataCacheLabel = ref
-        .watch(_metadataCacheSizeProvider)
+    final String cacheSizeLabel = ref
+        .watch(_cacheSizeProvider)
         .when(data: (String s) => s, loading: () => '…', error: (_, _) => '—');
     return SettingsSection(
       title: context.t('Cache'),
@@ -1935,7 +1905,7 @@ class _CacheSection extends ConsumerWidget {
         SettingsRow(
           title: context.t('Cache limit'),
           subtitle:
-              '${context.t('Applies to the in-memory image cache.')} ${context.t('Current')}: $imageCacheLabel',
+              '${context.t('Applies to memory, artwork, and metadata cache.')} ${context.t('Current')}: $cacheSizeLabel',
           trailing: DropdownButton<int>(
             value: settings.cacheLimitMb,
             items: const <int>[256, 512, 1024, 2048, 4096, 8192]
@@ -1948,22 +1918,54 @@ class _CacheSection extends ConsumerWidget {
                   ),
                 )
                 .toList(growable: false),
-            onChanged: (int? value) {
+            onChanged: (int? value) async {
               if (value != null) {
                 controller.setCacheLimitMb(value);
+                final MetadataCacheStore metadataCache = ref.read(
+                  metadataCacheStoreProvider,
+                );
+                configureMiruShinArtworkCache(
+                  maxCacheBytes: value * 1024 * 1024,
+                  retention: settings.cacheRetention.duration,
+                  otherCacheSizeBytes: metadataCache.cacheSizeBytes,
+                );
+                await metadataCache.enforceCachePolicy();
+                await miruShinArtworkCacheManager.enforceCachePolicy();
+                ref.invalidate(_cacheSizeProvider);
               }
             },
           ),
         ),
         SettingsRow(
-          title: context.t('Metadata cache'),
-          subtitle:
-              '${context.t('Use saved TMDB and AniList metadata when the catalog API is down.')} ${context.t('Current')}: $metadataCacheLabel',
-          trailing: Switch(
-            value: settings.metadataCacheEnabled,
-            onChanged: (bool value) {
-              controller.setMetadataCacheEnabled(value);
+          title: context.t('Cache retention'),
+          subtitle: context.t(
+            'Cached details and artwork unused for longer than this are removed.',
+          ),
+          trailing: DropdownButton<CacheRetention>(
+            value: settings.cacheRetention,
+            items: CacheRetention.values
+                .map(
+                  (CacheRetention value) => DropdownMenuItem<CacheRetention>(
+                    value: value,
+                    child: Text(context.t(value.labelKey)),
+                  ),
+                )
+                .toList(growable: false),
+            onChanged: (CacheRetention? value) async {
+              if (value == null) return;
+              controller.setCacheRetention(value);
+              final MetadataCacheStore metadataCache = ref.read(
+                metadataCacheStoreProvider,
+              );
+              configureMiruShinArtworkCache(
+                maxCacheBytes: settings.cacheLimitMb * 1024 * 1024,
+                retention: value.duration,
+                otherCacheSizeBytes: metadataCache.cacheSizeBytes,
+              );
+              await metadataCache.enforceCachePolicy();
+              await miruShinArtworkCacheManager.enforceCachePolicy();
               _clearMetadataProviders(ref);
+              ref.invalidate(_cacheSizeProvider);
             },
           ),
         ),
@@ -1984,6 +1986,9 @@ Future<void> _clearAppCache(BuildContext context, WidgetRef ref) async {
   PaintingBinding.instance.imageCache
     ..clear()
     ..clearLiveImages();
+  await clearMiruShinArtworkCache();
+  // Also remove images written by MiruShin versions that used the package's
+  // legacy default cache before the dedicated artwork cache was introduced.
   await DefaultCacheManager().emptyCache();
   try {
     final dynamic tmp = await getTemporaryDirectory();
@@ -1995,8 +2000,7 @@ Future<void> _clearAppCache(BuildContext context, WidgetRef ref) async {
   } catch (_) {}
   await _clearMetadataStores(ref);
   _clearMetadataProviders(ref);
-  ref.invalidate(_imageCacheSizeProvider);
-  ref.invalidate(_metadataCacheSizeProvider);
+  ref.invalidate(_cacheSizeProvider);
   if (context.mounted) {
     ScaffoldMessenger.of(
       context,

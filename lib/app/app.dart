@@ -9,12 +9,14 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../core/cache/artwork_cache_manager.dart';
 import '../core/constants/app_constants.dart';
 import '../core/platform/tv_platform.dart';
 import '../features/addons/application/cloudflare_challenge_service.dart';
 import '../features/addons/application/sora_addons_provider.dart';
 import '../features/addons/data/sora_js_runtime.dart';
 import '../features/addons/presentation/cloudflare_challenge_page.dart';
+import '../features/metadata/application/metadata_cache_provider.dart';
 import '../features/player/application/playback_controller.dart';
 import '../features/profile/application/anilist_user_settings_provider.dart';
 import '../features/settings/application/settings_state.dart';
@@ -92,9 +94,15 @@ class _MiruShinAppState extends ConsumerState<MiruShinApp> {
   @override
   Widget build(BuildContext context) {
     final SettingsState settings = ref.watch(settingsProvider);
+    final metadataCache = ref.watch(metadataCacheStoreProvider);
     ref.watch(soraAddonsProvider);
     PaintingBinding.instance.imageCache.maximumSizeBytes =
         settings.cacheLimitMb * 1024 * 1024;
+    configureMiruShinArtworkCache(
+      maxCacheBytes: settings.cacheLimitMb * 1024 * 1024,
+      retention: settings.cacheRetention.duration,
+      otherCacheSizeBytes: metadataCache.cacheSizeBytes,
+    );
     return MaterialApp.router(
       title: AppConstants.appName,
       debugShowCheckedModeBanner: false,

@@ -29,6 +29,25 @@ bool get _isMobilePlatform =>
 
 enum AppThemeMode { system, dark, light, oled }
 
+enum CacheRetention {
+  oneWeek(Duration(days: 7), '1 Week'),
+  oneMonth(Duration(days: 30), '1 Month'),
+  threeMonths(Duration(days: 90), '3 Months'),
+  never(null, 'Never expire');
+
+  const CacheRetention(this.duration, this.labelKey);
+
+  final Duration? duration;
+  final String labelKey;
+
+  static CacheRetention fromName(String? name) {
+    return CacheRetention.values.firstWhere(
+      (CacheRetention retention) => retention.name == name,
+      orElse: () => CacheRetention.oneMonth,
+    );
+  }
+}
+
 enum AppStartupPage {
   board('/board', 'Board'),
   discovery('/discovery', 'Discovery'),
@@ -115,7 +134,7 @@ class SettingsState {
     this.tmdbRegion = 'US',
     this.tmdbShowAdultContent = false,
     this.cacheLimitMb = 2048,
-    this.metadataCacheEnabled = true,
+    this.cacheRetention = CacheRetention.oneMonth,
     this.anilistMobileClientId = AppConstants.aniListMobileClientId,
     this.anilistDesktopClientId = AppConstants.aniListDesktopClientId,
     this.anilistDesktopPort = AppConstants.aniListDesktopCallbackPort,
@@ -171,7 +190,7 @@ class SettingsState {
   final String tmdbRegion;
   final bool tmdbShowAdultContent;
   final int cacheLimitMb;
-  final bool metadataCacheEnabled;
+  final CacheRetention cacheRetention;
   final String anilistMobileClientId;
   final String anilistDesktopClientId;
   final int anilistDesktopPort;
@@ -332,7 +351,7 @@ class SettingsState {
     String? tmdbRegion,
     bool? tmdbShowAdultContent,
     int? cacheLimitMb,
-    bool? metadataCacheEnabled,
+    CacheRetention? cacheRetention,
     String? anilistMobileClientId,
     String? anilistDesktopClientId,
     int? anilistDesktopPort,
@@ -392,7 +411,7 @@ class SettingsState {
       tmdbRegion: tmdbRegion ?? this.tmdbRegion,
       tmdbShowAdultContent: tmdbShowAdultContent ?? this.tmdbShowAdultContent,
       cacheLimitMb: cacheLimitMb ?? this.cacheLimitMb,
-      metadataCacheEnabled: metadataCacheEnabled ?? this.metadataCacheEnabled,
+      cacheRetention: cacheRetention ?? this.cacheRetention,
       anilistMobileClientId:
           anilistMobileClientId ?? this.anilistMobileClientId,
       anilistDesktopClientId:
@@ -618,7 +637,7 @@ class SettingsController extends Notifier<SettingsState> {
       tmdbRegion: preferences.readTmdbRegion(),
       tmdbShowAdultContent: preferences.readTmdbShowAdultContent(),
       cacheLimitMb: preferences.readCacheLimitMb(),
-      metadataCacheEnabled: preferences.readMetadataCacheEnabled(),
+      cacheRetention: CacheRetention.fromName(preferences.readCacheRetention()),
       anilistMobileClientId: preferences.readAniListMobileClientId(),
       anilistDesktopClientId: preferences.readAniListDesktopClientId(),
       anilistDesktopPort: preferences.readAniListDesktopPort(),
@@ -809,11 +828,11 @@ class SettingsController extends Notifier<SettingsState> {
     );
   }
 
-  void setMetadataCacheEnabled(bool value) {
-    state = state.copyWith(metadataCacheEnabled: value);
+  void setCacheRetention(CacheRetention value) {
+    state = state.copyWith(cacheRetention: value);
     unawaited(
       _save(
-        (SettingsPreferences prefs) => prefs.saveMetadataCacheEnabled(value),
+        (SettingsPreferences prefs) => prefs.saveCacheRetention(value.name),
       ),
     );
   }

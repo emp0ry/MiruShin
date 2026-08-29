@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -339,12 +340,12 @@ class _CalendarDayGroup extends ConsumerWidget {
                               gradient: palette.posterFallbackGradient,
                             ),
                           )
-                        : Image.network(
-                            item.mediaItem.posterUrl,
+                        : CachedNetworkImage(
+                            imageUrl: item.mediaItem.posterUrl,
                             width: 58,
                             height: 86,
                             fit: BoxFit.cover,
-                            errorBuilder: (_, _, _) => Container(
+                            errorWidget: (_, _, _) => Container(
                               width: 58,
                               height: 86,
                               decoration: BoxDecoration(

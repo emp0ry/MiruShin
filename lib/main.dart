@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'app/app.dart';
 import 'bootstrap/mirushin_fvp_bootstrap.dart';
 import 'bootstrap/mirushin_media_kit_bootstrap.dart';
+import 'core/cache/artwork_cache_manager.dart';
 import 'core/constants/app_constants.dart';
 import 'core/persistence/shared_preferences_recovery.dart';
 import 'core/platform/single_instance_guard.dart';
@@ -57,6 +58,7 @@ Future<void> main() async {
 
   configureMiruShinMediaKit();
   configureMiruShinFvp();
+  configureMiruShinArtworkCache();
   runApp(ProviderScope(child: MiruShinApp(initialRoute: initialRoute)));
 }
 
