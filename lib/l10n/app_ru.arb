@@ -610,6 +610,8 @@
   "Zoom": "Масштаб",
   "{name} installed": "{name} установлен",
   "Close": "Закрыть",
+  "View poster fullscreen": "Открыть постер на весь экран",
+  "Poster unavailable": "Постер недоступен",
   "Double-tap edges": "Двойное касание по краям",
   "Hold": "Удерживать",
   "Horizontal swipe": "Свайп по горизонтали",

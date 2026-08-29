@@ -190,7 +190,7 @@ void main() {
           'A metadata-only overview for a media item. It should be readable, polished, and never imply playback, streaming, scraping, or downloads.',
       type: MediaType.movie,
       year: 2026,
-      posterUrl: '',
+      posterUrl: 'https://example.invalid/details-poster.jpg',
       backdropUrl: '',
       rating: 8.4,
       genres: <String>[
@@ -247,6 +247,25 @@ void main() {
         find.byKey(const ValueKey<String>('details-edit-action')),
         findsOneWidget,
       );
+      expect(
+        find.byKey(const ValueKey<String>('details-poster-open')),
+        findsOneWidget,
+      );
+      final Finder posterButton = find.byKey(
+        const ValueKey<String>('details-poster-open'),
+      );
+      expect(
+        find.ancestor(of: posterButton, matching: find.byType(Tooltip)),
+        findsNothing,
+      );
+      expect(
+        find.descendant(
+          of: posterButton,
+          matching: find.byIcon(Icons.fullscreen_rounded),
+        ),
+        findsNothing,
+      );
+      expect(tester.widget<InkWell>(posterButton).onTap, isNotNull);
       final Size watchSize = tester.getSize(
         find.byKey(const ValueKey<String>('details-watch-action')),
       );

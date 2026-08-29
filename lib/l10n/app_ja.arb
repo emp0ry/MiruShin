@@ -610,6 +610,8 @@
   "Zoom": "ズーム",
   "{name} installed": "{name}をインストールしました",
   "Close": "閉じる",
+  "View poster fullscreen": "ポスターを全画面で表示",
+  "Poster unavailable": "ポスターを利用できません",
   "Double-tap edges": "端をダブルタップ",
   "Hold": "長押し",
   "Horizontal swipe": "横スワイプ",

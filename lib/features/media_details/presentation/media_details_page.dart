@@ -39,6 +39,7 @@ import '../../tracking/application/anilist_library_provider.dart';
 import '../../tracking/presentation/anilist_entry_editor.dart';
 import '../../tracking/presentation/anilist_favorite_button.dart';
 import '../data/anime_themes_client.dart';
+import 'poster_fullscreen_viewer.dart';
 
 class MediaDetailsPage extends ConsumerStatefulWidget {
   const MediaDetailsPage({required this.id, this.initialItem, super.key});
@@ -173,6 +174,9 @@ class _DetailsBody extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final CatalogMode mode = ref.watch(catalogModeProvider);
+    final bool forceCompact = ref.watch(
+      settingsProvider.select((SettingsState settings) => settings.compactMode),
+    );
     final bool hasAniListInfo =
         mode == CatalogMode.anilist &&
         (item.externalIds['anilist_source'] != null ||
@@ -183,25 +187,42 @@ class _DetailsBody extends ConsumerWidget {
             item.externalIds['anilist_popularity'] != null ||
             item.episodeCount != null ||
             item.genres.isNotEmpty);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        _ActionPanel(item: item),
-        const SizedBox(height: AppSpacing.xxl),
-        _OverviewPanel(item: item),
-        if (hasAniListInfo) ...<Widget>[
-          const SizedBox(height: AppSpacing.xxl),
-          _AniListInfoPanel(item: item),
-        ],
-        if (item.type == MediaType.anime) ...<Widget>[
-          const SizedBox(height: AppSpacing.xxl),
-          _AnimeThemesPanel(item: item),
-        ],
-        if (item.seasons.isNotEmpty) ...<Widget>[
-          const SizedBox(height: AppSpacing.xxl),
-          _SeasonsPanel(item: item),
-        ],
-      ],
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        final bool compact =
+            AppBreakpoints.classify(
+              constraints.maxWidth,
+              forceCompact: forceCompact,
+            ) ==
+            WindowSizeClass.compact;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            if (compact && item.posterUrl.isNotEmpty) ...<Widget>[
+              Align(
+                alignment: Alignment.center,
+                child: _PosterPreview(item: item),
+              ),
+              const SizedBox(height: AppSpacing.xxl),
+            ],
+            _ActionPanel(item: item),
+            const SizedBox(height: AppSpacing.xxl),
+            _OverviewPanel(item: item),
+            if (hasAniListInfo) ...<Widget>[
+              const SizedBox(height: AppSpacing.xxl),
+              _AniListInfoPanel(item: item),
+            ],
+            if (item.type == MediaType.anime) ...<Widget>[
+              const SizedBox(height: AppSpacing.xxl),
+              _AnimeThemesPanel(item: item),
+            ],
+            if (item.seasons.isNotEmpty) ...<Widget>[
+              const SizedBox(height: AppSpacing.xxl),
+              _SeasonsPanel(item: item),
+            ],
+          ],
+        );
+      },
     );
   }
 }
@@ -935,30 +956,46 @@ class _PosterPreview extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final AppThemeExtension palette = AppThemeExtension.of(context);
-    return ClipRRect(
-      borderRadius: AppRadius.all(AppRadius.xl),
-      child: SizedBox(
-        width: 188,
-        height: 282,
-        child: item.posterUrl.isEmpty
-            ? DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: palette.posterFallbackGradient,
+    final BorderRadius borderRadius = AppRadius.all(AppRadius.xl);
+    final Widget poster = item.posterUrl.isEmpty
+        ? DecoratedBox(
+            decoration: BoxDecoration(gradient: palette.posterFallbackGradient),
+          )
+        : CachedNetworkImage(
+            imageUrl: item.posterUrl,
+            fit: BoxFit.cover,
+            placeholder: (BuildContext context, String url) =>
+                const SkeletonBox(),
+            errorWidget: (BuildContext context, String url, Object error) =>
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: palette.posterFallbackGradient,
+                  ),
                 ),
-              )
-            : CachedNetworkImage(
-                imageUrl: item.posterUrl,
-                fit: BoxFit.cover,
-                placeholder: (BuildContext context, String url) =>
-                    const SkeletonBox(),
-                errorWidget: (BuildContext context, String url, Object error) =>
-                    DecoratedBox(
-                      decoration: BoxDecoration(
-                        gradient: palette.posterFallbackGradient,
-                      ),
-                    ),
+          );
+    return SizedBox(
+      width: 188,
+      height: 282,
+      child: item.posterUrl.isEmpty
+          ? ClipRRect(borderRadius: borderRadius, child: poster)
+          : Semantics(
+              button: true,
+              label: context.t('View poster fullscreen'),
+              child: Material(
+                color: Colors.transparent,
+                borderRadius: borderRadius,
+                clipBehavior: Clip.antiAlias,
+                child: InkWell(
+                  key: const ValueKey<String>('details-poster-open'),
+                  onTap: () => showNetworkPosterFullscreenViewer(
+                    context,
+                    imageUrl: item.posterUrl,
+                    title: item.title,
+                  ),
+                  child: poster,
+                ),
               ),
-      ),
+            ),
     );
   }
 }
