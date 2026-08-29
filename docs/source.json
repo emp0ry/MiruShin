@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.6.9",
+          "date": "2026-08-29",
+          "localizedDescription": "- MiruShin now remembers your selected server and quality for each title and restores them automatically.\n- Next episodes are prepared in the background for faster, smoother auto-next transitions.\n- Added cache retention settings for metadata and artwork, with options from 1 week to never expire.\n- Improved cache management so artwork and metadata share the configured cache size more efficiently.\n- Watch with Friends hosts can now allow guests to change streams during a watch party.\n- Guests can see which playback controls they have permission to use.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.6.9/MiruShin-ios-v2.6.9.ipa",
+          "size": 28754469,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.6.8",
           "date": "2026-08-28",
           "localizedDescription": "- Added progressive seek previews for online videos.\n- Previews generate across the entire timeline in multiple refinement passes.\n- The closest available preview appears immediately and improves as more frames generate.\n- Generation continues in the background while the player is open.\n- Choose between **Progressive timeline** (default) and **On demand** in Player Settings.\n- Offline seek previews remain unchanged.",
@@ -479,11 +487,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.6.8",
-      "versionDate": "2026-08-28",
-      "versionDescription": "- Added progressive seek previews for online videos.\n- Previews generate across the entire timeline in multiple refinement passes.\n- The closest available preview appears immediately and improves as more frames generate.\n- Generation continues in the background while the player is open.\n- Choose between **Progressive timeline** (default) and **On demand** in Player Settings.\n- Offline seek previews remain unchanged.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.6.8/MiruShin-ios-v2.6.8.ipa",
-      "size": 28776851,
+      "version": "2.6.9",
+      "versionDate": "2026-08-29",
+      "versionDescription": "- MiruShin now remembers your selected server and quality for each title and restores them automatically.\n- Next episodes are prepared in the background for faster, smoother auto-next transitions.\n- Added cache retention settings for metadata and artwork, with options from 1 week to never expire.\n- Improved cache management so artwork and metadata share the configured cache size more efficiently.\n- Watch with Friends hosts can now allow guests to change streams during a watch party.\n- Guests can see which playback controls they have permission to use.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.6.9/MiruShin-ios-v2.6.9.ipa",
+      "size": 28754469,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
