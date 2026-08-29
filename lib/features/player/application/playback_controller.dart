@@ -17,6 +17,7 @@ import '../../settings/application/settings_state.dart';
 import '../../tracking/application/anilist_library_provider.dart';
 import '../../tracking/application/tracker_sync_coordinator.dart';
 import '../../tracking/data/anilist_api_client.dart';
+import '../../watch/application/stream_selection_preferences.dart';
 import '../../watch/domain/normalized_models.dart';
 import '../data/discord_rpc_service.dart';
 import '../data/media_session_service.dart';
@@ -3174,6 +3175,28 @@ class PlaybackController extends Notifier<PlaybackState> {
     return state.desiredPlaying || (current?.state.value.isPlaying ?? true);
   }
 
+  void _persistCurrentStreamSelection() {
+    final MediaPlaybackItem? item = state.item;
+    final MediaServer? server = state.server;
+    if (item == null || server == null) return;
+    final StreamQuality? quality = state.quality;
+    unawaited(
+      ref
+          .read(streamSelectionPreferenceStoreProvider)
+          .save(
+            mediaType: item.mediaType,
+            mediaId: item.id,
+            preference: StreamSelectionPreference(
+              serverId: server.id,
+              serverTitle: server.name,
+              qualityId: quality?.id ?? '',
+              qualityLabel: quality?.label ?? '',
+            ),
+          )
+          .catchError((Object _) {}),
+    );
+  }
+
   Future<void> switchServer(MediaServer server) async {
     if (_suppressStreamControl) return;
     final MediaPlaybackItem? item = state.item;
@@ -3187,6 +3210,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       autoplay: _autoplayForSourceChange(current),
       clearVoiceover: true,
     );
+    _persistCurrentStreamSelection();
     _broadcastSourceChanged(userInitiated: true);
   }
 
@@ -3205,6 +3229,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       subtitle: state.subtitle,
       preserveAspectRatio: current?.state.value.aspectRatio,
     );
+    _persistCurrentStreamSelection();
   }
 
   Future<void> reloadWithBackend(PlayerBackend backend) async {

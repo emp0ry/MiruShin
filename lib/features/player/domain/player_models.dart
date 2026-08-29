@@ -289,6 +289,8 @@ class PlayerNextEpisodeResult {
     this.startPolicy = PlaybackStartPolicy.forceBeginning,
     this.serverId,
     this.serverTitle,
+    this.qualityId,
+    this.qualityLabel,
     this.voiceoverId,
     this.voiceoverLabel,
   });
@@ -297,6 +299,8 @@ class PlayerNextEpisodeResult {
   final PlaybackStartPolicy startPolicy;
   final String? serverId;
   final String? serverTitle;
+  final String? qualityId;
+  final String? qualityLabel;
   final String? voiceoverId;
   final String? voiceoverLabel;
 }
@@ -308,10 +312,18 @@ class PlayerEpisodeSelectionResult {
   const PlayerEpisodeSelectionResult({
     required this.episodeHref,
     this.startInFullscreen = false,
+    this.serverId,
+    this.serverTitle,
+    this.qualityId,
+    this.qualityLabel,
   });
 
   final String episodeHref;
   final bool startInFullscreen;
+  final String? serverId;
+  final String? serverTitle;
+  final String? qualityId;
+  final String? qualityLabel;
 }
 
 class DirectPlayerRouteArgs {

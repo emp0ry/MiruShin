@@ -183,6 +183,12 @@ void main() {
         (routeResult! as PlayerNextEpisodeResult).startInFullscreen,
         isFalse,
       );
+      final PlayerNextEpisodeResult nextResult =
+          routeResult! as PlayerNextEpisodeResult;
+      expect(nextResult.serverId, 'server');
+      expect(nextResult.serverTitle, 'Server');
+      expect(nextResult.qualityId, 'auto');
+      expect(nextResult.qualityLabel, 'Auto');
       expect(controller.stopCalls, greaterThanOrEqualTo(1));
       expect(setFullscreenCalls, contains(true));
       await tester.pump(const Duration(seconds: 3));

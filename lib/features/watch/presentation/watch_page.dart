@@ -48,6 +48,7 @@ import '../../metadata/domain/tmdb_episode_metadata.dart';
 import '../../player/domain/player_models.dart';
 import '../../settings/application/settings_state.dart';
 import '../../tracking/application/anilist_library_provider.dart';
+import '../application/stream_selection_preferences.dart';
 import '../application/watch_session.dart';
 import '../domain/normalized_models.dart';
 
@@ -188,8 +189,13 @@ class _WatchPageState extends ConsumerState<WatchPage> {
   VoidCallback? _retryPendingAdvance;
   String? _preferredServerId;
   String? _preferredServerTitle;
+  String? _preferredQualityId;
+  String? _preferredQualityLabel;
   String? _preferredVoiceOverId;
   String? _preferredVoiceOverLabel;
+  String? _streamPreferenceScope;
+  Future<void>? _streamPreferenceLoad;
+  int _streamPreferenceRevision = 0;
   final ScrollController _scrollController = ScrollController();
   final GlobalKey _sourceKey = GlobalKey();
   final GlobalKey _episodeKey = GlobalKey();
@@ -232,6 +238,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     _onlineNextResolutionUi.reset();
     _onlineNextPreparation.clear();
     _retryPendingAdvance = null;
+    _resetStreamPreferences();
   }
 
   @override
@@ -244,6 +251,51 @@ class _WatchPageState extends ConsumerState<WatchPage> {
   void _initSession(MediaItem item) {
     _lastItem = item;
     _session ??= WatchSession.initial(item);
+    unawaited(_ensureStreamPreferenceLoaded(item));
+  }
+
+  void _resetStreamPreferences() {
+    _preferredServerId = null;
+    _preferredServerTitle = null;
+    _preferredQualityId = null;
+    _preferredQualityLabel = null;
+    _preferredVoiceOverId = null;
+    _preferredVoiceOverLabel = null;
+    _streamPreferenceScope = null;
+    _streamPreferenceLoad = null;
+    _streamPreferenceRevision++;
+  }
+
+  Future<void> _ensureStreamPreferenceLoaded(MediaItem item) {
+    final String scope = '${item.type.name}:${item.id.trim()}';
+    if (_streamPreferenceScope == scope) {
+      return _streamPreferenceLoad ?? Future<void>.value();
+    }
+
+    _streamPreferenceScope = scope;
+    _preferredServerId = null;
+    _preferredServerTitle = null;
+    _preferredQualityId = null;
+    _preferredQualityLabel = null;
+    final int revision = ++_streamPreferenceRevision;
+    final Future<void> load = ref
+        .read(streamSelectionPreferenceStoreProvider)
+        .read(mediaType: item.type, mediaId: item.id)
+        .then((StreamSelectionPreference? preference) {
+          if (!mounted ||
+              _streamPreferenceScope != scope ||
+              _streamPreferenceRevision != revision ||
+              preference == null) {
+            return;
+          }
+          _preferredServerId = _nonEmpty(preference.serverId);
+          _preferredServerTitle = _nonEmpty(preference.serverTitle);
+          _preferredQualityId = _nonEmpty(preference.qualityId);
+          _preferredQualityLabel = _nonEmpty(preference.qualityLabel);
+        })
+        .catchError((Object _) {});
+    _streamPreferenceLoad = load;
+    return load;
   }
 
   void _syncSessionForItem(MediaItem item) {
@@ -484,6 +536,17 @@ class _WatchPageState extends ConsumerState<WatchPage> {
   }
 
   void _onStreamResolved(String requestKey, NormalizedStreamBundle bundle) {
+    unawaited(_handleStreamResolved(requestKey, bundle));
+  }
+
+  Future<void> _handleStreamResolved(
+    String requestKey,
+    NormalizedStreamBundle bundle,
+  ) async {
+    final MediaItem? item = _lastItem;
+    if (item != null) {
+      await _ensureStreamPreferenceLoaded(item);
+    }
     if (!mounted ||
         _session?.isResolving != true ||
         !_streamResolutionState.isCurrent(requestKey)) {
@@ -504,10 +567,8 @@ class _WatchPageState extends ConsumerState<WatchPage> {
       return;
     }
 
-    NormalizedStreamBundle resolvedBundle = bundle;
-    if (isAutoNext) {
-      resolvedBundle = _applyStreamPreferences(bundle);
-    }
+    final AppliedStreamSelection applied = _applyStreamPreferences(bundle);
+    final NormalizedStreamBundle resolvedBundle = applied.bundle;
 
     final bool canAutoPlay =
         resolvedBundle.activeUrl.trim().isNotEmpty &&
@@ -534,6 +595,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
         startPolicy: isAutoNext
             ? PlaybackStartPolicy.forceBeginning
             : PlaybackStartPolicy.resumeSaved,
+        explicitQualityLabel: applied.initialQualityLabel,
         transitionId: claim.transitionId,
       );
     } else {
@@ -666,32 +728,19 @@ class _WatchPageState extends ConsumerState<WatchPage> {
         active?.playbackGeneration == _activePlayerPlaybackGeneration;
   }
 
-  NormalizedStreamBundle _applyStreamPreferences(
+  AppliedStreamSelection _applyStreamPreferences(
     NormalizedStreamBundle bundle,
   ) {
-    NormalizedStreamBundle result = bundle;
-
-    bool matchedServerPreference = false;
-    final String? serverId = _preferredServerId;
-    if (serverId != null) {
-      for (final NormalizedServer s in bundle.availableServers) {
-        if (s.id == serverId) {
-          result = result.withServer(s);
-          matchedServerPreference = true;
-          break;
-        }
-      }
-    }
-
-    final String? serverTitle = _preferredServerTitle;
-    if (!matchedServerPreference && serverTitle != null) {
-      for (final NormalizedServer s in bundle.availableServers) {
-        if (s.title == serverTitle) {
-          result = result.withServer(s);
-          break;
-        }
-      }
-    }
+    final AppliedStreamSelection applied = applyStreamSelectionPreference(
+      bundle,
+      StreamSelectionPreference(
+        serverId: _preferredServerId ?? '',
+        serverTitle: _preferredServerTitle ?? '',
+        qualityId: _preferredQualityId ?? '',
+        qualityLabel: _preferredQualityLabel ?? '',
+      ),
+    );
+    NormalizedStreamBundle result = applied.bundle;
 
     bool matchedVoiceOverPreference = false;
     final String? voId = _preferredVoiceOverId;
@@ -715,7 +764,10 @@ class _WatchPageState extends ConsumerState<WatchPage> {
       }
     }
 
-    return result;
+    return AppliedStreamSelection(
+      bundle: result,
+      initialQualityLabel: applied.initialQualityLabel,
+    );
   }
 
   Future<void> _exitFullscreen() async {
@@ -759,10 +811,16 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     PlaybackStartPolicy startPolicy = PlaybackStartPolicy.resumeSaved,
     String? explicitQualityLabel,
     int? transitionId,
+    bool rememberSelection = false,
   }) {
     final bool isAutoNext = startPolicy == PlaybackStartPolicy.forceBeginning;
-    _preferredServerId = bundle.selectedServer.id;
-    _preferredServerTitle = bundle.selectedServer.title;
+    _rememberStreamSelection(
+      serverId: bundle.selectedServer.id,
+      serverTitle: bundle.selectedServer.title,
+      qualityId: explicitQualityLabel,
+      qualityLabel: explicitQualityLabel,
+      persist: rememberSelection,
+    );
     _preferredVoiceOverId = bundle.selectedVoiceOver?.id;
     _preferredVoiceOverLabel = bundle.selectedVoiceOver?.label;
 
@@ -870,6 +928,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
           _activePlayerEpisodeKey = null;
           setState(() {});
           if (result is PlayerEpisodeSelectionResult) {
+            _rememberPlayerEpisodeSelectionPreferences(result);
             _onlineNextPreparation.clear();
             _nextEpisodeInFullscreen = result.startInFullscreen;
             unawaited(_playEpisodeFromPlayer(result.episodeHref));
@@ -933,14 +992,12 @@ class _WatchPageState extends ConsumerState<WatchPage> {
   }
 
   void _rememberPlayerStreamPreferences(PlayerNextEpisodeResult result) {
-    final String? serverId = result.serverId?.trim();
-    if (serverId != null && serverId.isNotEmpty) {
-      _preferredServerId = serverId;
-    }
-    final String? serverTitle = result.serverTitle?.trim();
-    if (serverTitle != null && serverTitle.isNotEmpty) {
-      _preferredServerTitle = serverTitle;
-    }
+    _rememberStreamSelection(
+      serverId: result.serverId,
+      serverTitle: result.serverTitle,
+      qualityId: result.qualityId,
+      qualityLabel: result.qualityLabel,
+    );
     final String? voiceoverId = result.voiceoverId?.trim();
     if (voiceoverId != null && voiceoverId.isNotEmpty) {
       _preferredVoiceOverId = voiceoverId;
@@ -949,6 +1006,59 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     if (voiceoverLabel != null && voiceoverLabel.isNotEmpty) {
       _preferredVoiceOverLabel = voiceoverLabel;
     }
+  }
+
+  void _rememberPlayerEpisodeSelectionPreferences(
+    PlayerEpisodeSelectionResult result,
+  ) {
+    _rememberStreamSelection(
+      serverId: result.serverId,
+      serverTitle: result.serverTitle,
+      qualityId: result.qualityId,
+      qualityLabel: result.qualityLabel,
+    );
+  }
+
+  void _rememberStreamSelection({
+    String? serverId,
+    String? serverTitle,
+    String? qualityId,
+    String? qualityLabel,
+    bool persist = true,
+  }) {
+    final String? cleanServerId = _nonEmpty(serverId);
+    final String? cleanServerTitle = _nonEmpty(serverTitle);
+    if (cleanServerId == null && cleanServerTitle == null) return;
+
+    _preferredServerId = cleanServerId;
+    _preferredServerTitle = cleanServerTitle;
+    _preferredQualityId = _nonEmpty(qualityId);
+    _preferredQualityLabel = _nonEmpty(qualityLabel);
+    _streamPreferenceRevision++;
+    if (!persist) return;
+
+    final MediaItem? item = _lastItem;
+    if (item == null) return;
+    unawaited(
+      ref
+          .read(streamSelectionPreferenceStoreProvider)
+          .save(
+            mediaType: item.type,
+            mediaId: item.id,
+            preference: StreamSelectionPreference(
+              serverId: cleanServerId ?? '',
+              serverTitle: cleanServerTitle ?? '',
+              qualityId: _preferredQualityId ?? '',
+              qualityLabel: _preferredQualityLabel ?? '',
+            ),
+          )
+          .catchError((Object _) {}),
+    );
+  }
+
+  String? _nonEmpty(String? value) {
+    final String clean = value?.trim() ?? '';
+    return clean.isEmpty ? null : clean;
   }
 
   void _prepareNextOnlineEpisode({
@@ -1058,15 +1168,15 @@ class _WatchPageState extends ConsumerState<WatchPage> {
               'S${next.season}E${next.displayNumber}.',
             );
           }
-          final NormalizedStreamBundle preferred = _applyStreamPreferences(
+          final AppliedStreamSelection preferred = _applyStreamPreferences(
             candidate,
           );
-          if (preferred.activeUrl.trim().isEmpty) {
+          if (preferred.bundle.activeUrl.trim().isEmpty) {
             throw const SoraAddonException(
               'Next episode did not return a playable stream.',
             );
           }
-          resolvedBundle = preferred;
+          resolvedBundle = preferred.bundle;
         } on Object catch (error) {
           debugPrint(
             'OnlineNext: preparation generation=${snapshot.playbackGeneration} '
@@ -1189,9 +1299,10 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     if (prepared != null) {
       _onlineNextPreparation.clear();
       final SoraEpisode preparedNext = prepared.nextEpisode;
-      final NormalizedStreamBundle playableBundle = _applyStreamPreferences(
+      final AppliedStreamSelection applied = _applyStreamPreferences(
         prepared.bundle,
       );
+      final NormalizedStreamBundle playableBundle = applied.bundle;
       if (sameSoraPlaybackEpisode(preparedNext, playableBundle.episode) &&
           playableBundle.activeUrl.trim().isNotEmpty) {
         _pendingAdvanceTarget = preparedNext;
@@ -1221,6 +1332,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
         _playResolvedBundle(
           playableBundle,
           startPolicy: snapshot.startPolicy,
+          explicitQualityLabel: applied.initialQualityLabel,
           transitionId: operation.id,
         );
         return;
@@ -1374,15 +1486,15 @@ class _WatchPageState extends ConsumerState<WatchPage> {
             'S${next.season}E${next.displayNumber}.',
           );
         }
-        final NormalizedStreamBundle preferred = _applyStreamPreferences(
+        final AppliedStreamSelection preferred = _applyStreamPreferences(
           candidate,
         );
-        if (preferred.activeUrl.trim().isEmpty) {
+        if (preferred.bundle.activeUrl.trim().isEmpty) {
           throw const SoraAddonException(
             'Next episode did not return a playable stream.',
           );
         }
-        resolvedBundle = preferred;
+        resolvedBundle = preferred.bundle;
       } on Object catch (error) {
         resolutionError = error;
         debugPrint(
@@ -1405,7 +1517,10 @@ class _WatchPageState extends ConsumerState<WatchPage> {
       );
       return;
     }
-    final NormalizedStreamBundle playableBundle = resolvedBundle;
+    final AppliedStreamSelection applied = _applyStreamPreferences(
+      resolvedBundle,
+    );
+    final NormalizedStreamBundle playableBundle = applied.bundle;
 
     setState(() {
       _onlineNextResolutionUi.markStreamReady(
@@ -1420,6 +1535,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     _playResolvedBundle(
       playableBundle,
       startPolicy: snapshot.startPolicy,
+      explicitQualityLabel: applied.initialQualityLabel,
       transitionId: operation.id,
     );
   }
@@ -1630,6 +1746,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
                 _playResolvedBundle(
                   selected,
                   explicitQualityLabel: selected.selectedQuality?.label,
+                  rememberSelection: true,
                 );
               },
             ),

@@ -860,12 +860,18 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
         ? PlayerEpisodeSelectionResult(
             episodeHref: selectEpisodeHref,
             startInFullscreen: shouldStartNextFullscreen,
+            serverId: playbackState.server?.id,
+            serverTitle: playbackState.server?.name,
+            qualityId: playbackState.quality?.id,
+            qualityLabel: playbackState.quality?.label,
           )
         : playNext
         ? PlayerNextEpisodeResult(
             startInFullscreen: shouldStartNextFullscreen,
             serverId: playbackState.server?.id,
             serverTitle: playbackState.server?.name,
+            qualityId: playbackState.quality?.id,
+            qualityLabel: playbackState.quality?.label,
             voiceoverId: playbackState.voiceover?.id,
             voiceoverLabel: playbackState.voiceover?.label,
           )
@@ -908,6 +914,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
       PlayerNextEpisodeResult(
         serverId: playbackState.server?.id,
         serverTitle: playbackState.server?.name,
+        qualityId: playbackState.quality?.id,
+        qualityLabel: playbackState.quality?.label,
         voiceoverId: playbackState.voiceover?.id,
         voiceoverLabel: playbackState.voiceover?.label,
       ),
