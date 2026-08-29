@@ -1,0 +1,27 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mirushin-watch-party-relay",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-08-01",
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "ROOMS",
+        "class_name": "WatchPartyRoom"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["WatchPartyRoom"]
+    }
+  ],
+  "vars": {
+    "MAX_PARTICIPANTS_PER_ROOM": "50",
+    "MAX_MESSAGE_BYTES": "65536",
+    "MAX_MESSAGES_PER_MINUTE": "180",
+    "ROOM_IDLE_TIMEOUT_SECONDS": "21600",
+    "HOST_RECONNECT_TIMEOUT_SECONDS": "60"
+  }
+}

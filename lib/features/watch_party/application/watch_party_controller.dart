@@ -1,14 +1,18 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import '../../player/application/playback_controller.dart';
 import '../../player/domain/player_models.dart';
+import '../data/default_watch_party_transport.dart';
+import '../data/self_hosted_relay_transport.dart';
 import '../data/signaling_service.dart';
+import '../data/watch_party_transport.dart';
 import '../data/webrtc_sync_service.dart';
 import '../domain/watch_party_models.dart';
+import '../domain/watch_party_qr.dart';
+import 'watch_party_connection_settings.dart';
 import 'watch_party_guest_resolver.dart';
 
 final watchPartyProvider =
@@ -21,6 +25,7 @@ final watchPartyProvider =
 /// The host broadcasts global playback changes (it implements [PlaybackSyncSink]);
 /// the guest applies them with timestamp-based drift correction.
 class WatchPartyController extends Notifier<WatchPartyRoomState>
+    with WidgetsBindingObserver
     implements PlaybackSyncSink {
   // Drift beyond this triggers a corrective seek on the guest.
   static const Duration _maxDrift = Duration(seconds: 1);
@@ -34,9 +39,10 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
   WebRtcSyncService? _webrtc;
   WatchPartyGuestResolver? _resolver;
 
-  StreamSubscription<bool>? _channelSub;
-  StreamSubscription<WatchPartyEvent>? _messageSub;
-  StreamSubscription<RTCPeerConnectionState>? _connectionSub;
+  WatchPartyTransport? _transport;
+  StreamSubscription<WatchPartyIncomingMessage>? _messageSub;
+  StreamSubscription<WatchPartyTransportUpdate>? _connectionSub;
+  StreamSubscription<List<WatchPartyParticipant>>? _participantsSub;
 
   Timer? _pollTimer;
   Timer? _pairingTimeoutTimer;
@@ -54,14 +60,42 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
 
   @override
   WatchPartyRoomState build() {
+    WidgetsBinding.instance.addObserver(this);
     ref.onDispose(_teardown);
     return WatchPartyRoomState.idle;
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_resumeRelay());
+    }
+  }
+
+  Future<void> _resumeRelay() async {
+    if (state.connectionMode != WatchPartyConnectionMode.selfHostedRelay) {
+      return;
+    }
+    await _transport?.resume();
+    if (!state.isConnected) return;
+    if (state.isGuest) {
+      _send(WatchPartyEvent(type: WatchPartyEventType.helloRequest));
+    } else if (state.isHost) {
+      _send(_snapshotEvent());
+    }
   }
 
   // Public API
 
   /// Host: create a room and wait for a guest to pair.
   Future<void> createRoom() async {
+    final WatchPartyConnectionSettings settings = await ref.read(
+      watchPartyConnectionSettingsProvider.future,
+    );
+    if (settings.mode == WatchPartyConnectionMode.selfHostedRelay) {
+      await _createRelayRoom(settings);
+      return;
+    }
     if (state.isActive) await leave();
     _resetSignalingState();
     state = const WatchPartyRoomState(
@@ -74,7 +108,7 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
     _signaling = signaling;
     _webrtc = webrtc;
     _resolver = WatchPartyGuestResolver(ref, ignoreProgress: false);
-    _bindWebrtc(webrtc, role: 'host');
+    _bindWebrtc(webrtc, role: WatchPartyRole.host);
 
     try {
       final Map<String, dynamic> offer = await webrtc.createOffer();
@@ -112,7 +146,7 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
     _webrtc = webrtc;
     _resolver = WatchPartyGuestResolver(ref);
     _code = code;
-    _bindWebrtc(webrtc, role: 'guest');
+    _bindWebrtc(webrtc, role: WatchPartyRole.guest);
     final PlaybackController playback = ref.read(
       playbackControllerProvider.notifier,
     );
@@ -140,6 +174,103 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
     } on Object catch (error) {
       _fail('Could not join room: $error');
     }
+  }
+
+  Future<void> joinInvite(WatchPartyInvite invite) async {
+    if (!invite.isRelay) {
+      await joinRoom(invite.roomId);
+      return;
+    }
+    final Uri? relay = invite.relayUrl;
+    final String? joinToken = invite.joinToken;
+    if (relay == null || joinToken == null) {
+      _fail('Invalid relay invite.');
+      return;
+    }
+    if (state.isActive) await leave();
+    _resetSignalingState();
+    state = WatchPartyRoomState(
+      role: WatchPartyRole.guest,
+      status: WatchPartyConnectionStatus.connecting,
+      roomCode: invite.roomId,
+      connectionMode: WatchPartyConnectionMode.selfHostedRelay,
+      relayUrl: relay.toString(),
+      inviteUrl: invite.encode(),
+      hostConnected: true,
+    );
+    _resolver = WatchPartyGuestResolver(ref);
+    _lockGuestPlayback();
+    try {
+      final SelfHostedRelayTransport transport =
+          await SelfHostedRelayTransport.join(
+            relay: relay,
+            roomId: invite.roomId,
+            joinToken: joinToken,
+          );
+      _bindTransport(transport);
+      state = state.copyWith(participants: transport.currentParticipants);
+      _onChannelOpen();
+    } on Object catch (error) {
+      _fail('Could not join room: $error');
+    }
+  }
+
+  Future<void> _createRelayRoom(WatchPartyConnectionSettings settings) async {
+    final String? rawRelay = settings.relayUrl;
+    if (rawRelay == null) {
+      _fail('Configure and test a self-hosted relay in Settings first.');
+      return;
+    }
+    if (state.isActive) await leave();
+    _resetSignalingState();
+    final Uri relay;
+    try {
+      relay = WatchPartyRelayUrl.parse(rawRelay);
+    } on FormatException catch (error) {
+      _fail(error.message);
+      return;
+    }
+    state = WatchPartyRoomState(
+      role: WatchPartyRole.host,
+      status: WatchPartyConnectionStatus.signaling,
+      connectionMode: WatchPartyConnectionMode.selfHostedRelay,
+      relayUrl: relay.toString(),
+    );
+    _resolver = WatchPartyGuestResolver(ref, ignoreProgress: false);
+    try {
+      final SelfHostedRelayHostConnection connection =
+          await SelfHostedRelayTransport.createHost(relay);
+      final WatchPartyInvite invite = WatchPartyInvite(
+        roomId: connection.credentials.roomId,
+        mode: WatchPartyConnectionMode.selfHostedRelay,
+        relayUrl: relay,
+        joinToken: connection.credentials.joinToken,
+      );
+      _code = connection.credentials.roomId;
+      state = state.copyWith(
+        roomCode: connection.credentials.roomId,
+        status: WatchPartyConnectionStatus.connecting,
+        inviteUrl: invite.encode(),
+        participants: connection.transport.currentParticipants,
+      );
+      _bindTransport(connection.transport);
+      _onChannelOpen();
+    } on Object catch (error) {
+      _fail('Could not create room: $error');
+    }
+  }
+
+  void _lockGuestPlayback() {
+    final PlaybackController playback = ref.read(
+      playbackControllerProvider.notifier,
+    );
+    playback.setGuestLocked(true);
+    playback.setGuestPermissions(
+      canControlPlayback: state.permissions.canControlPlayback,
+      canSeek: state.permissions.canSeek,
+      canChangeSpeed: state.permissions.canChangeSpeed,
+      canChangeStream: state.permissions.canChangeStream,
+    );
   }
 
   /// Leave the party and release everything.
@@ -257,14 +388,19 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
 
   // WebRTC wiring
 
-  void _bindWebrtc(WebRtcSyncService webrtc, {required String role}) {
-    _channelSub = webrtc.channelOpen.listen((bool open) {
-      if (open) {
-        _onChannelOpen();
-      }
+  void _bindWebrtc(WebRtcSyncService webrtc, {required WatchPartyRole role}) {
+    _bindTransport(DefaultWatchPartyTransport(webrtc, role: role));
+  }
+
+  void _bindTransport(WatchPartyTransport transport) {
+    _transport = transport;
+    _messageSub = transport.messages.listen(_onMessage);
+    _connectionSub = transport.updates.listen(_onTransportUpdate);
+    _participantsSub = transport.participants.listen((
+      List<WatchPartyParticipant> participants,
+    ) {
+      state = state.copyWith(participants: participants);
     });
-    _messageSub = webrtc.messages.listen(_onMessage);
-    _connectionSub = webrtc.connectionState.listen(_onConnectionState);
   }
 
   void _onChannelOpen() {
@@ -299,44 +435,48 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
     // to expire by TTL so the app does not spend another request deleting it.
   }
 
-  void _onConnectionState(RTCPeerConnectionState s) {
+  void _onTransportUpdate(WatchPartyTransportUpdate update) {
     if (state.status == WatchPartyConnectionStatus.error ||
         state.status == WatchPartyConnectionStatus.idle) {
       return;
     }
-    switch (s) {
-      case RTCPeerConnectionState.RTCPeerConnectionStateDisconnected:
-        if (state.isConnected) {
-          state = state.copyWith(
-            status: WatchPartyConnectionStatus.reconnecting,
-          );
-        }
-      case RTCPeerConnectionState.RTCPeerConnectionStateFailed:
-        _fail('Connection lost.', deleteRoom: state.isHost && !_signalingDone);
-      case RTCPeerConnectionState.RTCPeerConnectionStateClosed:
-        if (state.isActive &&
-            state.status != WatchPartyConnectionStatus.closed) {
-          state = state.copyWith(status: WatchPartyConnectionStatus.closed);
-        }
-      case RTCPeerConnectionState.RTCPeerConnectionStateConnected:
-        if (state.status == WatchPartyConnectionStatus.reconnecting) {
-          state = state.copyWith(status: WatchPartyConnectionStatus.connected);
-          if (state.isGuest) {
-            _send(WatchPartyEvent(type: WatchPartyEventType.helloRequest));
-          }
-        }
-      default:
-        break;
+    if (update.status == WatchPartyConnectionStatus.error) {
+      _fail(update.error ?? 'Connection lost.');
+      return;
     }
+    if (update.status == WatchPartyConnectionStatus.connected) {
+      final bool reconnecting =
+          state.status == WatchPartyConnectionStatus.reconnecting;
+      state = state.copyWith(
+        status: WatchPartyConnectionStatus.connected,
+        peerConnected: true,
+        hostConnected: update.hostConnected,
+        clearError: true,
+      );
+      if (reconnecting && state.isGuest) {
+        _send(WatchPartyEvent(type: WatchPartyEventType.helloRequest));
+      }
+      return;
+    }
+    state = state.copyWith(
+      status: update.status,
+      peerConnected: update.status == WatchPartyConnectionStatus.connected,
+      hostConnected: update.hostConnected,
+      lastError: update.error,
+    );
   }
 
   // Incoming messages
 
-  void _onMessage(WatchPartyEvent event) {
+  void _onMessage(WatchPartyIncomingMessage incoming) {
+    final WatchPartyEvent event = incoming.event;
     if (state.isHost) {
       if (event.type == WatchPartyEventType.helloRequest) {
-        _sendPermissions();
-        _send(_snapshotEvent());
+        _sendPermissions(targetParticipantId: incoming.senderParticipantId);
+        _send(
+          _snapshotEvent(),
+          targetParticipantId: incoming.senderParticipantId,
+        );
       } else if (event.type == WatchPartyEventType.play ||
           event.type == WatchPartyEventType.pause) {
         if (state.permissions.canControlPlayback) {
@@ -401,13 +541,14 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
     _sendPermissions();
   }
 
-  void _sendPermissions() {
+  void _sendPermissions({String? targetParticipantId}) {
     if (!state.isConnected) return;
     _send(
       WatchPartyEvent(
         type: WatchPartyEventType.permissionsChanged,
         permissions: state.permissions,
       ),
+      targetParticipantId: targetParticipantId,
     );
   }
 
@@ -450,7 +591,11 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
     final bool temporarySpeedActive = ref
         .read(playbackControllerProvider)
         .temporarySpeedActive;
-    final bool alreadySelected = requested.sameStreamAs(current);
+    final bool relayMode =
+        state.connectionMode == WatchPartyConnectionMode.selfHostedRelay;
+    final bool alreadySelected = relayMode
+        ? requested.sameSelectionAs(current)
+        : requested.sameStreamAs(current);
     try {
       await resolver.apply(
         requested,
@@ -458,7 +603,7 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
         speed: speed,
         temporarySpeedActive: temporarySpeedActive,
         playing: playing,
-        syncQuality: false,
+        syncQuality: relayMode,
         forceReload: !alreadySelected,
       );
       // A real reload broadcasts from PlaybackController.load(). An unchanged
@@ -560,9 +705,13 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
     if (descriptor == null || resolver == null) return;
     final bool hasPendingGuestStreamRequest =
         _pendingGuestStreamRequest != null;
-    final bool syncInitialQuality = _lastAppliedSource == null;
+    final bool relayMode =
+        state.connectionMode == WatchPartyConnectionMode.selfHostedRelay;
+    final bool syncInitialQuality = _lastAppliedSource == null || relayMode;
     if (!hasPendingGuestStreamRequest &&
-        descriptor.sameStreamAs(_lastAppliedSource) &&
+        (relayMode
+            ? descriptor.sameSelectionAs(_lastAppliedSource)
+            : descriptor.sameStreamAs(_lastAppliedSource)) &&
         event.type != WatchPartyEventType.stateSnapshot) {
       return;
     }
@@ -616,7 +765,11 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
 
   void _startHeartbeat() {
     _heartbeatTimer?.cancel();
-    _heartbeatTimer = Timer.periodic(_heartbeat, (_) {
+    final Duration interval =
+        state.connectionMode == WatchPartyConnectionMode.selfHostedRelay
+        ? const Duration(seconds: 10)
+        : _heartbeat;
+    _heartbeatTimer = Timer.periodic(interval, (_) {
       if (!state.isHost || !state.isConnected) return;
       final PlaybackController playback = ref.read(
         playbackControllerProvider.notifier,
@@ -744,8 +897,10 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
 
   // Teardown
 
-  void _send(WatchPartyEvent event) {
-    unawaited(_webrtc?.send(event));
+  void _send(WatchPartyEvent event, {String? targetParticipantId}) {
+    unawaited(
+      _transport?.send(event, targetParticipantId: targetParticipantId),
+    );
   }
 
   void _fail(String message, {bool deleteRoom = false}) {
@@ -791,25 +946,29 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
   }
 
   Future<void> _disposePeerAfterFailure() async {
-    final StreamSubscription<bool>? channelSub = _channelSub;
-    final StreamSubscription<WatchPartyEvent>? messageSub = _messageSub;
-    final StreamSubscription<RTCPeerConnectionState>? connectionSub =
+    final StreamSubscription<WatchPartyIncomingMessage>? messageSub =
+        _messageSub;
+    final StreamSubscription<WatchPartyTransportUpdate>? connectionSub =
         _connectionSub;
-    final WebRtcSyncService? webrtc = _webrtc;
+    final StreamSubscription<List<WatchPartyParticipant>>? participantsSub =
+        _participantsSub;
+    final WatchPartyTransport? transport = _transport;
 
-    _channelSub = null;
     _messageSub = null;
     _connectionSub = null;
+    _participantsSub = null;
+    _transport = null;
     _webrtc = null;
     _resolver = null;
 
-    await channelSub?.cancel();
     await messageSub?.cancel();
     await connectionSub?.cancel();
-    await webrtc?.dispose();
+    await participantsSub?.cancel();
+    await transport?.disconnect();
   }
 
   Future<void> _teardown() async {
+    WidgetsBinding.instance.removeObserver(this);
     _pollTimer?.cancel();
     _pollTimer = null;
     _pairingTimeoutTimer?.cancel();
@@ -818,12 +977,12 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
     _heartbeatTimer = null;
     _finalizeTimer?.cancel();
     _finalizeTimer = null;
-    await _channelSub?.cancel();
     await _messageSub?.cancel();
     await _connectionSub?.cancel();
-    _channelSub = null;
+    await _participantsSub?.cancel();
     _messageSub = null;
     _connectionSub = null;
+    _participantsSub = null;
 
     // Release playback hooks.
     final PlaybackController playback = ref.read(
@@ -833,7 +992,8 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
     playback.setGuestLocked(false);
 
     // Let the room expire by TTL; no cleanup request is needed.
-    await _webrtc?.dispose();
+    await _transport?.disconnect(closeRoom: state.isHost);
+    _transport = null;
     _webrtc = null;
     _signaling = null;
     _resolver = null;

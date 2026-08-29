@@ -40,6 +40,10 @@ import '../../tracking/application/tracker_library_provider.dart';
 import '../../tracking/domain/tracker_models.dart';
 import '../../tracking/presentation/anilist_login_flow.dart';
 import '../../tracking/presentation/tracker_login_flow.dart';
+import '../../watch_party/application/watch_party_connection_settings.dart';
+import '../../watch_party/data/relay_api.dart';
+import '../../watch_party/data/relay_protocol.dart';
+import '../../watch_party/domain/watch_party_models.dart';
 import '../application/desktop_update_controller.dart';
 import '../application/settings_state.dart';
 import '../application/update_checker_provider.dart';
@@ -212,11 +216,109 @@ String _settingsUpdateButtonLabel(
   };
 }
 
-class _WatchPartySection extends StatelessWidget {
+class _WatchPartySection extends ConsumerStatefulWidget {
   const _WatchPartySection();
 
   @override
+  ConsumerState<_WatchPartySection> createState() => _WatchPartySectionState();
+}
+
+class _WatchPartySectionState extends ConsumerState<_WatchPartySection> {
+  final TextEditingController _relayController = TextEditingController();
+  WatchPartyConnectionMode _mode = WatchPartyConnectionMode.defaultConnection;
+  bool _initialized = false;
+  bool _testing = false;
+  String? _result;
+  bool _resultIsError = false;
+
+  @override
+  void dispose() {
+    _relayController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _saveRelay() async {
+    try {
+      await ref
+          .read(watchPartyConnectionSettingsProvider.notifier)
+          .saveRelay(_relayController.text);
+      if (!mounted) return;
+      setState(() {
+        _mode = WatchPartyConnectionMode.selfHostedRelay;
+        _result = context.t('Relay settings saved.');
+        _resultIsError = false;
+      });
+    } on FormatException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _result = error.message;
+        _resultIsError = true;
+      });
+    }
+  }
+
+  Future<void> _testRelay() async {
+    setState(() {
+      _testing = true;
+      _result = null;
+    });
+    try {
+      final RelayHealthResult result = await WatchPartyRelayApi()
+          .testConnection(_relayController.text);
+      if (!mounted) return;
+      setState(() {
+        _result = context.tf(
+          'Relay connection successful. Protocol version: {version}',
+          <String, Object>{'version': result.protocolVersion},
+        );
+        _resultIsError = false;
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _result = '$error';
+        _resultIsError = true;
+      });
+    } finally {
+      if (mounted) setState(() => _testing = false);
+    }
+  }
+
+  Future<void> _reset() async {
+    await ref
+        .read(watchPartyConnectionSettingsProvider.notifier)
+        .resetToDefault();
+    if (!mounted) return;
+    setState(() {
+      _mode = WatchPartyConnectionMode.defaultConnection;
+      _relayController.clear();
+      _result = context.t('Default connection restored.');
+      _resultIsError = false;
+    });
+  }
+
+  Future<void> _useDefault() async {
+    await ref.read(watchPartyConnectionSettingsProvider.notifier).useDefault();
+    if (!mounted) return;
+    setState(() {
+      _mode = WatchPartyConnectionMode.defaultConnection;
+      _result = context.t('Default connection selected.');
+      _resultIsError = false;
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final AsyncValue<WatchPartyConnectionSettings> settings = ref.watch(
+      watchPartyConnectionSettingsProvider,
+    );
+    final WatchPartyConnectionSettings? loaded = settings.value;
+    if (!_initialized && loaded != null) {
+      _initialized = true;
+      _mode = loaded.mode;
+      _relayController.text = loaded.relayUrl ?? '';
+    }
+    final ColorScheme colors = Theme.of(context).colorScheme;
     return SettingsSection(
       title: context.t('Watch with Friends'),
       icon: Icons.groups_rounded,
@@ -233,6 +335,93 @@ class _WatchPartySection extends StatelessWidget {
             label: Text(context.t('Open')),
           ),
         ),
+        const Divider(),
+        SettingsRow(
+          title: context.t('Connection Mode'),
+          subtitle: context.t(
+            'Default stays peer-to-peer. Select a relay only when the default connection does not work on your network.',
+          ),
+          trailing: DropdownButtonFormField<WatchPartyConnectionMode>(
+            key: ValueKey<WatchPartyConnectionMode>(_mode),
+            initialValue: _mode,
+            items: <DropdownMenuItem<WatchPartyConnectionMode>>[
+              DropdownMenuItem<WatchPartyConnectionMode>(
+                value: WatchPartyConnectionMode.defaultConnection,
+                child: Text(context.t('Default')),
+              ),
+              DropdownMenuItem<WatchPartyConnectionMode>(
+                value: WatchPartyConnectionMode.selfHostedRelay,
+                child: Text(context.t('Self-hosted Relay')),
+              ),
+            ],
+            onChanged: settings.isLoading
+                ? null
+                : (WatchPartyConnectionMode? value) {
+                    if (value == null) return;
+                    setState(() => _mode = value);
+                    if (value == WatchPartyConnectionMode.defaultConnection) {
+                      _useDefault();
+                    }
+                  },
+          ),
+        ),
+        if (_mode == WatchPartyConnectionMode.selfHostedRelay)
+          SettingsRow(
+            title: context.t('Relay URL'),
+            subtitle: context.t(
+              'Custom relays are operated by third parties. Prefer HTTPS; HTTP is accepted only for local/private development servers.',
+            ),
+            fullWidthTrailing: true,
+            trailing: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                TextField(
+                  controller: _relayController,
+                  autocorrect: false,
+                  keyboardType: TextInputType.url,
+                  decoration: const InputDecoration(
+                    hintText: 'https://example.workers.dev',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                Wrap(
+                  spacing: AppSpacing.sm,
+                  runSpacing: AppSpacing.sm,
+                  children: <Widget>[
+                    FilledButton.icon(
+                      onPressed: _testing ? null : _saveRelay,
+                      icon: const Icon(Icons.save_rounded),
+                      label: Text(context.t('Save')),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: _testing ? null : _testRelay,
+                      icon: _testing
+                          ? const SizedBox.square(
+                              dimension: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.network_check_rounded),
+                      label: Text(context.t('Test Connection')),
+                    ),
+                    TextButton(
+                      onPressed: _testing ? null : _reset,
+                      child: Text(context.t('Reset to Default')),
+                    ),
+                  ],
+                ),
+                if (_result != null) ...<Widget>[
+                  const SizedBox(height: AppSpacing.sm),
+                  Text(
+                    _result!,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: _resultIsError ? colors.error : colors.primary,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
       ],
     );
   }

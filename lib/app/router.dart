@@ -17,6 +17,7 @@ import '../features/settings/presentation/settings_page.dart';
 import '../features/settings/presentation/startup_update_popup.dart';
 import '../features/watch/domain/normalized_models.dart';
 import '../features/watch/presentation/watch_page.dart';
+import '../features/watch_party/domain/watch_party_qr.dart';
 import '../features/watch_party/presentation/create_room_screen.dart';
 import '../features/watch_party/presentation/join_room_screen.dart';
 import '../features/watch_party/presentation/watch_party_screen.dart';
@@ -56,8 +57,11 @@ GoRouter buildAppRouter(String initialLocation) => GoRouter(
     ),
     GoRoute(
       path: AppRoutes.watchPartyJoin,
-      pageBuilder: (BuildContext context, GoRouterState state) =>
-          _appPage(context, state, const JoinRoomScreen()),
+      pageBuilder: (BuildContext context, GoRouterState state) => _appPage(
+        context,
+        state,
+        JoinRoomScreen(invite: WatchPartyInvite.tryParse(state.uri.toString())),
+      ),
     ),
     ShellRoute(
       builder: (BuildContext context, GoRouterState state, Widget child) {

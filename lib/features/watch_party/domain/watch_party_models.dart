@@ -5,6 +5,33 @@ import '../../../shared/models/media_item.dart';
 /// the host's playback state.
 enum WatchPartyRole { host, guest }
 
+/// The existing peer-to-peer connection remains the default. A relay is used
+/// only when the host explicitly selects and configures one.
+enum WatchPartyConnectionMode { defaultConnection, selfHostedRelay }
+
+class WatchPartyParticipant {
+  const WatchPartyParticipant({
+    required this.id,
+    required this.role,
+    required this.connected,
+    this.joinedAt,
+  });
+
+  final String id;
+  final WatchPartyRole role;
+  final bool connected;
+  final DateTime? joinedAt;
+
+  factory WatchPartyParticipant.fromJson(Map<String, dynamic> json) {
+    return WatchPartyParticipant(
+      id: '${json['participantId'] ?? json['id'] ?? ''}',
+      role: json['role'] == 'host' ? WatchPartyRole.host : WatchPartyRole.guest,
+      connected: json['connected'] != false,
+      joinedAt: DateTime.tryParse('${json['connectedAt'] ?? ''}'),
+    );
+  }
+}
+
 /// Lifecycle of the pairing + P2P connection. [signaling] covers the Worker
 /// handshake; [connected] means the DataChannel is open and sync flows P2P.
 enum WatchPartyConnectionStatus {
@@ -269,6 +296,11 @@ class WatchPartyRoomState {
     this.peerConnected = false,
     this.lastError,
     this.permissions = WatchPartyPermissions.locked,
+    this.connectionMode = WatchPartyConnectionMode.defaultConnection,
+    this.relayUrl,
+    this.inviteUrl,
+    this.participants = const <WatchPartyParticipant>[],
+    this.hostConnected = true,
   });
 
   final String? roomCode;
@@ -277,6 +309,11 @@ class WatchPartyRoomState {
   final bool peerConnected;
   final String? lastError;
   final WatchPartyPermissions permissions;
+  final WatchPartyConnectionMode connectionMode;
+  final String? relayUrl;
+  final String? inviteUrl;
+  final List<WatchPartyParticipant> participants;
+  final bool hostConnected;
 
   bool get isActive =>
       role != null && status != WatchPartyConnectionStatus.idle;
@@ -291,6 +328,11 @@ class WatchPartyRoomState {
     bool? peerConnected,
     String? lastError,
     WatchPartyPermissions? permissions,
+    WatchPartyConnectionMode? connectionMode,
+    String? relayUrl,
+    String? inviteUrl,
+    List<WatchPartyParticipant>? participants,
+    bool? hostConnected,
     bool clearError = false,
     bool clearRoomCode = false,
   }) {
@@ -301,6 +343,11 @@ class WatchPartyRoomState {
       peerConnected: peerConnected ?? this.peerConnected,
       lastError: clearError ? null : lastError ?? this.lastError,
       permissions: permissions ?? this.permissions,
+      connectionMode: connectionMode ?? this.connectionMode,
+      relayUrl: relayUrl ?? this.relayUrl,
+      inviteUrl: inviteUrl ?? this.inviteUrl,
+      participants: participants ?? this.participants,
+      hostConnected: hostConnected ?? this.hostConnected,
     );
   }
 

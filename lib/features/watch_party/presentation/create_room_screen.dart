@@ -36,6 +36,9 @@ class _CreateRoomScreenState extends ConsumerState<CreateRoomScreen> {
     final WatchPartyRoomState party = ref.watch(watchPartyProvider);
     final ColorScheme colors = Theme.of(context).colorScheme;
     final String? code = party.roomCode;
+    final String? invite = party.inviteUrl;
+    final String? qrPayload =
+        invite ?? (code == null ? null : encodeWatchPartyQr(code));
 
     return Scaffold(
       appBar: AppBar(title: Text(context.t('Create a room'))),
@@ -82,7 +85,7 @@ class _CreateRoomScreenState extends ConsumerState<CreateRoomScreen> {
                             child: Padding(
                               padding: const EdgeInsets.all(16),
                               child: QrImageView(
-                                data: encodeWatchPartyQr(code),
+                                data: qrPayload!,
                                 size: 200,
                                 backgroundColor: Colors.white,
                                 // Force black modules so the code is always visible,
@@ -117,10 +120,16 @@ class _CreateRoomScreenState extends ConsumerState<CreateRoomScreen> {
                     const SizedBox(height: 24),
                     InkWell(
                       onTap: () {
-                        Clipboard.setData(ClipboardData(text: code));
+                        Clipboard.setData(ClipboardData(text: invite ?? code));
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
-                            content: Text(context.t('Room code copied')),
+                            content: Text(
+                              context.t(
+                                invite == null
+                                    ? 'Room code copied'
+                                    : 'Invite link copied',
+                              ),
+                            ),
                           ),
                         );
                       },
@@ -137,13 +146,20 @@ class _CreateRoomScreenState extends ConsumerState<CreateRoomScreen> {
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: <Widget>[
-                            Text(
-                              code,
-                              style: Theme.of(context).textTheme.headlineMedium
-                                  ?.copyWith(
-                                    letterSpacing: 8,
-                                    fontWeight: FontWeight.bold,
-                                  ),
+                            Flexible(
+                              child: FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: Text(
+                                  code,
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .headlineMedium
+                                      ?.copyWith(
+                                        letterSpacing: 8,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                ),
+                              ),
                             ),
                             const SizedBox(width: 12),
                             Icon(
@@ -158,6 +174,38 @@ class _CreateRoomScreenState extends ConsumerState<CreateRoomScreen> {
                   ],
                   const SizedBox(height: 28),
                   WatchPartyStatusText(party: party),
+                  if (party.connectionMode ==
+                      WatchPartyConnectionMode.selfHostedRelay) ...<Widget>[
+                    const SizedBox(height: 10),
+                    Text(
+                      '${party.participants.length} ${context.t('participants')}',
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      alignment: WrapAlignment.center,
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: <Widget>[
+                        for (final WatchPartyParticipant participant
+                            in party.participants.take(8))
+                          Chip(
+                            visualDensity: VisualDensity.compact,
+                            label: Text(
+                              participant.role == WatchPartyRole.host
+                                  ? context.t('Host')
+                                  : participant.id,
+                            ),
+                          ),
+                        if (party.participants.length > 8)
+                          Chip(
+                            visualDensity: VisualDensity.compact,
+                            label: Text('+${party.participants.length - 8}'),
+                          ),
+                      ],
+                    ),
+                  ],
                   if (party.isHost) ...<Widget>[
                     const SizedBox(height: 20),
                     WatchPartyPermissionControls(party: party),

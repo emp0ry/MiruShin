@@ -113,6 +113,25 @@ class _ActivePartyCard extends ConsumerWidget {
         ],
         const SizedBox(height: 12),
         WatchPartyStatusText(party: party),
+        if (party.connectionMode ==
+            WatchPartyConnectionMode.selfHostedRelay) ...<Widget>[
+          const SizedBox(height: 8),
+          Text(
+            '${party.participants.where((WatchPartyParticipant participant) => participant.connected).length} ${context.t('participants connected')}',
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          if (!party.hostConnected) ...<Widget>[
+            const SizedBox(height: 6),
+            Text(
+              context.t('Host disconnected. Waiting for reconnection…'),
+              textAlign: TextAlign.center,
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: colors.tertiary),
+            ),
+          ],
+        ],
         const SizedBox(height: 20),
         WatchPartyPermissionControls(party: party),
         const SizedBox(height: 28),
