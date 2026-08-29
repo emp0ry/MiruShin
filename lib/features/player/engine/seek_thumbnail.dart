@@ -73,10 +73,12 @@ Iterable<Duration> progressiveSeekThumbnailPositions(
 }
 
 bool shouldProgressivelyGenerateSeekThumbnails({
+  required bool enabled,
   required SeekPreviewMode mode,
   required SeekThumbnailPlan plan,
 }) {
-  return mode == SeekPreviewMode.progressive &&
+  return enabled &&
+      mode == SeekPreviewMode.progressive &&
       !plan.isOffline &&
       plan.candidates.isNotEmpty;
 }

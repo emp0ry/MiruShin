@@ -534,10 +534,23 @@ class PlaybackController extends Notifier<PlaybackState> {
       next,
     ) {
       _updateMediaSession();
-      final SeekPreviewMode? previousMode = previous?.value?.seekPreviewMode;
-      final SeekPreviewMode? nextMode = next.value?.seekPreviewMode;
+      final PlayerSettings? previousSettings = previous?.value;
+      final PlayerSettings? nextSettings = next.value;
+      if (nextSettings == null) return;
+      if (previousSettings?.seekPreviewsEnabled !=
+          nextSettings.seekPreviewsEnabled) {
+        if (nextSettings.seekPreviewsEnabled) {
+          _enableSeekPreviewsForCurrentPlayback();
+        } else {
+          _disableSeekPreviews();
+        }
+        return;
+      }
+      final SeekPreviewMode? previousMode = previousSettings?.seekPreviewMode;
+      final SeekPreviewMode nextMode = nextSettings.seekPreviewMode;
       if (previousMode != nextMode) {
-        if (nextMode == SeekPreviewMode.progressive) {
+        if (nextSettings.seekPreviewsEnabled &&
+            nextMode == SeekPreviewMode.progressive) {
           _maybeStartProgressiveSeekPreviews();
         } else {
           _cancelProgressiveSeekPreviews(cancelActiveRequest: true);
@@ -1127,7 +1140,9 @@ class PlaybackController extends Notifier<PlaybackState> {
     final PlayerBackend thumbnailBackend = seekThumbnailExtractionBackend(
       engineBackend,
     );
-    await _seekThumbnailService.activate(thumbnailPlan, thumbnailBackend);
+    if (settings.seekPreviewsEnabled) {
+      await _seekThumbnailService.activate(thumbnailPlan, thumbnailBackend);
+    }
     if (generation != _playbackGeneration) return;
     _seekThumbnailPlan = thumbnailPlan;
     _seekThumbnailBackend = thumbnailBackend;
@@ -1208,9 +1223,11 @@ class PlaybackController extends Notifier<PlaybackState> {
         attemptFailures,
       );
       _startOfflineStallWatch(item, server, engine, generation);
-      unawaited(
-        _warmSeekThumbnailIndex(thumbnailPlan, thumbnailBackend, generation),
-      );
+      if (_seekPreviewsEnabled()) {
+        unawaited(
+          _warmSeekThumbnailIndex(thumbnailPlan, thumbnailBackend, generation),
+        );
+      }
     } on Object catch (error) {
       final Duration fallbackPosition = _fallbackPositionFor(
         engine,
@@ -1269,6 +1286,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     PlayerBackend backend,
     int generation,
   ) async {
+    if (!_seekPreviewsEnabled()) return;
     // Local downloads can be indexed immediately. Online warmup yields to the
     // main player so its initial manifest/segment requests are never competing
     // with preview traffic during startup.
@@ -1278,12 +1296,46 @@ class PlaybackController extends Notifier<PlaybackState> {
     if (generation != _playbackGeneration ||
         _seekThumbnailPlan?.sessionKey != plan.sessionKey ||
         state.engine == null ||
-        !state.engine!.state.value.isInitialized) {
+        !state.engine!.state.value.isInitialized ||
+        !_seekPreviewsEnabled()) {
       return;
     }
     await _seekThumbnailService.warm(plan, backend);
-    if (generation == _playbackGeneration) {
+    if (generation == _playbackGeneration && _seekPreviewsEnabled()) {
       _maybeStartProgressiveSeekPreviews();
+    }
+  }
+
+  bool _seekPreviewsEnabled({PlayerSettings? settings}) {
+    return (settings ??
+            ref.read(playerSettingsProvider).value ??
+            const PlayerSettings())
+        .seekPreviewsEnabled;
+  }
+
+  void _enableSeekPreviewsForCurrentPlayback() {
+    final SeekThumbnailPlan? plan = _seekThumbnailPlan;
+    final PlayerEngine? engine = state.engine;
+    if (plan == null ||
+        engine == null ||
+        !engine.state.value.isInitialized ||
+        !_seekPreviewsEnabled()) {
+      return;
+    }
+    unawaited(
+      _warmSeekThumbnailIndex(plan, _seekThumbnailBackend, _playbackGeneration),
+    );
+  }
+
+  void _disableSeekPreviews() {
+    _cancelSeekThumbnailRequests();
+    if (state.seekPreviewThumbnail != null ||
+        state.seekPreviewLoading ||
+        state.seekPreviewImageSurface) {
+      state = state.copyWith(
+        clearSeekPreviewThumbnail: true,
+        seekPreviewImageSurface: false,
+      );
     }
   }
 
@@ -1379,6 +1431,7 @@ class PlaybackController extends Notifier<PlaybackState> {
         ref.read(playerSettingsProvider).value ??
         const PlayerSettings();
     return shouldProgressivelyGenerateSeekThumbnails(
+      enabled: effectiveSettings.seekPreviewsEnabled,
       mode: effectiveSettings.seekPreviewMode,
       plan: plan,
     );
@@ -2497,6 +2550,7 @@ class PlaybackController extends Notifier<PlaybackState> {
 
     final SeekThumbnailPlan? plan = _seekThumbnailPlan;
     final bool imageSurface =
+        _seekPreviewsEnabled() &&
         seekThumbnailExtractionSupported &&
         plan != null &&
         plan.candidates.isNotEmpty;
@@ -2607,6 +2661,7 @@ class PlaybackController extends Notifier<PlaybackState> {
         !engine.state.value.isInitialized ||
         plan == null ||
         plan.candidates.isEmpty ||
+        !_seekPreviewsEnabled() ||
         !seekThumbnailExtractionSupported) {
       _pendingSeekPreviewTarget = null;
       return;
@@ -2664,6 +2719,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       if (generation != _seekPreviewGeneration ||
           state.engine != engine ||
           _seekThumbnailPlan?.sessionKey != plan.sessionKey ||
+          !_seekPreviewsEnabled() ||
           !_seekThumbnailRequests.accepts(request, plan.sessionKey, bucket) ||
           !currentBucket) {
         if (kDebugMode) debugPrint('SeekPreview: request superseded.');
@@ -2685,7 +2741,9 @@ class PlaybackController extends Notifier<PlaybackState> {
     } finally {
       _seekPreviewInFlight = false;
       final Duration? pending = _pendingSeekPreviewTarget;
-      if (pending != null) {
+      if (!_seekPreviewsEnabled()) {
+        _pendingSeekPreviewTarget = null;
+      } else if (pending != null) {
         _queueSeekPreviewFrame(pending);
       } else {
         _maybeStartProgressiveSeekPreviews();

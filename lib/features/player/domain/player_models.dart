@@ -367,6 +367,7 @@ class PlayerSettings {
     this.autoAnilistSync = true,
     this.debugStreamInfo = false,
     this.playerBackend = PlayerBackend.auto,
+    this.seekPreviewsEnabled = true,
     this.seekPreviewMode = SeekPreviewMode.progressive,
   });
 
@@ -402,6 +403,7 @@ class PlayerSettings {
   final bool autoAnilistSync;
   final bool debugStreamInfo;
   final PlayerBackend playerBackend;
+  final bool seekPreviewsEnabled;
   final SeekPreviewMode seekPreviewMode;
 
   PlayerSettings copyWith({
@@ -434,6 +436,7 @@ class PlayerSettings {
     bool? autoAnilistSync,
     bool? debugStreamInfo,
     PlayerBackend? playerBackend,
+    bool? seekPreviewsEnabled,
     SeekPreviewMode? seekPreviewMode,
   }) {
     return PlayerSettings(
@@ -472,6 +475,7 @@ class PlayerSettings {
       autoAnilistSync: autoAnilistSync ?? this.autoAnilistSync,
       debugStreamInfo: debugStreamInfo ?? this.debugStreamInfo,
       playerBackend: playerBackend ?? this.playerBackend,
+      seekPreviewsEnabled: seekPreviewsEnabled ?? this.seekPreviewsEnabled,
       seekPreviewMode: seekPreviewMode ?? this.seekPreviewMode,
     );
   }
@@ -506,6 +510,7 @@ class PlayerSettings {
     'autoAnilistSync': autoAnilistSync,
     'debugStreamInfo': debugStreamInfo,
     'playerBackend': playerBackend.name,
+    'seekPreviewsEnabled': seekPreviewsEnabled,
     'seekPreviewMode': seekPreviewMode.name,
   };
 
@@ -566,6 +571,7 @@ class PlayerSettings {
         (PlayerBackend value) => value.name == json['playerBackend'],
         orElse: () => PlayerBackend.auto,
       ),
+      seekPreviewsEnabled: json['seekPreviewsEnabled'] as bool? ?? true,
       seekPreviewMode: SeekPreviewMode.values.firstWhere(
         (SeekPreviewMode value) => value.name == json['seekPreviewMode'],
         orElse: () => SeekPreviewMode.progressive,

@@ -179,6 +179,7 @@ void main() {
 
       expect(
         shouldProgressivelyGenerateSeekThumbnails(
+          enabled: true,
           mode: SeekPreviewMode.progressive,
           plan: onlinePlan,
         ),
@@ -186,6 +187,7 @@ void main() {
       );
       expect(
         shouldProgressivelyGenerateSeekThumbnails(
+          enabled: true,
           mode: SeekPreviewMode.progressive,
           plan: offlinePlan,
         ),
@@ -193,10 +195,20 @@ void main() {
       );
       expect(
         shouldProgressivelyGenerateSeekThumbnails(
+          enabled: true,
           mode: SeekPreviewMode.onDemand,
           plan: onlinePlan,
         ),
         isFalse,
+      );
+      expect(
+        shouldProgressivelyGenerateSeekThumbnails(
+          enabled: false,
+          mode: SeekPreviewMode.progressive,
+          plan: onlinePlan,
+        ),
+        isFalse,
+        reason: 'the master switch must prevent background network work',
       );
     });
   });

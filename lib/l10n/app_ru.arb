@@ -397,6 +397,8 @@
   "Player": "Плеер",
   "Player engine": "Движок плеера",
   "Player Settings": "Настройки плеера",
+  "Player progress preview": "Превью на шкале плеера",
+  "Show thumbnail previews while seeking. Turn off to save data.": "Показывать миниатюры при перемотке. Отключите, чтобы экономить трафик.",
   "Seek previews": "Превью при перемотке",
   "Progressive timeline": "Вся шкала постепенно",
   "On demand": "По запросу",

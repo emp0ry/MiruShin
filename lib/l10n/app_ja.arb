@@ -397,6 +397,8 @@
   "Player": "プレイヤー",
   "Player engine": "プレイヤーエンジン",
   "Player Settings": "プレイヤー設定",
+  "Player progress preview": "プレイヤー進行状況プレビュー",
+  "Show thumbnail previews while seeking. Turn off to save data.": "シーク中にサムネイルを表示します。通信量を節約するにはオフにしてください。",
   "Seek previews": "シークプレビュー",
   "Progressive timeline": "タイムライン全体を順次生成",
   "On demand": "オンデマンド",

@@ -1874,23 +1874,34 @@ class _PlayerEngineSection extends ConsumerWidget {
           ),
         ),
         SettingsRow(
-          title: context.t('Seek previews'),
-          subtitle: context.t(settings.seekPreviewMode.description),
-          trailing: DropdownButton<SeekPreviewMode>(
-            value: settings.seekPreviewMode,
-            items: SeekPreviewMode.values
-                .map(
-                  (SeekPreviewMode mode) => DropdownMenuItem<SeekPreviewMode>(
-                    value: mode,
-                    child: Text(context.t(mode.title)),
-                  ),
-                )
-                .toList(growable: false),
-            onChanged: (SeekPreviewMode? value) {
-              if (value != null) controller.setSeekPreviewMode(value);
-            },
+          title: context.t('Player progress preview'),
+          subtitle: context.t(
+            'Show thumbnail previews while seeking. Turn off to save data.',
+          ),
+          trailing: Switch(
+            value: settings.seekPreviewsEnabled,
+            onChanged: controller.setSeekPreviewsEnabled,
           ),
         ),
+        if (settings.seekPreviewsEnabled)
+          SettingsRow(
+            title: context.t('Seek previews'),
+            subtitle: context.t(settings.seekPreviewMode.description),
+            trailing: DropdownButton<SeekPreviewMode>(
+              value: settings.seekPreviewMode,
+              items: SeekPreviewMode.values
+                  .map(
+                    (SeekPreviewMode mode) => DropdownMenuItem<SeekPreviewMode>(
+                      value: mode,
+                      child: Text(context.t(mode.title)),
+                    ),
+                  )
+                  .toList(growable: false),
+              onChanged: (SeekPreviewMode? value) {
+                if (value != null) controller.setSeekPreviewMode(value);
+              },
+            ),
+          ),
         SettingsRow(
           title: context.t('Horizontal swipe seeking'),
           subtitle: context.t('Drag horizontally across the player to seek.'),

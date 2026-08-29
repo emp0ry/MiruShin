@@ -397,6 +397,8 @@
   "Player": "Player",
   "Player engine": "Player engine",
   "Player Settings": "Player Settings",
+  "Player progress preview": "Player progress preview",
+  "Show thumbnail previews while seeking. Turn off to save data.": "Show thumbnail previews while seeking. Turn off to save data.",
   "Seek previews": "Seek previews",
   "Progressive timeline": "Progressive timeline",
   "On demand": "On demand",

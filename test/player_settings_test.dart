@@ -25,6 +25,22 @@ void main() {
   });
 
   group('PlayerSettings seek preview mode', () {
+    test('keeps progress previews enabled for existing users', () {
+      final PlayerSettings settings = PlayerSettings.fromJson(
+        const <String, Object?>{},
+      );
+
+      expect(settings.seekPreviewsEnabled, isTrue);
+    });
+
+    test('round-trips a disabled progress preview preference', () {
+      final PlayerSettings restored = PlayerSettings.fromJson(
+        const PlayerSettings(seekPreviewsEnabled: false).toJson(),
+      );
+
+      expect(restored.seekPreviewsEnabled, isFalse);
+    });
+
     test('defaults older settings to progressive timeline generation', () {
       final PlayerSettings settings = PlayerSettings.fromJson(
         const <String, Object?>{},

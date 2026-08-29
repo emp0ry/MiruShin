@@ -4381,46 +4381,60 @@ class _PlayerSettingsTiles extends ConsumerWidget {
             }
           },
         ),
-        ListTile(
-          leading: const Icon(Icons.image_rounded),
-          title: Text(context.t('Seek previews')),
+        SwitchListTile(
+          value: settings.seekPreviewsEnabled,
+          secondary: const Icon(Icons.image_rounded),
+          title: Text(context.t('Player progress preview')),
           subtitle: Text(
-            '${context.t(settings.seekPreviewMode.title)} · '
-            '${context.t(settings.seekPreviewMode.description)}',
+            context.t(
+              'Show thumbnail previews while seeking. Turn off to save data.',
+            ),
           ),
-          onTap: () async {
-            final SeekPreviewMode? picked = await showDialog<SeekPreviewMode>(
-              context: context,
-              builder: (BuildContext context) => SimpleDialog(
-                title: Text(context.t('Seek previews')),
-                children: <Widget>[
-                  RadioGroup<SeekPreviewMode>(
-                    groupValue: settings.seekPreviewMode,
-                    onChanged: (SeekPreviewMode? value) =>
-                        Navigator.pop(context, value),
-                    child: Column(
-                      children: SeekPreviewMode.values
-                          .map(
-                            (SeekPreviewMode mode) =>
-                                RadioListTile<SeekPreviewMode>(
-                                  value: mode,
-                                  title: Text(context.t(mode.title)),
-                                  subtitle: Text(context.t(mode.description)),
-                                ),
-                          )
-                          .toList(growable: false),
-                    ),
-                  ),
-                ],
-              ),
-            );
-            if (picked != null) {
-              await ref
-                  .read(playerSettingsProvider.notifier)
-                  .setSeekPreviewMode(picked);
-            }
-          },
+          onChanged: (bool value) => ref
+              .read(playerSettingsProvider.notifier)
+              .setSeekPreviewsEnabled(value),
         ),
+        if (settings.seekPreviewsEnabled)
+          ListTile(
+            leading: const Icon(Icons.auto_awesome_motion_rounded),
+            title: Text(context.t('Seek previews')),
+            subtitle: Text(
+              '${context.t(settings.seekPreviewMode.title)} · '
+              '${context.t(settings.seekPreviewMode.description)}',
+            ),
+            onTap: () async {
+              final SeekPreviewMode? picked = await showDialog<SeekPreviewMode>(
+                context: context,
+                builder: (BuildContext context) => SimpleDialog(
+                  title: Text(context.t('Seek previews')),
+                  children: <Widget>[
+                    RadioGroup<SeekPreviewMode>(
+                      groupValue: settings.seekPreviewMode,
+                      onChanged: (SeekPreviewMode? value) =>
+                          Navigator.pop(context, value),
+                      child: Column(
+                        children: SeekPreviewMode.values
+                            .map(
+                              (SeekPreviewMode mode) =>
+                                  RadioListTile<SeekPreviewMode>(
+                                    value: mode,
+                                    title: Text(context.t(mode.title)),
+                                    subtitle: Text(context.t(mode.description)),
+                                  ),
+                            )
+                            .toList(growable: false),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+              if (picked != null) {
+                await ref
+                    .read(playerSettingsProvider.notifier)
+                    .setSeekPreviewMode(picked);
+              }
+            },
+          ),
         ListTile(
           leading: const Icon(Icons.keyboard_rounded),
           title: Text(context.t('Keyboard shortcuts')),
