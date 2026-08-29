@@ -191,7 +191,7 @@ void main() {
       type: MediaType.movie,
       year: 2026,
       posterUrl: 'https://example.invalid/details-poster.jpg',
-      backdropUrl: '',
+      backdropUrl: 'https://example.invalid/details-backdrop.jpg',
       rating: 8.4,
       genres: <String>[
         'Drama',
@@ -266,6 +266,22 @@ void main() {
         findsNothing,
       );
       expect(tester.widget<InkWell>(posterButton).onTap, isNotNull);
+      final Finder backdropButton = find.byKey(
+        const ValueKey<String>('details-backdrop-open'),
+      );
+      expect(backdropButton, findsOneWidget);
+      expect(
+        find.ancestor(of: backdropButton, matching: find.byType(Tooltip)),
+        findsNothing,
+      );
+      expect(
+        find.descendant(
+          of: backdropButton,
+          matching: find.byIcon(Icons.fullscreen_rounded),
+        ),
+        findsNothing,
+      );
+      expect(tester.widget<GestureDetector>(backdropButton).onTap, isNotNull);
       final Size watchSize = tester.getSize(
         find.byKey(const ValueKey<String>('details-watch-action')),
       );

@@ -612,6 +612,8 @@
   "Close": "閉じる",
   "View poster fullscreen": "ポスターを全画面で表示",
   "Poster unavailable": "ポスターを利用できません",
+  "View background image fullscreen": "背景画像を全画面で表示",
+  "Background image unavailable": "背景画像を利用できません",
   "Double-tap edges": "端をダブルタップ",
   "Hold": "長押し",
   "Horizontal swipe": "横スワイプ",

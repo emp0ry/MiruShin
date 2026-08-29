@@ -838,6 +838,33 @@ class _DetailsHero extends ConsumerWidget {
               forceCompact: forceCompact,
             ) ==
             WindowSizeClass.compact;
+        final Widget backdrop = item.backdropUrl.isEmpty
+            ? DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: palette.posterFallbackGradient,
+                ),
+              )
+            : CachedNetworkImage(
+                imageUrl: item.backdropUrl,
+                fit: BoxFit.cover,
+                placeholder: (BuildContext context, String url) =>
+                    const SkeletonBox(),
+                errorWidget: (BuildContext context, String url, Object error) =>
+                    DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: palette.posterFallbackGradient,
+                      ),
+                    ),
+              );
+        final Widget backdropWithOverlay = Stack(
+          fit: StackFit.expand,
+          children: <Widget>[
+            backdrop,
+            DecoratedBox(
+              decoration: BoxDecoration(gradient: palette.heroOverlayGradient),
+            ),
+          ],
+        );
         return RepaintBoundary(
           child: ClipRRect(
             borderRadius: AppRadius.all(AppRadius.xxl),
@@ -854,35 +881,26 @@ class _DetailsHero extends ConsumerWidget {
                   children: <Widget>[
                     Positioned.fill(
                       child: item.backdropUrl.isEmpty
-                          ? DecoratedBox(
-                              decoration: BoxDecoration(
-                                gradient: palette.posterFallbackGradient,
+                          ? backdropWithOverlay
+                          : Semantics(
+                              button: true,
+                              label: context.t(
+                                'View background image fullscreen',
                               ),
-                            )
-                          : CachedNetworkImage(
-                              imageUrl: item.backdropUrl,
-                              fit: BoxFit.cover,
-                              placeholder: (BuildContext context, String url) =>
-                                  const SkeletonBox(),
-                              errorWidget:
-                                  (
-                                    BuildContext context,
-                                    String url,
-                                    Object error,
-                                  ) => DecoratedBox(
-                                    decoration: BoxDecoration(
-                                      gradient: palette.posterFallbackGradient,
+                              child: GestureDetector(
+                                key: const ValueKey<String>(
+                                  'details-backdrop-open',
+                                ),
+                                behavior: HitTestBehavior.opaque,
+                                onTap: () =>
+                                    showNetworkBackdropFullscreenViewer(
+                                      context,
+                                      imageUrl: item.backdropUrl,
+                                      title: item.title,
                                     ),
-                                  ),
+                                child: backdropWithOverlay,
+                              ),
                             ),
-                    ),
-
-                    Positioned.fill(
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          gradient: palette.heroOverlayGradient,
-                        ),
-                      ),
                     ),
 
                     // This hides the scrolling hairline inside the bottom edge.

@@ -19,6 +19,33 @@ Future<void> showNetworkPosterFullscreenViewer(
   required String imageUrl,
   required String title,
 }) {
+  return _showNetworkImageFullscreenViewer(
+    context,
+    imageUrl: imageUrl,
+    title: title,
+    unavailableLabelKey: 'Poster unavailable',
+  );
+}
+
+Future<void> showNetworkBackdropFullscreenViewer(
+  BuildContext context, {
+  required String imageUrl,
+  required String title,
+}) {
+  return _showNetworkImageFullscreenViewer(
+    context,
+    imageUrl: imageUrl,
+    title: title,
+    unavailableLabelKey: 'Background image unavailable',
+  );
+}
+
+Future<void> _showNetworkImageFullscreenViewer(
+  BuildContext context, {
+  required String imageUrl,
+  required String title,
+  required String unavailableLabelKey,
+}) {
   return showPosterFullscreenViewer(
     context,
     title: title,
@@ -36,7 +63,7 @@ Future<void> showNetworkPosterFullscreenViewer(
             const Icon(Icons.broken_image_outlined, color: Colors.white70),
             const SizedBox(height: 8),
             Text(
-              context.t('Poster unavailable'),
+              context.t(unavailableLabelKey),
               style: const TextStyle(color: Colors.white70),
             ),
           ],

@@ -96,6 +96,8 @@ void main() {
     const List<String> keys = <String>[
       'View poster fullscreen',
       'Poster unavailable',
+      'View background image fullscreen',
+      'Background image unavailable',
     ];
     for (final String locale in <String>['en', 'ru', 'ja']) {
       final Map<String, dynamic> values =
