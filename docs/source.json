@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.7.1",
+          "date": "2026-08-29",
+          "localizedDescription": "- Added an option to enable or disable seek previews in Player Settings.\n- Improved Watch with Friends with copyable invite links and additional localized room, connection, and relay controls.\n- Posters can now be opened and viewed fullscreen from media details.\n- Background images can now be opened and viewed fullscreen from media details.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.7.1/MiruShin-ios-v2.7.1.ipa",
+          "size": 28860661,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.7.0",
           "date": "2026-08-29",
           "localizedDescription": "- Added Self-hosted Relay support for Watch with Friends as an alternative when the default peer-to-peer connection does not work.\n- Self-hosted rooms support one host and multiple guests at the same time.\n- Added relay configuration and connection testing directly in Watch with Friends settings.\n- Guests can join self-hosted rooms through invite links without manually configuring the relay.\n- Added relay trust and compatibility checks before connecting to custom third-party servers.\n- Added a complete open-source Cloudflare relay implementation that users can deploy and host themselves.\n- The relay only handles Watch with Friends synchronization and never proxies video or audio streams.",
@@ -495,11 +503,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.7.0",
+      "version": "2.7.1",
       "versionDate": "2026-08-29",
-      "versionDescription": "- Added Self-hosted Relay support for Watch with Friends as an alternative when the default peer-to-peer connection does not work.\n- Self-hosted rooms support one host and multiple guests at the same time.\n- Added relay configuration and connection testing directly in Watch with Friends settings.\n- Guests can join self-hosted rooms through invite links without manually configuring the relay.\n- Added relay trust and compatibility checks before connecting to custom third-party servers.\n- Added a complete open-source Cloudflare relay implementation that users can deploy and host themselves.\n- The relay only handles Watch with Friends synchronization and never proxies video or audio streams.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.7.0/MiruShin-ios-v2.7.0.ipa",
-      "size": 28825994,
+      "versionDescription": "- Added an option to enable or disable seek previews in Player Settings.\n- Improved Watch with Friends with copyable invite links and additional localized room, connection, and relay controls.\n- Posters can now be opened and viewed fullscreen from media details.\n- Background images can now be opened and viewed fullscreen from media details.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.7.1/MiruShin-ios-v2.7.1.ipa",
+      "size": 28860661,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
