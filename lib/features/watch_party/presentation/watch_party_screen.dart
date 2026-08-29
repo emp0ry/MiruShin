@@ -20,7 +20,7 @@ class WatchPartyScreen extends ConsumerWidget {
     final ColorScheme colors = Theme.of(context).colorScheme;
 
     return Scaffold(
-      appBar: AppBar(title: Text(context.t('Watch with Friend'))),
+      appBar: AppBar(title: Text(context.t('Watch with Friends'))),
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 420),

@@ -90,7 +90,7 @@ class _JoinRoomScreenState extends ConsumerState<JoinRoomScreen> {
         if (mounted) {
           ScaffoldMessenger.of(
             context,
-          ).showSnackBar(SnackBar(content: Text(error.message)));
+          ).showSnackBar(SnackBar(content: Text(context.t(error.message))));
         }
         return;
       }

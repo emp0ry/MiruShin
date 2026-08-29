@@ -38,7 +38,7 @@ class WatchPartyStatusText extends StatelessWidget {
         colors.error,
       ),
       WatchPartyConnectionStatus.error => (
-        party.lastError ?? context.t('Something went wrong'),
+        context.t(party.lastError ?? 'Something went wrong'),
         colors.error,
       ),
     };

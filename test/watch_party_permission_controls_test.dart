@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -29,6 +30,45 @@ void main() {
     await tester.tap(find.widgetWithText(SwitchListTile, 'Change stream'));
 
     expect(_HostWatchPartyController.lastStreamPermission, isTrue);
+  });
+
+  testWidgets('host can copy the complete invite link again', (
+    WidgetTester tester,
+  ) async {
+    MethodCall? clipboardCall;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (MethodCall call) async {
+        if (call.method == 'Clipboard.setData') clipboardCall = call;
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          watchPartyProvider.overrideWith(_HostWatchPartyController.new),
+        ],
+        child: const _PermissionTestApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('copy-watch-party-invite')));
+    await tester.pump();
+
+    expect(clipboardCall?.method, 'Clipboard.setData');
+    expect(
+      (clipboardCall?.arguments as Map<Object?, Object?>?)?['text'],
+      _HostWatchPartyController.inviteUrl,
+    );
+    expect(find.text('Invite link copied'), findsOneWidget);
   });
 
   testWidgets('guest sees change stream in the granted controls', (
@@ -99,6 +139,9 @@ class _TestLocalizationsDelegate
 }
 
 class _HostWatchPartyController extends WatchPartyController {
+  static const String inviteUrl =
+      'mirushin:///watch-party/join?room=RelayRoom123456&transport=relay'
+      '&relay=https%3A%2F%2Frelay.example.com&token=guest-token';
   static bool? lastStreamPermission;
 
   @override
@@ -107,6 +150,8 @@ class _HostWatchPartyController extends WatchPartyController {
       role: WatchPartyRole.host,
       status: WatchPartyConnectionStatus.connected,
       peerConnected: true,
+      roomCode: 'RelayRoom123456',
+      inviteUrl: inviteUrl,
     );
   }
 

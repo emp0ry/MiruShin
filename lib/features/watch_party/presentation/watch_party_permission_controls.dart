@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/localization/app_localizations.dart';
 import '../application/watch_party_controller.dart';
 import '../domain/watch_party_models.dart';
+import '../domain/watch_party_qr.dart';
 
 class WatchPartyPermissionControls extends ConsumerWidget {
   const WatchPartyPermissionControls({super.key, required this.party});
@@ -56,9 +58,30 @@ class WatchPartyPermissionControls extends ConsumerWidget {
     final WatchPartyController controller = ref.read(
       watchPartyProvider.notifier,
     );
+    final String? roomCode = party.roomCode?.trim();
+    final String? inviteUrl =
+        party.inviteUrl ??
+        (roomCode == null || roomCode.isEmpty
+            ? null
+            : encodeWatchPartyQr(roomCode));
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
+        if (inviteUrl != null) ...<Widget>[
+          OutlinedButton.icon(
+            key: const ValueKey<String>('copy-watch-party-invite'),
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: inviteUrl));
+              if (!context.mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text(context.t('Invite link copied'))),
+              );
+            },
+            icon: const Icon(Icons.link_rounded),
+            label: Text(context.t('Copy invite link')),
+          ),
+          const SizedBox(height: 20),
+        ],
         Text(
           context.t('Guest permissions'),
           style: Theme.of(context).textTheme.labelLarge?.copyWith(

@@ -251,7 +251,7 @@ class _WatchPartySectionState extends ConsumerState<_WatchPartySection> {
     } on FormatException catch (error) {
       if (!mounted) return;
       setState(() {
-        _result = error.message;
+        _result = context.t(error.message);
         _resultIsError = true;
       });
     }
@@ -276,7 +276,7 @@ class _WatchPartySectionState extends ConsumerState<_WatchPartySection> {
     } on Object catch (error) {
       if (!mounted) return;
       setState(() {
-        _result = '$error';
+        _result = context.t('$error');
         _resultIsError = true;
       });
     } finally {
@@ -401,10 +401,13 @@ class _WatchPartySectionState extends ConsumerState<_WatchPartySection> {
                               dimension: 16,
                               child: CircularProgressIndicator(strokeWidth: 2),
                             )
-                          : const Icon(Icons.network_check_rounded),
+                          : const Icon(Icons.wifi_rounded),
                       label: Text(context.t('Test Connection')),
                     ),
                     TextButton(
+                      style: TextButton.styleFrom(
+                        minimumSize: const Size(48, 48),
+                      ),
                       onPressed: _testing ? null : _reset,
                       child: Text(context.t('Reset to Default')),
                     ),
