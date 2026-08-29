@@ -1359,11 +1359,13 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 100));
     });
 
-    test('85 percent watched does not confirm end or auto-next', () async {
+    test('85 percent prepares next once without confirming the end', () async {
       final ProviderContainer c = container();
       final PlaybackController controller = c.read(
         playbackControllerProvider.notifier,
       );
+      int prepareCalls = 0;
+      controller.setPrepareNextEpisodeHandler(() => prepareCalls++);
       final MediaPlaybackItem item = _testPlaybackItem('watched-not-ended');
       final _FakePlayerEngine engine = _FakePlayerEngine(
         const PlayerEngineState(
@@ -1380,6 +1382,7 @@ void main() {
       controller.debugEvaluatePlaybackProgress(engine);
 
       final PlaybackState state = c.read(playbackControllerProvider);
+      expect(prepareCalls, 1);
       expect(state.confirmedEnded, isFalse);
       expect(state.autoNextVisible, isFalse);
       await Future<void>.delayed(const Duration(milliseconds: 100));

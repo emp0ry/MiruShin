@@ -293,7 +293,11 @@ CustomTransitionPage<void> _playerPage(
   return _appPage(
     context,
     state,
-    PlayerPage(item: item, startInFullscreen: args.startInFullscreen),
+    PlayerPage(
+      item: item,
+      startInFullscreen: args.startInFullscreen,
+      onPrepareNextEpisode: args.onPrepareNextEpisode,
+    ),
     motion: AppPageMotion.immersiveFade,
   );
 }
@@ -350,6 +354,7 @@ class PlayerRouteArgs {
     this.ignoreProgress = false,
     this.episodeSeasons = const <Season>[],
     this.initialQualityId,
+    this.onPrepareNextEpisode,
   });
 
   final NormalizedStreamBundle bundle;
@@ -363,6 +368,7 @@ class PlayerRouteArgs {
   /// Quality the user explicitly chose in the stream sheet, honored over the
   /// saved global preference. Null for auto-play / auto-next.
   final String? initialQualityId;
+  final ValueChanged<PlayerNextEpisodeResult>? onPrepareNextEpisode;
 
   /// Full episode list (grouped into seasons) for the in-player Episodes sheet,
   /// so the user can jump to any episode without leaving the player.

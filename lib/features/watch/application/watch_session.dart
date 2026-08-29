@@ -207,6 +207,90 @@ enum EpisodeAdvanceState {
   cancelled,
 }
 
+/// Holds one silent next-episode resolution while the current player route is
+/// still open. Both the episode key and playback generation are required so a
+/// late provider result from an older route can never become the next stream.
+class OnlineNextPreparationCache<T> {
+  String? _currentKey;
+  int? _playbackGeneration;
+  int _epoch = 0;
+  Future<T?>? _pending;
+  T? _ready;
+
+  bool isFor({required String currentKey, required int playbackGeneration}) =>
+      _currentKey == currentKey &&
+      _playbackGeneration == playbackGeneration;
+
+  Future<T?> begin({
+    required String currentKey,
+    required int playbackGeneration,
+    required Future<T?> Function() resolve,
+  }) {
+    if (isFor(
+      currentKey: currentKey,
+      playbackGeneration: playbackGeneration,
+    )) {
+      return _pending ?? Future<T?>.value(_ready);
+    }
+
+    final int epoch = ++_epoch;
+    _currentKey = currentKey;
+    _playbackGeneration = playbackGeneration;
+    _ready = null;
+    final Future<T?> pending = () async {
+      try {
+        return await resolve();
+      } on Object {
+        return null;
+      }
+    }();
+    _pending = pending;
+    pending.then((T? value) {
+      if (epoch != _epoch ||
+          !isFor(
+            currentKey: currentKey,
+            playbackGeneration: playbackGeneration,
+          )) {
+        return;
+      }
+      _ready = value;
+      _pending = null;
+    });
+    return pending;
+  }
+
+  Future<T?> resultFor({
+    required String currentKey,
+    required int playbackGeneration,
+  }) async {
+    if (!isFor(
+      currentKey: currentKey,
+      playbackGeneration: playbackGeneration,
+    )) {
+      return null;
+    }
+    final Future<T?>? pending = _pending;
+    if (pending != null) {
+      await pending;
+    }
+    if (!isFor(
+      currentKey: currentKey,
+      playbackGeneration: playbackGeneration,
+    )) {
+      return null;
+    }
+    return _ready;
+  }
+
+  void clear() {
+    _epoch++;
+    _currentKey = null;
+    _playbackGeneration = null;
+    _pending = null;
+    _ready = null;
+  }
+}
+
 class EpisodeAdvanceOperation {
   const EpisodeAdvanceOperation({
     required this.id,

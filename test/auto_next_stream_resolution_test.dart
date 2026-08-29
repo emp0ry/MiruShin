@@ -79,6 +79,69 @@ void main() {
     expect(state.phase, OnlineNextResolutionUiPhase.resolving);
   });
 
+  test('prepared next stream is scoped to episode and playback generation', () async {
+    final OnlineNextPreparationCache<String> cache =
+        OnlineNextPreparationCache<String>();
+
+    await cache.begin(
+      currentKey: 'episode-1',
+      playbackGeneration: 7,
+      resolve: () async => 'episode-2-stream',
+    );
+
+    expect(
+      await cache.resultFor(
+        currentKey: 'episode-1',
+        playbackGeneration: 7,
+      ),
+      'episode-2-stream',
+    );
+    expect(
+      await cache.resultFor(
+        currentKey: 'episode-1',
+        playbackGeneration: 8,
+      ),
+      isNull,
+    );
+  });
+
+  test('late preparation cannot replace a newer episode stream', () async {
+    final OnlineNextPreparationCache<String> cache =
+        OnlineNextPreparationCache<String>();
+    final Completer<String?> oldResolution = Completer<String?>();
+    final Completer<String?> currentResolution = Completer<String?>();
+
+    final Future<String?> oldFuture = cache.begin(
+      currentKey: 'episode-1',
+      playbackGeneration: 10,
+      resolve: () => oldResolution.future,
+    );
+    final Future<String?> currentFuture = cache.begin(
+      currentKey: 'episode-2',
+      playbackGeneration: 11,
+      resolve: () => currentResolution.future,
+    );
+    currentResolution.complete('episode-3-stream');
+    await currentFuture;
+    oldResolution.complete('stale-episode-2-stream');
+    await oldFuture;
+
+    expect(
+      await cache.resultFor(
+        currentKey: 'episode-2',
+        playbackGeneration: 11,
+      ),
+      'episode-3-stream',
+    );
+    expect(
+      await cache.resultFor(
+        currentKey: 'episode-1',
+        playbackGeneration: 10,
+      ),
+      isNull,
+    );
+  });
+
   test('resolving keeps episode context and target selection visible', () {
     const SoraSearchResult source = SoraSearchResult(
       addonId: 'addon',

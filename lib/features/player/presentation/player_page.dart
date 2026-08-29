@@ -69,11 +69,13 @@ class PlayerPage extends ConsumerStatefulWidget {
   const PlayerPage({
     required this.item,
     this.startInFullscreen = false,
+    this.onPrepareNextEpisode,
     super.key,
   });
 
   final MediaPlaybackItem item;
   final bool startInFullscreen;
+  final ValueChanged<PlayerNextEpisodeResult>? onPrepareNextEpisode;
 
   @override
   ConsumerState<PlayerPage> createState() => _PlayerPageState();
@@ -165,6 +167,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
       widget.item.ignoreProgress
           ? null
           : () => unawaited(_exitPlayer(playNext: true)),
+    );
+    _playbackNotifier.setPrepareNextEpisodeHandler(
+      widget.onPrepareNextEpisode == null ? null : _prepareNextEpisode,
     );
     unawaited(
       SystemChrome.setEnabledSystemUIMode(
@@ -407,6 +412,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     _autoNextTimer?.cancel();
     _cancelSpaceHold(restoreSpeed: true);
     _playbackNotifier.setNextEpisodeHandler(null);
+    _playbackNotifier.setPrepareNextEpisodeHandler(null);
     unawaited(_stopPlayback());
     _playerFocusNode.dispose();
     _tvChromeSeedFocus.dispose();
@@ -892,6 +898,20 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     } else {
       await Navigator.of(context).maybePop(result);
     }
+  }
+
+  void _prepareNextEpisode() {
+    if (_exitingPlayer || widget.onPrepareNextEpisode == null) return;
+    final PlaybackState playbackState = ref.read(playbackControllerProvider);
+    if (!isSamePlaybackRouteItem(playbackState.item, widget.item)) return;
+    widget.onPrepareNextEpisode!(
+      PlayerNextEpisodeResult(
+        serverId: playbackState.server?.id,
+        serverTitle: playbackState.server?.name,
+        voiceoverId: playbackState.voiceover?.id,
+        voiceoverLabel: playbackState.voiceover?.label,
+      ),
+    );
   }
 
   Future<void> _syncFullscreenState() async {

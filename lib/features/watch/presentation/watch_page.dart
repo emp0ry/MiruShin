@@ -142,6 +142,18 @@ class _OnlineAdvanceSnapshot {
   final bool startInFullscreen;
 }
 
+class _PreparedOnlineAdvance {
+  const _PreparedOnlineAdvance({
+    required this.episodes,
+    required this.nextEpisode,
+    required this.bundle,
+  });
+
+  final List<SoraEpisode> episodes;
+  final SoraEpisode nextEpisode;
+  final NormalizedStreamBundle bundle;
+}
+
 class WatchPage extends ConsumerStatefulWidget {
   const WatchPage({required this.id, this.initialItem, super.key});
 
@@ -171,6 +183,8 @@ class _WatchPageState extends ConsumerState<WatchPage> {
   SoraEpisode? _pendingAdvanceTarget;
   final OnlineNextResolutionUiState _onlineNextResolutionUi =
       OnlineNextResolutionUiState();
+  final OnlineNextPreparationCache<_PreparedOnlineAdvance>
+  _onlineNextPreparation = OnlineNextPreparationCache<_PreparedOnlineAdvance>();
   VoidCallback? _retryPendingAdvance;
   String? _preferredServerId;
   String? _preferredServerTitle;
@@ -216,11 +230,13 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     _pendingAdvance = null;
     _pendingAdvanceTarget = null;
     _onlineNextResolutionUi.reset();
+    _onlineNextPreparation.clear();
     _retryPendingAdvance = null;
   }
 
   @override
   void dispose() {
+    _onlineNextPreparation.clear();
     _scrollController.dispose();
     super.dispose();
   }
@@ -308,6 +324,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
       _pendingAdvance = null;
       _pendingAdvanceTarget = null;
       _onlineNextResolutionUi.reset();
+      _onlineNextPreparation.clear();
       _retryPendingAdvance = null;
       _session = _session!.copyWith(
         step: sourceSeasonFlow
@@ -824,6 +841,12 @@ class _WatchPageState extends ConsumerState<WatchPage> {
           // they must track progress and be able to chain the next auto-next.
           ignoreProgress: false,
           episodeSeasons: _playerEpisodeSeasons(),
+          onPrepareNextEpisode: (PlayerNextEpisodeResult preferences) {
+            _prepareNextOnlineEpisode(
+              playbackGeneration: playbackGeneration,
+              preferences: preferences,
+            );
+          },
         ),
       );
       if (transitionId != null) {
@@ -847,6 +870,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
           _activePlayerEpisodeKey = null;
           setState(() {});
           if (result is PlayerEpisodeSelectionResult) {
+            _onlineNextPreparation.clear();
             _nextEpisodeInFullscreen = result.startInFullscreen;
             unawaited(_playEpisodeFromPlayer(result.episodeHref));
             return;
@@ -871,7 +895,9 @@ class _WatchPageState extends ConsumerState<WatchPage> {
               return;
             }
             unawaited(_requestOnlineAdvance(snapshot, reason: 'player-next'));
+            return;
           }
+          _onlineNextPreparation.clear();
         },
         onError: (Object error, StackTrace stackTrace) {
           if (!mounted ||
@@ -922,6 +948,156 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     final String? voiceoverLabel = result.voiceoverLabel?.trim();
     if (voiceoverLabel != null && voiceoverLabel.isNotEmpty) {
       _preferredVoiceOverLabel = voiceoverLabel;
+    }
+  }
+
+  void _prepareNextOnlineEpisode({
+    required int playbackGeneration,
+    required PlayerNextEpisodeResult preferences,
+  }) {
+    if (!mounted ||
+        !_playerRouteInFlight ||
+        _activePlayerPlaybackGeneration != playbackGeneration) {
+      return;
+    }
+    _rememberPlayerStreamPreferences(preferences);
+    final _OnlineAdvanceSnapshot? snapshot = _captureOnlineAdvanceSnapshot(
+      playbackGeneration: playbackGeneration,
+      startPolicy: PlaybackStartPolicy.forceBeginning,
+    );
+    if (snapshot == null) return;
+
+    debugPrint(
+      'OnlineNext: preparation generation=$playbackGeneration '
+      'current=S${snapshot.currentSeason}E${snapshot.current.displayNumber} '
+      'state=resolving',
+    );
+    unawaited(
+      _onlineNextPreparation
+          .begin(
+            currentKey: snapshot.currentKey,
+            playbackGeneration: playbackGeneration,
+            resolve: () => _resolveNextOnlineEpisodeInBackground(snapshot),
+          )
+          .then((_) {}),
+    );
+  }
+
+  Future<_PreparedOnlineAdvance?> _resolveNextOnlineEpisodeInBackground(
+    _OnlineAdvanceSnapshot snapshot,
+  ) async {
+    try {
+      List<SoraEpisode>? episodes;
+      for (int attempt = 1; attempt <= 3 && episodes == null; attempt++) {
+        try {
+          final SoraInstalledAddon? addon = ref
+              .read(soraAddonsProvider)
+              .byId(snapshot.source.addonId);
+          if (addon == null) {
+            throw const SoraAddonException('Addon is no longer installed.');
+          }
+          episodes = await ref
+              .read(soraJsRuntimeProvider)
+              .extractEpisodes(addon: addon, result: snapshot.source);
+        } on Object catch (error) {
+          debugPrint(
+            'OnlineNext: preparation generation=${snapshot.playbackGeneration} '
+            'episodeListAttempt=$attempt failed=${error.runtimeType}',
+          );
+          if (attempt < 3) {
+            await Future<void>.delayed(Duration(milliseconds: 300 * attempt));
+          }
+        }
+      }
+      if (episodes == null ||
+          !mounted ||
+          _activePlayerPlaybackGeneration != snapshot.playbackGeneration) {
+        return null;
+      }
+
+      final SoraNextEpisodeLookup lookup = findNextSoraEpisode(
+        episodes: episodes,
+        currentHref: snapshot.current.href,
+        currentSeason: snapshot.currentSeason,
+        currentNumber: snapshot.current.number,
+      );
+      final SoraEpisode? rawNext = lookup.episode;
+      if (rawNext == null) {
+        debugPrint(
+          'OnlineNext: preparation generation=${snapshot.playbackGeneration} '
+          'state=noNext reason=${lookup.reason} fallbackAtEnd=true',
+        );
+        return null;
+      }
+
+      final AnimeEpisodeMetadata? metadata = await _metadataForAutoNext(
+        snapshot.item,
+        rawNext,
+      );
+      if (!mounted ||
+          _activePlayerPlaybackGeneration != snapshot.playbackGeneration) {
+        return null;
+      }
+      final SoraEpisode next = _episodeForPlayback(rawNext, metadata, null);
+      final SoraStreamRequest request = SoraStreamRequest(
+        addonId: snapshot.source.addonId,
+        episode: next,
+      );
+      NormalizedStreamBundle? resolvedBundle;
+      for (int attempt = 1; attempt <= 3 && resolvedBundle == null; attempt++) {
+        try {
+          ref.invalidate(soraStreamResolveProvider(request));
+          ref.invalidate(soraStreamBundleProvider(request));
+          final NormalizedStreamBundle candidate = await ref.read(
+            soraStreamBundleProvider(request).future,
+          );
+          if (!sameSoraPlaybackEpisode(next, candidate.episode)) {
+            throw SoraAddonException(
+              'Resolved S${candidate.episode.season}'
+              'E${candidate.episode.displayNumber} while requesting '
+              'S${next.season}E${next.displayNumber}.',
+            );
+          }
+          final NormalizedStreamBundle preferred = _applyStreamPreferences(
+            candidate,
+          );
+          if (preferred.activeUrl.trim().isEmpty) {
+            throw const SoraAddonException(
+              'Next episode did not return a playable stream.',
+            );
+          }
+          resolvedBundle = preferred;
+        } on Object catch (error) {
+          debugPrint(
+            'OnlineNext: preparation generation=${snapshot.playbackGeneration} '
+            'resolutionAttempt=$attempt failed=${error.runtimeType}',
+          );
+          if (attempt < 3) {
+            await Future<void>.delayed(Duration(milliseconds: 300 * attempt));
+          }
+        }
+      }
+      if (resolvedBundle == null ||
+          !mounted ||
+          _activePlayerPlaybackGeneration != snapshot.playbackGeneration) {
+        return null;
+      }
+      debugPrint(
+        'OnlineNext: preparation generation=${snapshot.playbackGeneration} '
+        'next=S${next.season > 0 ? next.season : snapshot.currentSeason}'
+        'E${next.displayNumber} state=ready',
+      );
+      return _PreparedOnlineAdvance(
+        episodes: List<SoraEpisode>.unmodifiable(episodes),
+        nextEpisode: next,
+        bundle: resolvedBundle,
+      );
+    } on Object catch (error) {
+      debugPrint(
+        'OnlineNext: preparation generation=${snapshot.playbackGeneration} '
+        'state=failed reason=${error.runtimeType}',
+      );
+      return null;
     }
   }
 
@@ -1000,6 +1176,60 @@ class _WatchPageState extends ConsumerState<WatchPage> {
       'current=S${snapshot.currentSeason}E${snapshot.current.displayNumber} '
       'state=findingNext',
     );
+
+    final _PreparedOnlineAdvance? prepared = await _onlineNextPreparation
+        .resultFor(
+          currentKey: snapshot.currentKey,
+          playbackGeneration: snapshot.playbackGeneration,
+        );
+    if (!mounted || !_isCurrentAdvance(operation.id)) {
+      _advanceCoordinator.cancel(operation.id);
+      return;
+    }
+    if (prepared != null) {
+      _onlineNextPreparation.clear();
+      final SoraEpisode preparedNext = prepared.nextEpisode;
+      final NormalizedStreamBundle playableBundle = _applyStreamPreferences(
+        prepared.bundle,
+      );
+      if (sameSoraPlaybackEpisode(preparedNext, playableBundle.episode) &&
+          playableBundle.activeUrl.trim().isNotEmpty) {
+        _pendingAdvanceTarget = preparedNext;
+        _sourceEpisodes = prepared.episodes;
+        final bool useAddonSeason =
+            _usesSourceSeasonFlow(_lastItem) && preparedNext.season > 0;
+        _advanceCoordinator.move(
+          operation.id,
+          EpisodeAdvanceState.resolvingNext,
+        );
+        setState(() {
+          _onlineNextResolutionUi.markStreamReady(hasPlayableStream: true);
+          _session = _session?.copyWith(
+            step: WatchStep.streamReady,
+            episode: preparedNext,
+            seasonNumber: useAddonSeason ? preparedNext.season : null,
+            clearCandidate: true,
+            clearError: true,
+            isResolving: false,
+          );
+        });
+        debugPrint(
+          'OnlineNext: transition=${operation.id} '
+          'next=S${preparedNext.season > 0 ? preparedNext.season : snapshot.currentSeason}'
+          'E${preparedNext.displayNumber} state=streamReady prepared=true',
+        );
+        _playResolvedBundle(
+          playableBundle,
+          startPolicy: snapshot.startPolicy,
+          transitionId: operation.id,
+        );
+        return;
+      }
+      debugPrint(
+        'OnlineNext: transition=${operation.id} state=findingNext '
+        'prepared=true invalid=true fallback=true',
+      );
+    }
 
     List<SoraEpisode>? episodes = forcedNext == null
         ? null

@@ -338,6 +338,7 @@ class PlaybackController extends Notifier<PlaybackState> {
   String? _russianTitleResolving;
 
   void Function()? _nextEpisodeHandler;
+  void Function()? _prepareNextEpisodeHandler;
 
   // Watch-party sync. Guests are locked by default, but the host can grant a
   // small set of remote-control permissions. applyRemote* raises
@@ -566,6 +567,10 @@ class PlaybackController extends Notifier<PlaybackState> {
 
   void setNextEpisodeHandler(void Function()? handler) {
     _nextEpisodeHandler = handler;
+  }
+
+  void setPrepareNextEpisodeHandler(void Function()? handler) {
+    _prepareNextEpisodeHandler = handler;
   }
 
   int get playbackGeneration => _playbackGeneration;
@@ -3767,6 +3772,13 @@ class PlaybackController extends Notifier<PlaybackState> {
         '${end.observedPosition.inSeconds}s/'
         '${end.authoritativeDuration?.inSeconds}s -> marking watched',
       );
+      try {
+        _prepareNextEpisodeHandler?.call();
+      } on Object catch (error) {
+        debugPrint(
+          'OnlineNext: preparation callback failed: ${error.runtimeType}',
+        );
+      }
       unawaited(_saveProgress(item, engine));
     }
 
