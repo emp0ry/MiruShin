@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.7.0",
+          "date": "2026-08-29",
+          "localizedDescription": "- Added Self-hosted Relay support for Watch with Friends as an alternative when the default peer-to-peer connection does not work.\n- Self-hosted rooms support one host and multiple guests at the same time.\n- Added relay configuration and connection testing directly in Watch with Friends settings.\n- Guests can join self-hosted rooms through invite links without manually configuring the relay.\n- Added relay trust and compatibility checks before connecting to custom third-party servers.\n- Added a complete open-source Cloudflare relay implementation that users can deploy and host themselves.\n- The relay only handles Watch with Friends synchronization and never proxies video or audio streams.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.7.0/MiruShin-ios-v2.7.0.ipa",
+          "size": 28825994,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.6.9",
           "date": "2026-08-29",
           "localizedDescription": "- MiruShin now remembers your selected server and quality for each title and restores them automatically.\n- Next episodes are prepared in the background for faster, smoother auto-next transitions.\n- Added cache retention settings for metadata and artwork, with options from 1 week to never expire.\n- Improved cache management so artwork and metadata share the configured cache size more efficiently.\n- Watch with Friends hosts can now allow guests to change streams during a watch party.\n- Guests can see which playback controls they have permission to use.",
@@ -487,11 +495,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.6.9",
+      "version": "2.7.0",
       "versionDate": "2026-08-29",
-      "versionDescription": "- MiruShin now remembers your selected server and quality for each title and restores them automatically.\n- Next episodes are prepared in the background for faster, smoother auto-next transitions.\n- Added cache retention settings for metadata and artwork, with options from 1 week to never expire.\n- Improved cache management so artwork and metadata share the configured cache size more efficiently.\n- Watch with Friends hosts can now allow guests to change streams during a watch party.\n- Guests can see which playback controls they have permission to use.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.6.9/MiruShin-ios-v2.6.9.ipa",
-      "size": 28754469,
+      "versionDescription": "- Added Self-hosted Relay support for Watch with Friends as an alternative when the default peer-to-peer connection does not work.\n- Self-hosted rooms support one host and multiple guests at the same time.\n- Added relay configuration and connection testing directly in Watch with Friends settings.\n- Guests can join self-hosted rooms through invite links without manually configuring the relay.\n- Added relay trust and compatibility checks before connecting to custom third-party servers.\n- Added a complete open-source Cloudflare relay implementation that users can deploy and host themselves.\n- The relay only handles Watch with Friends synchronization and never proxies video or audio streams.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.7.0/MiruShin-ios-v2.7.0.ipa",
+      "size": 28825994,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
