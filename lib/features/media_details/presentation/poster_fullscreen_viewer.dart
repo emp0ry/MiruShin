@@ -118,6 +118,10 @@ class _PosterFullscreenViewerState extends State<PosterFullscreenViewer> {
   final TransformationController _transformationController =
       TransformationController();
 
+  void _resetView() {
+    _transformationController.value = Matrix4.identity();
+  }
+
   @override
   void dispose() {
     _transformationController.dispose();
@@ -141,19 +145,24 @@ class _PosterFullscreenViewerState extends State<PosterFullscreenViewer> {
             child: Stack(
               fit: StackFit.expand,
               children: <Widget>[
-                MouseRegion(
-                  cursor: SystemMouseCursors.grab,
-                  child: InteractiveViewer(
-                    key: posterInteractiveViewerKey,
-                    transformationController: _transformationController,
-                    minScale: 1,
-                    maxScale: 6,
-                    scaleFactor: 180,
-                    trackpadScrollCausesScale: true,
-                    child: Semantics(
-                      image: true,
-                      label: widget.title,
-                      child: SizedBox.expand(child: widget.poster),
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => Navigator.of(context).maybePop(),
+                  onDoubleTap: _resetView,
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.grab,
+                    child: InteractiveViewer(
+                      key: posterInteractiveViewerKey,
+                      transformationController: _transformationController,
+                      minScale: 1,
+                      maxScale: 6,
+                      scaleFactor: 180,
+                      trackpadScrollCausesScale: true,
+                      child: Semantics(
+                        image: true,
+                        label: widget.title,
+                        child: SizedBox.expand(child: widget.poster),
+                      ),
                     ),
                   ),
                 ),

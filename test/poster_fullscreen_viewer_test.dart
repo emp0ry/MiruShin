@@ -39,6 +39,44 @@ void main() {
     expect(find.byKey(posterFullscreenViewerKey), findsNothing);
   });
 
+  testWidgets('single tap closes the poster viewer', (
+    WidgetTester tester,
+  ) async {
+    await _openViewer(tester);
+
+    await tester.tap(find.byKey(posterInteractiveViewerKey));
+    await tester.pump(kDoubleTapTimeout + const Duration(milliseconds: 1));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(posterFullscreenViewerKey), findsNothing);
+  });
+
+  testWidgets('double tap resets zoom without closing the viewer', (
+    WidgetTester tester,
+  ) async {
+    await _openViewer(tester);
+    final Finder viewerFinder = find.byKey(posterInteractiveViewerKey);
+    final InteractiveViewer viewer = tester.widget<InteractiveViewer>(
+      viewerFinder,
+    );
+    final TransformationController controller =
+        viewer.transformationController!;
+    final Offset center = tester.getCenter(viewerFinder);
+    final TestPointer pointer = TestPointer(1, PointerDeviceKind.mouse);
+    await tester.sendEventToBinding(pointer.hover(center));
+    await tester.sendEventToBinding(pointer.scroll(const Offset(0, -80)));
+    await tester.pump();
+    expect(controller.value.getMaxScaleOnAxis(), greaterThan(1));
+
+    await tester.tap(viewerFinder);
+    await tester.pump(kDoubleTapMinTime);
+    await tester.tap(viewerFinder);
+    await tester.pumpAndSettle();
+
+    expect(controller.value.storage, orderedEquals(Matrix4.identity().storage));
+    expect(find.byKey(posterFullscreenViewerKey), findsOneWidget);
+  });
+
   testWidgets('mouse wheel zooms the poster in and out', (
     WidgetTester tester,
   ) async {
@@ -90,6 +128,7 @@ void main() {
 
     await first.up();
     await second.up();
+    await tester.pump(kDoubleTapMinTime + const Duration(milliseconds: 1));
   });
 
   test('poster viewer labels are translated in every supported locale', () {
