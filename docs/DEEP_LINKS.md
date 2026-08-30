@@ -27,12 +27,15 @@ silently substitutes an AniList or TMDB website/search URL.
 
 ## Watch with Friends
 
-The original default connection remains P2P signaling/WebRTC and retains its
-existing invite:
+The original default connection remains P2P signaling/WebRTC. Its shared invite
+uses the same public HTTPS opener as media links:
 
 ```text
-mirushin://watch-party/join?code=ABC123
+https://mirushin.emp0ry.com/open.html?target=mirushin%3A%2F%2Fwatch-party%2Fjoin%3Fcode%3DABC123
 ```
+
+The encoded `mirushin://watch-party/join?code=ABC123` target remains accepted
+directly for backward compatibility.
 
 Self-hosted relay rooms generate only an HTTPS bearer invite on the configured
 relay, preserving any configured base path:

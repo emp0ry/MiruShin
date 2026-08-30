@@ -1,17 +1,24 @@
+import '../../../core/utils/mirushin_web_opener.dart';
 import '../application/watch_party_connection_settings.dart';
 import 'watch_party_models.dart';
 
-/// QR payload helpers for watch-party pairing. Default rooms keep the original
-/// code URI; relay rooms also carry their relay origin and guest join token.
+/// QR payload helpers for watch-party pairing. Default rooms share the public
+/// HTTPS opener; relay rooms carry their relay origin and guest join token.
 
-const String _qrPrefix = 'mirushin://watch-party/join?code=';
 const int _maximumInviteLength = 4096;
 
 final RegExp _codePattern = RegExp(r'^[A-Z0-9]{6}$');
 final RegExp _relayRoomPattern = RegExp(r'^[A-Za-z0-9_-]{8,64}$');
 final RegExp _relayTokenPattern = RegExp(r'^[A-Za-z0-9_-]{16,256}$');
 
-String encodeWatchPartyQr(String code) => '$_qrPrefix$code';
+String encodeWatchPartyQr(String code) => mirushinWebOpenUri(
+  Uri(
+    scheme: 'mirushin',
+    host: 'watch-party',
+    path: '/join',
+    queryParameters: <String, String>{'code': code},
+  ),
+).toString();
 
 class WatchPartyInvite {
   const WatchPartyInvite({
@@ -60,6 +67,10 @@ class WatchPartyInvite {
   }) {
     final Uri? uri = Uri.tryParse(value);
     if (uri == null) return null;
+    final Uri? openerTarget = tryUnwrapMirushinWebOpenUri(uri);
+    if (openerTarget != null) {
+      return _tryParse(openerTarget.toString(), allowBridge: allowBridge);
+    }
 
     if (_isMiruShinJoinRoute(uri)) {
       final Map<String, List<String>> parameters = uri.queryParametersAll;
@@ -163,7 +174,10 @@ String? decodeWatchPartyQr(String? raw) {
   if (trimmed.isEmpty) return null;
 
   try {
-    final Uri? uri = Uri.tryParse(trimmed);
+    final Uri? parsedUri = Uri.tryParse(trimmed);
+    final Uri? uri = parsedUri == null
+        ? null
+        : tryUnwrapMirushinWebOpenUri(parsedUri) ?? parsedUri;
     if (uri != null && _isMiruShinJoinRoute(uri)) {
       final Map<String, List<String>> parameters = uri.queryParametersAll;
       if (_hasExactParameters(parameters, <String>{'code'})) {

@@ -1,4 +1,4 @@
-import '../../core/constants/app_constants.dart';
+import '../../core/utils/mirushin_web_opener.dart';
 import '../../features/watch_party/domain/watch_party_qr.dart';
 import '../../shared/models/media_item.dart';
 
@@ -15,13 +15,17 @@ sealed class MiruShinDeepLink {
       return null;
     }
     try {
-      final Uri? uri = Uri.tryParse(value);
-      if (uri == null || uri.scheme.toLowerCase() != 'mirushin') return null;
+      final Uri? parsedUri = Uri.tryParse(value);
+      if (parsedUri == null) return null;
+      final Uri uri = tryUnwrapMirushinWebOpenUri(parsedUri) ?? parsedUri;
+      if (uri.scheme.toLowerCase() != 'mirushin') return null;
 
       final MiruShinMediaDeepLink? media = _tryParseMedia(uri);
       if (media != null) return media;
 
-      final WatchPartyInvite? invite = WatchPartyInvite.tryParse(value);
+      final WatchPartyInvite? invite = WatchPartyInvite.tryParse(
+        uri.toString(),
+      );
       return invite == null ? null : MiruShinWatchPartyDeepLink(invite);
     } on FormatException {
       return null;
@@ -117,9 +121,7 @@ class MiruShinMediaDeepLink extends MiruShinDeepLink {
   };
 
   /// Public HTTPS link that hands this media URI to the MiruShin app opener.
-  Uri get webOpenUri => Uri.parse(AppConstants.appWebsiteUrl)
-      .resolve('open.html')
-      .replace(queryParameters: <String, String>{'target': uri.toString()});
+  Uri get webOpenUri => mirushinWebOpenUri(uri);
 
   @override
   String get deduplicationKey => uri.toString();

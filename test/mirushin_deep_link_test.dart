@@ -121,6 +121,15 @@ void main() {
       (defaultParty! as MiruShinWatchPartyDeepLink).invite.mode,
       WatchPartyConnectionMode.defaultConnection,
     );
+    final MiruShinDeepLink? sharedDefaultParty = MiruShinDeepLink.tryParse(
+      'https://mirushin.emp0ry.com/open.html?target='
+      'mirushin%3A%2F%2Fwatch-party%2Fjoin%3Fcode%3DABC123',
+    );
+    expect(sharedDefaultParty, isA<MiruShinWatchPartyDeepLink>());
+    expect(
+      (sharedDefaultParty! as MiruShinWatchPartyDeepLink).invite.roomId,
+      'ABC123',
+    );
 
     const String relayInvite =
         'https://relay.example.com/join?room=AbCdEfGhIjKlMnOp'

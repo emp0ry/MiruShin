@@ -145,14 +145,25 @@ void main() {
     }
   });
 
-  test('legacy default QR payload remains backward compatible', () {
+  test('default QR uses the HTTPS opener and legacy payloads still parse', () {
     const String code = 'ABC123';
-    expect(encodeWatchPartyQr(code), 'mirushin://watch-party/join?code=ABC123');
+    expect(
+      encodeWatchPartyQr(code),
+      'https://mirushin.emp0ry.com/open.html?target='
+      'mirushin%3A%2F%2Fwatch-party%2Fjoin%3Fcode%3DABC123',
+    );
     final WatchPartyInvite decoded = WatchPartyInvite.tryParse(
       encodeWatchPartyQr(code),
     )!;
     expect(decoded.roomId, code);
     expect(decoded.mode, WatchPartyConnectionMode.defaultConnection);
+    expect(
+      WatchPartyInvite.tryParse(
+        'mirushin://watch-party/join?code=ABC123',
+      )?.roomId,
+      code,
+    );
+    expect(decodeWatchPartyQr(encodeWatchPartyQr(code)), code);
   });
 
   test('room state represents multiple participants and relay host loss', () {
