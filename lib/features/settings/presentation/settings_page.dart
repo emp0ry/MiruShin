@@ -26,15 +26,20 @@ import '../../../core/widgets/section_header.dart';
 import '../../../core/widgets/tv_directional_focus.dart';
 import '../../../core/widgets/tv_text_field_focus.dart';
 import '../../../shared/models/anilist_models.dart';
+import '../../addons/application/addon_sources_provider.dart';
+import '../../addons/application/sora_addons_provider.dart';
 import '../../calendar/application/calendar_items_provider.dart';
 import '../../catalog/application/catalog_mode.dart';
+import '../../downloads/application/download_settings.dart';
 import '../../downloads/application/downloads_provider.dart';
+import '../../library/application/local_library_provider.dart';
 import '../../metadata/application/metadata_cache_provider.dart';
 import '../../metadata/application/metadata_providers.dart';
 import '../../metadata/data/tmdb_metadata_provider.dart';
 import '../../player/application/player_settings.dart';
 import '../../player/data/discord_rpc_service.dart';
 import '../../player/domain/player_models.dart';
+import '../../profile/application/anilist_user_settings_provider.dart';
 import '../../tracking/application/anilist_library_provider.dart';
 import '../../tracking/application/tracker_library_provider.dart';
 import '../../tracking/domain/tracker_models.dart';
@@ -45,8 +50,10 @@ import '../../watch_party/data/relay_api.dart';
 import '../../watch_party/data/relay_protocol.dart';
 import '../../watch_party/domain/watch_party_models.dart';
 import '../application/desktop_update_controller.dart';
+import '../application/mirushin_backup_service.dart';
 import '../application/settings_state.dart';
 import '../application/update_checker_provider.dart';
+import 'mirushin_backup_file.dart';
 import 'widgets/settings_widgets.dart';
 
 class SettingsPage extends ConsumerWidget {
@@ -96,6 +103,8 @@ class SettingsPage extends ConsumerWidget {
           _ApiConnectionsSection(settings: settings, controller: controller),
           const SizedBox(height: AppSpacing.lg),
           const _DownloadsSection(),
+          const SizedBox(height: AppSpacing.lg),
+          const _BackupSection(),
           const SizedBox(height: AppSpacing.lg),
           _CacheSection(settings: settings, controller: controller),
           const SizedBox(height: AppSpacing.lg),
@@ -2088,6 +2097,183 @@ Future<void> _confirmDeleteAllDownloads(
       context,
     ).showSnackBar(SnackBar(content: Text(context.t('Downloads deleted'))));
   }
+}
+
+class _BackupSection extends ConsumerStatefulWidget {
+  const _BackupSection();
+
+  @override
+  ConsumerState<_BackupSection> createState() => _BackupSectionState();
+}
+
+class _BackupSectionState extends ConsumerState<_BackupSection> {
+  bool _busy = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return SettingsSection(
+      title: context.t('Data & backup'),
+      icon: Icons.settings_backup_restore_rounded,
+      children: <Widget>[
+        SettingsRow(
+          title: context.t('Full MiruShin backup'),
+          subtitle: context.t(
+            'Includes every app setting and saved page state, player settings and stream choices, Watch with Friends relay and trust settings, AniList settings, AniList/MAL/Shikimori sessions and avatars, local library progress, addons, and source cookies. Downloaded videos and temporary caches are not included.',
+          ),
+          fullWidthTrailing: true,
+          trailing: _busy
+              ? const Center(
+                  child: SizedBox.square(
+                    dimension: 24,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                )
+              : Wrap(
+                  spacing: AppSpacing.sm,
+                  runSpacing: AppSpacing.sm,
+                  children: <Widget>[
+                    OutlinedButton.icon(
+                      onPressed: _exportBackup,
+                      icon: const Icon(Icons.upload_file_rounded),
+                      label: Text(context.t('Export config')),
+                    ),
+                    FilledButton.icon(
+                      onPressed: _importBackup,
+                      icon: const Icon(Icons.download_rounded),
+                      label: Text(context.t('Import config')),
+                    ),
+                  ],
+                ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _exportBackup() async {
+    final bool confirmed =
+        await _confirmBackupAction(
+          title: 'Export full backup?',
+          message:
+              'This readable JSON file contains account access tokens, profile details, avatar URLs, source cookies, and private app settings. Anyone with the file may be able to access your connected accounts. Store it securely.',
+          action: 'Export',
+        ) ??
+        false;
+    if (!confirmed || !mounted) return;
+    setState(() => _busy = true);
+    try {
+      final MiruShinBackupService service =
+          await MiruShinBackupService.create();
+      final String json = await service.createBackupJson();
+      if (!mounted) return;
+      final String? path = await saveMiruShinBackupJson(context, json);
+      if (!mounted) return;
+      final String message = path == null
+          ? context.t('Backup export cancelled')
+          : path.isEmpty
+          ? context.t('Backup exported')
+          : context.tf('Backup saved to {path}', <String, Object?>{
+              'path': path,
+            });
+      _showBackupMessage(message);
+    } on Object catch (error) {
+      if (mounted) {
+        _showBackupMessage(
+          context.tf('Backup export failed: {error}', <String, Object?>{
+            'error': error,
+          }),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _importBackup() async {
+    setState(() => _busy = true);
+    try {
+      final String? raw = await pickMiruShinBackupJson();
+      if (!mounted) return;
+      if (raw == null) {
+        _showBackupMessage(context.t('Backup import cancelled'));
+        return;
+      }
+      final bool confirmed =
+          await _confirmBackupAction(
+            title: 'Import full backup?',
+            message:
+                'Importing replaces this device\'s saved MiruShin configuration, local library state, addons, and connected account sessions. Downloaded videos and temporary caches are not included.',
+            action: 'Import',
+          ) ??
+          false;
+      if (!confirmed || !mounted) return;
+
+      final MiruShinBackupService service =
+          await MiruShinBackupService.create();
+      await service.importBackupJson(raw);
+      if (!mounted) return;
+      _refreshRestoredState(ref);
+      _showBackupMessage(
+        context.t(
+          'Backup restored. Restart MiruShin to apply every restored page state.',
+        ),
+      );
+    } on Object catch (error) {
+      if (mounted) {
+        _showBackupMessage(
+          context.tf('Backup import failed: {error}', <String, Object?>{
+            'error': error,
+          }),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<bool?> _confirmBackupAction({
+    required String title,
+    required String message,
+    required String action,
+  }) {
+    return showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) => AlertDialog(
+        title: Text(context.t(title)),
+        content: Text(context.t(message)),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: Text(context.t('Cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(context.t(action)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showBackupMessage(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+}
+
+void _refreshRestoredState(WidgetRef ref) {
+  ref.invalidate(settingsProvider);
+  ref.invalidate(catalogModeProvider);
+  ref.invalidate(playerSettingsProvider);
+  ref.invalidate(localLibraryProvider);
+  ref.invalidate(downloadSettingsProvider);
+  ref.invalidate(addonSourcesProvider);
+  ref.invalidate(addonCatalogProvider);
+  ref.invalidate(soraAddonsProvider);
+  ref.invalidate(watchPartyConnectionSettingsProvider);
+  ref.invalidate(aniListUserSettingsProvider);
+  ref.invalidate(trackerAnimeListProvider);
+  invalidateAniListLibraryProviders(ref.invalidate);
 }
 
 class _CacheSection extends ConsumerWidget {

@@ -24,6 +24,54 @@ class AppSecureStorage {
       'shikimori.customClientSecret';
   static const String _fallbackPrefix = 'secureStorageFallback.';
 
+  /// Every secret that belongs in a portable MiruShin backup. Keep this list
+  /// explicit so a backup cannot read or restore unrelated platform secrets.
+  static const List<String> backupKeys = <String>[
+    tmdbReadAccessTokenKey,
+    tvdbApiKeyKey,
+    tvdbSubscriberPinKey,
+    anilistAccessTokenKey,
+    anilistExpiresAtKey,
+    malAccessTokenKey,
+    malRefreshTokenKey,
+    malExpiresAtKey,
+    shikimoriAccessTokenKey,
+    shikimoriRefreshTokenKey,
+    shikimoriExpiresAtKey,
+    shikimoriCustomClientSecretKey,
+  ];
+
+  Future<Map<String, String>> exportBackupValues() async {
+    final Map<String, String> values = <String, String>{};
+    for (final String key in backupKeys) {
+      final String? value = await _read(key);
+      if (value != null && value.isNotEmpty) values[key] = value;
+    }
+    return values;
+  }
+
+  /// Replaces every MiruShin-owned secure value with [values]. Callers are
+  /// expected to warn that these credentials are stored in the backup file.
+  Future<void> replaceBackupValues(Map<String, String> values) async {
+    final Set<String> allowed = backupKeys.toSet();
+    String? unsupported;
+    for (final String key in values.keys) {
+      if (!allowed.contains(key)) {
+        unsupported = key;
+        break;
+      }
+    }
+    if (unsupported != null) {
+      throw ArgumentError.value(unsupported, 'key', 'Unsupported secure key');
+    }
+    for (final String key in backupKeys) {
+      await _delete(key);
+    }
+    for (final MapEntry<String, String> entry in values.entries) {
+      if (entry.value.isNotEmpty) await _write(entry.key, entry.value);
+    }
+  }
+
   Future<String?> readTmdbReadAccessToken() {
     return _read(tmdbReadAccessTokenKey);
   }

@@ -1373,5 +1373,21 @@
   "This server is not a MiruShin Watch with Friends relay.": "このサーバーはMiruShinの「友達と見る」用リレーではありません。",
   "This relay uses an unsupported Watch with Friends protocol version.": "このリレーは未対応の「友達と見る」プロトコルバージョンを使用しています。",
   "This relay does not provide a compatible WebSocket endpoint.": "このリレーには互換性のあるWebSocketエンドポイントがありません。",
-  "The relay health check passed, but its WebSocket is unavailable.": "リレーのヘルスチェックには成功しましたが、WebSocketを利用できません。"
+  "The relay health check passed, but its WebSocket is unavailable.": "リレーのヘルスチェックには成功しましたが、WebSocketを利用できません。",
+  "Data & backup": "データとバックアップ",
+  "Full MiruShin backup": "MiruShin 完全バックアップ",
+  "Includes every app setting and saved page state, player settings and stream choices, Watch with Friends relay and trust settings, AniList settings, AniList/MAL/Shikimori sessions and avatars, local library progress, addons, and source cookies. Downloaded videos and temporary caches are not included.": "すべてのアプリ設定と保存済みページ状態、プレイヤー設定とストリーム選択、「フレンドと視聴」のリレーと信頼設定、AniList設定、AniList/MAL/Shikimoriのセッションとアバター、ローカルライブラリの進捗、アドオン、ソースCookieが含まれます。ダウンロード済み動画と一時キャッシュは含まれません。",
+  "Export config": "設定をエクスポート",
+  "Import config": "設定をインポート",
+  "Export full backup?": "完全バックアップをエクスポートしますか？",
+  "This readable JSON file contains account access tokens, profile details, avatar URLs, source cookies, and private app settings. Anyone with the file may be able to access your connected accounts. Store it securely.": "この読み取り可能なJSONファイルには、アカウントのアクセストークン、プロフィール情報、アバターURL、ソースCookie、個人設定が含まれます。ファイルを入手した人が接続済みアカウントへアクセスできる可能性があります。安全に保管してください。",
+  "Import full backup?": "完全バックアップをインポートしますか？",
+  "Importing replaces this device's saved MiruShin configuration, local library state, addons, and connected account sessions. Downloaded videos and temporary caches are not included.": "インポートすると、この端末に保存されたMiruShinの設定、ローカルライブラリの状態、アドオン、接続済みアカウントのセッションが置き換えられます。ダウンロード済み動画と一時キャッシュは含まれません。",
+  "Backup export cancelled": "バックアップのエクスポートをキャンセルしました",
+  "Backup exported": "バックアップをエクスポートしました",
+  "Backup saved to {path}": "バックアップの保存先: {path}",
+  "Backup import cancelled": "バックアップのインポートをキャンセルしました",
+  "Backup restored. Restart MiruShin to apply every restored page state.": "バックアップを復元しました。すべてのページ状態を適用するにはMiruShinを再起動してください。",
+  "Backup export failed: {error}": "バックアップのエクスポートに失敗しました: {error}",
+  "Backup import failed: {error}": "バックアップのインポートに失敗しました: {error}"
 }

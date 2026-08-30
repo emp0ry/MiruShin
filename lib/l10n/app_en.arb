@@ -1373,5 +1373,21 @@
   "This server is not a MiruShin Watch with Friends relay.": "This server is not a MiruShin Watch with Friends relay.",
   "This relay uses an unsupported Watch with Friends protocol version.": "This relay uses an unsupported Watch with Friends protocol version.",
   "This relay does not provide a compatible WebSocket endpoint.": "This relay does not provide a compatible WebSocket endpoint.",
-  "The relay health check passed, but its WebSocket is unavailable.": "The relay health check passed, but its WebSocket is unavailable."
+  "The relay health check passed, but its WebSocket is unavailable.": "The relay health check passed, but its WebSocket is unavailable.",
+  "Data & backup": "Data & backup",
+  "Full MiruShin backup": "Full MiruShin backup",
+  "Includes every app setting and saved page state, player settings and stream choices, Watch with Friends relay and trust settings, AniList settings, AniList/MAL/Shikimori sessions and avatars, local library progress, addons, and source cookies. Downloaded videos and temporary caches are not included.": "Includes every app setting and saved page state, player settings and stream choices, Watch with Friends relay and trust settings, AniList settings, AniList/MAL/Shikimori sessions and avatars, local library progress, addons, and source cookies. Downloaded videos and temporary caches are not included.",
+  "Export config": "Export config",
+  "Import config": "Import config",
+  "Export full backup?": "Export full backup?",
+  "This readable JSON file contains account access tokens, profile details, avatar URLs, source cookies, and private app settings. Anyone with the file may be able to access your connected accounts. Store it securely.": "This readable JSON file contains account access tokens, profile details, avatar URLs, source cookies, and private app settings. Anyone with the file may be able to access your connected accounts. Store it securely.",
+  "Import full backup?": "Import full backup?",
+  "Importing replaces this device's saved MiruShin configuration, local library state, addons, and connected account sessions. Downloaded videos and temporary caches are not included.": "Importing replaces this device's saved MiruShin configuration, local library state, addons, and connected account sessions. Downloaded videos and temporary caches are not included.",
+  "Backup export cancelled": "Backup export cancelled",
+  "Backup exported": "Backup exported",
+  "Backup saved to {path}": "Backup saved to {path}",
+  "Backup import cancelled": "Backup import cancelled",
+  "Backup restored. Restart MiruShin to apply every restored page state.": "Backup restored. Restart MiruShin to apply every restored page state.",
+  "Backup export failed: {error}": "Backup export failed: {error}",
+  "Backup import failed: {error}": "Backup import failed: {error}"
 }

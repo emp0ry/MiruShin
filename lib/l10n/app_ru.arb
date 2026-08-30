@@ -1378,5 +1378,21 @@
   "This server is not a MiruShin Watch with Friends relay.": "Этот сервер не является ретранслятором MiruShin для совместного просмотра.",
   "This relay uses an unsupported Watch with Friends protocol version.": "Этот ретранслятор использует неподдерживаемую версию протокола совместного просмотра.",
   "This relay does not provide a compatible WebSocket endpoint.": "Этот ретранслятор не предоставляет совместимую конечную точку WebSocket.",
-  "The relay health check passed, but its WebSocket is unavailable.": "Проверка ретранслятора пройдена, но его WebSocket недоступен."
+  "The relay health check passed, but its WebSocket is unavailable.": "Проверка ретранслятора пройдена, но его WebSocket недоступен.",
+  "Data & backup": "Данные и резервная копия",
+  "Full MiruShin backup": "Полная резервная копия MiruShin",
+  "Includes every app setting and saved page state, player settings and stream choices, Watch with Friends relay and trust settings, AniList settings, AniList/MAL/Shikimori sessions and avatars, local library progress, addons, and source cookies. Downloaded videos and temporary caches are not included.": "Включает все настройки приложения и сохранённое состояние страниц, настройки плеера и выбор потоков, настройки ретранслятора и доверия «Смотреть с друзьями», настройки AniList, сеансы и аватары AniList/MAL/Shikimori, прогресс локальной библиотеки, аддоны и файлы cookie источников. Загруженные видео и временный кеш не включаются.",
+  "Export config": "Экспорт конфигурации",
+  "Import config": "Импорт конфигурации",
+  "Export full backup?": "Экспортировать полную резервную копию?",
+  "This readable JSON file contains account access tokens, profile details, avatar URLs, source cookies, and private app settings. Anyone with the file may be able to access your connected accounts. Store it securely.": "Этот читаемый JSON-файл содержит токены доступа к аккаунтам, данные профилей, URL аватаров, cookies источников и личные настройки приложения. Любой, у кого есть этот файл, может получить доступ к подключённым аккаунтам. Храните его в безопасном месте.",
+  "Import full backup?": "Импортировать полную резервную копию?",
+  "Importing replaces this device's saved MiruShin configuration, local library state, addons, and connected account sessions. Downloaded videos and temporary caches are not included.": "Импорт заменит сохранённую на этом устройстве конфигурацию MiruShin, состояние локальной библиотеки, аддоны и сеансы подключённых аккаунтов. Загруженные видео и временный кеш не включаются.",
+  "Backup export cancelled": "Экспорт резервной копии отменён",
+  "Backup exported": "Резервная копия экспортирована",
+  "Backup saved to {path}": "Резервная копия сохранена: {path}",
+  "Backup import cancelled": "Импорт резервной копии отменён",
+  "Backup restored. Restart MiruShin to apply every restored page state.": "Резервная копия восстановлена. Перезапустите MiruShin, чтобы применить состояние всех страниц.",
+  "Backup export failed: {error}": "Не удалось экспортировать резервную копию: {error}",
+  "Backup import failed: {error}": "Не удалось импортировать резервную копию: {error}"
 }

@@ -131,6 +131,9 @@ void main() {
     expect(find.text('Score format'), findsNothing);
     expect(find.text('Show adult content'), findsNothing);
     expect(find.text('Theme mode'), findsWidgets);
+    expect(find.text('Data & backup'), findsOneWidget);
+    expect(find.text('Export config'), findsOneWidget);
+    expect(find.text('Import config'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
