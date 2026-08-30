@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -7,6 +8,10 @@ import 'package:mirushin/app/localization/app_localizations.dart';
 import 'package:mirushin/app/theme/app_theme.dart';
 import 'package:mirushin/features/media_details/presentation/media_details_page.dart';
 import 'package:mirushin/features/settings/application/settings_state.dart';
+import 'package:mirushin/features/watch_party/application/watch_party_controller.dart';
+import 'package:mirushin/features/watch_party/domain/watch_party_models.dart';
+import 'package:mirushin/features/watch_party/presentation/join_room_screen.dart';
+import 'package:mirushin/features/watch_party/presentation/watch_party_screen.dart';
 import 'package:mirushin/shared/models/media_item.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -186,6 +191,21 @@ void main() {
   testWidgets('Media details page lays out on desktop and compact sizes', (
     WidgetTester tester,
   ) async {
+    MethodCall? clipboardCall;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (MethodCall call) async {
+        if (call.method == 'Clipboard.setData') clipboardCall = call;
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+
     const MediaItem item = MediaItem(
       id: 'tmdb:movie:1',
       title: 'A Very Long Cinematic Movie Title That Still Needs To Fit',
@@ -261,6 +281,34 @@ void main() {
         find.byKey(const ValueKey<String>('details-edit-action')),
         findsOneWidget,
       );
+      final Finder linksAction = find.byKey(
+        const ValueKey<String>('details-links-action'),
+      );
+      expect(linksAction, findsOneWidget);
+      await tester.tap(linksAction);
+      await tester.pumpAndSettle();
+      expect(find.text('Media links'), findsOneWidget);
+      expect(find.text('TMDB link'), findsOneWidget);
+      expect(find.text('https://www.themoviedb.org/movie/1'), findsOneWidget);
+      expect(find.text('MiruShin link'), findsOneWidget);
+      expect(
+        find.text(
+          'https://mirushin.emp0ry.com/open.html?target='
+          'mirushin%3A%2F%2Ftmdb%2Fmovie%2F1',
+        ),
+        findsOneWidget,
+      );
+      clipboardCall = null;
+      await tester.tap(find.byTooltip('Copy link').last);
+      await tester.pump();
+      expect(clipboardCall?.method, 'Clipboard.setData');
+      expect(
+        (clipboardCall?.arguments as Map<Object?, Object?>?)?['text'],
+        'https://mirushin.emp0ry.com/open.html?target='
+        'mirushin%3A%2F%2Ftmdb%2Fmovie%2F1',
+      );
+      await tester.tap(find.text('Close'));
+      await tester.pumpAndSettle();
       expect(
         find.byKey(const ValueKey<String>('details-poster-open')),
         findsOneWidget,
@@ -352,6 +400,70 @@ void main() {
     );
   });
 
+  testWidgets('Join room always shows an explicit back button', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          watchPartyProvider.overrideWith(_IdleWatchPartyController.new),
+        ],
+        child: MaterialApp(
+          locale: const Locale('en'),
+          theme: AppTheme.dark(),
+          supportedLocales: AppLocalizations.supportedLocales,
+          localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
+            AppLocalizations.delegate,
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+          home: const JoinRoomScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey<String>('join-room-back')),
+      findsOneWidget,
+    );
+    expect(find.byType(BackButton), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Watch with Friends always shows an explicit back button', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          watchPartyProvider.overrideWith(_IdleWatchPartyController.new),
+        ],
+        child: MaterialApp(
+          locale: const Locale('en'),
+          theme: AppTheme.dark(),
+          supportedLocales: AppLocalizations.supportedLocales,
+          localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
+            AppLocalizations.delegate,
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+          home: const WatchPartyScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey<String>('watch-party-back')),
+      findsOneWidget,
+    );
+    expect(find.byType(BackButton), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('AniList stats wrap without overflowing narrow details cards', (
     WidgetTester tester,
   ) async {
@@ -405,10 +517,33 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    final Finder linksAction = find.byKey(
+      const ValueKey<String>('details-links-action'),
+    );
+    expect(linksAction, findsOneWidget);
+    await tester.tap(linksAction);
+    await tester.pumpAndSettle();
+    expect(find.text('AniList link'), findsOneWidget);
+    expect(find.text('https://anilist.co/anime/1'), findsOneWidget);
+    expect(
+      find.text(
+        'https://mirushin.emp0ry.com/open.html?target='
+        'mirushin%3A%2F%2Fanilist%2Fanime%2F1',
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Close'));
+    await tester.pumpAndSettle();
+
     expect(find.text('142K'), findsOneWidget);
     expect(find.text('watching'), findsOneWidget);
     expect(find.text('4.3K'), findsOneWidget);
     expect(find.text('favorites'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+}
+
+class _IdleWatchPartyController extends WatchPartyController {
+  @override
+  WatchPartyRoomState build() => WatchPartyRoomState.idle;
 }

@@ -1389,5 +1389,12 @@
   "Backup import cancelled": "バックアップのインポートをキャンセルしました",
   "Backup restored. Restart MiruShin to apply every restored page state.": "バックアップを復元しました。すべてのページ状態を適用するにはMiruShinを再起動してください。",
   "Backup export failed: {error}": "バックアップのエクスポートに失敗しました: {error}",
-  "Backup import failed: {error}": "バックアップのインポートに失敗しました: {error}"
+  "Backup import failed: {error}": "バックアップのインポートに失敗しました: {error}",
+  "Media links": "作品リンク",
+  "AniList link": "AniListリンク",
+  "TMDB link": "TMDBリンク",
+  "MiruShin link": "MiruShinリンク",
+  "Copy link": "リンクをコピー",
+  "Link copied": "リンクをコピーしました",
+  "Share the MiruShin link to open this title directly in the app.": "MiruShinリンクを共有すると、この作品をアプリで直接開けます。"
 }

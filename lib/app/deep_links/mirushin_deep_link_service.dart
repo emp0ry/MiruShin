@@ -5,9 +5,12 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../features/catalog/application/catalog_mode.dart';
 import '../app_routes.dart';
 import 'mirushin_deep_link.dart';
 import 'mirushin_deep_link_queue.dart';
+
+typedef MiruShinCatalogModeSetter = Future<void> Function(CatalogMode mode);
 
 class MiruShinDeepLinkService {
   MiruShinDeepLinkService._();
@@ -21,6 +24,7 @@ class MiruShinDeepLinkService {
   );
   StreamSubscription<String>? _subscription;
   GoRouter? _router;
+  MiruShinCatalogModeSetter? _setCatalogMode;
   int _activation = 0;
 
   void initialize() {
@@ -35,9 +39,13 @@ class MiruShinDeepLinkService {
   @visibleForTesting
   void accept(String raw) => _queue.accept(raw);
 
-  void attachRouter(GoRouter router) {
+  void attachRouter(
+    GoRouter router, {
+    required MiruShinCatalogModeSetter setCatalogMode,
+  }) {
     _queue.markNotReady();
     _router = router;
+    _setCatalogMode = setCatalogMode;
   }
 
   void markNavigationReady(GoRouter router) {
@@ -48,6 +56,7 @@ class MiruShinDeepLinkService {
   void detachRouter(GoRouter router) {
     if (!identical(_router, router)) return;
     _router = null;
+    _setCatalogMode = null;
     _queue.markNotReady();
   }
 
@@ -57,6 +66,10 @@ class MiruShinDeepLinkService {
     _activation++;
     switch (link) {
       case MiruShinMediaDeepLink():
+        final MiruShinCatalogModeSetter? setCatalogMode = _setCatalogMode;
+        if (setCatalogMode != null) {
+          unawaited(setCatalogMode(catalogModeForMediaDeepLink(link)));
+        }
         router.go(AppRoutes.mediaDetailsPath(link.internalMediaId));
       case MiruShinWatchPartyDeepLink():
         router.go(
@@ -83,3 +96,9 @@ class MiruShinDeepLinkService {
     }
   }
 }
+
+CatalogMode catalogModeForMediaDeepLink(MiruShinMediaDeepLink link) =>
+    switch (link.provider) {
+      MiruShinMediaProvider.tmdb => CatalogMode.tmdb,
+      MiruShinMediaProvider.anilist => CatalogMode.anilist,
+    };

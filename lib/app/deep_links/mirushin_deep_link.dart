@@ -1,3 +1,4 @@
+import '../../core/constants/app_constants.dart';
 import '../../features/watch_party/domain/watch_party_qr.dart';
 import '../../shared/models/media_item.dart';
 
@@ -95,6 +96,31 @@ class MiruShinMediaDeepLink extends MiruShinDeepLink {
     pathSegments: <String>[kind.name, numericId.toString()],
   );
 
+  Uri get providerUri => switch ((provider, kind)) {
+    (MiruShinMediaProvider.anilist, MiruShinMediaKind.anime) => Uri.https(
+      'anilist.co',
+      '/anime/$numericId',
+    ),
+    (MiruShinMediaProvider.anilist, MiruShinMediaKind.manga) => Uri.https(
+      'anilist.co',
+      '/manga/$numericId',
+    ),
+    (MiruShinMediaProvider.tmdb, MiruShinMediaKind.movie) => Uri.https(
+      'www.themoviedb.org',
+      '/movie/$numericId',
+    ),
+    (MiruShinMediaProvider.tmdb, MiruShinMediaKind.tv) => Uri.https(
+      'www.themoviedb.org',
+      '/tv/$numericId',
+    ),
+    _ => throw StateError('Unsupported provider/media-kind combination.'),
+  };
+
+  /// Public HTTPS link that hands this media URI to the MiruShin app opener.
+  Uri get webOpenUri => Uri.parse(AppConstants.appWebsiteUrl)
+      .resolve('open.html')
+      .replace(queryParameters: <String, String>{'target': uri.toString()});
+
   @override
   String get deduplicationKey => uri.toString();
 }
@@ -117,19 +143,33 @@ Uri? mirushinMediaUri({
   required String internalId,
   required MediaType mediaType,
   Map<String, String> externalIds = const <String, String>{},
+}) => mirushinMediaLink(
+  internalId: internalId,
+  mediaType: mediaType,
+  externalIds: externalIds,
+)?.uri;
+
+/// Resolves both the permanent MiruShin URI and the matching provider page
+/// from one unambiguous media identity.
+MiruShinMediaDeepLink? mirushinMediaLink({
+  required String internalId,
+  required MediaType mediaType,
+  Map<String, String> externalIds = const <String, String>{},
 }) {
   final MiruShinMediaDeepLink? fromInternal = _mediaLinkFromInternalId(
     internalId,
   );
-  if (fromInternal != null) return fromInternal.uri;
+  if (fromInternal != null) return fromInternal;
 
   final int? aniListId = int.tryParse(externalIds['anilist'] ?? '');
   if (aniListId != null && aniListId > 0 && mediaType == MediaType.anime) {
     return MiruShinMediaDeepLink(
       provider: MiruShinMediaProvider.anilist,
-      kind: MiruShinMediaKind.anime,
+      kind: externalIds['anilist_type']?.toUpperCase() == 'MANGA'
+          ? MiruShinMediaKind.manga
+          : MiruShinMediaKind.anime,
       numericId: aniListId,
-    ).uri;
+    );
   }
 
   final int? tmdbId = int.tryParse(externalIds['tmdb'] ?? '');
@@ -140,7 +180,7 @@ Uri? mirushinMediaUri({
         ? MiruShinMediaKind.movie
         : MiruShinMediaKind.tv,
     numericId: tmdbId,
-  ).uri;
+  );
 }
 
 MiruShinMediaDeepLink? _mediaLinkFromInternalId(String raw) {

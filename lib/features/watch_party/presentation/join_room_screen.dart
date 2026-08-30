@@ -4,7 +4,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+import '../../../app/app_routes.dart';
 import '../../../app/localization/app_localizations.dart';
+import '../../../app/navigation_helpers.dart';
 import '../application/watch_party_connection_settings.dart';
 import '../application/watch_party_controller.dart';
 import '../data/relay_trust_store.dart';
@@ -208,7 +210,14 @@ class _JoinRoomScreenState extends ConsumerState<JoinRoomScreen> {
             party.status == WatchPartyConnectionStatus.reconnecting);
 
     return Scaffold(
-      appBar: AppBar(title: Text(context.t('Join a room'))),
+      appBar: AppBar(
+        automaticallyImplyLeading: false,
+        leading: BackButton(
+          key: const ValueKey<String>('join-room-back'),
+          onPressed: () => goBackOrGo(context, AppRoutes.watchParty),
+        ),
+        title: Text(context.t('Join a room')),
+      ),
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),

@@ -1389,5 +1389,12 @@
   "Backup import cancelled": "Backup import cancelled",
   "Backup restored. Restart MiruShin to apply every restored page state.": "Backup restored. Restart MiruShin to apply every restored page state.",
   "Backup export failed: {error}": "Backup export failed: {error}",
-  "Backup import failed: {error}": "Backup import failed: {error}"
+  "Backup import failed: {error}": "Backup import failed: {error}",
+  "Media links": "Media links",
+  "AniList link": "AniList link",
+  "TMDB link": "TMDB link",
+  "MiruShin link": "MiruShin link",
+  "Copy link": "Copy link",
+  "Link copied": "Link copied",
+  "Share the MiruShin link to open this title directly in the app.": "Share the MiruShin link to open this title directly in the app."
 }

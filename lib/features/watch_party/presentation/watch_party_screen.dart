@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../app/app_routes.dart';
 import '../../../app/localization/app_localizations.dart';
+import '../../../app/navigation_helpers.dart';
 import '../application/watch_party_controller.dart';
 import '../domain/watch_party_models.dart';
 import 'watch_party_permission_controls.dart';
@@ -20,7 +21,13 @@ class WatchPartyScreen extends ConsumerWidget {
     final ColorScheme colors = Theme.of(context).colorScheme;
 
     return Scaffold(
-      appBar: AppBar(title: Text(context.t('Watch with Friends'))),
+      appBar: AppBar(
+        leading: BackButton(
+          key: const ValueKey<String>('watch-party-back'),
+          onPressed: () => goBackOrGo(context, AppRoutes.board),
+        ),
+        title: Text(context.t('Watch with Friends')),
+      ),
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 420),

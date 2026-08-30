@@ -25,6 +25,7 @@ extension CatalogModeLabel on CatalogMode {
 class CatalogModeController extends Notifier<CatalogMode> {
   static const String _key = 'catalog.mode';
   bool _loading = false;
+  int _selectionRevision = 0;
 
   @override
   CatalogMode build() {
@@ -36,14 +37,18 @@ class CatalogModeController extends Notifier<CatalogMode> {
   }
 
   Future<void> setMode(CatalogMode mode) async {
-    if (state == mode) return;
-    state = mode;
+    _selectionRevision++;
+    if (state != mode) {
+      state = mode;
+    }
     final SharedPreferences prefs = await SharedPreferences.getInstance();
     await prefs.setString(_key, mode.name);
   }
 
   Future<void> _load() async {
+    final int revisionBeforeLoad = _selectionRevision;
     final SharedPreferences prefs = await SharedPreferences.getInstance();
+    if (_selectionRevision != revisionBeforeLoad) return;
     final String? raw = prefs.getString(_key);
     final CatalogMode loaded = CatalogMode.values.firstWhere(
       (CatalogMode mode) => mode.name == raw,

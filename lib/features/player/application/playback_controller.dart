@@ -7,7 +7,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/deep_links/mirushin_deep_link.dart';
 import '../../../app/localization/app_localizations.dart';
-import '../../../core/constants/app_constants.dart';
 import '../../../core/platform/tv_platform.dart';
 import '../../../shared/models/anilist_models.dart';
 import '../../addons/data/anime_titles_service.dart';
@@ -807,16 +806,12 @@ class PlaybackController extends Notifier<PlaybackState> {
   }
 
   String _discordViewUrl(MediaPlaybackItem item) {
-    final Uri? target = mirushinMediaUri(
+    final MiruShinMediaDeepLink? link = mirushinMediaLink(
       internalId: item.id,
       mediaType: item.mediaType,
       externalIds: item.externalIds,
     );
-    if (target == null) return '';
-    return Uri.parse(AppConstants.appWebsiteUrl)
-        .resolve('open.html')
-        .replace(queryParameters: <String, String>{'target': target.toString()})
-        .toString();
+    return link?.webOpenUri.toString() ?? '';
   }
 
   Future<void> load(MediaPlaybackItem item) async {

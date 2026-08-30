@@ -17,7 +17,8 @@ mirushin://tmdb/tv/<positive-id>
 ```
 
 The provider in the link selects the repository used for that details request.
-It does not read or change the user's saved catalog preference.
+Before opening the details page, MiruShin also switches and saves the matching
+catalog: AniList links select AniList, and TMDB links select TMDB.
 
 Discord Rich Presence uses an HTTPS URL because Discord activity URLs are web
 links. `https://mirushin.emp0ry.com/open.html?target=...` validates one of the

@@ -1394,5 +1394,12 @@
   "Backup import cancelled": "Импорт резервной копии отменён",
   "Backup restored. Restart MiruShin to apply every restored page state.": "Резервная копия восстановлена. Перезапустите MiruShin, чтобы применить состояние всех страниц.",
   "Backup export failed: {error}": "Не удалось экспортировать резервную копию: {error}",
-  "Backup import failed: {error}": "Не удалось импортировать резервную копию: {error}"
+  "Backup import failed: {error}": "Не удалось импортировать резервную копию: {error}",
+  "Media links": "Ссылки на тайтл",
+  "AniList link": "Ссылка AniList",
+  "TMDB link": "Ссылка TMDB",
+  "MiruShin link": "Ссылка MiruShin",
+  "Copy link": "Копировать ссылку",
+  "Link copied": "Ссылка скопирована",
+  "Share the MiruShin link to open this title directly in the app.": "Отправьте ссылку MiruShin, чтобы открыть этот тайтл прямо в приложении."
 }

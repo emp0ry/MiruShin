@@ -16,6 +16,7 @@ import '../features/addons/application/cloudflare_challenge_service.dart';
 import '../features/addons/application/sora_addons_provider.dart';
 import '../features/addons/data/sora_js_runtime.dart';
 import '../features/addons/presentation/cloudflare_challenge_page.dart';
+import '../features/catalog/application/catalog_mode.dart';
 import '../features/metadata/application/metadata_cache_provider.dart';
 import '../features/player/application/playback_controller.dart';
 import '../features/profile/application/anilist_user_settings_provider.dart';
@@ -51,7 +52,11 @@ class _MiruShinAppState extends ConsumerState<MiruShinApp> {
     _playbackController = ref.read(playbackControllerProvider.notifier);
     _soraRuntime = ref.read(soraJsRuntimeProvider);
     _router = buildAppRouter(widget.initialRoute);
-    MiruShinDeepLinkService.instance.attachRouter(_router);
+    MiruShinDeepLinkService.instance.attachRouter(
+      _router,
+      setCatalogMode: (CatalogMode mode) =>
+          ref.read(catalogModeProvider.notifier).setMode(mode),
+    );
     WidgetsBinding.instance.addPostFrameCallback((_) {
       MiruShinDeepLinkService.instance.markNavigationReady(_router);
     });

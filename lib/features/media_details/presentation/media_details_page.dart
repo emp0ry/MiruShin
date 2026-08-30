@@ -39,6 +39,7 @@ import '../../tracking/application/anilist_library_provider.dart';
 import '../../tracking/presentation/anilist_entry_editor.dart';
 import '../../tracking/presentation/anilist_favorite_button.dart';
 import '../data/anime_themes_client.dart';
+import 'media_links_dialog.dart';
 import 'poster_fullscreen_viewer.dart';
 
 class MediaDetailsPage extends ConsumerStatefulWidget {
@@ -930,7 +931,13 @@ class _DetailsHero extends ConsumerWidget {
                           borderRadius: AppRadius.all(AppRadius.lg),
                           border: Border.all(color: Colors.white24),
                         ),
-                        child: AniListFavoriteButton(item: item, onImage: true),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: <Widget>[
+                            MediaLinksButton(item: item),
+                            AniListFavoriteButton(item: item, onImage: true),
+                          ],
+                        ),
                       ),
                     ),
 

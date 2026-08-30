@@ -35,6 +35,24 @@ void main() {
     expect(container.read(catalogModeProvider), CatalogMode.tmdb);
   });
 
+  test('explicit selection wins over a pending persisted-mode load', () async {
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'catalog.mode': 'tmdb',
+    });
+    final ProviderContainer container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    expect(container.read(catalogModeProvider), CatalogMode.anilist);
+    await container
+        .read(catalogModeProvider.notifier)
+        .setMode(CatalogMode.anilist);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(container.read(catalogModeProvider), CatalogMode.anilist);
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString('catalog.mode'), 'anilist');
+  });
+
   test('metadata cache reads, overwrites, and clears by mode prefix', () async {
     SharedPreferences.setMockInitialValues(<String, Object>{});
     const MetadataCacheStore store = MetadataCacheStore();
