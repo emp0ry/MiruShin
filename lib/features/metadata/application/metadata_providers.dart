@@ -60,10 +60,12 @@ final _animeEpisodeMetadataClientProvider =
 
 // Catalog Mode Routing
 
-final activeCatalogRepositoryProvider = Provider<CatalogRepository?>((Ref ref) {
+final catalogRepositoryProvider = Provider.family<CatalogRepository?, CatalogMode>((
+  Ref ref,
+  CatalogMode mode,
+) {
   final MetadataCacheStore cache = ref.watch(metadataCacheStoreProvider);
   final SettingsState settings = ref.watch(settingsProvider);
-  final CatalogMode mode = ref.watch(catalogModeProvider);
   final String aniListTitleLanguage = ref.watch(
     aniListEffectiveTitleLanguageProvider,
   );
@@ -119,6 +121,11 @@ final activeCatalogRepositoryProvider = Provider<CatalogRepository?>((Ref ref) {
   };
 });
 
+final activeCatalogRepositoryProvider = Provider<CatalogRepository?>((Ref ref) {
+  final CatalogMode mode = ref.watch(catalogModeProvider);
+  return ref.watch(catalogRepositoryProvider(mode));
+});
+
 // MetadataRepository (search + details)
 
 final metadataRepositoryProvider = Provider<MetadataRepository>((Ref ref) {
@@ -164,10 +171,10 @@ final mediaDetailsProvider = FutureProvider.family<MediaItem?, String>((
   Ref ref,
   String id,
 ) async {
-  final CatalogMode mode = ref.watch(catalogModeProvider);
-  if (!mediaIdBelongsToMode(id, mode)) return null;
+  final CatalogMode? mode = catalogModeForMediaId(id);
+  if (mode == null) return null;
   final CatalogRepository? repository = ref.watch(
-    activeCatalogRepositoryProvider,
+    catalogRepositoryProvider(mode),
   );
   if (repository == null) return null;
   try {

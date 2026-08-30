@@ -32,13 +32,15 @@
 			</dict>
 			<dict>
 				<key>CFBundleURLName</key>
-				<string>MiruShin Watch Party</string>
+				<string>MiruShin Links</string>
 				<key>CFBundleURLSchemes</key>
 				<array>
 					<string>mirushin</string>
 				</array>
 			</dict>
 		</array>
+		<key>FlutterDeepLinkingEnabled</key>
+		<false/>
 		<key>CFBundlePackageType</key>
 		<string>APPL</string>
 		<key>CFBundleShortVersionString</key>

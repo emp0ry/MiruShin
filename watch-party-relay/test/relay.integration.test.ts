@@ -117,6 +117,60 @@ async function connect(
 }
 
 describe("reference relay", () => {
+  it("serves a self-contained, non-cacheable invite landing page", async () => {
+    const invite =
+      "https://relay.test/join?room=AbCdEfGhIjKlMnOp&token=guest_join_token_1234567890";
+    const response = await SELF.fetch(invite);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toContain("text/html");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(response.headers.get("Referrer-Policy")).toBe("no-referrer");
+    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(response.headers.get("Content-Security-Policy")).toContain(
+      "default-src 'none'",
+    );
+    const body = await response.text();
+    expect(body).toContain("Open in MiruShin");
+    expect(body).toContain("mirushin://watch-party/join?invite=");
+    expect(body).toContain(
+      encodeURIComponent(invite).replaceAll("%20", "+"),
+    );
+    expect(body).not.toContain("hostToken");
+    expect(body).not.toMatch(/<script|https:\/\/[^&\"]+\.(js|css)/i);
+  });
+
+  it("keeps a relay base path in the app bridge", async () => {
+    const response = await SELF.fetch(
+      "https://relay.test/base/relay/join?room=AbCdEfGhIjKlMnOp&token=guest_join_token_1234567890",
+    );
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain(
+      encodeURIComponent(
+        "https://relay.test/base/relay/join?room=AbCdEfGhIjKlMnOp&token=guest_join_token_1234567890",
+      ),
+    );
+  });
+
+  it("rejects malformed invite pages and non-GET methods", async () => {
+    for (const url of [
+      "https://relay.test/join",
+      "https://relay.test/join?room=short&token=guest_join_token_1234567890",
+      "https://relay.test/join?room=AbCdEfGhIjKlMnOp&token=short",
+      "https://relay.test/join?room=AbCdEfGhIjKlMnOp&token=guest_join_token_1234567890&hostToken=secret",
+      "https://relay.test/join?room=AbCdEfGhIjKlMnOp&room=OtherRoom123&token=guest_join_token_1234567890",
+    ]) {
+      const response = await SELF.fetch(url);
+      expect(response.status, url).toBe(400);
+      expect(response.headers.get("Cache-Control")).toBe("no-store");
+    }
+    const post = await SELF.fetch(
+      "https://relay.test/join?room=AbCdEfGhIjKlMnOp&token=guest_join_token_1234567890",
+      { method: "POST" },
+    );
+    expect(post.status).toBe(405);
+    expect(post.headers.get("Allow")).toBe("GET");
+  });
+
   it("reports compatible health and creates unpredictable tokenized rooms", async () => {
     const health = await SELF.fetch("https://relay.test/health");
     expect(await health.json()).toMatchObject({

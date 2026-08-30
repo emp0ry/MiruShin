@@ -48,6 +48,13 @@ class MainFlutterWindow: NSWindow {
           if fullscreen != current { self.toggleFullScreen(nil) }
           result(fullscreen)
         }
+      case "foreground":
+        DispatchQueue.main.async {
+          self.deminiaturize(nil)
+          self.makeKeyAndOrderFront(nil)
+          NSApp.activate(ignoringOtherApps: true)
+          result(nil)
+        }
       default:
         result(FlutterMethodNotImplemented)
       }

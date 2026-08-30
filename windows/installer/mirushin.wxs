@@ -59,6 +59,30 @@
     <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
     <Property Id="ARPHELPLINK" Value="https://github.com/emp0ry/MiruShin" />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/emp0ry/MiruShin" />
+
+    <!-- Run in the installing user's context so the permanent protocol owner
+         is HKCU even for an all-users binary install. The executable's removal
+         mode verifies the exact current command before deleting anything. -->
+    <CustomAction Id="RegisterMiruShinProtocol"
+                  Directory="APPLICATIONFOLDER"
+                  ExeCommand="&quot;[APPLICATIONFOLDER]mirushin.exe&quot; --register-protocol"
+                  Execute="immediate"
+                  Impersonate="yes"
+                  Return="ignore" />
+    <CustomAction Id="UnregisterMiruShinProtocolIfOwned"
+                  Directory="APPLICATIONFOLDER"
+                  ExeCommand="&quot;[APPLICATIONFOLDER]mirushin.exe&quot; --unregister-protocol-if-owned"
+                  Execute="immediate"
+                  Impersonate="yes"
+                  Return="ignore" />
+    <InstallExecuteSequence>
+      <Custom Action="RegisterMiruShinProtocol"
+              After="InstallFiles"
+              Condition="NOT Installed OR REINSTALL" />
+      <Custom Action="UnregisterMiruShinProtocolIfOwned"
+              Before="RemoveFiles"
+              Condition="REMOVE~=&quot;ALL&quot;" />
+    </InstallExecuteSequence>
   </Package>
 
   <!-- Harvest the entire Flutter Release folder (exe, DLLs, data\, plugins). -->

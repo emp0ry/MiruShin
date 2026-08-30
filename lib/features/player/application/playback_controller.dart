@@ -5,10 +5,11 @@ import 'dart:ui' show Locale, PlatformDispatcher;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../app/deep_links/mirushin_deep_link.dart';
 import '../../../app/localization/app_localizations.dart';
+import '../../../core/constants/app_constants.dart';
 import '../../../core/platform/tv_platform.dart';
 import '../../../shared/models/anilist_models.dart';
-import '../../../shared/models/media_item.dart';
 import '../../addons/data/anime_titles_service.dart';
 import '../../catalog/application/catalog_mode.dart';
 import '../../library/application/local_library_provider.dart';
@@ -806,22 +807,16 @@ class PlaybackController extends Notifier<PlaybackState> {
   }
 
   String _discordViewUrl(MediaPlaybackItem item) {
-    final String? aniListId = item.externalIds['anilist'];
-    if (aniListId != null && aniListId.isNotEmpty) {
-      return 'https://anilist.co/anime/$aniListId';
-    }
-
-    final String? tmdbId = item.externalIds['tmdb'];
-    if (tmdbId != null && tmdbId.isNotEmpty) {
-      final String path = item.mediaType == MediaType.movie ? 'movie' : 'tv';
-      return 'https://www.themoviedb.org/$path/$tmdbId';
-    }
-
-    final String query = Uri.encodeComponent(_nowPlayingTitle(item));
-    final String searchPath = item.mediaType == MediaType.movie
-        ? 'movie'
-        : 'tv';
-    return 'https://www.themoviedb.org/search/$searchPath?query=$query';
+    final Uri? target = mirushinMediaUri(
+      internalId: item.id,
+      mediaType: item.mediaType,
+      externalIds: item.externalIds,
+    );
+    if (target == null) return '';
+    return Uri.parse(AppConstants.appWebsiteUrl)
+        .resolve('open.html')
+        .replace(queryParameters: <String, String>{'target': target.toString()})
+        .toString();
   }
 
   Future<void> load(MediaPlaybackItem item) async {

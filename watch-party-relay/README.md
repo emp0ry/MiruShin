@@ -77,8 +77,18 @@ installs. MiruShin never automatically falls back to a public relay.
 
 ## Invites
 
-Relay QR/deep links include the room ID, exact relay URL, and guest join token.
-They never include the host token. A guest does not have to configure the relay
+Relay invites are ordinary HTTPS links on the configured relay, including any
+configured base path:
+
+```text
+https://relay.example/base/join?room=ROOM_ID&token=GUEST_JOIN_TOKEN
+```
+
+They contain only the room ID and guest join token, never the host token,
+transport name, or a second relay URL. `GET /join` serves a self-contained,
+non-cacheable page whose **Open in MiruShin** button passes that exact HTTPS
+invite to the app through `mirushin://watch-party/join?invite=...`. The page
+loads no third-party resources. A guest does not have to configure the relay
 manually. Before connecting to an untrusted origin, MiruShin shows the exact
 origin and a third-party relay warning. Optional trust is scoped to that exact
 scheme, host, and port.
@@ -107,6 +117,7 @@ This implementation speaks `mirushin-watch-party` protocol version `1`.
 - `GET /health` reports identity and protocol version.
 - `GET /capabilities` reports non-sensitive capabilities.
 - `GET /probe` verifies a WebSocket upgrade.
+- `GET /join?room=...&token=...` serves the secure invite landing page.
 - `POST /rooms` creates an ephemeral room and returns `roomId`, `hostToken`,
   and `joinToken`.
 - `GET /rooms/{roomId}/connect` upgrades to the room WebSocket. Authentication

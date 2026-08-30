@@ -104,6 +104,18 @@ void FlutterWindow::SetupWindowChannel() {
           return;
         }
 
+        if (call.method_name() == "foreground") {
+          if (IsIconic(hwnd)) {
+            ShowWindow(hwnd, SW_RESTORE);
+          } else {
+            ShowWindow(hwnd, SW_SHOW);
+          }
+          SetForegroundWindow(hwnd);
+          BringWindowToTop(hwnd);
+          result->Success();
+          return;
+        }
+
         // PiP / window-management helpers
 
         if (call.method_name() == "getWindowRect") {

@@ -62,3 +62,10 @@ bool mediaIdBelongsToMode(String id, CatalogMode mode) {
     CatalogMode.anilist => normalized.startsWith('anilist:'),
   };
 }
+
+CatalogMode? catalogModeForMediaId(String id) {
+  final String normalized = id.trim().toLowerCase();
+  if (normalized.startsWith('tmdb:')) return CatalogMode.tmdb;
+  if (normalized.startsWith('anilist:')) return CatalogMode.anilist;
+  return null;
+}

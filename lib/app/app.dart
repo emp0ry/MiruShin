@@ -22,6 +22,7 @@ import '../features/profile/application/anilist_user_settings_provider.dart';
 import '../features/settings/application/settings_state.dart';
 import '../features/tracking/application/anilist_library_provider.dart';
 import 'app_routes.dart';
+import 'deep_links/mirushin_deep_link_service.dart';
 import 'localization/app_localizations.dart';
 import 'router.dart';
 import 'theme/app_theme.dart';
@@ -50,6 +51,10 @@ class _MiruShinAppState extends ConsumerState<MiruShinApp> {
     _playbackController = ref.read(playbackControllerProvider.notifier);
     _soraRuntime = ref.read(soraJsRuntimeProvider);
     _router = buildAppRouter(widget.initialRoute);
+    MiruShinDeepLinkService.instance.attachRouter(_router);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      MiruShinDeepLinkService.instance.markNavigationReady(_router);
+    });
     _lifecycleListener = AppLifecycleListener(
       onDetach: () => unawaited(_cleanupForExit()),
       onExitRequested: () async {
@@ -66,6 +71,7 @@ class _MiruShinAppState extends ConsumerState<MiruShinApp> {
 
   @override
   void dispose() {
+    MiruShinDeepLinkService.instance.detachRouter(_router);
     _lifecycleListener.dispose();
     unawaited(_cleanupForExit());
     CloudflareChallengeService.instance.registerSolver(null);

@@ -140,8 +140,8 @@ class _TestLocalizationsDelegate
 
 class _HostWatchPartyController extends WatchPartyController {
   static const String inviteUrl =
-      'mirushin:///watch-party/join?room=RelayRoom123456&transport=relay'
-      '&relay=https%3A%2F%2Frelay.example.com&token=guest-token';
+      'https://relay.example.com/join?room=RelayRoom123456'
+      '&token=guest_join_token_1234567890';
   static bool? lastStreamPermission;
 
   @override

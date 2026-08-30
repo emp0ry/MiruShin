@@ -252,7 +252,7 @@ class _JoinRoomScreenState extends ConsumerState<JoinRoomScreen> {
                       ],
                       decoration: const InputDecoration(
                         counterText: '',
-                        hintText: 'ABC123 or mirushin:///watch-party/…',
+                        hintText: 'ABC123 or a MiruShin invite link',
                         border: OutlineInputBorder(),
                       ),
                       onSubmitted: _join,

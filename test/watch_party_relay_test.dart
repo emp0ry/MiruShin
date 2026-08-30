@@ -79,21 +79,70 @@ void main() {
       joinToken: 'guest_join_token_1234567890',
     );
     final String encoded = invite.encode();
-    expect(encoded, startsWith('mirushin:///watch-party/join?'));
+    expect(
+      encoded,
+      'https://relay.example.com/join?room=AbCdEfGhIjKlMnOp'
+      '&token=guest_join_token_1234567890',
+    );
     expect(encoded, contains('guest_join_token_1234567890'));
     expect(encoded, isNot(contains('hostToken')));
+    expect(encoded, isNot(contains('relay=')));
+    expect(encoded, isNot(contains('transport=')));
 
     final WatchPartyInvite decoded = WatchPartyInvite.tryParse(encoded)!;
     expect(decoded.isRelay, isTrue);
     expect(decoded.roomId, invite.roomId);
     expect(decoded.relayUrl, invite.relayUrl);
     expect(decoded.joinToken, invite.joinToken);
-    expect(
-      WatchPartyInvite.tryParse(
-        'https://evil.example/watch-party/join?transport=relay&room=AbCdEfGhIjKlMnOp&relay=https%3A%2F%2Frelay.example.com&token=guest_join_token_1234567890',
-      ),
-      isNull,
+  });
+
+  test('relay invite preserves a configured base path', () {
+    final WatchPartyInvite invite = WatchPartyInvite(
+      roomId: 'AbCdEfGhIjKlMnOp',
+      mode: WatchPartyConnectionMode.selfHostedRelay,
+      relayUrl: Uri.parse('https://relay.example.com/mirushin/relay'),
+      joinToken: 'guest_join_token_1234567890',
     );
+    final String encoded = invite.encode();
+    expect(
+      encoded,
+      'https://relay.example.com/mirushin/relay/join'
+      '?room=AbCdEfGhIjKlMnOp&token=guest_join_token_1234567890',
+    );
+    expect(WatchPartyInvite.tryParse(encoded)?.relayUrl, invite.relayUrl);
+  });
+
+  test('internal bridge and legacy relay invites remain readable', () {
+    const String httpsInvite =
+        'https://relay.example.com/base/join?room=AbCdEfGhIjKlMnOp'
+        '&token=guest_join_token_1234567890';
+    final String bridge = Uri(
+      scheme: 'mirushin',
+      host: 'watch-party',
+      path: '/join',
+      queryParameters: const <String, String>{'invite': httpsInvite},
+    ).toString();
+    final WatchPartyInvite bridged = WatchPartyInvite.tryParse(bridge)!;
+    expect(bridged.relayUrl.toString(), 'https://relay.example.com/base');
+
+    const String legacy =
+        'mirushin:///watch-party/join?room=AbCdEfGhIjKlMnOp'
+        '&transport=relay&relay=https%3A%2F%2Frelay.example.com%2Fbase'
+        '&token=guest_join_token_1234567890';
+    final WatchPartyInvite decodedLegacy = WatchPartyInvite.tryParse(legacy)!;
+    expect(decodedLegacy.relayUrl.toString(), 'https://relay.example.com/base');
+  });
+
+  test('relay invites reject invalid routes, fields, and extra parameters', () {
+    for (final String value in <String>[
+      'https://evil.example/watch-party/join?transport=relay&room=AbCdEfGhIjKlMnOp&relay=https%3A%2F%2Frelay.example.com&token=guest_join_token_1234567890',
+      'https://relay.example.com/join?room=short&token=guest_join_token_1234567890',
+      'https://relay.example.com/join?room=AbCdEfGhIjKlMnOp&token=short',
+      'https://relay.example.com/join?room=AbCdEfGhIjKlMnOp&token=guest_join_token_1234567890&hostToken=secret',
+      'mirushin://watch-party/join?invite=mirushin%3A%2F%2Fwatch-party%2Fjoin%3Fcode%3DABC123',
+    ]) {
+      expect(WatchPartyInvite.tryParse(value), isNull, reason: value);
+    }
   });
 
   test('legacy default QR payload remains backward compatible', () {

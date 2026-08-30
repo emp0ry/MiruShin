@@ -43,3 +43,46 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+
+[Code]
+const
+  MiruShinProtocolKey = 'Software\Classes\mirushin';
+  MiruShinProtocolCommandKey = 'Software\Classes\mirushin\shell\open\command';
+
+function InstalledProtocolCommand: String;
+begin
+  Result := '"' + ExpandConstant('{app}\{#MyAppExeName}') + '" "%1"';
+end;
+
+procedure RegisterMiruShinProtocol;
+begin
+  RegWriteStringValue(HKCU, MiruShinProtocolKey, '', 'URL:MiruShin Protocol');
+  RegWriteStringValue(HKCU, MiruShinProtocolKey, 'URL Protocol', '');
+  RegWriteStringValue(
+    HKCU,
+    MiruShinProtocolCommandKey,
+    '',
+    InstalledProtocolCommand
+  );
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+    RegisterMiruShinProtocol;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  CurrentCommand: String;
+begin
+  if (CurUninstallStep = usUninstall) and
+     RegQueryStringValue(
+       HKCU,
+       MiruShinProtocolCommandKey,
+       '',
+       CurrentCommand
+     ) and
+     (CompareText(CurrentCommand, InstalledProtocolCommand) = 0) then
+    RegDeleteKeyIncludingSubkeys(HKCU, MiruShinProtocolKey);
+end;

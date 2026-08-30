@@ -60,7 +60,11 @@ GoRouter buildAppRouter(String initialLocation) => GoRouter(
       pageBuilder: (BuildContext context, GoRouterState state) => _appPage(
         context,
         state,
-        JoinRoomScreen(invite: WatchPartyInvite.tryParse(state.uri.toString())),
+        JoinRoomScreen(
+          invite: state.extra is WatchPartyInvite
+              ? state.extra! as WatchPartyInvite
+              : WatchPartyInvite.tryParse(state.uri.toString()),
+        ),
       ),
     ),
     ShellRoute(

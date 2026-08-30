@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app/app.dart';
+import 'app/deep_links/mirushin_deep_link_service.dart';
 import 'bootstrap/mirushin_fvp_bootstrap.dart';
 import 'bootstrap/mirushin_media_kit_bootstrap.dart';
 import 'core/cache/artwork_cache_manager.dart';
@@ -18,6 +19,7 @@ import 'features/settings/application/settings_state.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  MiruShinDeepLinkService.instance.initialize();
   final bool isPrimaryInstance = await acquireMiruShinSingleInstanceLock();
   if (!isPrimaryInstance) {
     debugPrint('MiruShin is already running; exiting duplicate instance.');

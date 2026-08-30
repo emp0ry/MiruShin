@@ -178,10 +178,13 @@ class DiscordRpcService {
         smallUrl: AppConstants.appWebsiteUrl,
       ),
       buttons: <_DiscordActivityButton>[
-        const _DiscordActivityButton(
-          label: 'Visit Website',
-          url: AppConstants.appWebsiteUrl,
-        ),
+        if (mediaUrl.isNotEmpty)
+          _DiscordActivityButton(label: 'Open in MiruShin', url: mediaUrl)
+        else
+          const _DiscordActivityButton(
+            label: 'Visit Website',
+            url: AppConstants.appWebsiteUrl,
+          ),
         const _DiscordActivityButton(
           label: 'Download MiruShin',
           url: AppConstants.githubLatestReleaseUrl,

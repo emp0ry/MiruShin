@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#0a0011">
+    <meta name="robots" content="noindex, nofollow">
+    <meta name="referrer" content="no-referrer">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-mirushin-open'; style-src 'nonce-mirushin-open'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
+    <title>Open in MiruShin</title>
+    <style nonce="mirushin-open">
+      :root { font-family: Inter, system-ui, sans-serif; }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0a0011; color: #f7efff; }
+      main { width: min(32rem, calc(100% - 3rem)); box-sizing: border-box; padding: 2rem; border: 1px solid #493556; border-radius: 1.25rem; background: #170d1e; text-align: center; box-shadow: 0 1rem 3rem #0008; }
+      h1 { margin: .25rem 0 .75rem; font-size: clamp(1.6rem, 7vw, 2.35rem); }
+      p { color: #cabdd2; line-height: 1.55; }
+      a { display: inline-block; margin-top: 1rem; padding: .85rem 1.25rem; border-radius: 999px; background: #c985ff; color: #170d1e; font-weight: 750; text-decoration: none; }
+      [hidden] { display: none; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Open in MiruShin</h1>
+      <p id="status">Checking this media link…</p>
+      <a id="open" hidden>Open in MiruShin</a>
+    </main>
+    <script nonce="mirushin-open">
+      (() => {
+        const status = document.getElementById('status');
+        const button = document.getElementById('open');
+        const raw = new URLSearchParams(location.search).get('target') || '';
+        let target;
+        try { target = new URL(raw); } catch (_) { target = null; }
+        const valid = target && raw.length <= 256 &&
+          target.protocol === 'mirushin:' && !target.username &&
+          !target.password && !target.port && !target.search && !target.hash &&
+          ((target.hostname === 'anilist' && /^\/(anime|manga)\/[1-9]\d*$/.test(target.pathname)) ||
+           (target.hostname === 'tmdb' && /^\/(movie|tv)\/[1-9]\d*$/.test(target.pathname)));
+        if (!valid) {
+          status.textContent = 'This MiruShin media link is invalid.';
+          return;
+        }
+        button.href = target.href;
+        button.hidden = false;
+        status.textContent = 'MiruShin should open automatically. Use the button if your browser asks for confirmation.';
+        location.replace(target.href);
+      })();
+    </script>
+  </body>
+</html>

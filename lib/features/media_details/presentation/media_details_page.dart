@@ -173,7 +173,8 @@ class _DetailsBody extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final CatalogMode mode = ref.watch(catalogModeProvider);
+    final CatalogMode mode =
+        catalogModeForMediaId(item.id) ?? ref.watch(catalogModeProvider);
     final bool hasAniListInfo =
         mode == CatalogMode.anilist &&
         (item.externalIds['anilist_source'] != null ||
@@ -367,7 +368,8 @@ class _OverviewPanel extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final CatalogMode mode = ref.watch(catalogModeProvider);
+    final CatalogMode mode =
+        catalogModeForMediaId(item.id) ?? ref.watch(catalogModeProvider);
     final List<Widget> chips = <Widget>[
       if (mode != CatalogMode.anilist && item.sourceProvider.isNotEmpty)
         MetadataChip(label: item.sourceProvider),
@@ -1049,7 +1051,8 @@ class _HeroCopy extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final CatalogMode mode = ref.watch(catalogModeProvider);
+    final CatalogMode mode =
+        catalogModeForMediaId(item.id) ?? ref.watch(catalogModeProvider);
     final String formatLabel = _mediaKindLabel(item);
     final String personalStatusLabel = _personalStatusLabel(ref, item, mode);
     final TextTheme textTheme = Theme.of(context).textTheme;
@@ -1249,7 +1252,8 @@ class _ActionPanel extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final CatalogMode mode = ref.watch(catalogModeProvider);
+    final CatalogMode mode =
+        catalogModeForMediaId(item.id) ?? ref.watch(catalogModeProvider);
     final SettingsState settings = ref.watch(settingsProvider);
     final String anilistToken = settings.anilistAccessToken.trim();
 
@@ -1829,7 +1833,8 @@ final _shikimoriRussianDescriptionProvider = FutureProvider.autoDispose
 /// it loads or when Shikimori has none.
 String _localizedOverview(WidgetRef ref, MediaItem item) {
   final bool wantsRussian =
-      ref.watch(catalogModeProvider) == CatalogMode.anilist &&
+      (catalogModeForMediaId(item.id) ?? ref.watch(catalogModeProvider)) ==
+          CatalogMode.anilist &&
       ref.watch(aniListEffectiveTitleLanguageProvider) == 'RUSSIAN';
   if (!wantsRussian) return item.overview;
   final int malId = int.tryParse(item.externalIds['mal'] ?? '') ?? 0;
@@ -2205,7 +2210,8 @@ class _SeasonsPanel extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final CatalogMode mode = ref.watch(catalogModeProvider);
+    final CatalogMode mode =
+        catalogModeForMediaId(item.id) ?? ref.watch(catalogModeProvider);
     final SettingsState settings = ref.watch(settingsProvider);
     final String anilistToken = settings.anilistAccessToken.trim();
     final LocalLibraryController controller = ref.read(

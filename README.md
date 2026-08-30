@@ -89,6 +89,12 @@ Grab the latest build for your device from the **[Releases page](https://github.
 > [!NOTE]
 > **Windows:** the `.exe` installer is unsigned, so Microsoft Defender may show a false-positive warning. If that happens, use the `.msi` installer or the portable `.zip` instead.
 
+On Linux, the `.deb` desktop entry registers `mirushin://` links. AppImage
+desktop integration uses the same scheme declaration. For the portable
+`.tar.gz`, extract it and run `./install-url-handler.sh`; run
+`./install-url-handler.sh --remove` before deleting that copy. Removal only
+clears the handler when it still points to the same portable executable.
+
 ### iOS one-tap install
 
 MiruShin works with **AltStore**, **SideStore**, **Feather**, and **LiveContainer**, so you can install the `.ipa` and get future updates automatically. Tap a button **on your iPhone or iPad** (with the installer app already set up):
@@ -228,6 +234,9 @@ lib/
   features/   # domain-focused feature modules
   shared/     # app-wide models and shared data structures
 ```
+
+The public application-link routes and platform registration behavior are
+documented in [`docs/DEEP_LINKS.md`](docs/DEEP_LINKS.md).
 
 ### Built with
 

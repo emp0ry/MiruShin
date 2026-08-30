@@ -93,7 +93,13 @@ jobs:
           fi
 
           TGZ="${APP_NAME}-linux-v${VERSION}.tar.gz"
-          tar -C "$OUT_DIR" -czf "$TGZ" .
+          TAR_STAGE="${RUNNER_TEMP}/mirushin-tar-${VERSION}"
+          rm -rf "$TAR_STAGE"
+          mkdir -p "$TAR_STAGE"
+          cp -a "$OUT_DIR/." "$TAR_STAGE/"
+          cp linux/packaging/install-url-handler.sh "$TAR_STAGE/"
+          chmod +x "$TAR_STAGE/install-url-handler.sh"
+          tar -C "$TAR_STAGE" -czf "$TGZ" .
           echo "tgz_path=$TGZ" >> "$GITHUB_OUTPUT"
 
       - name: Build AppImage
@@ -131,9 +137,10 @@ jobs:
           [Desktop Entry]
           Type=Application
           Name=${APP_NAME}
-          Exec=$(basename "$APP_BIN")
+          Exec=$(basename "$APP_BIN") %u
           Icon=${LINUX_APP_ID}
           Categories=AudioVideo;
+          MimeType=x-scheme-handler/mirushin;
           StartupWMClass=${APP_NAME}
           EOAPP
 
@@ -232,9 +239,10 @@ jobs:
           [Desktop Entry]
           Type=Application
           Name=${APP_NAME}
-          Exec=${PKG}
+          Exec=${PKG} %u
           Icon=${LINUX_APP_ID}
           Categories=AudioVideo;
+          MimeType=x-scheme-handler/mirushin;
           StartupWMClass=${APP_NAME}
           EOF
 

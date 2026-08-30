@@ -1,11 +1,15 @@
+import '../application/watch_party_connection_settings.dart';
 import 'watch_party_models.dart';
 
 /// QR payload helpers for watch-party pairing. Default rooms keep the original
 /// code URI; relay rooms also carry their relay origin and guest join token.
 
 const String _qrPrefix = 'mirushin://watch-party/join?code=';
+const int _maximumInviteLength = 4096;
 
 final RegExp _codePattern = RegExp(r'^[A-Z0-9]{6}$');
+final RegExp _relayRoomPattern = RegExp(r'^[A-Za-z0-9_-]{8,64}$');
+final RegExp _relayTokenPattern = RegExp(r'^[A-Za-z0-9_-]{16,256}$');
 
 String encodeWatchPartyQr(String code) => '$_qrPrefix$code';
 
@@ -26,44 +30,124 @@ class WatchPartyInvite {
 
   String encode() {
     if (!isRelay) return encodeWatchPartyQr(roomId);
-    final String query = Uri(
-      queryParameters: <String, String>{
-        'room': roomId,
-        'transport': 'relay',
-        'relay': relayUrl.toString(),
-        'token': joinToken!,
-      },
-    ).query;
-    return 'mirushin:///watch-party/join?$query';
+    final Uri relay = WatchPartyRelayUrl.parse(relayUrl.toString());
+    return WatchPartyRelayUrl.endpoint(relay, '/join')
+        .replace(
+          queryParameters: <String, String>{
+            'room': roomId,
+            'token': joinToken!,
+          },
+        )
+        .toString();
   }
 
   static WatchPartyInvite? tryParse(String? raw) {
     if (raw == null || raw.trim().isEmpty) return null;
     final String value = raw.trim();
-    final Uri? uri = Uri.tryParse(value);
-    if (uri?.queryParameters['transport'] == 'relay') {
-      final bool validRoute =
-          (uri!.scheme == 'mirushin' || uri.scheme.isEmpty) &&
-          uri.path == '/watch-party/join';
-      final String room = uri.queryParameters['room']?.trim() ?? '';
-      final Uri? relay = Uri.tryParse(uri.queryParameters['relay'] ?? '');
-      final String token = uri.queryParameters['token']?.trim() ?? '';
-      if (!validRoute ||
-          !RegExp(r'^[A-Za-z0-9_-]{8,64}$').hasMatch(room) ||
-          relay == null ||
-          relay.host.isEmpty ||
-          !RegExp(r'^[A-Za-z0-9_-]{16,256}$').hasMatch(token)) {
-        return null;
-      }
-      return WatchPartyInvite(
-        roomId: room,
-        mode: WatchPartyConnectionMode.selfHostedRelay,
-        relayUrl: relay,
-        joinToken: token,
-      );
+    if (value.length > _maximumInviteLength) return null;
+    try {
+      return _tryParse(value, allowBridge: true);
+    } on FormatException {
+      return null;
+    } on ArgumentError {
+      return null;
     }
-    final String? code = decodeWatchPartyQr(value);
-    return code == null ? null : WatchPartyInvite(roomId: code);
+  }
+
+  static WatchPartyInvite? _tryParse(
+    String value, {
+    required bool allowBridge,
+  }) {
+    final Uri? uri = Uri.tryParse(value);
+    if (uri == null) return null;
+
+    if (_isMiruShinJoinRoute(uri)) {
+      final Map<String, List<String>> parameters = uri.queryParametersAll;
+      if (allowBridge && _hasExactParameters(parameters, <String>{'invite'})) {
+        final String nested = parameters['invite']!.single.trim();
+        if (nested.isEmpty || nested.length > _maximumInviteLength) return null;
+        final Uri? nestedUri = Uri.tryParse(nested);
+        if (nestedUri == null ||
+            (nestedUri.scheme != 'https' && nestedUri.scheme != 'http')) {
+          return null;
+        }
+        return _tryParse(nested, allowBridge: false);
+      }
+
+      if (_hasExactParameters(parameters, <String>{'code'})) {
+        final String code = parameters['code']!.single.trim().toUpperCase();
+        return _codePattern.hasMatch(code)
+            ? WatchPartyInvite(roomId: code)
+            : null;
+      }
+
+      // Backward compatibility for relay invites emitted before the HTTPS
+      // landing-page contract. New invites are never generated in this form.
+      if (_hasExactParameters(parameters, <String>{
+            'room',
+            'transport',
+            'relay',
+            'token',
+          }) &&
+          parameters['transport']!.single == 'relay') {
+        final String room = parameters['room']!.single.trim();
+        final String token = parameters['token']!.single.trim();
+        if (!_relayRoomPattern.hasMatch(room) ||
+            !_relayTokenPattern.hasMatch(token)) {
+          return null;
+        }
+        final Uri relay = WatchPartyRelayUrl.parse(parameters['relay']!.single);
+        return WatchPartyInvite(
+          roomId: room,
+          mode: WatchPartyConnectionMode.selfHostedRelay,
+          relayUrl: relay,
+          joinToken: token,
+        );
+      }
+      return null;
+    }
+
+    if (uri.scheme == 'https' || uri.scheme == 'http') {
+      return _tryParseRelayLandingUri(uri);
+    }
+
+    final String bare = value.toUpperCase();
+    return _codePattern.hasMatch(bare) ? WatchPartyInvite(roomId: bare) : null;
+  }
+
+  static WatchPartyInvite? _tryParseRelayLandingUri(Uri uri) {
+    if (uri.host.isEmpty || uri.userInfo.isNotEmpty || uri.hasFragment) {
+      return null;
+    }
+    final Map<String, List<String>> parameters = uri.queryParametersAll;
+    if (!_hasExactParameters(parameters, <String>{'room', 'token'})) {
+      return null;
+    }
+    final List<String> segments = uri.pathSegments;
+    if (segments.isEmpty || segments.last != 'join') return null;
+
+    final String room = parameters['room']!.single.trim();
+    final String token = parameters['token']!.single.trim();
+    if (!_relayRoomPattern.hasMatch(room) ||
+        !_relayTokenPattern.hasMatch(token)) {
+      return null;
+    }
+
+    final List<String> baseSegments = segments.sublist(0, segments.length - 1);
+    final Uri relay = WatchPartyRelayUrl.parse(
+      Uri(
+        scheme: uri.scheme,
+        host: uri.host,
+        port: uri.hasPort ? uri.port : null,
+        pathSegments: baseSegments,
+      ).toString(),
+    );
+    return WatchPartyInvite(
+      roomId: room,
+      mode: WatchPartyConnectionMode.selfHostedRelay,
+      relayUrl: relay,
+      joinToken: token,
+    );
   }
 }
 
@@ -78,13 +162,36 @@ String? decodeWatchPartyQr(String? raw) {
   final String trimmed = raw.trim();
   if (trimmed.isEmpty) return null;
 
-  final Uri? uri = Uri.tryParse(trimmed);
-  final String? fromQuery = uri?.queryParameters['code'];
-  if (fromQuery != null) {
-    final String code = fromQuery.trim().toUpperCase();
-    if (_codePattern.hasMatch(code)) return code;
+  try {
+    final Uri? uri = Uri.tryParse(trimmed);
+    if (uri != null && _isMiruShinJoinRoute(uri)) {
+      final Map<String, List<String>> parameters = uri.queryParametersAll;
+      if (_hasExactParameters(parameters, <String>{'code'})) {
+        final String code = parameters['code']!.single.trim().toUpperCase();
+        if (_codePattern.hasMatch(code)) return code;
+      }
+    }
+  } on FormatException {
+    return null;
   }
 
   final String bare = trimmed.toUpperCase();
   return _codePattern.hasMatch(bare) ? bare : null;
+}
+
+bool _isMiruShinJoinRoute(Uri uri) {
+  if (uri.scheme.isEmpty) return uri.path == '/watch-party/join';
+  if (uri.scheme.toLowerCase() != 'mirushin') return false;
+  return (uri.host.toLowerCase() == 'watch-party' && uri.path == '/join') ||
+      (uri.host.isEmpty && uri.path == '/watch-party/join');
+}
+
+bool _hasExactParameters(
+  Map<String, List<String>> parameters,
+  Set<String> expected,
+) {
+  return parameters.length == expected.length &&
+      expected.every(
+        (String key) => parameters[key] != null && parameters[key]!.length == 1,
+      );
 }
