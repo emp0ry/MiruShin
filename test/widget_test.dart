@@ -6,6 +6,7 @@ import 'package:mirushin/app/app.dart';
 import 'package:mirushin/app/localization/app_localizations.dart';
 import 'package:mirushin/app/theme/app_theme.dart';
 import 'package:mirushin/features/media_details/presentation/media_details_page.dart';
+import 'package:mirushin/features/settings/application/settings_state.dart';
 import 'package:mirushin/shared/models/media_item.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -212,7 +213,11 @@ void main() {
       trailer: MediaTrailer(id: 'demo-trailer', site: 'YouTube'),
     );
 
-    Future<void> pumpDetails(Size size) async {
+    Future<void> pumpDetails(
+      Size size, {
+      bool expectCompactPoster = false,
+      bool forceCompactMode = false,
+    }) async {
       tester.view.physicalSize = size;
       tester.view.devicePixelRatio = 1;
       await tester.pumpWidget(
@@ -234,6 +239,12 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
+      if (forceCompactMode) {
+        ProviderScope.containerOf(
+          tester.element(find.byType(MediaDetailsPage)),
+        ).read(settingsProvider.notifier).setCompactMode(true);
+        await tester.pumpAndSettle();
+      }
       expect(find.text('Edit'), findsOneWidget);
       expect(
         find.byKey(const ValueKey<String>('details-watch-action')),
@@ -254,6 +265,18 @@ void main() {
       final Finder posterButton = find.byKey(
         const ValueKey<String>('details-poster-open'),
       );
+      final Finder detailsHero = find.byKey(
+        const ValueKey<String>('details-hero'),
+      );
+      final Finder heroOverview = find.descendant(
+        of: detailsHero,
+        matching: find.text(item.overview),
+      );
+      expect(
+        find.descendant(of: detailsHero, matching: posterButton),
+        findsOneWidget,
+      );
+      expect(heroOverview, findsOneWidget);
       expect(
         find.ancestor(of: posterButton, matching: find.byType(Tooltip)),
         findsNothing,
@@ -291,9 +314,20 @@ void main() {
       final Size editSize = tester.getSize(
         find.byKey(const ValueKey<String>('details-edit-action')),
       );
+      final Rect posterRect = tester.getRect(posterButton);
+      final Finder heroTitle = find.text(item.title);
+      final Rect titleRect = tester.getRect(heroTitle);
+      final Rect overviewRect = tester.getRect(heroOverview);
       expect(watchSize.height, 58);
       expect(watchSize.width, greaterThan(trailerSize.width));
+      if (expectCompactPoster) {
+        expect(posterRect.width, lessThan(188));
+        expect(posterRect.right, lessThan(titleRect.left));
+        expect(posterRect.right, lessThan(overviewRect.left));
+      }
       if (size.width < 600) {
+        expect(tester.widget<Text>(heroTitle).style?.fontSize, lessThan(32));
+        expect(tester.widget<Text>(heroOverview).style?.fontSize, lessThan(16));
         expect(trailerSize.height, 54);
         expect(editSize.height, 54);
         expect(trailerSize.width, closeTo(editSize.width, 0.01));
@@ -306,7 +340,13 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     await pumpDetails(const Size(1280, 900));
-    await pumpDetails(const Size(390, 844));
+    await pumpDetails(const Size(390, 844), expectCompactPoster: true);
+
+    await pumpDetails(
+      const Size(1280, 900),
+      expectCompactPoster: true,
+      forceCompactMode: true,
+    );
   });
 
   testWidgets('AniList stats wrap without overflowing narrow details cards', (

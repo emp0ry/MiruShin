@@ -174,9 +174,6 @@ class _DetailsBody extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final CatalogMode mode = ref.watch(catalogModeProvider);
-    final bool forceCompact = ref.watch(
-      settingsProvider.select((SettingsState settings) => settings.compactMode),
-    );
     final bool hasAniListInfo =
         mode == CatalogMode.anilist &&
         (item.externalIds['anilist_source'] != null ||
@@ -187,42 +184,25 @@ class _DetailsBody extends ConsumerWidget {
             item.externalIds['anilist_popularity'] != null ||
             item.episodeCount != null ||
             item.genres.isNotEmpty);
-    return LayoutBuilder(
-      builder: (BuildContext context, BoxConstraints constraints) {
-        final bool compact =
-            AppBreakpoints.classify(
-              constraints.maxWidth,
-              forceCompact: forceCompact,
-            ) ==
-            WindowSizeClass.compact;
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            if (compact && item.posterUrl.isNotEmpty) ...<Widget>[
-              Align(
-                alignment: Alignment.center,
-                child: _PosterPreview(item: item),
-              ),
-              const SizedBox(height: AppSpacing.xxl),
-            ],
-            _ActionPanel(item: item),
-            const SizedBox(height: AppSpacing.xxl),
-            _OverviewPanel(item: item),
-            if (hasAniListInfo) ...<Widget>[
-              const SizedBox(height: AppSpacing.xxl),
-              _AniListInfoPanel(item: item),
-            ],
-            if (item.type == MediaType.anime) ...<Widget>[
-              const SizedBox(height: AppSpacing.xxl),
-              _AnimeThemesPanel(item: item),
-            ],
-            if (item.seasons.isNotEmpty) ...<Widget>[
-              const SizedBox(height: AppSpacing.xxl),
-              _SeasonsPanel(item: item),
-            ],
-          ],
-        );
-      },
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        _ActionPanel(item: item),
+        const SizedBox(height: AppSpacing.xxl),
+        _OverviewPanel(item: item),
+        if (hasAniListInfo) ...<Widget>[
+          const SizedBox(height: AppSpacing.xxl),
+          _AniListInfoPanel(item: item),
+        ],
+        if (item.type == MediaType.anime) ...<Widget>[
+          const SizedBox(height: AppSpacing.xxl),
+          _AnimeThemesPanel(item: item),
+        ],
+        if (item.seasons.isNotEmpty) ...<Widget>[
+          const SizedBox(height: AppSpacing.xxl),
+          _SeasonsPanel(item: item),
+        ],
+      ],
     );
   }
 }
@@ -838,6 +818,21 @@ class _DetailsHero extends ConsumerWidget {
               forceCompact: forceCompact,
             ) ==
             WindowSizeClass.compact;
+        final double compactPosterWidth =
+            ((constraints.maxWidth - (AppSpacing.lg * 2)) * 0.30)
+                .clamp(84.0, 112.0)
+                .toDouble();
+        final double compactCopyWidth =
+            (constraints.maxWidth - (AppSpacing.lg * 2))
+                .clamp(0.0, 820.0)
+                .toDouble();
+        final double compactTextWidth = item.posterUrl.isEmpty
+            ? compactCopyWidth
+            : compactCopyWidth - compactPosterWidth - AppSpacing.md;
+        final double compactTextScale =
+            0.75 +
+            (((compactTextWidth - 160) / 200).clamp(0.0, 1.0).toDouble() *
+                0.25);
         final Widget backdrop = item.backdropUrl.isEmpty
             ? DecoratedBox(
                 decoration: BoxDecoration(
@@ -866,6 +861,7 @@ class _DetailsHero extends ConsumerWidget {
           ],
         );
         return RepaintBoundary(
+          key: const ValueKey<String>('details-hero'),
           child: ClipRRect(
             borderRadius: AppRadius.all(AppRadius.xxl),
             clipBehavior: Clip.hardEdge,
@@ -941,7 +937,19 @@ class _DetailsHero extends ConsumerWidget {
                       right: compact ? AppSpacing.lg : AppSpacing.xxl,
                       bottom: compact ? AppSpacing.xl : AppSpacing.xxl,
                       child: compact
-                          ? _HeroCopy(item: item, compact: true)
+                          ? _HeroCopy(
+                              item: item,
+                              compact: true,
+                              compactTextScale: compactTextScale,
+                              leading: item.posterUrl.isEmpty
+                                  ? null
+                                  : _PosterPreview(
+                                      item: item,
+                                      width: compactPosterWidth,
+                                      height: compactPosterWidth * 1.5,
+                                      radius: AppRadius.lg,
+                                    ),
+                            )
                           : Row(
                               crossAxisAlignment: CrossAxisAlignment.end,
                               children: <Widget>[
@@ -967,14 +975,22 @@ void _goBackFromDetails(BuildContext context) {
 }
 
 class _PosterPreview extends StatelessWidget {
-  const _PosterPreview({required this.item});
+  const _PosterPreview({
+    required this.item,
+    this.width = 188,
+    this.height = 282,
+    this.radius = AppRadius.xl,
+  });
 
   final MediaItem item;
+  final double width;
+  final double height;
+  final double radius;
 
   @override
   Widget build(BuildContext context) {
     final AppThemeExtension palette = AppThemeExtension.of(context);
-    final BorderRadius borderRadius = AppRadius.all(AppRadius.xl);
+    final BorderRadius borderRadius = AppRadius.all(radius);
     final Widget poster = item.posterUrl.isEmpty
         ? DecoratedBox(
             decoration: BoxDecoration(gradient: palette.posterFallbackGradient),
@@ -992,8 +1008,8 @@ class _PosterPreview extends StatelessWidget {
                 ),
           );
     return SizedBox(
-      width: 188,
-      height: 282,
+      width: width,
+      height: height,
       child: item.posterUrl.isEmpty
           ? ClipRRect(borderRadius: borderRadius, child: poster)
           : Semantics(
@@ -1019,16 +1035,35 @@ class _PosterPreview extends StatelessWidget {
 }
 
 class _HeroCopy extends ConsumerWidget {
-  const _HeroCopy({required this.item, this.compact = false});
+  const _HeroCopy({
+    required this.item,
+    this.compact = false,
+    this.compactTextScale = 1,
+    this.leading,
+  });
 
   final MediaItem item;
   final bool compact;
+  final double compactTextScale;
+  final Widget? leading;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final CatalogMode mode = ref.watch(catalogModeProvider);
     final String formatLabel = _mediaKindLabel(item);
     final String personalStatusLabel = _personalStatusLabel(ref, item, mode);
+    final TextTheme textTheme = Theme.of(context).textTheme;
+    final TextStyle? baseTitleStyle = compact
+        ? textTheme.headlineLarge
+        : textTheme.displayLarge;
+    final TextStyle? baseOverviewStyle = textTheme.bodyLarge;
+    final double overviewTextScale = 1 - ((1 - compactTextScale) * 0.5);
+    final double? titleFontSize = compact
+        ? (baseTitleStyle?.fontSize ?? 32) * compactTextScale
+        : null;
+    final double? overviewFontSize = compact
+        ? (baseOverviewStyle?.fontSize ?? 16) * overviewTextScale
+        : null;
     // final String aniListTitleLanguage = ref.watch(
     //   aniListEffectiveTitleLanguageProvider,
     // );
@@ -1036,6 +1071,46 @@ class _HeroCopy extends ConsumerWidget {
     //   item,
     //   aniListTitleLanguage: aniListTitleLanguage,
     // );
+    final List<Widget> titleAndOverview = <Widget>[
+      GestureDetector(
+        onTap: () {
+          Clipboard.setData(ClipboardData(text: item.title));
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(context.t('Title copied'))));
+        },
+        child: Text(
+          item.title,
+          maxLines: compact ? 4 : 3,
+          overflow: TextOverflow.ellipsis,
+          style: baseTitleStyle?.copyWith(
+            color: Colors.white,
+            fontSize: titleFontSize,
+          ),
+        ),
+      ),
+      // if (secondaryTitle != null) ...<Widget>[
+      //   const SizedBox(height: AppSpacing.sm),
+      //   Text(
+      //     secondaryTitle,
+      //     maxLines: 1,
+      //     overflow: TextOverflow.ellipsis,
+      //     style: Theme.of(
+      //       context,
+      //     ).textTheme.titleMedium?.copyWith(color: Colors.white70),
+      //   ),
+      // ],
+      const SizedBox(height: AppSpacing.md),
+      Text(
+        _localizedOverview(ref, item),
+        maxLines: compact ? 4 : 5,
+        overflow: TextOverflow.ellipsis,
+        style: baseOverviewStyle?.copyWith(
+          color: Colors.white70,
+          fontSize: overviewFontSize,
+        ),
+      ),
+    ];
     return ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 820),
       child: Column(
@@ -1073,44 +1148,23 @@ class _HeroCopy extends ConsumerWidget {
             ],
           ),
           const SizedBox(height: AppSpacing.lg),
-          GestureDetector(
-            onTap: () {
-              Clipboard.setData(ClipboardData(text: item.title));
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text(context.t('Title copied'))),
-              );
-            },
-            child: Text(
-              item.title,
-              maxLines: compact ? 4 : 3,
-              overflow: TextOverflow.ellipsis,
-              style:
-                  (compact
-                          ? Theme.of(context).textTheme.headlineLarge
-                          : Theme.of(context).textTheme.displayLarge)
-                      ?.copyWith(color: Colors.white),
+          if (leading == null)
+            ...titleAndOverview
+          else
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                leading!,
+                const SizedBox(width: AppSpacing.md),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: titleAndOverview,
+                  ),
+                ),
+              ],
             ),
-          ),
-          // if (secondaryTitle != null) ...<Widget>[
-          //   const SizedBox(height: AppSpacing.sm),
-          //   Text(
-          //     secondaryTitle,
-          //     maxLines: 1,
-          //     overflow: TextOverflow.ellipsis,
-          //     style: Theme.of(
-          //       context,
-          //     ).textTheme.titleMedium?.copyWith(color: Colors.white70),
-          //   ),
-          // ],
-          const SizedBox(height: AppSpacing.md),
-          Text(
-            _localizedOverview(ref, item),
-            maxLines: compact ? 4 : 5,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(
-              context,
-            ).textTheme.bodyLarge?.copyWith(color: Colors.white70),
-          ),
         ],
       ),
     );
