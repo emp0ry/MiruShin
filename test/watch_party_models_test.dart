@@ -143,6 +143,29 @@ void main() {
     expect(decoded.speed, 2.0);
     expect(decoded.temporarySpeedActive, isTrue);
   });
+
+  test('playing position extrapolates only plausible network transit', () {
+    const int now = 2_000_000;
+    final WatchPartyEvent fresh = WatchPartyEvent(
+      type: WatchPartyEventType.positionSync,
+      sentAt: now - 250,
+      position: const Duration(seconds: 40),
+      speed: 2,
+      isPlaying: true,
+    );
+    final WatchPartyEvent clockSkewed = WatchPartyEvent(
+      type: WatchPartyEventType.positionSync,
+      sentAt: now - const Duration(minutes: 2).inMilliseconds,
+      position: const Duration(seconds: 40),
+      isPlaying: true,
+    );
+
+    expect(
+      fresh.expectedPositionAt(now),
+      const Duration(seconds: 40, milliseconds: 500),
+    );
+    expect(clockSkewed.expectedPositionAt(now), clockSkewed.position);
+  });
 }
 
 SourceDescriptor _descriptor({

@@ -226,9 +226,13 @@ class WatchPartyPermissions {
   static const WatchPartyPermissions locked = WatchPartyPermissions();
 }
 
-/// A single sync message. Carries a server-agnostic [sentAt] timestamp so the
-/// receiver can extrapolate the expected position:
-/// `expected = position + ((now - sentAt) / 1000) * speed` while playing.
+/// Maximum plausible in-flight age used for position extrapolation. Host and
+/// guest wall clocks are not guaranteed to agree, so a larger delta is treated
+/// as clock skew instead of advancing the guest toward the end of the video.
+const Duration maxWatchPartyEventTransit = Duration(seconds: 5);
+
+/// A single sync message. [sentAt] is used only for short, plausible network
+/// transit; cross-device wall-clock skew must never become playback progress.
 class WatchPartyEvent {
   WatchPartyEvent({
     required this.type,
@@ -249,6 +253,17 @@ class WatchPartyEvent {
   final bool temporarySpeedActive;
   final SourceDescriptor? source;
   final WatchPartyPermissions? permissions;
+
+  Duration expectedPositionAt(int nowMillisecondsSinceEpoch) {
+    if (!isPlaying) return position;
+    final int elapsedMs = nowMillisecondsSinceEpoch - sentAt;
+    if (elapsedMs <= 0 ||
+        elapsedMs > maxWatchPartyEventTransit.inMilliseconds) {
+      return position;
+    }
+    final int advancedMs = (elapsedMs * speed).round();
+    return position + Duration(milliseconds: advancedMs);
+  }
 
   Map<String, dynamic> toJson() => <String, dynamic>{
     'type': type.name,

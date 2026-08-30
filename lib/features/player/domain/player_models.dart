@@ -630,6 +630,32 @@ class MediaPlaybackItem {
   /// Voiceover already resolved into this item's stream URLs, when applicable.
   final String? initialVoiceoverId;
 
+  MediaPlaybackItem withIgnoreProgress(bool value) {
+    if (value == ignoreProgress) return this;
+    return MediaPlaybackItem(
+      id: id,
+      title: title,
+      mediaType: mediaType,
+      servers: servers,
+      subtitle: subtitle,
+      originalTitle: originalTitle,
+      posterUrl: posterUrl,
+      backdropUrl: backdropUrl,
+      externalIds: externalIds,
+      seasons: seasons,
+      currentEpisodeId: currentEpisodeId,
+      skipMarkers: skipMarkers,
+      startPosition: startPosition,
+      startPolicy: startPolicy,
+      seasonNumber: seasonNumber,
+      episodeNumber: episodeNumber,
+      episodeCount: episodeCount,
+      ignoreProgress: value,
+      initialQualityId: initialQualityId,
+      initialVoiceoverId: initialVoiceoverId,
+    );
+  }
+
   Episode? get currentEpisode {
     for (final Season season in seasons) {
       for (final Episode episode in season.episodes) {

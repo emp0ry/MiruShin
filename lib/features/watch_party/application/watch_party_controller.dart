@@ -107,7 +107,8 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
     final WebRtcSyncService webrtc = WebRtcSyncService();
     _signaling = signaling;
     _webrtc = webrtc;
-    _resolver = WatchPartyGuestResolver(ref, ignoreProgress: false);
+    _resolver = WatchPartyGuestResolver(ref);
+    _setCurrentPartyProgressIgnored(false);
     _bindWebrtc(webrtc, role: WatchPartyRole.host);
 
     try {
@@ -147,16 +148,7 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
     _resolver = WatchPartyGuestResolver(ref);
     _code = code;
     _bindWebrtc(webrtc, role: WatchPartyRole.guest);
-    final PlaybackController playback = ref.read(
-      playbackControllerProvider.notifier,
-    );
-    playback.setGuestLocked(true);
-    playback.setGuestPermissions(
-      canControlPlayback: state.permissions.canControlPlayback,
-      canSeek: state.permissions.canSeek,
-      canChangeSpeed: state.permissions.canChangeSpeed,
-      canChangeStream: state.permissions.canChangeStream,
-    );
+    _lockGuestPlayback();
 
     try {
       final Map<String, dynamic>? offer = await signaling.fetchOffer(code);
@@ -236,7 +228,8 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
       connectionMode: WatchPartyConnectionMode.selfHostedRelay,
       relayUrl: relay.toString(),
     );
-    _resolver = WatchPartyGuestResolver(ref, ignoreProgress: false);
+    _resolver = WatchPartyGuestResolver(ref);
+    _setCurrentPartyProgressIgnored(false);
     try {
       final SelfHostedRelayHostConnection connection =
           await SelfHostedRelayTransport.createHost(relay);
@@ -265,6 +258,7 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
       playbackControllerProvider.notifier,
     );
     playback.setGuestLocked(true);
+    _setCurrentPartyProgressIgnored(false);
     playback.setGuestPermissions(
       canControlPlayback: state.permissions.canControlPlayback,
       canSeek: state.permissions.canSeek,
@@ -737,11 +731,14 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
 
   /// expected = position + ((now - sentAt) / 1000) * speed, when playing.
   Duration _expectedPosition(WatchPartyEvent event) {
-    if (!event.isPlaying) return event.position;
-    final int elapsedMs = DateTime.now().millisecondsSinceEpoch - event.sentAt;
-    if (elapsedMs <= 0) return event.position;
-    final int advancedMs = (elapsedMs * event.speed).round();
-    return event.position + Duration(milliseconds: advancedMs);
+    return event.expectedPositionAt(DateTime.now().millisecondsSinceEpoch);
+  }
+
+  void _setCurrentPartyProgressIgnored(bool ignored) {
+    if (_currentDescriptor() == null) return;
+    ref
+        .read(playbackControllerProvider.notifier)
+        .setCurrentItemProgressIgnored(ignored);
   }
 
   // Host snapshot / heartbeat
@@ -919,6 +916,7 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
     );
     playback.setPlaybackSyncSink(null);
     playback.setGuestLocked(false);
+    if (state.isGuest) _setCurrentPartyProgressIgnored(false);
 
     final String? code = _code;
     // Rooms have a short KV TTL. Avoid delete calls in failure paths so a bad
@@ -990,6 +988,7 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
     );
     playback.setPlaybackSyncSink(null);
     playback.setGuestLocked(false);
+    if (state.isGuest) _setCurrentPartyProgressIgnored(false);
 
     // Let the room expire by TTL; no cleanup request is needed.
     await _transport?.disconnect(closeRoom: state.isHost);

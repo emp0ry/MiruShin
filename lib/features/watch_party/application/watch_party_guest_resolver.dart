@@ -16,13 +16,12 @@ import '../domain/watch_party_models.dart';
 
 /// Re-resolves a watch-party episode/source **locally** through this device's
 /// own Sora addon (no stream URL is shared), then loads and aligns the player.
-/// Guests use [ignoreProgress] while the host keeps normal progress persistence
-/// when accepting a permitted guest stream request.
+/// Both hosts and guests retain normal local and tracker progress persistence;
+/// the party lock separately prevents guests from advancing episodes.
 class WatchPartyGuestResolver {
-  WatchPartyGuestResolver(this._ref, {this.ignoreProgress = true});
+  WatchPartyGuestResolver(this._ref);
 
   final Ref _ref;
-  final bool ignoreProgress;
 
   /// Applies [descriptor]: re-resolves the stream locally and, if it is a new
   /// episode/source, swaps it into the player (or navigates into the player when
@@ -42,8 +41,13 @@ class WatchPartyGuestResolver {
     );
 
     // Realign without reloading when the exact episode and source are active.
-    final PlaybackState currentState = _ref.read(playbackControllerProvider);
-    final MediaPlaybackItem? current = currentState.item;
+    PlaybackState currentState = _ref.read(playbackControllerProvider);
+    MediaPlaybackItem? current = currentState.item;
+    if (current != null && _isSameEpisode(current, descriptor)) {
+      playback.setCurrentItemProgressIgnored(false);
+      currentState = _ref.read(playbackControllerProvider);
+      current = currentState.item;
+    }
     if (!forceReload &&
         _isSameSource(currentState, descriptor, syncQuality: syncQuality)) {
       await _align(
@@ -161,9 +165,9 @@ class WatchPartyGuestResolver {
       descriptor.seasonNumber,
       startPosition: startPosition,
       startPolicy: PlaybackStartPolicy.explicitPosition,
-      // The guest mirrors the host; it shouldn't drive auto-next or persist its
-      // own progress for the shared session.
-      ignoreProgress: ignoreProgress,
+      // Every participant owns their local/tracker progress. Guest auto-next is
+      // suppressed independently by PlaybackController's party lock.
+      ignoreProgress: false,
       initialQualityId: initialQualityId,
       initialVoiceoverId: descriptor.voiceoverId,
       useBundleSelectedVoiceover: false,

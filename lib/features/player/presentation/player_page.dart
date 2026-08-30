@@ -274,6 +274,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     );
     if (!mounted) return;
     if (confirmed) {
+      if (!_playbackNotifier.allowsEpisodeNavigation) return;
       await _exitPlayer(playNext: true);
       return;
     }
@@ -321,7 +322,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
           isPlaying: engine?.value.isPlaying ?? true,
           hasNext:
               !(ref.read(playbackControllerProvider).item?.ignoreProgress ??
-                  false),
+                  false) &&
+              _playbackNotifier.allowsEpisodeNavigation,
         );
   }
 
@@ -566,6 +568,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
   void _maybeScheduleAutoNext(PlaybackState state, PlayerSettings settings) {
     final bool shouldAutoNext =
         !_exitingPlayer &&
+        _playbackNotifier.allowsEpisodeNavigation &&
         isSamePlaybackRouteItem(state.item, widget.item) &&
         settings.autoplayNext &&
         state.autoNextVisible &&
@@ -628,7 +631,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     if (!mounted ||
         _exitingPlayer ||
         !identical(notifier, _playbackNotifier) ||
-        notifier.playbackGeneration != playbackGeneration) {
+        notifier.playbackGeneration != playbackGeneration ||
+        !notifier.allowsEpisodeNavigation) {
       return;
     }
     final PlaybackState currentState = ref.read(playbackControllerProvider);
@@ -1260,7 +1264,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
       playbackControllerProvider.notifier,
     );
     // 1. Next episode: the overlay appears only at the end, so it takes priority.
-    if (state.autoNextVisible && state.confirmedEnded) {
+    if (state.autoNextVisible &&
+        state.confirmedEnded &&
+        notifier.allowsEpisodeNavigation) {
       notifier.dismissAutoNext();
       unawaited(_exitPlayer(playNext: true));
       return true;

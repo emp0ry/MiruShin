@@ -360,11 +360,28 @@ class PlaybackController extends Notifier<PlaybackState> {
 
   void setGuestLocked(bool locked) {
     _guestLocked = locked;
+    if (locked) {
+      _autoNextOverlayTimer?.cancel();
+      _autoNextOverlayTimer = null;
+      if (state.autoNextVisible) {
+        state = state.copyWith(autoNextVisible: false);
+      }
+    }
     if (!locked) {
       _guestCanControlPlayback = false;
       _guestCanSeek = false;
       _guestCanChangeSpeed = false;
       _guestCanChangeStream = false;
+    }
+  }
+
+  void setCurrentItemProgressIgnored(bool ignored) {
+    final MediaPlaybackItem? item = state.item;
+    if (item == null || item.ignoreProgress == ignored) return;
+    state = state.copyWith(item: item.withIgnoreProgress(ignored));
+    final PlayerEngine? engine = state.engine;
+    if (!ignored && engine != null) {
+      _evaluatePlaybackProgress(engine);
     }
   }
 
@@ -389,6 +406,7 @@ class PlaybackController extends Notifier<PlaybackState> {
   bool get _suppressStreamControl =>
       _guestControlLocked && !_guestCanChangeStream;
   bool get _suppressGuestGlobalControl => _guestControlLocked;
+  bool get allowsEpisodeNavigation => !_suppressGuestGlobalControl;
 
   /// Current engine position, for the host heartbeat and guest drift checks.
   Duration get currentEnginePosition => _currentPositionFor(state.engine);
@@ -2530,7 +2548,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     final PlayerEngine? engine = state.engine;
     if (item == null || engine == null || item.ignoreProgress) return;
     await _saveProgress(item, engine);
-    if (!showNext) return;
+    if (!showNext || _suppressGuestGlobalControl) return;
     final PlayerSettings settings =
         ref.read(playerSettingsProvider).value ?? const PlayerSettings();
     if ((settings.autoplayNext || settings.showNextEpisodeButton) &&
@@ -3537,7 +3555,7 @@ class PlaybackController extends Notifier<PlaybackState> {
         await _saveProgress(item, engine);
       }
       _updateMediaSession();
-      if (item.ignoreProgress) {
+      if (item.ignoreProgress || _suppressGuestGlobalControl) {
         return;
       }
       // Fallback path. The engine listener (_watchPlaybackProgress) is the
@@ -3855,12 +3873,14 @@ class PlaybackController extends Notifier<PlaybackState> {
         '${end.observedPosition.inSeconds}s/'
         '${end.authoritativeDuration?.inSeconds}s -> marking watched',
       );
-      try {
-        _prepareNextEpisodeHandler?.call();
-      } on Object catch (error) {
-        debugPrint(
-          'OnlineNext: preparation callback failed: ${error.runtimeType}',
-        );
+      if (!_suppressGuestGlobalControl) {
+        try {
+          _prepareNextEpisodeHandler?.call();
+        } on Object catch (error) {
+          debugPrint(
+            'OnlineNext: preparation callback failed: ${error.runtimeType}',
+          );
+        }
       }
       unawaited(_saveProgress(item, engine));
     }
@@ -3910,6 +3930,14 @@ class PlaybackController extends Notifier<PlaybackState> {
   void _evaluateAutoNextOverlay(PlayerEngine engine) {
     final MediaPlaybackItem? item = state.item;
     if (item == null || item.ignoreProgress) return;
+    if (_suppressGuestGlobalControl) {
+      _autoNextOverlayTimer?.cancel();
+      _autoNextOverlayTimer = null;
+      if (state.autoNextVisible) {
+        state = state.copyWith(autoNextVisible: false);
+      }
+      return;
+    }
     final PlayerSettings settings =
         ref.read(playerSettingsProvider).value ?? const PlayerSettings();
     final bool showNextOverlay =
@@ -3950,7 +3978,10 @@ class PlaybackController extends Notifier<PlaybackState> {
   void _showAutoNextOverlay() {
     _autoNextOverlayTimer?.cancel();
     _autoNextOverlayTimer = null;
-    if (_autoNextDismissed || state.autoNextVisible || !state.confirmedEnded) {
+    if (_suppressGuestGlobalControl ||
+        _autoNextDismissed ||
+        state.autoNextVisible ||
+        !state.confirmedEnded) {
       return;
     }
     debugPrint('[DEBUG] auto-next: overlay shown');
@@ -3960,7 +3991,8 @@ class PlaybackController extends Notifier<PlaybackState> {
   // Surfaces the auto-next overlay after [_autoNextOverlayDelay]. Idempotent:
   // repeated calls while the timer is pending (every engine tick) are no-ops.
   void _scheduleAutoNextOverlay() {
-    if (_autoNextOverlayTimer != null ||
+    if (_suppressGuestGlobalControl ||
+        _autoNextOverlayTimer != null ||
         _autoNextDismissed ||
         state.autoNextVisible ||
         !state.confirmedEnded) {

@@ -29,6 +29,58 @@ void main() {
 
   group('PlaybackController play/pause intent', () {
     test(
+      'watch-party guest saves automatic progress without auto-next',
+      () async {
+        final ProviderContainer c = container();
+        final PlaybackController controller = c.read(
+          playbackControllerProvider.notifier,
+        );
+        final MediaPlaybackItem item = _testPlaybackItem(
+          'party-guest-progress',
+        ).withIgnoreProgress(true);
+        final _FakePlayerEngine engine = _FakePlayerEngine(
+          const PlayerEngineState(
+            isInitialized: true,
+            position: Duration(seconds: 1224),
+            duration: Duration(seconds: 1440),
+          ),
+        );
+        controller.debugSetPlaybackState(
+          PlaybackState(item: item, engine: engine, server: item.servers.first),
+        );
+
+        controller.setGuestLocked(true);
+        controller.setCurrentItemProgressIgnored(false);
+        controller.debugEvaluatePlaybackProgress(engine);
+        controller.debugEvaluatePlaybackProgress(engine);
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+
+        PlaybackState state = c.read(playbackControllerProvider);
+        expect(state.item?.ignoreProgress, isFalse);
+        expect(state.confirmedEnded, isFalse);
+        expect(state.autoNextVisible, isFalse);
+        expect(controller.allowsEpisodeNavigation, isFalse);
+        expect(
+          (await c
+                  .read(localLibraryProvider.notifier)
+                  .loadEpisodeProgress(item.id, 1, 1))
+              ?.completed,
+          isTrue,
+        );
+
+        engine.setState(
+          engine.value.copyWith(position: const Duration(seconds: 1436)),
+        );
+        controller.debugEvaluatePlaybackProgress(engine);
+        controller.debugEvaluatePlaybackProgress(engine);
+
+        state = c.read(playbackControllerProvider);
+        expect(state.confirmedEnded, isTrue);
+        expect(state.autoNextVisible, isFalse);
+      },
+    );
+
+    test(
       'rapid play then pause applies only the latest desired state',
       () async {
         final ProviderContainer c = container();
