@@ -10,6 +10,7 @@ class ResponsiveGrid extends StatelessWidget {
     required this.itemBuilder,
     this.minItemWidth = 168,
     this.maxColumns = 6,
+    this.maxColumnsForWidth,
     this.spacing = AppSpacing.lg,
     this.childAspectRatio = 0.62,
     this.physics = const NeverScrollableScrollPhysics(),
@@ -21,6 +22,7 @@ class ResponsiveGrid extends StatelessWidget {
   final IndexedWidgetBuilder itemBuilder;
   final double minItemWidth;
   final int maxColumns;
+  final int Function(double availableWidth)? maxColumnsForWidth;
   final double spacing;
   final double childAspectRatio;
   final ScrollPhysics physics;
@@ -30,9 +32,19 @@ class ResponsiveGrid extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
+        final int effectiveMaxColumns = math.max(
+          1,
+          math.min(
+            maxColumns,
+            maxColumnsForWidth?.call(constraints.maxWidth) ?? maxColumns,
+          ),
+        );
         final int columns = math.max(
           1,
-          math.min(maxColumns, (constraints.maxWidth / minItemWidth).floor()),
+          math.min(
+            effectiveMaxColumns,
+            (constraints.maxWidth / minItemWidth).floor(),
+          ),
         );
 
         return GridView.builder(

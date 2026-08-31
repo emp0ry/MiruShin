@@ -47,6 +47,19 @@ const List<_AniListDiscoveryKind> _kVisibleAniListDiscoveryKinds =
       _AniListDiscoveryKind.manga,
     ];
 
+const double _kDiscoveryWidePosterWidth = 166;
+
+int _discoveryMaxColumnsForWidth(double availableWidth) {
+  const double spacing = AppSpacing.lg;
+  const double sevenColumnsWidth =
+      (7 * _kDiscoveryWidePosterWidth) + (6 * spacing);
+  const double eightColumnsWidth =
+      (8 * _kDiscoveryWidePosterWidth) + (7 * spacing);
+  if (availableWidth >= eightColumnsWidth) return 8;
+  if (availableWidth >= sevenColumnsWidth) return 7;
+  return 6;
+}
+
 class _AniListDiscoveryFilter {
   const _AniListDiscoveryFilter({
     this.formatIn = const <String>[],
@@ -683,6 +696,41 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
             ),
           )
         : const <String, AniListAnimeListEntry>{};
+    final bool hasAdvancedFilters = mode == CatalogMode.anilist
+        ? _advancedFilter.hasAnyFilter
+        : _tmdbAdvancedFilter.hasAnyFilter;
+    final Widget advancedFilterActions = Wrap(
+      spacing: AppSpacing.sm,
+      runSpacing: AppSpacing.sm,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: <Widget>[
+        if (hasAdvancedFilters)
+          TextButton.icon(
+            onPressed: mode == CatalogMode.anilist
+                ? _clearAdvancedFilter
+                : _clearTmdbAdvancedFilter,
+            icon: const Icon(Icons.filter_list_off_rounded, size: 18),
+            label: Text(context.t('Clear filters')),
+          ),
+        OutlinedButton.icon(
+          key: const ValueKey<String>('discovery-filters-button'),
+          onPressed: mode == CatalogMode.anilist
+              ? _openFilterSheet
+              : _openTmdbFilterSheet,
+          icon: Icon(
+            hasAdvancedFilters
+                ? Icons.filter_alt_rounded
+                : Icons.filter_alt_outlined,
+            size: 18,
+          ),
+          label: Text(
+            hasAdvancedFilters
+                ? context.t('Filters (active)')
+                : context.t('Filters'),
+          ),
+        ),
+      ],
+    );
     final Widget page = AdaptivePage(
       child: SingleChildScrollView(
         controller: _scrollController,
@@ -714,83 +762,65 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
                     ),
                   ),
                   const SizedBox(height: AppSpacing.md),
-                  _TypeTabs(
-                    mode: mode,
-                    selectedType: _selectedType,
-                    selectedAniListKind: _selectedAniListKind,
-                    onTypeChanged: _setType,
-                    onAniListKindChanged: _setAniListKind,
-                  ),
-                  const SizedBox(height: AppSpacing.md),
+                  if (mode == CatalogMode.tmdb) ...<Widget>[
+                    _TypeTabs(
+                      mode: mode,
+                      selectedType: _selectedType,
+                      selectedAniListKind: _selectedAniListKind,
+                      onTypeChanged: _setType,
+                      onAniListKindChanged: _setAniListKind,
+                    ),
+                    const SizedBox(height: AppSpacing.md),
+                  ],
                   _FilterBar(
                     mode: mode,
                     selected: _filter,
                     onSelected: _setFilter,
                   ),
-                  if (mode == CatalogMode.anilist) ...<Widget>[
-                    const SizedBox(height: AppSpacing.sm),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: <Widget>[
-                        if (_advancedFilter.hasAnyFilter)
-                          TextButton.icon(
-                            onPressed: _clearAdvancedFilter,
-                            icon: const Icon(
-                              Icons.filter_list_off_rounded,
-                              size: 18,
-                            ),
-                            label: Text(context.t('Clear filters')),
-                          ),
-                        const SizedBox(width: AppSpacing.sm),
-                        OutlinedButton.icon(
-                          onPressed: _openFilterSheet,
-                          icon: Icon(
-                            _advancedFilter.hasAnyFilter
-                                ? Icons.filter_alt_rounded
-                                : Icons.filter_alt_outlined,
-                            size: 18,
-                          ),
-                          label: Text(
-                            _advancedFilter.hasAnyFilter
-                                ? context.t('Filters (active)')
-                                : context.t('Filters'),
-                          ),
-                        ),
-                      ],
+                  const SizedBox(height: AppSpacing.sm),
+                  if (mode == CatalogMode.anilist)
+                    LayoutBuilder(
+                      key: const ValueKey<String>('discovery-primary-controls'),
+                      builder:
+                          (BuildContext context, BoxConstraints constraints) {
+                            final Widget typeTabs = _TypeTabs(
+                              mode: mode,
+                              selectedType: _selectedType,
+                              selectedAniListKind: _selectedAniListKind,
+                              onTypeChanged: _setType,
+                              onAniListKindChanged: _setAniListKind,
+                            );
+                            final double minimumInlineWidth = hasAdvancedFilters
+                                ? 480
+                                : 420;
+                            if (constraints.maxWidth < minimumInlineWidth) {
+                              return Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: <Widget>[
+                                  typeTabs,
+                                  const SizedBox(height: AppSpacing.sm),
+                                  Align(
+                                    alignment: Alignment.centerRight,
+                                    child: advancedFilterActions,
+                                  ),
+                                ],
+                              );
+                            }
+                            return Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: <Widget>[
+                                typeTabs,
+                                const Spacer(),
+                                advancedFilterActions,
+                              ],
+                            );
+                          },
+                    )
+                  else
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: advancedFilterActions,
                     ),
-                  ],
-                  if (mode == CatalogMode.tmdb) ...<Widget>[
-                    const SizedBox(height: AppSpacing.sm),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: <Widget>[
-                        if (_tmdbAdvancedFilter.hasAnyFilter)
-                          TextButton.icon(
-                            onPressed: _clearTmdbAdvancedFilter,
-                            icon: const Icon(
-                              Icons.filter_list_off_rounded,
-                              size: 18,
-                            ),
-                            label: Text(context.t('Clear filters')),
-                          ),
-                        const SizedBox(width: AppSpacing.sm),
-                        OutlinedButton.icon(
-                          onPressed: _openTmdbFilterSheet,
-                          icon: Icon(
-                            _tmdbAdvancedFilter.hasAnyFilter
-                                ? Icons.filter_alt_rounded
-                                : Icons.filter_alt_outlined,
-                            size: 18,
-                          ),
-                          label: Text(
-                            _tmdbAdvancedFilter.hasAnyFilter
-                                ? context.t('Filters (active)')
-                                : context.t('Filters'),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
                 ],
               ),
             ),
@@ -815,8 +845,10 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
               )
             else ...<Widget>[
               ResponsiveGrid(
+                key: const ValueKey<String>('discovery-grid'),
                 itemCount: items.length,
-                maxColumns: 6,
+                maxColumns: 8,
+                maxColumnsForWidth: _discoveryMaxColumnsForWidth,
                 itemBuilder: (BuildContext context, int index) {
                   final MediaItem item = items[index];
                   final AniListAnimeListEntry? entry = anilistEntryMap[item.id];
@@ -1172,8 +1204,10 @@ class _DiscoverySkeletonGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ResponsiveGrid(
+      key: const ValueKey<String>('discovery-skeleton-grid'),
       itemCount: 8,
-      maxColumns: 6,
+      maxColumns: 8,
+      maxColumnsForWidth: _discoveryMaxColumnsForWidth,
       itemBuilder: (BuildContext context, int index) =>
           const SkeletonBox(radius: 18),
     );
