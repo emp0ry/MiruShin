@@ -87,6 +87,32 @@ void main() {
     expect(find.byKey(posterFullscreenViewerKey), findsNothing);
   });
 
+  testWidgets('download action is anchored at the bottom right', (
+    WidgetTester tester,
+  ) async {
+    int downloads = 0;
+    await _openViewer(
+      tester,
+      onDownload: (BuildContext context) async {
+        downloads += 1;
+      },
+    );
+
+    final Finder download = find.byKey(posterViewerDownloadKey);
+    expect(download, findsOneWidget);
+    final Rect viewerRect = tester.getRect(
+      find.byKey(posterFullscreenViewerKey),
+    );
+    final Rect downloadRect = tester.getRect(download);
+    expect(downloadRect.center.dx, greaterThan(viewerRect.center.dx));
+    expect(downloadRect.center.dy, greaterThan(viewerRect.center.dy));
+
+    await tester.tap(download);
+    await tester.pump();
+    expect(downloads, 1);
+    expect(find.byKey(posterFullscreenViewerKey), findsOneWidget);
+  });
+
   testWidgets('single tap closes the poster viewer', (
     WidgetTester tester,
   ) async {
@@ -185,6 +211,10 @@ void main() {
       'Poster unavailable',
       'View background image fullscreen',
       'Background image unavailable',
+      'Image download cancelled',
+      'Image download failed: {error}',
+      'Image saved to {path}',
+      'Image shared',
     ];
     for (final String locale in <String>['en', 'ru', 'ja']) {
       final Map<String, dynamic> values =
@@ -201,7 +231,10 @@ void main() {
   });
 }
 
-Future<void> _openViewer(WidgetTester tester) async {
+Future<void> _openViewer(
+  WidgetTester tester, {
+  PosterDownloadCallback? onDownload,
+}) async {
   await tester.pumpWidget(
     MaterialApp(
       locale: const Locale('en'),
@@ -220,6 +253,7 @@ Future<void> _openViewer(WidgetTester tester) async {
                 context,
                 title: 'Test poster',
                 poster: const ColoredBox(color: Colors.deepPurple),
+                onDownload: onDownload,
               ),
               child: const Text('Open poster'),
             ),

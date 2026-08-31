@@ -17,6 +17,7 @@ import '../../../core/widgets/section_header.dart';
 import '../../../shared/models/media_item.dart';
 import '../application/fanart_gallery_provider.dart';
 import '../domain/fanart_gallery.dart';
+import 'artwork_export.dart';
 
 const ValueKey<String> fanartGallerySectionKey = ValueKey<String>(
   'fanart-gallery-section',
@@ -26,6 +27,9 @@ const ValueKey<String> fanartGalleryViewerKey = ValueKey<String>(
 );
 const ValueKey<String> fanartGalleryCounterKey = ValueKey<String>(
   'fanart-gallery-counter',
+);
+const ValueKey<String> fanartGalleryDownloadKey = ValueKey<String>(
+  'fanart-gallery-download',
 );
 
 class FanartGallerySection extends ConsumerWidget {
@@ -292,6 +296,7 @@ class _FanartGalleryViewerState extends State<FanartGalleryViewer> {
   double _swipeDistance = 0;
   bool _cancelSwipe = false;
   DateTime? _lastPointerNavigation;
+  bool _downloading = false;
 
   @override
   void initState() {
@@ -317,6 +322,21 @@ class _FanartGalleryViewerState extends State<FanartGalleryViewer> {
       _index = next;
       _transformationController.value = Matrix4.identity();
     });
+  }
+
+  Future<void> _download(FanartBackground image) async {
+    if (_downloading) return;
+    setState(() => _downloading = true);
+    try {
+      await downloadArtworkImage(
+        context,
+        imageUrl: image.url,
+        title: widget.mediaTitle,
+        filenameSuffix: 'gallery_${image.id}',
+      );
+    } finally {
+      if (mounted) setState(() => _downloading = false);
+    }
   }
 
   void _onPointerDown(PointerDownEvent event) {
@@ -515,6 +535,24 @@ class _FanartGalleryViewerState extends State<FanartGalleryViewer> {
                     ),
                   ),
                 ),
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: SafeArea(
+                    minimum: const EdgeInsets.all(12),
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: _GalleryViewerButton(
+                        key: fanartGalleryDownloadKey,
+                        tooltip: context.t('Download'),
+                        icon: Icons.download_rounded,
+                        busy: _downloading,
+                        onPressed: _downloading ? null : () => _download(image),
+                      ),
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
@@ -579,12 +617,14 @@ class _GalleryViewerButton extends StatelessWidget {
     required this.tooltip,
     required this.icon,
     required this.onPressed,
+    this.busy = false,
     super.key,
   });
 
   final String tooltip;
   final IconData icon;
-  final VoidCallback onPressed;
+  final VoidCallback? onPressed;
+  final bool busy;
 
   @override
   Widget build(BuildContext context) {
@@ -594,7 +634,16 @@ class _GalleryViewerButton extends StatelessWidget {
       child: IconButton(
         tooltip: tooltip,
         color: Colors.white,
-        icon: Icon(icon),
+        disabledColor: Colors.white70,
+        icon: busy
+            ? const SizedBox.square(
+                dimension: 20,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white,
+                ),
+              )
+            : Icon(icon),
         onPressed: onPressed,
       ),
     );

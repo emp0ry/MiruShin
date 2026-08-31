@@ -78,6 +78,8 @@ void main() {
 
     expect(find.byKey(fanartGalleryViewerKey), findsOneWidget);
     expect(find.byKey(fanartGalleryCounterKey), findsOneWidget);
+    expect(find.byKey(fanartGalleryDownloadKey), findsOneWidget);
+    expect(find.byIcon(Icons.download_rounded), findsOneWidget);
     expect(find.text('2/2'), findsOneWidget);
     final Text counter = tester.widget<Text>(
       find.byKey(fanartGalleryCounterKey),

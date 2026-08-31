@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../app/localization/app_localizations.dart';
+import 'artwork_export.dart';
 
 const ValueKey<String> posterFullscreenViewerKey = ValueKey<String>(
   'poster-fullscreen-viewer',
@@ -13,6 +14,11 @@ const ValueKey<String> posterInteractiveViewerKey = ValueKey<String>(
 const ValueKey<String> posterViewerCloseKey = ValueKey<String>(
   'poster-viewer-close',
 );
+const ValueKey<String> posterViewerDownloadKey = ValueKey<String>(
+  'poster-viewer-download',
+);
+
+typedef PosterDownloadCallback = Future<void> Function(BuildContext context);
 
 String maximumQualityArtworkUrl(String imageUrl) {
   final Uri? uri = Uri.tryParse(imageUrl.trim());
@@ -76,6 +82,7 @@ Future<void> showNetworkPosterFullscreenViewer(
     imageUrl: imageUrl,
     title: title,
     unavailableLabelKey: 'Poster unavailable',
+    filenameSuffix: 'poster',
   );
 }
 
@@ -89,6 +96,7 @@ Future<void> showNetworkBackdropFullscreenViewer(
     imageUrl: imageUrl,
     title: title,
     unavailableLabelKey: 'Background image unavailable',
+    filenameSuffix: 'background',
   );
 }
 
@@ -97,12 +105,20 @@ Future<void> _showNetworkImageFullscreenViewer(
   required String imageUrl,
   required String title,
   required String unavailableLabelKey,
+  required String filenameSuffix,
 }) {
+  final String originalImageUrl = maximumQualityArtworkUrl(imageUrl);
   return showPosterFullscreenViewer(
     context,
     title: title,
+    onDownload: (BuildContext dialogContext) => downloadArtworkImage(
+      dialogContext,
+      imageUrl: originalImageUrl,
+      title: title,
+      filenameSuffix: filenameSuffix,
+    ),
     poster: CachedNetworkImage(
-      imageUrl: maximumQualityArtworkUrl(imageUrl),
+      imageUrl: originalImageUrl,
       width: double.infinity,
       height: double.infinity,
       fit: BoxFit.contain,
@@ -129,6 +145,7 @@ Future<void> showPosterFullscreenViewer(
   BuildContext context, {
   required String title,
   required Widget poster,
+  PosterDownloadCallback? onDownload,
 }) {
   return showGeneralDialog<void>(
     context: context,
@@ -141,7 +158,11 @@ Future<void> showPosterFullscreenViewer(
           BuildContext dialogContext,
           Animation<double> animation,
           Animation<double> secondaryAnimation,
-        ) => PosterFullscreenViewer(title: title, poster: poster),
+        ) => PosterFullscreenViewer(
+          title: title,
+          poster: poster,
+          onDownload: onDownload,
+        ),
     transitionBuilder:
         (
           BuildContext context,
@@ -156,11 +177,13 @@ class PosterFullscreenViewer extends StatefulWidget {
   const PosterFullscreenViewer({
     required this.title,
     required this.poster,
+    this.onDownload,
     super.key,
   });
 
   final String title;
   final Widget poster;
+  final PosterDownloadCallback? onDownload;
 
   @override
   State<PosterFullscreenViewer> createState() => _PosterFullscreenViewerState();
@@ -169,9 +192,21 @@ class PosterFullscreenViewer extends StatefulWidget {
 class _PosterFullscreenViewerState extends State<PosterFullscreenViewer> {
   final TransformationController _transformationController =
       TransformationController();
+  bool _downloading = false;
 
   void _resetView() {
     _transformationController.value = Matrix4.identity();
+  }
+
+  Future<void> _download() async {
+    final PosterDownloadCallback? callback = widget.onDownload;
+    if (callback == null || _downloading) return;
+    setState(() => _downloading = true);
+    try {
+      await callback(context);
+    } finally {
+      if (mounted) setState(() => _downloading = false);
+    }
   }
 
   @override
@@ -235,6 +270,25 @@ class _PosterFullscreenViewerState extends State<PosterFullscreenViewer> {
                     ),
                   ),
                 ),
+                if (widget.onDownload != null)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: SafeArea(
+                      minimum: const EdgeInsets.all(12),
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: _PosterViewerButton(
+                          key: posterViewerDownloadKey,
+                          tooltip: context.t('Download'),
+                          icon: Icons.download_rounded,
+                          busy: _downloading,
+                          onPressed: _downloading ? null : _download,
+                        ),
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -249,12 +303,14 @@ class _PosterViewerButton extends StatelessWidget {
     required this.tooltip,
     required this.icon,
     required this.onPressed,
+    this.busy = false,
     super.key,
   });
 
   final String tooltip;
   final IconData icon;
-  final VoidCallback onPressed;
+  final VoidCallback? onPressed;
+  final bool busy;
 
   @override
   Widget build(BuildContext context) {
@@ -264,7 +320,16 @@ class _PosterViewerButton extends StatelessWidget {
       child: IconButton(
         tooltip: tooltip,
         color: Colors.white,
-        icon: Icon(icon),
+        disabledColor: Colors.white70,
+        icon: busy
+            ? const SizedBox.square(
+                dimension: 20,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white,
+                ),
+              )
+            : Icon(icon),
         onPressed: onPressed,
       ),
     );
