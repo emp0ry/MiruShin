@@ -1357,6 +1357,8 @@
   "Connection Mode": "接続モード",
   "Default stays peer-to-peer. Select a relay only when the default connection does not work on your network.": "既定ではP2P接続を使用します。お使いのネットワークで既定の接続が動作しない場合にのみリレーを選択してください。",
   "Self-hosted Relay": "セルフホスト型リレー",
+  "Setup guide": "セットアップガイド",
+  "Could not open the self-hosting guide.": "セルフホストのガイドを開けませんでした。",
   "Relay URL": "リレーURL",
   "Custom relays are operated by third parties. Prefer HTTPS; HTTP is accepted only for local/private development servers.": "カスタムリレーは第三者が運営しています。HTTPSを推奨します。HTTPはローカル／プライベートの開発サーバーでのみ使用できます。",
   "Test Connection": "接続をテスト",

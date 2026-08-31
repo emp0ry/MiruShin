@@ -52,6 +52,8 @@ void main() {
       'Connection Mode',
       'Default stays peer-to-peer. Select a relay only when the default connection does not work on your network.',
       'Self-hosted Relay',
+      'Setup guide',
+      'Could not open the self-hosting guide.',
       'Relay URL',
       'Custom relays are operated by third parties. Prefer HTTPS; HTTP is accepted only for local/private development servers.',
       'Test Connection',

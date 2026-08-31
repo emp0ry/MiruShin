@@ -49,6 +49,7 @@ import '../../watch_party/application/watch_party_connection_settings.dart';
 import '../../watch_party/data/relay_api.dart';
 import '../../watch_party/data/relay_protocol.dart';
 import '../../watch_party/domain/watch_party_models.dart';
+import '../../watch_party/presentation/self_hosted_relay_info_button.dart';
 import '../application/desktop_update_controller.dart';
 import '../application/mirushin_backup_service.dart';
 import '../application/settings_state.dart';
@@ -394,32 +395,43 @@ class _WatchPartySectionState extends ConsumerState<_WatchPartySection> {
                   ),
                 ),
                 const SizedBox(height: AppSpacing.sm),
-                Wrap(
-                  spacing: AppSpacing.sm,
-                  runSpacing: AppSpacing.sm,
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    FilledButton.icon(
-                      onPressed: _testing ? null : _saveRelay,
-                      icon: const Icon(Icons.save_rounded),
-                      label: Text(context.t('Save')),
-                    ),
-                    OutlinedButton.icon(
-                      onPressed: _testing ? null : _testRelay,
-                      icon: _testing
-                          ? const SizedBox.square(
-                              dimension: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.wifi_rounded),
-                      label: Text(context.t('Test Connection')),
-                    ),
-                    TextButton(
-                      style: TextButton.styleFrom(
-                        minimumSize: const Size(48, 48),
+                    Expanded(
+                      child: Wrap(
+                        spacing: AppSpacing.sm,
+                        runSpacing: AppSpacing.sm,
+                        children: <Widget>[
+                          FilledButton.icon(
+                            onPressed: _testing ? null : _saveRelay,
+                            icon: const Icon(Icons.save_rounded),
+                            label: Text(context.t('Save')),
+                          ),
+                          OutlinedButton.icon(
+                            onPressed: _testing ? null : _testRelay,
+                            icon: _testing
+                                ? const SizedBox.square(
+                                    dimension: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(Icons.wifi_rounded),
+                            label: Text(context.t('Test Connection')),
+                          ),
+                          TextButton(
+                            style: TextButton.styleFrom(
+                              minimumSize: const Size(48, 48),
+                            ),
+                            onPressed: _testing ? null : _reset,
+                            child: Text(context.t('Reset to Default')),
+                          ),
+                        ],
                       ),
-                      onPressed: _testing ? null : _reset,
-                      child: Text(context.t('Reset to Default')),
                     ),
+                    const SizedBox(width: AppSpacing.sm),
+                    const SelfHostedRelayInfoButton(),
                   ],
                 ),
                 if (_result != null) ...<Widget>[

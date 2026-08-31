@@ -1362,6 +1362,8 @@
   "Connection Mode": "Режим подключения",
   "Default stays peer-to-peer. Select a relay only when the default connection does not work on your network.": "По умолчанию используется прямое P2P-подключение. Выбирайте ретранслятор, только если подключение по умолчанию не работает в вашей сети.",
   "Self-hosted Relay": "Свой ретранслятор",
+  "Setup guide": "Инструкция по настройке",
+  "Could not open the self-hosting guide.": "Не удалось открыть инструкцию по самостоятельному размещению.",
   "Relay URL": "URL ретранслятора",
   "Custom relays are operated by third parties. Prefer HTTPS; HTTP is accepted only for local/private development servers.": "Пользовательские ретрансляторы управляются третьими лицами. Предпочтительно использовать HTTPS; HTTP разрешён только для локальных или частных серверов разработки.",
   "Test Connection": "Проверить подключение",
