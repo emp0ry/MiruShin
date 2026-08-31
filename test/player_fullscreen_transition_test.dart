@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -89,6 +90,34 @@ void main() {
       isTrue,
       reason: 'mobile immersive continuation keeps its existing semantics',
     );
+  });
+
+  test('timeline hover and drag ownership are released independently', () {
+    int activeChanges = 0;
+    final TimelineInteractionTracker tracker = TimelineInteractionTracker(
+      () => activeChanges += 1,
+    );
+    final Object hoverOwner = Object();
+    final Object dragOwner = Object();
+
+    tracker.setHovered(hoverOwner, true);
+    tracker.setDragging(dragOwner, true);
+    expect(tracker.isHovered, isTrue);
+    expect(tracker.isDragging, isTrue);
+    expect(tracker.isActive, isTrue);
+
+    tracker.clearHovered();
+    expect(tracker.isHovered, isFalse);
+    expect(tracker.isDragging, isTrue);
+    expect(tracker.isActive, isTrue);
+
+    tracker.release(dragOwner);
+    expect(tracker.isActive, isFalse);
+
+    tracker.setHovered(hoverOwner, true);
+    tracker.release(hoverOwner);
+    expect(tracker.isActive, isFalse);
+    expect(activeChanges, 4);
   });
 
   testWidgets(
@@ -195,6 +224,190 @@ void main() {
       debugDefaultTargetPlatformOverride = null;
     },
   );
+
+  testWidgets('next route waits for the confirmed native fullscreen exit', (
+    WidgetTester tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    bool nativeFullscreen = true;
+    final Completer<bool> exitCompletion = Completer<bool>();
+    final List<bool> setFullscreenCalls = <bool>[];
+    binding.defaultBinaryMessenger.setMockMethodCallHandler(windowChannel, (
+      MethodCall call,
+    ) async {
+      if (call.method == 'isFullscreen') return nativeFullscreen;
+      if (call.method == 'setFullscreen') {
+        final bool target = call.arguments! as bool;
+        setFullscreenCalls.add(target);
+        if (target) return true;
+        final bool result = await exitCompletion.future;
+        nativeFullscreen = result;
+        return result;
+      }
+      return null;
+    });
+    final _FullscreenTestEngine engine = _FullscreenTestEngine();
+    final _FullscreenTestPlaybackController controller =
+        _FullscreenTestPlaybackController(_item, engine);
+    Object? routeResult;
+    final GoRouter router = GoRouter(
+      routes: <RouteBase>[
+        GoRoute(
+          path: '/',
+          builder: (BuildContext context, GoRouterState state) => FilledButton(
+            onPressed: () async {
+              routeResult = await context.push<Object?>('/player');
+            },
+            child: const Text('Open player'),
+          ),
+        ),
+        GoRoute(
+          path: '/player',
+          builder: (BuildContext context, GoRouterState state) =>
+              const PlayerPage(item: _item, startInFullscreen: true),
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
+    addTearDown(engine.disposeNotifier);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          playbackControllerProvider.overrideWith(() => controller),
+          watchPartyProvider.overrideWith(_IdleWatchPartyController.new),
+          pipControllerProvider.overrideWithValue(
+            const UnsupportedPipController(),
+          ),
+        ],
+        child: MaterialApp.router(
+          routerConfig: router,
+          locale: const Locale('en'),
+          supportedLocales: AppLocalizations.supportedLocales,
+          localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
+            AppLocalizations.delegate,
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Open player'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 20));
+
+    controller.showAutoNext();
+    await tester.pump();
+    final Finder nextButton = find.widgetWithText(FilledButton, 'Next');
+    expect(nextButton, findsOneWidget);
+    tester.widget<FilledButton>(nextButton).onPressed!();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(setFullscreenCalls, contains(false));
+    expect(find.byType(PlayerPage), findsOneWidget);
+    expect(find.byIcon(Icons.fullscreen_exit_rounded), findsWidgets);
+    expect(routeResult, isNull);
+    expect(controller.stopCalls, 0);
+
+    exitCompletion.complete(false);
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    expect(find.byType(PlayerPage), findsNothing);
+    expect(routeResult, isA<PlayerNextEpisodeResult>());
+    expect((routeResult! as PlayerNextEpisodeResult).startInFullscreen, isTrue);
+    expect(controller.stopCalls, 1);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('timeline hover lifetime controls auto-hide ownership', (
+    WidgetTester tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    binding.defaultBinaryMessenger.setMockMethodCallHandler(windowChannel, (
+      MethodCall call,
+    ) async {
+      if (call.method == 'isFullscreen') return false;
+      if (call.method == 'setFullscreen') return call.arguments! as bool;
+      return null;
+    });
+    final _FullscreenTestEngine engine = _FullscreenTestEngine();
+    final _FullscreenTestPlaybackController controller =
+        _FullscreenTestPlaybackController(_item, engine);
+    addTearDown(engine.disposeNotifier);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          playbackControllerProvider.overrideWith(() => controller),
+          watchPartyProvider.overrideWith(_IdleWatchPartyController.new),
+          pipControllerProvider.overrideWithValue(
+            const UnsupportedPipController(),
+          ),
+        ],
+        child: MaterialApp(
+          locale: const Locale('en'),
+          supportedLocales: AppLocalizations.supportedLocales,
+          localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
+            AppLocalizations.delegate,
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+          home: const PlayerPage(item: _item),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 20));
+
+    final Finder timeline = find.byType(Slider).first;
+    expect(timeline, findsOneWidget);
+    final TestGesture mouse = await tester.createGesture(
+      kind: PointerDeviceKind.mouse,
+    );
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(tester.getCenter(timeline));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 5));
+    expect(controller.controlsVisible, isTrue);
+
+    await mouse.moveTo(tester.getCenter(find.byType(PlayerPage)));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 5));
+    expect(controller.controlsVisible, isFalse);
+
+    controller.setControlsVisible(true);
+    await tester.pump();
+    await mouse.moveTo(tester.getCenter(timeline));
+    await tester.pump();
+    await mouse.down(tester.getCenter(timeline));
+    await tester.pump();
+    await mouse.moveTo(const Offset(-20, -20));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 5));
+    expect(controller.controlsVisible, isTrue);
+    await mouse.up();
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 5));
+    expect(controller.controlsVisible, isFalse);
+
+    controller.setControlsVisible(true);
+    await tester.pump();
+    await mouse.moveTo(tester.getCenter(timeline));
+    await tester.pump();
+    controller.removeEngine();
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 5));
+    expect(controller.controlsVisible, isFalse);
+
+    await mouse.removePointer();
+    debugDefaultTargetPlatformOverride = null;
+  });
 
   testWidgets('auto-next timer cannot start before confirmed end', (
     WidgetTester tester,
@@ -317,6 +530,8 @@ class _FullscreenTestPlaybackController extends PlaybackController {
   @override
   int get playbackGeneration => testPlaybackGeneration;
 
+  bool get controlsVisible => state.controlsVisible;
+
   @override
   PlaybackState build() => PlaybackState(
     item: item,
@@ -337,6 +552,10 @@ class _FullscreenTestPlaybackController extends PlaybackController {
 
   void bumpPlaybackGeneration() {
     testPlaybackGeneration += 1;
+  }
+
+  void removeEngine() {
+    state = state.copyWith(clearEngine: true);
   }
 
   @override

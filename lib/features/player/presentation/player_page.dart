@@ -65,6 +65,69 @@ bool playerContinuationStartsFullscreen({
   return advancing && (isMobile || currentFullscreen);
 }
 
+@visibleForTesting
+class TimelineInteractionTracker {
+  TimelineInteractionTracker(VoidCallback onActiveChanged)
+    : _onActiveChanged = onActiveChanged;
+
+  final Set<Object> _hoverOwners = <Object>{};
+  final Set<Object> _dragOwners = <Object>{};
+  VoidCallback? _onActiveChanged;
+
+  bool get isHovered => _hoverOwners.isNotEmpty;
+  bool get isDragging => _dragOwners.isNotEmpty;
+  bool get isActive => isHovered || isDragging;
+
+  void setHovered(Object owner, bool hovered) {
+    _updateOwner(_hoverOwners, owner, hovered);
+  }
+
+  void setDragging(Object owner, bool dragging) {
+    _updateOwner(_dragOwners, owner, dragging);
+  }
+
+  void release(Object owner) {
+    final bool wasActive = isActive;
+    _hoverOwners.remove(owner);
+    _dragOwners.remove(owner);
+    _notifyIfActiveChanged(wasActive);
+  }
+
+  void clearHovered() {
+    if (_hoverOwners.isEmpty) return;
+    final bool wasActive = isActive;
+    _hoverOwners.clear();
+    _notifyIfActiveChanged(wasActive);
+  }
+
+  void clear() {
+    final bool wasActive = isActive;
+    _hoverOwners.clear();
+    _dragOwners.clear();
+    _notifyIfActiveChanged(wasActive);
+  }
+
+  void detach() {
+    _onActiveChanged = null;
+    _hoverOwners.clear();
+    _dragOwners.clear();
+  }
+
+  void _updateOwner(Set<Object> owners, Object owner, bool active) {
+    final bool wasActive = isActive;
+    if (active) {
+      owners.add(owner);
+    } else {
+      owners.remove(owner);
+    }
+    _notifyIfActiveChanged(wasActive);
+  }
+
+  void _notifyIfActiveChanged(bool wasActive) {
+    if (wasActive != isActive) _onActiveChanged?.call();
+  }
+}
+
 class PlayerPage extends ConsumerStatefulWidget {
   const PlayerPage({
     required this.item,
@@ -84,6 +147,7 @@ class PlayerPage extends ConsumerStatefulWidget {
 class _PlayerPageState extends ConsumerState<PlayerPage>
     with WidgetsBindingObserver {
   static const MethodChannel _windowChannel = MethodChannel('mirushin/window');
+  static Object? _windowChannelHandlerOwner;
   static const Duration _spaceHoldSpeedDelay = Duration(milliseconds: 260);
   static const Duration _exitCleanupTimeout = Duration(seconds: 2);
   static const Duration _controlsHideDelay = Duration(seconds: 4);
@@ -121,10 +185,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
   bool _exitingPlayer = false;
   bool _allowRoutePop = false;
   bool _isFullscreen = false;
+  bool? _pendingFullscreenTarget;
+  int _fullscreenRequestGeneration = 0;
+  int _timelineHoverEpoch = 0;
   bool _preserveFullscreenForNextRoute = false;
   bool _spacePressed = false;
   bool _spaceTemporarySpeedActive = false;
-  bool _timelineInteractionActive = false;
   DateTime? _lastTrailerFullscreenShortcutAt;
   DateTime? _lastTrailerEscapeShortcutAt;
   late final bool _isMobile;
@@ -134,6 +200,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
   PlayerEngine? _tvObservedEngine;
   bool _tvWasPlaying = true;
   late final PlaybackController _playbackNotifier;
+  late final TimelineInteractionTracker _timelineInteractions;
+  late final Object _windowChannelOwner;
 
   Duration get _trailerControlsHideDelay {
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.macOS) {
@@ -163,6 +231,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     _windowPipSupported =
         !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
     _playbackNotifier = ref.read(playbackControllerProvider.notifier);
+    _timelineInteractions = TimelineInteractionTracker(
+      _handleTimelineInteractionChanged,
+    );
+    _windowChannelOwner = Object();
+    _windowChannelHandlerOwner = _windowChannelOwner;
+    _windowChannel.setMethodCallHandler(_handleWindowMethodCall);
     _playbackNotifier.setNextEpisodeHandler(
       widget.item.ignoreProgress
           ? null
@@ -214,6 +288,14 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (!_isMobile) {
+      if (state == AppLifecycleState.resumed) {
+        if (mounted) setState(() => _timelineHoverEpoch += 1);
+      } else {
+        _timelineInteractions.clear();
+        _playbackNotifier.cancelSeekPreview();
+      }
+    }
     if (state == AppLifecycleState.detached) {
       _hideTimer?.cancel();
       _autoNextTimer?.cancel();
@@ -412,6 +494,11 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     unawaited(AppWakelock.release(this));
     _hideTimer?.cancel();
     _autoNextTimer?.cancel();
+    _timelineInteractions.detach();
+    if (identical(_windowChannelHandlerOwner, _windowChannelOwner)) {
+      _windowChannelHandlerOwner = null;
+      _windowChannel.setMethodCallHandler(null);
+    }
     _cancelSpaceHold(restoreSpeed: true);
     _playbackNotifier.setNextEpisodeHandler(null);
     _playbackNotifier.setPrepareNextEpisodeHandler(null);
@@ -553,7 +640,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     _hideTimer?.cancel();
     // Never auto-hide the player chrome while the pointer is over the position
     // slider or while the user is actively dragging it.
-    if (_timelineInteractionActive) return;
+    if (_timelineInteractions.isActive) return;
     // On Android TV keep the controls up while paused so the user can navigate
     // them with the D-pad; they only auto-hide again once playback resumes.
     if (_isTv && !(_tvObservedEngine?.state.value.isPlaying ?? true)) {
@@ -646,11 +733,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     await _exitPlayer(playNext: true);
   }
 
-  void _setTimelineInteractionActive(bool active) {
-    if (_timelineInteractionActive == active) return;
-    _timelineInteractionActive = active;
-
-    if (active) {
+  void _handleTimelineInteractionChanged() {
+    if (!mounted) return;
+    if (_timelineInteractions.isActive) {
       // Cancel any already-running hide timer immediately. Merely keeping the
       // pointer stationary over the timeline must keep the chrome visible.
       _hideTimer?.cancel();
@@ -852,12 +937,18 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
         SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky),
       );
     } else {
-      unawaited(
-        Future.any(<Future<void>>[
-          _setFullscreen(false),
-          Future<void>.delayed(_exitCleanupTimeout),
-        ]),
-      );
+      await _setFullscreen(false);
+      if (!mounted) return;
+      if (!kIsWeb &&
+          defaultTargetPlatform == TargetPlatform.macOS &&
+          _isFullscreen) {
+        // AppKit explicitly reported that the exit failed. Keep this route
+        // alive so a later request can retry instead of opening the next player
+        // while the native window is still full-screen.
+        setState(() => _exitingPlayer = false);
+        _scheduleHide();
+        return;
+      }
     }
     final PlaybackState playbackState = ref.read(playbackControllerProvider);
     final Object? result = selectEpisodeHref != null
@@ -890,6 +981,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     } else {
       unawaited(_stopPlayback());
     }
+    if (!mounted) return;
 
     debugPrint(
       'PlayerExit: reason=$exitReason resultType=${result.runtimeType} '
@@ -901,8 +993,6 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     setState(() {
       _allowRoutePop = true;
     });
-    await Future<void>.delayed(const Duration(milliseconds: 40));
-    if (!mounted) return;
     if (context.canPop()) {
       context.pop(result);
     } else {
@@ -931,19 +1021,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
       final bool? fullscreen = await _windowChannel.invokeMethod<bool>(
         'isFullscreen',
       );
-      if (mounted && fullscreen != null) {
-        setState(() => _isFullscreen = fullscreen);
-        final PlayerEngine? engine = ref
-            .read(playbackControllerProvider)
-            .engine;
-        if (engine != null &&
-            _isYoutubeTrailerPlayback(
-              ref.read(playbackControllerProvider),
-              widget.item,
-            )) {
-          unawaited(engine.setHostFullscreen(fullscreen));
-        }
-      }
+      if (fullscreen != null) _applyFullscreenState(fullscreen);
     } on MissingPluginException {
       // Non-desktop platforms do not need a native window toggle.
     } on PlatformException {
@@ -951,9 +1029,35 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     }
   }
 
+  Future<void> _handleWindowMethodCall(MethodCall call) async {
+    if (call.method == 'fullscreenChanged' && call.arguments is bool) {
+      _applyFullscreenState(call.arguments! as bool);
+    }
+  }
+
+  void _applyFullscreenState(bool fullscreen) {
+    if (!mounted) return;
+    if (_isFullscreen != fullscreen) {
+      _timelineInteractions.clear();
+      _playbackNotifier.cancelSeekPreview();
+      setState(() {
+        _isFullscreen = fullscreen;
+        // A macOS full-screen transition changes coordinate spaces. Recreate
+        // only the hover region so MouseTracker establishes fresh ownership at
+        // the pointer's real post-transition position.
+        _timelineHoverEpoch += 1;
+      });
+    }
+    final PlaybackState state = ref.read(playbackControllerProvider);
+    final PlayerEngine? engine = state.engine;
+    if (engine != null && _isYoutubeTrailerPlayback(state, widget.item)) {
+      unawaited(engine.setHostFullscreen(fullscreen));
+    }
+  }
+
   void _toggleFullscreen() {
     if (_isMobile) return;
-    unawaited(_setFullscreen(!_isFullscreen));
+    unawaited(_setFullscreen(!(_pendingFullscreenTarget ?? _isFullscreen)));
   }
 
   // Escape priority: leave the Windows mini-player first, then drop out of
@@ -1038,37 +1142,40 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
   }
 
   Future<void> _setFullscreen(bool fullscreen) async {
-    if (mounted && _isFullscreen != fullscreen) {
-      setState(() => _isFullscreen = fullscreen);
-    }
+    final int requestGeneration = ++_fullscreenRequestGeneration;
+    _pendingFullscreenTarget = fullscreen;
     await SystemChrome.setEnabledSystemUIMode(
       fullscreen ? SystemUiMode.immersiveSticky : SystemUiMode.edgeToEdge,
     );
-    if (fullscreen) {
+    if (fullscreen && _isMobile) {
       _scheduleFullscreenSystemUiReassert();
     }
+    bool? actualFullscreen;
     try {
-      final bool? actualFullscreen = await _windowChannel.invokeMethod<bool>(
+      actualFullscreen = await _windowChannel.invokeMethod<bool>(
         'setFullscreen',
         fullscreen,
       );
-      if (mounted && actualFullscreen != null) {
-        setState(() => _isFullscreen = actualFullscreen);
-      }
     } on MissingPluginException {
-      // Mobile/web can still use SystemChrome above.
+      // Mobile/web can still use SystemChrome above and have no native window
+      // state to confirm separately.
+      actualFullscreen = fullscreen;
     } on PlatformException {
-      // Leave the player usable even if native fullscreen fails.
+      // A native failure is a completed request, not a reason to guess the
+      // requested state. Re-read the last confirmed window state instead.
+      await _syncFullscreenState();
+    }
+    if (actualFullscreen != null) {
+      _applyFullscreenState(actualFullscreen);
+    }
+    if (requestGeneration == _fullscreenRequestGeneration) {
+      _pendingFullscreenTarget = null;
     }
     if (mounted &&
         _isYoutubeTrailerPlayback(
           ref.read(playbackControllerProvider),
           widget.item,
         )) {
-      final PlayerEngine? engine = ref.read(playbackControllerProvider).engine;
-      if (engine != null) {
-        unawaited(engine.setHostFullscreen(_isFullscreen));
-      }
       _showTrailerControls();
     }
   }
@@ -1617,7 +1724,21 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
                             ? SystemMouseCursors.basic
                             : SystemMouseCursors.none,
                         onHover: (_) => _showControls(),
-                        onExit: (_) => _hideControls(),
+                        onExit: (_) {
+                          // Leaving the whole player proves that no nested
+                          // timeline hover can still be valid, even if Flutter
+                          // removed/rebuilt that MouseRegion without its exit.
+                          // Active drag ownership remains separate.
+                          _timelineInteractions.clearHovered();
+                          if (_timelineInteractions.isDragging) {
+                            _hideTimer?.cancel();
+                            ref
+                                .read(playbackControllerProvider.notifier)
+                                .setControlsVisible(true);
+                          } else {
+                            _hideControls();
+                          }
+                        },
                         child: GestureOverlay(
                           onTap: _toggleControls,
                           onActivity: _showControls,
@@ -1694,8 +1815,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
                                             : null,
                                         onExit: () => unawaited(_exitPlayer()),
                                         onToggleFullscreen: _toggleFullscreen,
-                                        onTimelineInteractionChanged:
-                                            _setTimelineInteractionActive,
+                                        timelineInteractions:
+                                            _timelineInteractions,
+                                        timelineHoverEpoch: _timelineHoverEpoch,
                                         onSelectEpisode: (String href) =>
                                             unawaited(
                                               _exitPlayer(
@@ -2316,7 +2438,8 @@ class _PlayerChrome extends ConsumerWidget {
     required this.volumeControlsEnabled,
     required this.onExit,
     required this.onToggleFullscreen,
-    required this.onTimelineInteractionChanged,
+    required this.timelineInteractions,
+    required this.timelineHoverEpoch,
     this.onSelectEpisode,
     this.onEnterNativePip,
     this.tvSeedFocusNode,
@@ -2327,7 +2450,8 @@ class _PlayerChrome extends ConsumerWidget {
   final bool volumeControlsEnabled;
   final VoidCallback onExit;
   final VoidCallback onToggleFullscreen;
-  final ValueChanged<bool> onTimelineInteractionChanged;
+  final TimelineInteractionTracker timelineInteractions;
+  final int timelineHoverEpoch;
 
   /// Plays the episode the user picks from the in-player Episodes sheet.
   final void Function(String href)? onSelectEpisode;
@@ -2549,7 +2673,8 @@ class _PlayerChrome extends ConsumerWidget {
                         _PositionBar(
                           controller: controller,
                           skipMarkers: markers,
-                          onInteractionChanged: onTimelineInteractionChanged,
+                          interactions: timelineInteractions,
+                          hoverRegionKey: ValueKey<int>(timelineHoverEpoch),
                         ),
                       const SizedBox(height: 8),
                       Row(
@@ -3010,23 +3135,25 @@ class _InlineVolumeControlState extends ConsumerState<_InlineVolumeControl> {
 class _PositionBar extends ConsumerStatefulWidget {
   const _PositionBar({
     required this.controller,
-    required this.onInteractionChanged,
+    required this.interactions,
+    required this.hoverRegionKey,
     this.skipMarkers,
   });
 
   final PlayerEngine controller;
   final SkipMarkers? skipMarkers;
-  final ValueChanged<bool> onInteractionChanged;
+  final TimelineInteractionTracker interactions;
+  final Key hoverRegionKey;
 
   @override
   ConsumerState<_PositionBar> createState() => _PositionBarState();
 }
 
 class _PositionBarState extends ConsumerState<_PositionBar> {
+  final Object _dragOwner = Object();
   double? _dragValue;
   double? _hoverValue;
   Duration? _lastDragPosition;
-  bool _pointerInside = false;
 
   Duration _positionFromValue(Duration duration, double value) {
     return Duration(milliseconds: (duration.inMilliseconds * value).round());
@@ -3042,9 +3169,20 @@ class _PositionBarState extends ConsumerState<_PositionBar> {
   @override
   void didUpdateWidget(covariant _PositionBar oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.interactions != widget.interactions) {
+      final bool wasDragging = _dragValue != null;
+      oldWidget.interactions.release(_dragOwner);
+      widget.interactions.setDragging(_dragOwner, wasDragging);
+    }
+    if (oldWidget.hoverRegionKey != widget.hoverRegionKey) {
+      widget.interactions.setDragging(_dragOwner, false);
+      _dragValue = null;
+      _hoverValue = null;
+    }
     if (oldWidget.controller != widget.controller) {
       oldWidget.controller.removeListener(_tick);
       widget.controller.addListener(_tick);
+      widget.interactions.setDragging(_dragOwner, false);
       _dragValue = null;
       _hoverValue = null;
     }
@@ -3052,9 +3190,29 @@ class _PositionBarState extends ConsumerState<_PositionBar> {
 
   @override
   void dispose() {
-    widget.onInteractionChanged(false);
+    widget.interactions.release(_dragOwner);
     widget.controller.removeListener(_tick);
     super.dispose();
+  }
+
+  void _handleHoverExit() {
+    if (_dragValue != null) return;
+    setState(() {
+      // Hide the preview, but keep its last anchor until the opacity animation
+      // finishes so it does not jump to the real playback thumb while fading.
+      _hoverValue = null;
+    });
+    ref.read(playbackControllerProvider.notifier).cancelSeekPreview();
+  }
+
+  void _cancelDrag() {
+    if (_dragValue == null) return;
+    setState(() {
+      _dragValue = null;
+      _hoverValue = null;
+    });
+    widget.interactions.setDragging(_dragOwner, false);
+    ref.read(playbackControllerProvider.notifier).cancelSeekPreview();
   }
 
   void _tick() => mounted ? setState(() {}) : null;
@@ -3162,62 +3320,43 @@ class _PositionBarState extends ConsumerState<_PositionBar> {
           8.0,
           bubbleWidth - 8.0,
         );
-        return MouseRegion(
+        return _TimelineHoverRegion(
+          key: ValueKey<(Key, bool)>((
+            widget.hoverRegionKey,
+            duration > Duration.zero,
+          )),
+          interactions: widget.interactions,
+          enabled: !TvPlatform.isAndroidTv && duration > Duration.zero,
           // Entering the timeline should keep the chrome visible immediately,
           // but do NOT start seek preview yet. Starting preview before the first
           // hover coordinate is known would flash the current playback time.
-          onEnter: TvPlatform.isAndroidTv || duration <= Duration.zero
-              ? null
-              : (_) {
-                  _pointerInside = true;
-                  widget.onInteractionChanged(true);
-                },
-          onHover: TvPlatform.isAndroidTv || duration <= Duration.zero
-              ? null
-              : (PointerHoverEvent event) {
-                  if (_dragValue != null || trackWidth <= 0) return;
-                  widget.onInteractionChanged(true);
-                  final double hover =
-                      ((event.localPosition.dx - thumbHPad) / trackWidth)
-                          .clamp(0.0, 1.0)
-                          .toDouble();
-                  final Duration pos = _positionFromValue(duration, hover);
-                  final bool startingHover = _hoverValue == null;
+          onHover: (PointerHoverEvent event) {
+            if (_dragValue != null || trackWidth <= 0) return;
+            final double hover =
+                ((event.localPosition.dx - thumbHPad) / trackWidth)
+                    .clamp(0.0, 1.0)
+                    .toDouble();
+            final Duration pos = _positionFromValue(duration, hover);
+            final bool startingHover = _hoverValue == null;
 
-                  // Store the mouse position first, before notifying the
-                  // playback controller. That way every rebuild already knows
-                  // where the preview bubble belongs.
-                  setState(() {
-                    _hoverValue = hover;
-                    _lastDragPosition = pos;
-                  });
+            // Store the mouse position first, before notifying the
+            // playback controller. That way every rebuild already knows
+            // where the preview bubble belongs.
+            setState(() {
+              _hoverValue = hover;
+              _lastDragPosition = pos;
+            });
 
-                  final PlaybackController notifier = ref.read(
-                    playbackControllerProvider.notifier,
-                  );
-                  if (startingHover) {
-                    notifier.beginSeekPreview();
-                  }
-                  notifier.previewSeekTo(pos);
-                },
-          onExit: TvPlatform.isAndroidTv
-              ? null
-              : (_) {
-                  _pointerInside = false;
-                  // If a drag is still in progress, keep auto-hide blocked until
-                  // onChangeEnd. Otherwise leaving the timeline releases it now.
-                  if (_dragValue != null) return;
-                  setState(() {
-                    // Hide the preview, but keep its last anchor until the
-                    // opacity animation finishes so it does not flash back at
-                    // the real playback thumb while disappearing.
-                    _hoverValue = null;
-                  });
-                  ref
-                      .read(playbackControllerProvider.notifier)
-                      .cancelSeekPreview();
-                  widget.onInteractionChanged(false);
-                },
+            final PlaybackController notifier = ref.read(
+              playbackControllerProvider.notifier,
+            );
+            if (startingHover) {
+              notifier.beginSeekPreview();
+            }
+            notifier.previewSeekTo(pos);
+          },
+          onExit: _handleHoverExit,
+          onPointerCancel: _cancelDrag,
           child: SizedBox(
             height: 10,
             child: Stack(
@@ -3286,7 +3425,10 @@ class _PositionBarState extends ConsumerState<_PositionBar> {
                                           duration.inMilliseconds <= 0
                                           ? null
                                           : (double startValue) {
-                                              widget.onInteractionChanged(true);
+                                              widget.interactions.setDragging(
+                                                _dragOwner,
+                                                true,
+                                              );
                                               final Duration pos =
                                                   _positionFromValue(
                                                     duration,
@@ -3307,6 +3449,7 @@ class _PositionBarState extends ConsumerState<_PositionBar> {
                                       onChanged: duration.inMilliseconds <= 0
                                           ? null
                                           : (double v) {
+                                              if (_dragValue == null) return;
                                               final Duration pos =
                                                   _positionFromValue(
                                                     duration,
@@ -3326,6 +3469,7 @@ class _PositionBarState extends ConsumerState<_PositionBar> {
                                       onChangeEnd: duration.inMilliseconds <= 0
                                           ? null
                                           : (double v) {
+                                              if (_dragValue == null) return;
                                               final Duration pos =
                                                   _positionFromValue(
                                                     duration,
@@ -3343,12 +3487,9 @@ class _PositionBarState extends ConsumerState<_PositionBar> {
                                               );
                                               notifier.seekTo(pos);
                                               notifier.endSeekPreview();
-                                              // Mouse release can happen while
-                                              // the pointer is still sitting on
-                                              // the timeline. In that case keep
-                                              // auto-hide blocked until onExit.
-                                              widget.onInteractionChanged(
-                                                _pointerInside,
+                                              widget.interactions.setDragging(
+                                                _dragOwner,
+                                                false,
                                               );
                                             },
                                     );
@@ -3395,6 +3536,88 @@ class _PositionBarState extends ConsumerState<_PositionBar> {
     final int totalMs = duration.inMilliseconds;
     if (totalMs <= 0) return 0;
     return (bufferedEnd.inMilliseconds / totalMs).clamp(0, 1).toDouble();
+  }
+}
+
+class _TimelineHoverRegion extends StatefulWidget {
+  const _TimelineHoverRegion({
+    required this.interactions,
+    required this.enabled,
+    required this.onHover,
+    required this.onExit,
+    required this.onPointerCancel,
+    required this.child,
+    super.key,
+  });
+
+  final TimelineInteractionTracker interactions;
+  final bool enabled;
+  final ValueChanged<PointerHoverEvent> onHover;
+  final VoidCallback onExit;
+  final VoidCallback onPointerCancel;
+  final Widget child;
+
+  @override
+  State<_TimelineHoverRegion> createState() => _TimelineHoverRegionState();
+}
+
+class _TimelineHoverRegionState extends State<_TimelineHoverRegion> {
+  final Object _hoverOwner = Object();
+  bool _pointerInside = false;
+
+  @override
+  void didUpdateWidget(covariant _TimelineHoverRegion oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.interactions != widget.interactions) {
+      oldWidget.interactions.release(_hoverOwner);
+      widget.interactions.setHovered(
+        _hoverOwner,
+        _pointerInside && widget.enabled,
+      );
+    }
+    if (oldWidget.enabled && !widget.enabled) {
+      _pointerInside = false;
+      widget.interactions.setHovered(_hoverOwner, false);
+    }
+  }
+
+  @override
+  void dispose() {
+    // MouseRegion does not promise an onExit when its render object disappears.
+    // Releasing this token makes the region's lifetime the hover lifetime.
+    widget.interactions.release(_hoverOwner);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: widget.enabled
+          ? (_) {
+              _pointerInside = true;
+              widget.interactions.setHovered(_hoverOwner, true);
+            }
+          : null,
+      onHover: widget.enabled
+          ? (PointerHoverEvent event) {
+              // Reassert on movement so an ancestor/window exit that cleared a
+              // stale hover token can establish ownership again without a
+              // synthetic enter event.
+              _pointerInside = true;
+              widget.interactions.setHovered(_hoverOwner, true);
+              widget.onHover(event);
+            }
+          : null,
+      onExit: (_) {
+        _pointerInside = false;
+        widget.interactions.setHovered(_hoverOwner, false);
+        widget.onExit();
+      },
+      child: Listener(
+        onPointerCancel: (_) => widget.onPointerCancel(),
+        child: widget.child,
+      ),
+    );
   }
 }
 
