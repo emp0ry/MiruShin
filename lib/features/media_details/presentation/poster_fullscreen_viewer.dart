@@ -14,6 +14,58 @@ const ValueKey<String> posterViewerCloseKey = ValueKey<String>(
   'poster-viewer-close',
 );
 
+String maximumQualityArtworkUrl(String imageUrl) {
+  final Uri? uri = Uri.tryParse(imageUrl.trim());
+  if (uri == null) return imageUrl;
+
+  final String host = uri.host.toLowerCase();
+  final List<String> pathSegments = uri.pathSegments;
+
+  if (RegExp(r'^s\d+\.anilist\.co$').hasMatch(host) &&
+      pathSegments.length >= 7 &&
+      pathSegments[0] == 'file' &&
+      pathSegments[1] == 'anilistcdn' &&
+      pathSegments[2] == 'media' &&
+      pathSegments[4] == 'cover') {
+    final String size = pathSegments[5].toLowerCase();
+    if (size == 'large') return imageUrl;
+    if (size != 'medium' && size != 'small') return imageUrl;
+
+    return uri
+        .replace(
+          pathSegments: <String>[
+            ...pathSegments.take(5),
+            'large',
+            ...pathSegments.skip(6),
+          ],
+        )
+        .toString();
+  }
+
+  if (host != 'image.tmdb.org') return imageUrl;
+
+  if (pathSegments.length < 4 ||
+      pathSegments[0] != 't' ||
+      pathSegments[1] != 'p') {
+    return imageUrl;
+  }
+
+  final String size = pathSegments[2].toLowerCase();
+  if (size == 'original') return imageUrl;
+  if (!RegExp(r'^[wh]\d').hasMatch(size)) return imageUrl;
+
+  return uri
+      .replace(
+        pathSegments: <String>[
+          pathSegments[0],
+          pathSegments[1],
+          'original',
+          ...pathSegments.skip(3),
+        ],
+      )
+      .toString();
+}
+
 Future<void> showNetworkPosterFullscreenViewer(
   BuildContext context, {
   required String imageUrl,
@@ -50,7 +102,7 @@ Future<void> _showNetworkImageFullscreenViewer(
     context,
     title: title,
     poster: CachedNetworkImage(
-      imageUrl: imageUrl,
+      imageUrl: maximumQualityArtworkUrl(imageUrl),
       width: double.infinity,
       height: double.infinity,
       fit: BoxFit.contain,

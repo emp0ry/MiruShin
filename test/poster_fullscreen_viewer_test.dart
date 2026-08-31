@@ -15,6 +15,54 @@ void main() {
     await AppLocalizations.load(const Locale('en'));
   });
 
+  group('maximumQualityArtworkUrl', () {
+    test('requests the original TMDB poster', () {
+      expect(
+        maximumQualityArtworkUrl('https://image.tmdb.org/t/p/w500/poster.jpg'),
+        'https://image.tmdb.org/t/p/original/poster.jpg',
+      );
+    });
+
+    test('requests the original TMDB backdrop and preserves its query', () {
+      expect(
+        maximumQualityArtworkUrl(
+          'https://image.tmdb.org/t/p/w1280/backdrop.jpg?language=en',
+        ),
+        'https://image.tmdb.org/t/p/original/backdrop.jpg?language=en',
+      );
+    });
+
+    test('keeps an original TMDB URL unchanged', () {
+      const String url =
+          'https://image.tmdb.org/t/p/original/already-original.jpg';
+      expect(maximumQualityArtworkUrl(url), url);
+    });
+
+    test('requests the largest AniList cover', () {
+      expect(
+        maximumQualityArtworkUrl(
+          'https://s4.anilist.co/file/anilistcdn/media/anime/cover/'
+          'medium/example.jpg',
+        ),
+        'https://s4.anilist.co/file/anilistcdn/media/anime/cover/'
+        'large/example.jpg',
+      );
+    });
+
+    test('keeps the largest AniList cover unchanged', () {
+      const String url =
+          'https://s4.anilist.co/file/anilistcdn/media/anime/cover/'
+          'large/example.jpg';
+      expect(maximumQualityArtworkUrl(url), url);
+    });
+
+    test('keeps the direct AniList banner URL unchanged', () {
+      const String url =
+          'https://s4.anilist.co/file/anilistcdn/media/anime/banner/example.jpg';
+      expect(maximumQualityArtworkUrl(url), url);
+    });
+  });
+
   testWidgets('poster viewer fills the window and can be closed', (
     WidgetTester tester,
   ) async {
