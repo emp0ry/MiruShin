@@ -4,6 +4,7 @@ import '../../../shared/models/calendar_item.dart';
 import '../../../shared/models/media_item.dart';
 import '../domain/metadata_provider.dart';
 import '../domain/tmdb_episode_metadata.dart';
+import '../domain/tmdb_media_identity.dart';
 
 class TmdbConfigurationException implements Exception {
   const TmdbConfigurationException(this.message);
@@ -36,6 +37,7 @@ class TmdbMetadataProvider implements PagedDiscoveryProvider {
   final String _readAccessToken;
   final String language;
   final String region;
+  final Map<int, Future<int?>> _tvdbIdRequests = <int, Future<int?>>{};
 
   /// When `true`, adult (18+) results are included in TMDB search and discovery.
   /// Trailer lookups always force this off regardless of this flag.
@@ -432,6 +434,45 @@ class TmdbMetadataProvider implements PagedDiscoveryProvider {
     return null;
   }
 
+  Future<TmdbMediaIdentity?> resolveAnimeTmdbIdentity(MediaItem item) async {
+    if (item.type != MediaType.anime) return null;
+    _assertConfigured();
+    final List<String> queries = _trailerSearchQueries(item);
+    for (final String query in queries) {
+      try {
+        final List<MediaItem> results = await _searchForTrailerMatch(query);
+        final List<MediaItem> ranked = results.toList()
+          ..sort(
+            (MediaItem a, MediaItem b) => _animeTmdbMatchScore(
+              b,
+              item,
+            ).compareTo(_animeTmdbMatchScore(a, item)),
+          );
+        for (final MediaItem candidate in ranked) {
+          if (_animeTmdbMatchScore(candidate, item) < 40) break;
+          final TmdbMediaIdentity? identity = TmdbMediaIdentity.fromMediaItem(
+            candidate,
+          );
+          if (identity != null) return identity;
+        }
+      } catch (_) {
+        continue;
+      }
+    }
+    return null;
+  }
+
+  Future<int?> tvdbIdForTmdbTv(int tmdbId) {
+    if (tmdbId <= 0) return Future<int?>.value();
+    return _tvdbIdRequests.putIfAbsent(tmdbId, () async {
+      _assertConfigured();
+      final Response<dynamic> response = await _get('/tv/$tmdbId/external_ids');
+      final Object? data = response.data;
+      if (data is! Map) return null;
+      return _nullableInt(data['tvdb_id']);
+    });
+  }
+
   /// Searches TMDB for trailer matching, pinned to English regardless of the
   /// user's system locale. TMDB search matches across all translations, so the
   /// candidate set is locale-independent; the localized `name`, however, is
@@ -808,6 +849,23 @@ class TmdbMetadataProvider implements PagedDiscoveryProvider {
       score += 20;
     } else if ((candidate.year - target.year).abs() == 1) {
       score += 8;
+    }
+    return score;
+  }
+
+  static int _animeTmdbMatchScore(MediaItem candidate, MediaItem target) {
+    int score = _animeTrailerMatchScore(candidate, target);
+    final String format = (target.externalIds['anilist_format'] ?? '')
+        .trim()
+        .toUpperCase();
+    final TmdbMediaIdentity? identity = TmdbMediaIdentity.fromMediaItem(
+      candidate,
+    );
+    if (format == 'MOVIE' && identity?.kind == TmdbMediaKind.movie) {
+      score += 30;
+    } else if ((format == 'TV' || format == 'TV_SHORT') &&
+        identity?.kind == TmdbMediaKind.tv) {
+      score += 20;
     }
     return score;
   }

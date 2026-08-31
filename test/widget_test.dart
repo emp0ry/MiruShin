@@ -135,6 +135,21 @@ void main() {
     expect(find.text('Default Library page'), findsNothing);
     expect(find.text('Score format'), findsNothing);
     expect(find.text('Show adult content'), findsNothing);
+    expect(find.text('Fanart.tv API key'), findsOneWidget);
+    final Finder fanartField = find.byKey(
+      const ValueKey<String>('Enter Fanart.tv API key:'),
+    );
+    expect(
+      tester
+          .widget<EditableText>(
+            find.descendant(
+              of: fanartField,
+              matching: find.byType(EditableText),
+            ),
+          )
+          .obscureText,
+      isTrue,
+    );
     expect(find.text('Theme mode'), findsWidgets);
     expect(find.text('Data & backup'), findsOneWidget);
     expect(find.text('Export config'), findsOneWidget);
@@ -161,6 +176,7 @@ void main() {
     expect(find.text('App language'), findsWidgets);
     expect(find.text('Metadata language'), findsNothing);
     expect(find.text('Region / country preference'), findsNothing);
+    expect(find.text('Fanart.tv API key'), findsOneWidget);
     await tester.pump(const Duration(seconds: 3));
     await tester.pumpAndSettle();
   });

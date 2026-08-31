@@ -24,4 +24,8 @@ abstract final class Env {
   /// the endpoint is not a plain string in the source or compiled binary.
   @EnviedField(varName: 'MODULE_LIBRARY_URL', obfuscate: true)
   static final String moduleLibraryUrl = _Env.moduleLibraryUrl;
+
+  /// Fanart.tv project API key used for supplementary Media Details galleries.
+  @EnviedField(varName: 'FANART_TV_API_KEY', obfuscate: true, defaultValue: '')
+  static final String fanartTvApiKey = _Env.fanartTvApiKey;
 }

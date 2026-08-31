@@ -1,5 +1,12 @@
 {
   "@@locale": "ru",
+  "4K Backgrounds": "Фоны 4K",
+  "Backgrounds": "Фоны",
+  "Enter Fanart.tv API key": "Введите API-ключ Fanart.tv",
+  "Fanart.tv API key": "API-ключ Fanart.tv",
+  "Gallery": "Галерея",
+  "Previous": "Назад",
+  "Stored in secure platform storage. Used for Media Details Gallery backgrounds.": "Хранится в защищённом хранилище платформы. Используется для фонов галереи на странице сведений о медиа.",
   "${installed.manifest.sourceName} installed": "${installed.manifest.sourceName} установлен",
   "10-point": "10-балльная",
   "10-point decimal": "10-балльная с дробью",

@@ -1,5 +1,12 @@
 {
   "@@locale": "en",
+  "4K Backgrounds": "4K Backgrounds",
+  "Backgrounds": "Backgrounds",
+  "Enter Fanart.tv API key": "Enter Fanart.tv API key",
+  "Fanart.tv API key": "Fanart.tv API key",
+  "Gallery": "Gallery",
+  "Previous": "Previous",
+  "Stored in secure platform storage. Used for Media Details Gallery backgrounds.": "Stored in secure platform storage. Used for Media Details Gallery backgrounds.",
   "${installed.manifest.sourceName} installed": "${installed.manifest.sourceName} installed",
   "10-point": "10-point",
   "10-point decimal": "10-point decimal",

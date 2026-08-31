@@ -10,6 +10,10 @@ inputs:
   module-library-url:
     description: Public Sora module catalog endpoint (obfuscated by envied).
     required: true
+  fanart-tv-api-key:
+    description: Fanart.tv project API key (obfuscated by envied).
+    required: false
+    default: ''
 runs:
   using: composite
   steps:
@@ -18,6 +22,7 @@ runs:
       env:
         TMDB_READ_ACCESS_TOKEN: ${{ inputs.tmdb-read-access-token }}
         MODULE_LIBRARY_URL: ${{ inputs.module-library-url }}
+        FANART_TV_API_KEY: ${{ inputs.fanart-tv-api-key }}
       run: |
         if [ -z "$TMDB_READ_ACCESS_TOKEN" ]; then
           echo "::error::TMDB_READ_ACCESS_TOKEN secret is empty. Add it under Settings → Secrets and variables → Actions."
@@ -29,6 +34,10 @@ runs:
         fi
         printf 'TMDB_READ_ACCESS_TOKEN=%s\n' "$TMDB_READ_ACCESS_TOKEN" > .env
         printf 'MODULE_LIBRARY_URL=%s\n' "$MODULE_LIBRARY_URL" >> .env
+        printf 'FANART_TV_API_KEY=%s\n' "$FANART_TV_API_KEY" >> .env
+        if [ -z "$FANART_TV_API_KEY" ]; then
+          echo "::warning::FANART_TV_API_KEY is empty; Fanart.tv Gallery will stay hidden."
+        fi
         echo "Wrote .env ($(wc -c < .env) bytes)."
 
     - name: Generate envied sources

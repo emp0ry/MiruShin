@@ -39,6 +39,7 @@ import '../../tracking/application/anilist_library_provider.dart';
 import '../../tracking/presentation/anilist_entry_editor.dart';
 import '../../tracking/presentation/anilist_favorite_button.dart';
 import '../data/anime_themes_client.dart';
+import 'fanart_gallery.dart';
 import 'media_links_dialog.dart';
 import 'poster_fullscreen_viewer.dart';
 
@@ -196,6 +197,7 @@ class _DetailsBody extends ConsumerWidget {
           const SizedBox(height: AppSpacing.xxl),
           _AniListInfoPanel(item: item),
         ],
+        FanartGallerySection(item: item),
         if (item.type == MediaType.anime) ...<Widget>[
           const SizedBox(height: AppSpacing.xxl),
           _AnimeThemesPanel(item: item),

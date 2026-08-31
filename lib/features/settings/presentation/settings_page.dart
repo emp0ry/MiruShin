@@ -520,6 +520,19 @@ class _ApiConnectionsSection extends ConsumerWidget {
       title: context.t('API Connections'),
       icon: Icons.cloud_sync_rounded,
       children: <Widget>[
+        SettingsRow(
+          title: context.t('Fanart.tv API key'),
+          subtitle: context.t(
+            'Stored in secure platform storage. Used for Media Details Gallery backgrounds.',
+          ),
+          trailing: _TextSettingField(
+            initialValue: settings.fanartTvApiKey,
+            hintText: context.t('Enter Fanart.tv API key'),
+            obscureText: true,
+            onChanged: controller.setFanartTvApiKey,
+          ),
+        ),
+        const Divider(height: AppSpacing.xxl),
         if (showTmdb) ...<Widget>[
           SettingsRow(
             title: context.t('Use custom API key'),

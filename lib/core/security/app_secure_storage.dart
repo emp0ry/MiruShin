@@ -10,6 +10,7 @@ class AppSecureStorage {
   final FlutterSecureStorage _storage;
 
   static const String tmdbReadAccessTokenKey = 'tmdb.readAccessToken';
+  static const String fanartTvApiKeyKey = 'fanartTv.apiKey';
   static const String tvdbApiKeyKey = 'tvdb.apiKey';
   static const String tvdbSubscriberPinKey = 'tvdb.subscriberPin';
   static const String anilistAccessTokenKey = 'anilist.accessToken';
@@ -28,6 +29,7 @@ class AppSecureStorage {
   /// explicit so a backup cannot read or restore unrelated platform secrets.
   static const List<String> backupKeys = <String>[
     tmdbReadAccessTokenKey,
+    fanartTvApiKeyKey,
     tvdbApiKeyKey,
     tvdbSubscriberPinKey,
     anilistAccessTokenKey,
@@ -79,6 +81,11 @@ class AppSecureStorage {
   Future<void> writeTmdbReadAccessToken(String token) {
     return _writeOrDelete(tmdbReadAccessTokenKey, token);
   }
+
+  Future<String?> readFanartTvApiKey() => _read(fanartTvApiKeyKey);
+
+  Future<void> writeFanartTvApiKey(String key) =>
+      _writeOrDelete(fanartTvApiKeyKey, key);
 
   Future<String?> readTvdbApiKey() => _read(tvdbApiKeyKey);
 

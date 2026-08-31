@@ -130,6 +130,7 @@ class SettingsState {
     this.discordRpcEnabled = true,
     this.tmdbUseCustomKey = false,
     this.tmdbReadAccessToken = '',
+    this.fanartTvApiKey = '',
     this.tmdbLanguage = 'en-US',
     this.tmdbRegion = 'US',
     this.tmdbShowAdultContent = false,
@@ -186,6 +187,7 @@ class SettingsState {
   /// `false`, the bundled default key from [Env.tmdbReadAccessToken] is used.
   final bool tmdbUseCustomKey;
   final String tmdbReadAccessToken;
+  final String fanartTvApiKey;
   final String tmdbLanguage;
   final String tmdbRegion;
   final bool tmdbShowAdultContent;
@@ -304,6 +306,15 @@ class SettingsState {
 
   bool get hasTmdbToken => effectiveTmdbReadAccessToken.isNotEmpty;
 
+  /// The user-provided Fanart.tv key, falling back to an optional build-time
+  /// key for private builds. Public MiruShin builds leave that fallback empty.
+  String get effectiveFanartTvApiKey {
+    final String customKey = fanartTvApiKey.trim();
+    return customKey.isNotEmpty ? customKey : Env.fanartTvApiKey.trim();
+  }
+
+  bool get hasFanartTvApiKey => effectiveFanartTvApiKey.isNotEmpty;
+
   bool get hasTvdbApiKey => tvdbApiKey.trim().isNotEmpty;
 
   String get effectiveTvdbLanguage {
@@ -347,6 +358,7 @@ class SettingsState {
     bool? discordRpcEnabled,
     bool? tmdbUseCustomKey,
     String? tmdbReadAccessToken,
+    String? fanartTvApiKey,
     String? tmdbLanguage,
     String? tmdbRegion,
     bool? tmdbShowAdultContent,
@@ -407,6 +419,7 @@ class SettingsState {
       discordRpcEnabled: discordRpcEnabled ?? this.discordRpcEnabled,
       tmdbUseCustomKey: tmdbUseCustomKey ?? this.tmdbUseCustomKey,
       tmdbReadAccessToken: tmdbReadAccessToken ?? this.tmdbReadAccessToken,
+      fanartTvApiKey: fanartTvApiKey ?? this.fanartTvApiKey,
       tmdbLanguage: tmdbLanguage ?? this.tmdbLanguage,
       tmdbRegion: tmdbRegion ?? this.tmdbRegion,
       tmdbShowAdultContent: tmdbShowAdultContent ?? this.tmdbShowAdultContent,
@@ -576,6 +589,7 @@ class SettingsController extends Notifier<SettingsState> {
     final String? metadataLanguage = preferences.readMetadataLanguage();
     final int? accentColor = preferences.readAccentColor();
     final String? tmdbToken = await _secureStorage.readTmdbReadAccessToken();
+    final String? fanartTvApiKey = await _secureStorage.readFanartTvApiKey();
     final String? tvdbApiKey = await _secureStorage.readTvdbApiKey();
     final String? tvdbSubscriberPin = await _secureStorage
         .readTvdbSubscriberPin();
@@ -632,6 +646,7 @@ class SettingsController extends Notifier<SettingsState> {
       discordRpcEnabled: preferences.readDiscordRpcEnabled(),
       tmdbUseCustomKey: preferences.readTmdbUseCustomKey(),
       tmdbReadAccessToken: tmdbToken ?? '',
+      fanartTvApiKey: fanartTvApiKey ?? '',
       tmdbLanguage: tmdbLanguage,
       metadataLocale: metadataLocale,
       tmdbRegion: preferences.readTmdbRegion(),
@@ -786,6 +801,11 @@ class SettingsController extends Notifier<SettingsState> {
   void setTmdbReadAccessToken(String token) {
     state = state.copyWith(tmdbReadAccessToken: token.trim());
     unawaited(_secureStorage.writeTmdbReadAccessToken(token));
+  }
+
+  void setFanartTvApiKey(String value) {
+    state = state.copyWith(fanartTvApiKey: value.trim());
+    unawaited(_secureStorage.writeFanartTvApiKey(value));
   }
 
   void setTmdbLanguage(String value) {

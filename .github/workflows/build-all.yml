@@ -40,6 +40,7 @@ jobs:
         with:
           tmdb-read-access-token: ${{ secrets.TMDB_READ_ACCESS_TOKEN }}
           module-library-url: ${{ secrets.MODULE_LIBRARY_URL }}
+          fanart-tv-api-key: ${{ secrets.FANART_TV_API_KEY }}
 
       - name: Set up Android release signing
         uses: ./.github/actions/android-signing
@@ -128,6 +129,7 @@ jobs:
         with:
           tmdb-read-access-token: ${{ secrets.TMDB_READ_ACCESS_TOKEN }}
           module-library-url: ${{ secrets.MODULE_LIBRARY_URL }}
+          fanart-tv-api-key: ${{ secrets.FANART_TV_API_KEY }}
 
       - name: Force fresh pinned MDK SDK
         run: |
@@ -397,6 +399,7 @@ jobs:
         with:
           tmdb-read-access-token: ${{ secrets.TMDB_READ_ACCESS_TOKEN }}
           module-library-url: ${{ secrets.MODULE_LIBRARY_URL }}
+          fanart-tv-api-key: ${{ secrets.FANART_TV_API_KEY }}
 
       - name: Preload Windows MDK SDK
         shell: pwsh
@@ -529,6 +532,7 @@ jobs:
         with:
           tmdb-read-access-token: ${{ secrets.TMDB_READ_ACCESS_TOKEN }}
           module-library-url: ${{ secrets.MODULE_LIBRARY_URL }}
+          fanart-tv-api-key: ${{ secrets.FANART_TV_API_KEY }}
 
       - name: Pre-cache Apple MDK SDK
         run: bash .github/scripts/precache-apple-mdk.sh

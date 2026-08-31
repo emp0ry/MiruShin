@@ -1,5 +1,12 @@
 {
   "@@locale": "ja",
+  "4K Backgrounds": "4K 背景",
+  "Backgrounds": "背景",
+  "Enter Fanart.tv API key": "Fanart.tv API キーを入力",
+  "Fanart.tv API key": "Fanart.tv API キー",
+  "Gallery": "ギャラリー",
+  "Previous": "前へ",
+  "Stored in secure platform storage. Used for Media Details Gallery backgrounds.": "プラットフォームの安全なストレージに保存され、メディア詳細ギャラリーの背景に使用されます。",
   "${installed.manifest.sourceName} installed": "${installed.manifest.sourceName}をインストールしました",
   "10-point": "10点",
   "10-point decimal": "10点（小数）",

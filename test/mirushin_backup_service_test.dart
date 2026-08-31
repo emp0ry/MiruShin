@@ -18,6 +18,7 @@ void main() {
     'secure backup covers MiruShin secrets without unrelated values',
     () async {
       FlutterSecureStorage.setMockInitialValues(<String, String>{
+        AppSecureStorage.fanartTvApiKeyKey: 'fanart-key',
         AppSecureStorage.anilistAccessTokenKey: 'anilist-token',
         AppSecureStorage.malRefreshTokenKey: 'mal-refresh',
         AppSecureStorage.shikimoriCustomClientSecretKey: 'shikimori-secret',
@@ -27,6 +28,7 @@ void main() {
       const AppSecureStorage secure = AppSecureStorage();
 
       expect(await secure.exportBackupValues(), <String, String>{
+        AppSecureStorage.fanartTvApiKeyKey: 'fanart-key',
         AppSecureStorage.anilistAccessTokenKey: 'anilist-token',
         AppSecureStorage.malRefreshTokenKey: 'mal-refresh',
         AppSecureStorage.shikimoriCustomClientSecretKey: 'shikimori-secret',
@@ -37,6 +39,7 @@ void main() {
       });
 
       expect(await secure.readAniListAccessToken(), isNull);
+      expect(await secure.readFanartTvApiKey(), isNull);
       expect(await secure.readMalAccessToken(), 'restored-mal-token');
       expect(await secure.readMalRefreshToken(), isNull);
       expect(
@@ -118,6 +121,7 @@ void main() {
       final SharedPreferences preferences =
           await SharedPreferences.getInstance();
       final _FakeSecureStorage secure = _FakeSecureStorage(<String, String>{
+        AppSecureStorage.fanartTvApiKeyKey: 'fanart-key',
         AppSecureStorage.anilistAccessTokenKey: 'anilist-token',
         AppSecureStorage.anilistExpiresAtKey: '2035-01-01T00:00:00.000Z',
         AppSecureStorage.malAccessTokenKey: 'mal-token',
@@ -317,6 +321,7 @@ void main() {
         secure.values[AppSecureStorage.shikimoriCustomClientSecretKey],
         'shikimori-secret',
       );
+      expect(secure.values[AppSecureStorage.fanartTvApiKeyKey], 'fanart-key');
       expect(
         await File(
           '${support.path}${Platform.pathSeparator}sora_addons'
