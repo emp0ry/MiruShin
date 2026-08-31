@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.7.4",
+          "date": "2026-08-31",
+          "localizedDescription": "- Added cross-platform MiruShin deep links for opening AniList and TMDB titles directly in the app.\n- Added shareable MiruShin links to media details, and updated Discord Rich Presence links to open the currently watched title directly in MiruShin.\n- Opening an AniList or TMDB MiruShin link now automatically switches to the matching catalog.\n- Watch with Friends default invites now use normal clickable HTTPS links, while existing `mirushin://` invite links remain supported.\n- Improved Self-hosted Relay invites with cleaner direct HTTPS links and browser landing pages for opening rooms in MiruShin.\n- Added automatic `mirushin://` protocol handling across desktop and mobile platforms, including improved portable Windows and Linux support.\n- Added a Setup Guide button for Self-hosted Relay configuration, with English, Russian, and Japanese localization.\n- Improved macOS fullscreen transitions so the player waits for the native fullscreen transition to actually finish before closing or opening the next episode.\n- Improved timeline hover and drag handling, preventing seek previews and player controls from getting stuck after fullscreen or window-state changes.\n- Improved progressive seek previews to prefer the later thumbnail when two cached frames are equally close to the selected position.\n- Fixed backup exports not correctly including some saved list-based settings and filters on desktop platforms.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.7.4/MiruShin-ios-v2.7.4.ipa",
+          "size": 28959746,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.7.3",
           "date": "2026-08-30",
           "localizedDescription": "- Added cross-platform MiruShin deep links for opening AniList and TMDB titles directly in the app on Windows, Linux, macOS, Android, and iOS.\n- Added shareable MiruShin links to media details, alongside the original AniList or TMDB page links.\n- Updated Discord Rich Presence links to open the currently watched title directly in MiruShin instead of AniList or TMDB.\n- Opening an AniList or TMDB MiruShin link now automatically switches to the matching catalog.\n- Watch with Friends default invites now use a normal clickable HTTPS link that opens the room in MiruShin, while existing `mirushin://` invites remain supported.\n- Improved Self-hosted Relay invites with clean HTTPS links using the relay address directly, without redundant relay or transport parameters.\n- Added browser landing pages for Self-hosted Relay invites with an Open in MiruShin action.\n- Added automatic `mirushin://` protocol registration and link forwarding for desktop platforms, including automatic path repair for portable Windows installations.\n- Added backward compatibility for previously generated MiruShin and Self-hosted Relay invite links.",
@@ -519,11 +527,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.7.3",
-      "versionDate": "2026-08-30",
-      "versionDescription": "- Added cross-platform MiruShin deep links for opening AniList and TMDB titles directly in the app on Windows, Linux, macOS, Android, and iOS.\n- Added shareable MiruShin links to media details, alongside the original AniList or TMDB page links.\n- Updated Discord Rich Presence links to open the currently watched title directly in MiruShin instead of AniList or TMDB.\n- Opening an AniList or TMDB MiruShin link now automatically switches to the matching catalog.\n- Watch with Friends default invites now use a normal clickable HTTPS link that opens the room in MiruShin, while existing `mirushin://` invites remain supported.\n- Improved Self-hosted Relay invites with clean HTTPS links using the relay address directly, without redundant relay or transport parameters.\n- Added browser landing pages for Self-hosted Relay invites with an Open in MiruShin action.\n- Added automatic `mirushin://` protocol registration and link forwarding for desktop platforms, including automatic path repair for portable Windows installations.\n- Added backward compatibility for previously generated MiruShin and Self-hosted Relay invite links.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.7.3/MiruShin-ios-v2.7.3.ipa",
-      "size": 28959738,
+      "version": "2.7.4",
+      "versionDate": "2026-08-31",
+      "versionDescription": "- Added cross-platform MiruShin deep links for opening AniList and TMDB titles directly in the app.\n- Added shareable MiruShin links to media details, and updated Discord Rich Presence links to open the currently watched title directly in MiruShin.\n- Opening an AniList or TMDB MiruShin link now automatically switches to the matching catalog.\n- Watch with Friends default invites now use normal clickable HTTPS links, while existing `mirushin://` invite links remain supported.\n- Improved Self-hosted Relay invites with cleaner direct HTTPS links and browser landing pages for opening rooms in MiruShin.\n- Added automatic `mirushin://` protocol handling across desktop and mobile platforms, including improved portable Windows and Linux support.\n- Added a Setup Guide button for Self-hosted Relay configuration, with English, Russian, and Japanese localization.\n- Improved macOS fullscreen transitions so the player waits for the native fullscreen transition to actually finish before closing or opening the next episode.\n- Improved timeline hover and drag handling, preventing seek previews and player controls from getting stuck after fullscreen or window-state changes.\n- Improved progressive seek previews to prefer the later thumbnail when two cached frames are equally close to the selected position.\n- Fixed backup exports not correctly including some saved list-based settings and filters on desktop platforms.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.7.4/MiruShin-ios-v2.7.4.ipa",
+      "size": 28959746,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
