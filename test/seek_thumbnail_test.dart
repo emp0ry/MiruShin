@@ -1784,6 +1784,48 @@ segment-5.ts
       },
     );
 
+    test(
+      'progressive lookup prefers the later frame on an equal-distance tie',
+      () async {
+        final _FakeExtractor extractor = _FakeExtractor();
+        final SeekThumbnailService service = _service(extractor);
+        addTearDown(service.dispose);
+        final SeekThumbnailPlan plan = _singlePlan();
+        const Duration duration = Duration(minutes: 1);
+
+        for (final int second in <int>[30, 40]) {
+          await service.request(
+            plan: plan,
+            backend: PlayerBackend.mpv,
+            position: Duration(seconds: second),
+            duration: duration,
+          );
+        }
+
+        expect(
+          service
+              .nearestCachedFor(
+                plan,
+                const Duration(seconds: 35),
+                duration: duration,
+                maxDistance: duration,
+              )
+              ?.position,
+          const Duration(seconds: 30),
+          reason: 'on-demand lookup keeps its existing tie behavior',
+        );
+        final SeekThumbnail? nearest = service.nearestCachedFor(
+          plan,
+          const Duration(seconds: 35),
+          duration: duration,
+          maxDistance: duration,
+          preferLaterOnTie: true,
+        );
+
+        expect(nearest?.position, const Duration(seconds: 40));
+      },
+    );
+
     test('identical simultaneous requests are coalesced', () async {
       final Completer<void> gate = Completer<void>();
       final _FakeExtractor extractor = _FakeExtractor(gate: gate);

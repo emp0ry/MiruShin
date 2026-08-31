@@ -129,8 +129,12 @@ class MiruShinBackupService {
     if (value is double) {
       return <String, dynamic>{'type': 'double', 'value': value};
     }
-    if (value is List<String>) {
-      return <String, dynamic>{'type': 'stringList', 'value': value};
+    if (value is List<Object?> &&
+        value.every((Object? item) => item is String)) {
+      return <String, dynamic>{
+        'type': 'stringList',
+        'value': List<String>.from(value),
+      };
     }
     return null;
   }

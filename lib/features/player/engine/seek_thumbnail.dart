@@ -377,6 +377,7 @@ class SeekThumbnailService {
     Duration position, {
     Duration duration = Duration.zero,
     Duration maxDistance = const Duration(seconds: 15),
+    bool preferLaterOnTie = false,
   }) {
     final Duration bucket = quantizeSeekThumbnailPosition(
       position,
@@ -394,7 +395,12 @@ class SeekThumbnailService {
       if (!sourceKeys.contains(entry.key.sourceKey)) continue;
       final int distance =
           (entry.key.bucket.inMilliseconds - bucket.inMilliseconds).abs();
-      if (distance < nearestDistance) {
+      final bool isLaterTie =
+          preferLaterOnTie &&
+          distance == nearestDistance &&
+          nearestKey != null &&
+          entry.key.bucket > nearestKey.bucket;
+      if (distance < nearestDistance || isLaterTie) {
         nearestDistance = distance;
         nearestKey = entry.key;
         nearest = entry.value;

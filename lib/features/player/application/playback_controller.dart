@@ -1458,6 +1458,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       visiblePosition,
       duration: duration,
       maxDistance: duration,
+      preferLaterOnTie: true,
     );
     if (nearest == null) return;
     state = state.copyWith(
@@ -2574,6 +2575,7 @@ class PlaybackController extends Notifier<PlaybackState> {
                 clamped,
                 duration: duration,
                 maxDistance: duration,
+                preferLaterOnTie: true,
               ) ??
               state.seekPreviewThumbnail
         : cached ??

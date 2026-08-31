@@ -77,7 +77,11 @@ void main() {
         ],
         'settings.malAvatarUrl': 'https://img.test/mal.jpg',
         'settings.shikimoriAvatarUrl': 'https://img.test/shikimori.jpg',
-        'library.anilist.anime.filters.genres': <String>['Action', 'Drama'],
+        // Desktop stores can decode persisted JSON arrays as List<Object?>.
+        'library.anilist.ANIME.current.genres': <Object>['Action', 'Drama'],
+        'library.local.statuses': <Object>['watching'],
+        'library.local.providers.excluded': <Object>['Demo source'],
+        'library.local.minRating': 7.5,
         'library.episodeProgress': '{"demo|S1E1.0":{"completed":true}}',
         'mirushin.player.settings': jsonEncode(<String, Object>{
           'playbackSpeed': 2.25,
@@ -168,6 +172,28 @@ void main() {
         isNotNull,
       );
       expect(exportedPreferences['settings.anilistSavedAccounts'], isNotNull);
+      expect(
+        exportedPreferences['library.anilist.ANIME.current.genres'],
+        <String, dynamic>{
+          'type': 'stringList',
+          'value': <String>['Action', 'Drama'],
+        },
+      );
+      expect(exportedPreferences['library.local.statuses'], <String, dynamic>{
+        'type': 'stringList',
+        'value': <String>['watching'],
+      });
+      expect(
+        exportedPreferences['library.local.providers.excluded'],
+        <String, dynamic>{
+          'type': 'stringList',
+          'value': <String>['Demo source'],
+        },
+      );
+      expect(exportedPreferences['library.local.minRating'], <String, dynamic>{
+        'type': 'double',
+        'value': 7.5,
+      });
       expect(exportedPreferences['mirushin.player.settings'], isNotNull);
       expect(exportedPreferences['watch.streamSelection.v1.demo'], isNotNull);
       expect(
@@ -217,9 +243,17 @@ void main() {
       expect(preferences.getInt('example.int'), 42);
       expect(preferences.getDouble('example.double'), 0.75);
       expect(
-        preferences.getStringList('library.anilist.anime.filters.genres'),
+        preferences.getStringList('library.anilist.ANIME.current.genres'),
         <String>['Action', 'Drama'],
       );
+      expect(preferences.getStringList('library.local.statuses'), <String>[
+        'watching',
+      ]);
+      expect(
+        preferences.getStringList('library.local.providers.excluded'),
+        <String>['Demo source'],
+      );
+      expect(preferences.getDouble('library.local.minRating'), 7.5);
       expect(
         preferences.getString('settings.anilistAvatarUrl'),
         'https://img.test/anilist.jpg',
