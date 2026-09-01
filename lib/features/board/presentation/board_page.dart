@@ -115,6 +115,8 @@ class _BoardPageState extends ConsumerState<BoardPage> {
               .toList(growable: false);
     final Widget page = AdaptivePage(
       child: SingleChildScrollView(
+        key: const ValueKey<String>('board-page-scroll-view'),
+        clipBehavior: Clip.none,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[

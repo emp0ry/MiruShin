@@ -733,7 +733,9 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
     );
     final Widget page = AdaptivePage(
       child: SingleChildScrollView(
+        key: const ValueKey<String>('discovery-page-scroll-view'),
         controller: _scrollController,
+        clipBehavior: Clip.none,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[

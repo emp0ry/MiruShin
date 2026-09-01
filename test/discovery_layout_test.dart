@@ -54,6 +54,14 @@ void main() {
     await _pumpDiscovery(tester, const Size(1600, 1000));
 
     expect(_discoveryGrid(tester).clipBehavior, Clip.none);
+    expect(
+      tester
+          .widget<SingleChildScrollView>(
+            find.byKey(const ValueKey<String>('discovery-page-scroll-view')),
+          )
+          .clipBehavior,
+      Clip.none,
+    );
   });
 
   testWidgets('Anime and Manga sit left of Filters on the lower filter row', (

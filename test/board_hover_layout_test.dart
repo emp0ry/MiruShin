@@ -63,11 +63,15 @@ void main() {
     final Iterable<ListView> posterRows = tester.widgetList<ListView>(
       find.byKey(const ValueKey<String>('media-section-horizontal-list')),
     );
+    final SingleChildScrollView pageScrollView = tester.widget(
+      find.byKey(const ValueKey<String>('board-page-scroll-view')),
+    );
     expect(posterRows, isNotEmpty);
     expect(
       posterRows.every((ListView row) => row.clipBehavior == Clip.none),
       isTrue,
     );
+    expect(pageScrollView.clipBehavior, Clip.none);
     expect(tester.takeException(), isNull);
   });
 }
