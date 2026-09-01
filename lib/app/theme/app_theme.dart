@@ -90,7 +90,9 @@ abstract final class AppTheme {
       canvasColor: scaffoldBackgroundColor,
       cardColor: palette.glassColor,
       dividerColor: palette.borderColor,
-      splashFactory: InkSparkle.splashFactory,
+      // Keep press feedback smooth and predictable. InkSparkle renders a
+      // particle burst that looks noisy on compact buttons and icon actions.
+      splashFactory: InkRipple.splashFactory,
       // Strong, accent-tinted focus highlight so D-pad / keyboard navigation is
       // clearly visible on every ink-based surface (InkWell, ListTile, etc.).
       // This is the backbone of the 10-foot (Android TV) experience and is

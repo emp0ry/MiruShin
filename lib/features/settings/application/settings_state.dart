@@ -126,7 +126,7 @@ class SettingsState {
     this.metadataLocale,
     this.accentColor = AppColors.accentPurple,
     this.compactMode = false,
-    this.compactCards = false,
+    this.compactCards = true,
     this.discordRpcEnabled = true,
     this.tmdbUseCustomKey = false,
     this.tmdbReadAccessToken = '',

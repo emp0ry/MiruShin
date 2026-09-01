@@ -12,6 +12,7 @@ import 'package:mirushin/features/board/presentation/board_page.dart';
 import 'package:mirushin/features/catalog/application/catalog_mode.dart';
 import 'package:mirushin/features/catalog/application/catalog_repository.dart';
 import 'package:mirushin/features/metadata/application/metadata_providers.dart';
+import 'package:mirushin/features/settings/application/settings_state.dart';
 import 'package:mirushin/features/tracking/application/anilist_library_provider.dart';
 import 'package:mirushin/shared/models/anilist_models.dart';
 import 'package:mirushin/shared/models/calendar_item.dart';
@@ -101,6 +102,29 @@ void main() {
     },
   );
 
+  testWidgets('wide Board uses compact cards by default', (
+    WidgetTester tester,
+  ) async {
+    await _pumpBoard(
+      tester,
+      size: const Size(1600, 1000),
+      rails: BoardRails(
+        recentSeries: List<MediaItem>.generate(
+          4,
+          (int index) => _item(index + 1),
+        ),
+      ),
+    );
+
+    expect(
+      find.byKey(const ValueKey<String>('media-section-horizontal-list')),
+      findsWidgets,
+    );
+    expect(find.byType(GridView), findsNothing);
+    expect(find.text('Load more'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('wide Board uses up to 8 columns and loads three rows', (
     WidgetTester tester,
   ) async {
@@ -109,6 +133,7 @@ void main() {
     await _pumpBoard(
       tester,
       size: const Size(1600, 1000),
+      compactCards: false,
       rails: BoardRails(
         recentSeries: List<MediaItem>.generate(
           24,
@@ -247,6 +272,7 @@ Future<void> _pumpBoard(
   List<AniListAnimeListFolder> folders = const <AniListAnimeListFolder>[],
   bool settle = true,
   Size size = const Size(390, 844),
+  bool? compactCards,
 }) async {
   assert((rails == null) != (railsFuture == null));
   tester.view.physicalSize = size;
@@ -284,6 +310,12 @@ Future<void> _pumpBoard(
     await tester.pumpAndSettle();
   } else {
     await tester.pump();
+  }
+  if (compactCards != null) {
+    ProviderScope.containerOf(
+      tester.element(find.byType(BoardPage)),
+    ).read(settingsProvider.notifier).setCompactCards(compactCards);
+    await tester.pumpAndSettle();
   }
 }
 
