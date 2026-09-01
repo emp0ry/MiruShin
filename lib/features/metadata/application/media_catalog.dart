@@ -5,11 +5,16 @@ class BoardRails {
     this.recentMovies = const <MediaItem>[],
     this.recentSeries = const <MediaItem>[],
     this.topAnime = const <MediaItem>[],
+    this.additionalSections = const <String, List<MediaItem>>{},
   });
 
   final List<MediaItem> recentMovies;
   final List<MediaItem> recentSeries;
   final List<MediaItem> topAnime;
+  final Map<String, List<MediaItem>> additionalSections;
+
+  List<MediaItem> additionalSection(String filter) =>
+      additionalSections[filter] ?? const <MediaItem>[];
 
   factory BoardRails.empty() => const BoardRails();
 

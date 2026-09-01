@@ -182,19 +182,20 @@ class AniListCatalogRepository implements CatalogRepository {
     return _cachedBoardThenRefreshForNextLaunch(
       cache: cache,
       key: '$cacheScope.board.${viewerId ?? 'public'}',
+      isCachedSnapshotCurrent: (Map<String, dynamic> json) =>
+          json['schemaVersion'] == _boardCacheSchemaVersion,
       onOffline: onOffline,
       onOnline: onOnline,
       fetch: () async {
-        final List<MediaItem> continueWatching = await _continueWatching();
         final List<List<MediaItem>> results =
             await Future.wait(<Future<List<MediaItem>>>[
               client.getTrendingCatalog(kind: 'anime'),
               client.getPopularCatalog(kind: 'anime'),
               client.getFilteredCatalog(kind: 'anime', filter: 'Top Rated'),
+              for (final String filter in _additionalAniListBoardFilters)
+                client.getFilteredCatalog(kind: 'anime', filter: filter),
             ]);
-        List<MediaItem> recentMovies = continueWatching.isNotEmpty
-            ? continueWatching
-            : results[0];
+        List<MediaItem> recentMovies = results[0];
         if (recentMovies.isNotEmpty) {
           final MediaItem enriched = await client.enrichHeroOverview(
             recentMovies.first,
@@ -208,6 +209,14 @@ class AniListCatalogRepository implements CatalogRepository {
             recentMovies: recentMovies,
             recentSeries: results[1],
             topAnime: results[2],
+            additionalSections: <String, List<MediaItem>>{
+              for (
+                int index = 0;
+                index < _additionalAniListBoardFilters.length;
+                index += 1
+              )
+                _additionalAniListBoardFilters[index]: results[index + 3],
+            },
           ),
         );
       },
@@ -300,26 +309,16 @@ class AniListCatalogRepository implements CatalogRepository {
       encode: _calendarListToJson,
     );
   }
-
-  Future<List<MediaItem>> _continueWatching() async {
-    if (!hasAccessToken || viewerId == null) return const <MediaItem>[];
-    try {
-      final folders = await client.fetchAnimeListCollection(userId: viewerId);
-      final List<MediaItem> items = <MediaItem>[];
-      for (final folder in folders) {
-        for (final entry in folder.entries) {
-          if (entry.progress > 0) {
-            items.add(entry.mediaItem);
-          }
-        }
-      }
-      final List<MediaItem> taken = items.take(20).toList(growable: false);
-      return client.enrichWithRussian(taken);
-    } catch (_) {
-      return const <MediaItem>[];
-    }
-  }
 }
+
+const List<String> _additionalAniListBoardFilters = <String>[
+  'Favorites',
+  'Airing',
+  'Upcoming',
+  'Finished',
+  'Newest',
+  'Recently Updated',
+];
 
 /// Returns the previous complete board snapshot immediately, then replaces the
 /// stored snapshot in the background for the next app launch.
@@ -330,11 +329,13 @@ Future<BoardRails> _cachedBoardThenRefreshForNextLaunch({
   required MetadataCacheStore cache,
   required String key,
   required Future<BoardRails> Function() fetch,
+  bool Function(Map<String, dynamic> json)? isCachedSnapshotCurrent,
   CatalogOfflineCallback? onOffline,
   CatalogOnlineCallback? onOnline,
 }) async {
   final Map<String, dynamic>? cachedJson = await cache.read(key);
-  if (cachedJson != null) {
+  if (cachedJson != null &&
+      (isCachedSnapshotCurrent?.call(cachedJson) ?? true)) {
     try {
       final BoardRails cached = _limitBoardRails(_boardFromJson(cachedJson));
       unawaited(
@@ -496,6 +497,7 @@ Future<T> _networkFirst<T>({
 Map<String, dynamic> _boardToJson(BoardRails rails) {
   final BoardRails limited = _limitBoardRails(rails);
   return <String, dynamic>{
+    'schemaVersion': _boardCacheSchemaVersion,
     'recentMovies': limited.recentMovies
         .map((MediaItem item) => item.toJson())
         .toList(growable: false),
@@ -505,6 +507,13 @@ Map<String, dynamic> _boardToJson(BoardRails rails) {
     'topAnime': limited.topAnime
         .map((MediaItem item) => item.toJson())
         .toList(growable: false),
+    'additionalSections': <String, dynamic>{
+      for (final MapEntry<String, List<MediaItem>> section
+          in limited.additionalSections.entries)
+        section.key: section.value
+            .map((MediaItem item) => item.toJson())
+            .toList(growable: false),
+    },
   };
 }
 
@@ -514,10 +523,12 @@ BoardRails _boardFromJson(Map<String, dynamic> json) {
       recentMovies: _mediaList(json['recentMovies']),
       recentSeries: _mediaList(json['recentSeries']),
       topAnime: _mediaList(json['topAnime']),
+      additionalSections: _mediaSectionMap(json['additionalSections']),
     ),
   );
 }
 
+const int _boardCacheSchemaVersion = 2;
 const int _boardCacheItemLimit = 20;
 
 BoardRails _limitBoardRails(BoardRails rails) {
@@ -529,7 +540,25 @@ BoardRails _limitBoardRails(BoardRails rails) {
         .take(_boardCacheItemLimit)
         .toList(growable: false),
     topAnime: rails.topAnime.take(_boardCacheItemLimit).toList(growable: false),
+    additionalSections: <String, List<MediaItem>>{
+      for (final MapEntry<String, List<MediaItem>> section
+          in rails.additionalSections.entries)
+        section.key: section.value
+            .take(_boardCacheItemLimit)
+            .toList(growable: false),
+    },
   );
+}
+
+Map<String, List<MediaItem>> _mediaSectionMap(Object? value) {
+  if (value is! Map<dynamic, dynamic>) {
+    return const <String, List<MediaItem>>{};
+  }
+  return <String, List<MediaItem>>{
+    for (final MapEntry<dynamic, dynamic> section in value.entries)
+      if (section.key is String)
+        section.key as String: _mediaList(section.value),
+  };
 }
 
 Map<String, dynamic> _mediaListToJson(List<MediaItem> items) {

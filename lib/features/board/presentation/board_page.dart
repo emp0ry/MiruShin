@@ -26,6 +26,7 @@ import '../../../shared/models/anilist_models.dart';
 import '../../../shared/models/library_item.dart';
 import '../../../shared/models/media_item.dart';
 import '../../catalog/application/catalog_mode.dart';
+import '../../catalog/application/catalog_repository.dart';
 import '../../catalog/presentation/catalog_offline_banner.dart';
 import '../../library/application/local_library_provider.dart';
 import '../../metadata/application/metadata_providers.dart';
@@ -108,11 +109,7 @@ class _BoardPageState extends ConsumerState<BoardPage> {
               .take(12)
               .map((LibraryItem item) => item.mediaItem)
               .toList(growable: false)
-        : anilistFolders
-              .expand((AniListAnimeListFolder folder) => folder.entries)
-              .map((AniListAnimeListEntry entry) => entry.mediaItem)
-              .take(12)
-              .toList(growable: false);
+        : const <MediaItem>[];
     final Widget page = AdaptivePage(
       child: SingleChildScrollView(
         key: const ValueKey<String>('board-page-scroll-view'),
@@ -153,54 +150,49 @@ class _BoardPageState extends ConsumerState<BoardPage> {
                 enableAniListEditing: mode == CatalogMode.anilist,
               ),
             ],
-            if (rails.recentSeries.isNotEmpty) ...<Widget>[
+            if (mode == CatalogMode.anilist) ...<Widget>[
+              for (final String filter in _anilistBoardFilters)
+                if (_anilistBoardItems(rails, filter).isNotEmpty) ...<Widget>[
+                  const SizedBox(height: AppSpacing.xxl),
+                  _MediaSection(
+                    title: context.t(filter),
+                    items: _anilistBoardItems(rails, filter),
+                    maxColumns: filter == 'Top Rated' ? 6 : 5,
+                    loadMoreQuery: _BoardLoadMoreQuery(
+                      filter: filter,
+                      anilistKind: 'anime',
+                    ),
+                    statusBadgeMap: statusBadges,
+                    anilistEntryMap: anilistEntryMap,
+                    enableAniListEditing: true,
+                  ),
+                ],
+            ] else ...<Widget>[
+              if (rails.recentSeries.isNotEmpty) ...<Widget>[
+                const SizedBox(height: AppSpacing.xxl),
+                _MediaSection(
+                  title: context.t('Recently Aired Series'),
+                  items: rails.recentSeries,
+                ),
+              ],
+              if (rails.topAnime.isNotEmpty) ...<Widget>[
+                const SizedBox(height: AppSpacing.xxl),
+                _MediaSection(
+                  title: context.t('Top Anime'),
+                  items: rails.topAnime,
+                  maxColumns: 6,
+                  loadMoreQuery: const _BoardLoadMoreQuery(
+                    type: MediaType.anime,
+                    filter: 'Popular',
+                  ),
+                ),
+              ],
               const SizedBox(height: AppSpacing.xxl),
               _MediaSection(
-                title: context.t(
-                  mode == CatalogMode.tmdb
-                      ? 'Recently Aired Series'
-                      : 'Popular Anime',
-                ),
-                items: rails.recentSeries,
-                showMoreLocation: mode == CatalogMode.anilist
-                    ? AppRoutes.discoveryPath(
-                        filter: 'Popular',
-                        anilistKind: 'anime',
-                      )
-                    : null,
-                statusBadgeMap: statusBadges,
-                anilistEntryMap: anilistEntryMap,
-                enableAniListEditing: mode == CatalogMode.anilist,
+                title: context.t('Recently Added to Library'),
+                items: recentlyAdded,
               ),
             ],
-            if (rails.topAnime.isNotEmpty) ...<Widget>[
-              const SizedBox(height: AppSpacing.xxl),
-              _MediaSection(
-                title: context.t('Top Anime'),
-                items: rails.topAnime,
-                maxColumns: 6,
-                showMoreLocation: AppRoutes.discoveryPath(
-                  type: mode == CatalogMode.tmdb ? MediaType.anime : null,
-                  filter: mode == CatalogMode.tmdb ? 'Popular' : 'Top Rated',
-                  anilistKind: mode == CatalogMode.anilist ? 'anime' : null,
-                ),
-                statusBadgeMap: statusBadges,
-                anilistEntryMap: anilistEntryMap,
-                enableAniListEditing: mode == CatalogMode.anilist,
-              ),
-            ],
-            const SizedBox(height: AppSpacing.xxl),
-            _MediaSection(
-              title: context.t(
-                mode == CatalogMode.tmdb
-                    ? 'Recently Added to Library'
-                    : 'AniList Library',
-              ),
-              items: recentlyAdded,
-              statusBadgeMap: statusBadges,
-              anilistEntryMap: anilistEntryMap,
-              enableAniListEditing: mode == CatalogMode.anilist,
-            ),
             const SizedBox(height: AppSpacing.xxl),
           ],
         ),
@@ -208,6 +200,27 @@ class _BoardPageState extends ConsumerState<BoardPage> {
     );
     return TvPlatform.isAndroidTv ? TvDirectionalFocus(child: page) : page;
   }
+}
+
+const List<String> _anilistBoardFilters = <String>[
+  'Trending',
+  'Popular',
+  'Top Rated',
+  'Favorites',
+  'Airing',
+  'Upcoming',
+  'Finished',
+  'Newest',
+  'Recently Updated',
+];
+
+List<MediaItem> _anilistBoardItems(BoardRails rails, String filter) {
+  return switch (filter) {
+    'Trending' => rails.recentMovies,
+    'Popular' => rails.recentSeries,
+    'Top Rated' => rails.topAnime,
+    _ => rails.additionalSection(filter),
+  };
 }
 
 Map<String, String> _anilistStatusBadges(
@@ -504,7 +517,30 @@ ButtonStyle _onImageOutlinedButtonStyle() {
   );
 }
 
-class _MediaSection extends ConsumerWidget {
+class _BoardLoadMoreQuery {
+  const _BoardLoadMoreQuery({
+    required this.filter,
+    this.type,
+    this.anilistKind,
+  });
+
+  final String filter;
+  final MediaType? type;
+  final String? anilistKind;
+
+  @override
+  bool operator ==(Object other) {
+    return other is _BoardLoadMoreQuery &&
+        other.filter == filter &&
+        other.type == type &&
+        other.anilistKind == anilistKind;
+  }
+
+  @override
+  int get hashCode => Object.hash(filter, type, anilistKind);
+}
+
+class _MediaSection extends ConsumerStatefulWidget {
   const _MediaSection({
     required this.title,
     required this.items,
@@ -513,7 +549,7 @@ class _MediaSection extends ConsumerWidget {
     this.statusBadgeMap = const <String, String>{},
     this.anilistEntryMap = const <String, AniListAnimeListEntry>{},
     this.enableAniListEditing = false,
-    this.showMoreLocation,
+    this.loadMoreQuery,
   });
 
   final String title;
@@ -523,10 +559,85 @@ class _MediaSection extends ConsumerWidget {
   final Map<String, String> statusBadgeMap;
   final Map<String, AniListAnimeListEntry> anilistEntryMap;
   final bool enableAniListEditing;
-  final String? showMoreLocation;
+  final _BoardLoadMoreQuery? loadMoreQuery;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_MediaSection> createState() => _MediaSectionState();
+}
+
+class _MediaSectionState extends ConsumerState<_MediaSection> {
+  final List<MediaItem> _additionalItems = <MediaItem>[];
+  int _page = 1;
+  int _requestSerial = 0;
+  bool _loadingMore = false;
+  bool _hasMore = true;
+
+  @override
+  void didUpdateWidget(covariant _MediaSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.loadMoreQuery != widget.loadMoreQuery ||
+        !identical(oldWidget.items, widget.items)) {
+      _requestSerial += 1;
+      _additionalItems.clear();
+      _page = 1;
+      _loadingMore = false;
+      _hasMore = true;
+    }
+  }
+
+  List<MediaItem> get _visibleItems {
+    final Set<String> seen = <String>{};
+    return <MediaItem>[
+      ...widget.items,
+      ..._additionalItems,
+    ].where((MediaItem item) => seen.add(item.id)).toList(growable: false);
+  }
+
+  Future<void> _loadMore() async {
+    final _BoardLoadMoreQuery? query = widget.loadMoreQuery;
+    if (query == null || _loadingMore || !_hasMore) return;
+
+    final CatalogRepository? repository = ref.read(
+      activeCatalogRepositoryProvider,
+    );
+    if (repository == null) {
+      setState(() => _hasMore = false);
+      return;
+    }
+
+    final int requestId = ++_requestSerial;
+    final int nextPage = _page + 1;
+    setState(() => _loadingMore = true);
+    try {
+      final List<MediaItem> nextItems = await repository.discover(
+        search: '',
+        type: query.type,
+        filter: query.filter,
+        page: nextPage,
+        anilistKind: query.anilistKind,
+      );
+      if (!mounted || requestId != _requestSerial) return;
+
+      final Set<String> seen = _visibleItems
+          .map((MediaItem item) => item.id)
+          .toSet();
+      setState(() {
+        _additionalItems.addAll(
+          nextItems.where((MediaItem item) => seen.add(item.id)),
+        );
+        if (nextItems.isNotEmpty) _page = nextPage;
+        _hasMore = nextItems.isNotEmpty;
+        _loadingMore = false;
+      });
+    } catch (_) {
+      if (!mounted || requestId != _requestSerial) return;
+      setState(() => _loadingMore = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final List<MediaItem> items = _visibleItems;
     final bool forceCompact = ref.watch(
       settingsProvider.select(
         (SettingsState settings) => settings.compactCards,
@@ -540,16 +651,21 @@ class _MediaSection extends ConsumerWidget {
               forceCompact: forceCompact,
             ) ==
             WindowSizeClass.compact;
-        final VoidCallback? onShowMore = showMoreLocation == null
+        final VoidCallback? onShowMore = widget.loadMoreQuery == null
             ? null
-            : () => context.go(showMoreLocation!);
+            : () => unawaited(_loadMore());
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
             SectionHeader(
-              title: title,
+              title: widget.title,
               trailing: compact && onShowMore != null
-                  ? _SectionLoadMoreButton(onPressed: onShowMore, compact: true)
+                  ? _SectionLoadMoreButton(
+                      onPressed: onShowMore,
+                      compact: true,
+                      loading: _loadingMore,
+                      hasMore: _hasMore,
+                    )
                   : null,
             ),
             if (items.isEmpty)
@@ -577,9 +693,9 @@ class _MediaSection extends ConsumerWidget {
                     itemBuilder: (BuildContext context, int index) {
                       final MediaItem item = items[index];
                       final AniListAnimeListEntry? entry =
-                          anilistEntryMap[item.id];
+                          widget.anilistEntryMap[item.id];
                       final VoidCallback? editAniListEntry =
-                          enableAniListEditing
+                          widget.enableAniListEditing
                           ? () => unawaited(
                               _openAniListEntryEditor(
                                 context,
@@ -594,8 +710,8 @@ class _MediaSection extends ConsumerWidget {
                         child: MediaPosterCard(
                           item: item,
                           compact: false,
-                          watchProgress: progressMap[item.id],
-                          statusBadgeLabel: statusBadgeMap[item.id],
+                          watchProgress: widget.progressMap[item.id],
+                          statusBadgeLabel: widget.statusBadgeMap[item.id],
                           onTap: () => context.push(
                             AppRoutes.mediaDetailsPath(item.id),
                             extra: item,
@@ -610,13 +726,14 @@ class _MediaSection extends ConsumerWidget {
               else
                 ResponsiveGrid(
                   itemCount: items.length,
-                  maxColumns: maxColumns,
+                  maxColumns: widget.maxColumns,
                   clipBehavior: Clip.none,
                   itemBuilder: (BuildContext context, int index) {
                     final MediaItem item = items[index];
                     final AniListAnimeListEntry? entry =
-                        anilistEntryMap[item.id];
-                    final VoidCallback? editAniListEntry = enableAniListEditing
+                        widget.anilistEntryMap[item.id];
+                    final VoidCallback? editAniListEntry =
+                        widget.enableAniListEditing
                         ? () => unawaited(
                             _openAniListEntryEditor(
                               context,
@@ -628,8 +745,8 @@ class _MediaSection extends ConsumerWidget {
                         : null;
                     return MediaPosterCard(
                       item: item,
-                      watchProgress: progressMap[item.id],
-                      statusBadgeLabel: statusBadgeMap[item.id],
+                      watchProgress: widget.progressMap[item.id],
+                      statusBadgeLabel: widget.statusBadgeMap[item.id],
                       onTap: () => context.push(
                         AppRoutes.mediaDetailsPath(item.id),
                         extra: item,
@@ -641,7 +758,13 @@ class _MediaSection extends ConsumerWidget {
                 ),
               if (!compact && onShowMore != null) ...<Widget>[
                 const SizedBox(height: AppSpacing.lg),
-                Center(child: _SectionLoadMoreButton(onPressed: onShowMore)),
+                Center(
+                  child: _SectionLoadMoreButton(
+                    onPressed: onShowMore,
+                    loading: _loadingMore,
+                    hasMore: _hasMore,
+                  ),
+                ),
               ],
             ],
           ],
@@ -652,15 +775,28 @@ class _MediaSection extends ConsumerWidget {
 }
 
 class _SectionLoadMoreButton extends StatelessWidget {
-  const _SectionLoadMoreButton({required this.onPressed, this.compact = false});
+  const _SectionLoadMoreButton({
+    required this.onPressed,
+    required this.loading,
+    required this.hasMore,
+    this.compact = false,
+  });
 
   final VoidCallback onPressed;
+  final bool loading;
+  final bool hasMore;
   final bool compact;
 
   @override
   Widget build(BuildContext context) {
+    if (!hasMore) {
+      return Text(
+        context.t('All caught up'),
+        style: Theme.of(context).textTheme.labelLarge,
+      );
+    }
     return OutlinedButton.icon(
-      onPressed: onPressed,
+      onPressed: loading ? null : onPressed,
       style: compact
           ? OutlinedButton.styleFrom(
               visualDensity: VisualDensity.compact,
@@ -670,8 +806,13 @@ class _SectionLoadMoreButton extends StatelessWidget {
               ),
             )
           : null,
-      icon: const Icon(Icons.expand_more_rounded),
-      label: Text(context.t('Load more')),
+      icon: loading
+          ? const SizedBox.square(
+              dimension: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.expand_more_rounded),
+      label: Text(context.t(loading ? 'Loading more' : 'Load more')),
     );
   }
 }

@@ -89,6 +89,18 @@ void main() {
       expect(initial.recentSeries, hasLength(20));
       expect(initial.topAnime, hasLength(20));
       expect(initial.topAnime.first.title, 'cached-top 0');
+      expect(
+        initial.additionalSections.keys,
+        containsAll(<String>[
+          'Favorites',
+          'Airing',
+          'Upcoming',
+          'Finished',
+          'Newest',
+          'Recently Updated',
+        ]),
+      );
+      expect(initial.additionalSections.values, everyElement(hasLength(20)));
 
       final _BlockingAniListClient refreshClient = _BlockingAniListClient();
       final Future<void> refreshWritten = cache.nextWrite;
@@ -100,7 +112,16 @@ void main() {
 
       expect(shown.topAnime.first.title, 'cached-top 0');
       await Future<void>.delayed(Duration.zero);
-      expect(refreshClient.callCount, 3);
+      expect(refreshClient.callCount, 9);
+      expect(refreshClient.requestedFilters, <String>[
+        'Top Rated',
+        'Favorites',
+        'Airing',
+        'Upcoming',
+        'Finished',
+        'Newest',
+        'Recently Updated',
+      ]);
 
       refreshClient.complete('fresh');
       await refreshWritten.timeout(const Duration(seconds: 1));
@@ -110,6 +131,10 @@ void main() {
       );
       final List<dynamic> storedAnime = stored!['topAnime'] as List<dynamic>;
       expect(storedAnime, hasLength(20));
+      final Map<String, dynamic> storedSections =
+          stored['additionalSections'] as Map<String, dynamic>;
+      expect(storedSections, hasLength(6));
+      expect(storedSections['Favorites'], hasLength(20));
       expect(
         (storedAnime.first as Map<String, dynamic>)['title'],
         'fresh-top 0',
@@ -327,6 +352,7 @@ class _BlockingAniListClient extends AniListApiClient {
         'top': Completer<List<MediaItem>>(),
       };
   int callCount = 0;
+  final List<String> requestedFilters = <String>[];
 
   @override
   Future<List<MediaItem>> getTrendingCatalog({
@@ -353,6 +379,7 @@ class _BlockingAniListClient extends AniListApiClient {
     int page = 1,
   }) {
     callCount += 1;
+    requestedFilters.add(filter);
     return _requests['top']!.future;
   }
 
