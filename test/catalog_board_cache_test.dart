@@ -9,6 +9,29 @@ import 'package:mirushin/features/tracking/data/anilist_api_client.dart';
 import 'package:mirushin/shared/models/media_item.dart';
 
 void main() {
+  test('logical media pages preserve exact row-sized boundaries', () async {
+    final List<int> requestedPages = <int>[];
+    final List<MediaItem> secondPage = await loadLogicalMediaPage(
+      page: 2,
+      pageSize: 24,
+      fetchPage: (int page) async {
+        requestedPages.add(page);
+        if (page > 3) return const <MediaItem>[];
+        return _items(
+          'page',
+          MediaType.anime,
+          start: (page - 1) * 20,
+          count: 20,
+        );
+      },
+    );
+
+    expect(requestedPages, <int>[1, 2, 3]);
+    expect(secondPage, hasLength(24));
+    expect(secondPage.first.id, 'page:24');
+    expect(secondPage.last.id, 'page:47');
+  });
+
   group('board metadata cache', () {
     test(
       'TMDB shows the previous snapshot immediately and saves the refresh for '
@@ -22,10 +45,10 @@ void main() {
         );
 
         final BoardRails initial = await firstLaunch.boardRails();
-        expect(initial.recentMovies, hasLength(20));
+        expect(initial.recentMovies, hasLength(24));
         expect(initial.recentMovies.first.title, 'cached-recent-movie 0');
-        expect(initial.recentSeries, hasLength(20));
-        expect(initial.topAnime, hasLength(20));
+        expect(initial.recentSeries, hasLength(24));
+        expect(initial.topAnime, hasLength(24));
         expect(initial.topAnime.first.title, 'cached-anime 0');
 
         final _BlockingTmdbProvider refreshProvider = _BlockingTmdbProvider();
@@ -47,7 +70,7 @@ void main() {
           'test.tmdb.board',
         );
         final List<dynamic> storedAnime = stored!['topAnime'] as List<dynamic>;
-        expect(storedAnime, hasLength(20));
+        expect(storedAnime, hasLength(24));
         expect(
           (storedAnime.first as Map<String, dynamic>)['title'],
           'fresh-anime 0',
@@ -76,7 +99,7 @@ void main() {
       },
     );
 
-    test('AniList uses the same 20-item next-launch snapshot policy', () async {
+    test('AniList uses the same 24-item next-launch snapshot policy', () async {
       final _RecordingCacheStore cache = _RecordingCacheStore();
       final AniListCatalogRepository firstLaunch = AniListCatalogRepository(
         client: _ImmediateAniListClient('cached'),
@@ -85,9 +108,9 @@ void main() {
       );
 
       final BoardRails initial = await firstLaunch.boardRails();
-      expect(initial.recentMovies, hasLength(20));
-      expect(initial.recentSeries, hasLength(20));
-      expect(initial.topAnime, hasLength(20));
+      expect(initial.recentMovies, hasLength(24));
+      expect(initial.recentSeries, hasLength(24));
+      expect(initial.topAnime, hasLength(24));
       expect(initial.topAnime.first.title, 'cached-top 0');
       expect(
         initial.additionalSections.keys,
@@ -100,7 +123,7 @@ void main() {
           'Recently Updated',
         ]),
       );
-      expect(initial.additionalSections.values, everyElement(hasLength(20)));
+      expect(initial.additionalSections.values, everyElement(hasLength(24)));
 
       final _BlockingAniListClient refreshClient = _BlockingAniListClient();
       final Future<void> refreshWritten = cache.nextWrite;
@@ -130,11 +153,11 @@ void main() {
         'test.anilist.board.public',
       );
       final List<dynamic> storedAnime = stored!['topAnime'] as List<dynamic>;
-      expect(storedAnime, hasLength(20));
+      expect(storedAnime, hasLength(24));
       final Map<String, dynamic> storedSections =
           stored['additionalSections'] as Map<String, dynamic>;
       expect(storedSections, hasLength(6));
-      expect(storedSections['Favorites'], hasLength(20));
+      expect(storedSections['Favorites'], hasLength(24));
       expect(
         (storedAnime.first as Map<String, dynamic>)['title'],
         'fresh-top 0',
@@ -325,12 +348,14 @@ class _ImmediateAniListClient extends AniListApiClient {
   Future<List<MediaItem>> getTrendingCatalog({
     required String kind,
     int page = 1,
+    int perPage = 20,
   }) async => _items('$prefix-trending', MediaType.anime);
 
   @override
   Future<List<MediaItem>> getPopularCatalog({
     required String kind,
     int page = 1,
+    int perPage = 20,
   }) async => _items('$prefix-popular', MediaType.anime);
 
   @override
@@ -338,6 +363,7 @@ class _ImmediateAniListClient extends AniListApiClient {
     required String kind,
     required String filter,
     int page = 1,
+    int perPage = 20,
   }) async => _items('$prefix-top', MediaType.anime);
 
   @override
@@ -358,6 +384,7 @@ class _BlockingAniListClient extends AniListApiClient {
   Future<List<MediaItem>> getTrendingCatalog({
     required String kind,
     int page = 1,
+    int perPage = 20,
   }) {
     callCount += 1;
     return _requests['trending']!.future;
@@ -367,6 +394,7 @@ class _BlockingAniListClient extends AniListApiClient {
   Future<List<MediaItem>> getPopularCatalog({
     required String kind,
     int page = 1,
+    int perPage = 20,
   }) {
     callCount += 1;
     return _requests['popular']!.future;
@@ -377,6 +405,7 @@ class _BlockingAniListClient extends AniListApiClient {
     required String kind,
     required String filter,
     int page = 1,
+    int perPage = 20,
   }) {
     callCount += 1;
     requestedFilters.add(filter);
@@ -448,10 +477,15 @@ MediaItem _detailsItem(String prefix, String id) {
   );
 }
 
-List<MediaItem> _items(String prefix, MediaType type) {
-  return List<MediaItem>.generate(
-    25,
-    (int index) => MediaItem(
+List<MediaItem> _items(
+  String prefix,
+  MediaType type, {
+  int start = 0,
+  int count = 25,
+}) {
+  return List<MediaItem>.generate(count, (int offset) {
+    final int index = start + offset;
+    return MediaItem(
       id: '$prefix:$index',
       title: '$prefix $index',
       originalTitle: 'Original $index',
@@ -479,7 +513,6 @@ List<MediaItem> _items(String prefix, MediaType type) {
       aliases: <String>['Alias $index'],
       originalLanguage: 'ja',
       trailer: MediaTrailer(id: 'trailer-$index', site: 'youtube'),
-    ),
-    growable: false,
-  );
+    );
+  }, growable: false);
 }

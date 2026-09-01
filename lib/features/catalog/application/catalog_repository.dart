@@ -27,6 +27,7 @@ abstract interface class CatalogRepository {
     required MediaType? type,
     required String filter,
     required int page,
+    int pageSize = 20,
     String? anilistKind,
   });
 
@@ -61,14 +62,31 @@ class TmdbCatalogRepository implements CatalogRepository {
     return _cachedBoardThenRefreshForNextLaunch(
       cache: cache,
       key: '$cacheScope.board',
+      isCachedSnapshotCurrent: (Map<String, dynamic> json) =>
+          json['schemaVersion'] == _boardCacheSchemaVersion,
       onOffline: onOffline,
       onOnline: onOnline,
       fetch: () async {
         final List<List<MediaItem>> results =
             await Future.wait(<Future<List<MediaItem>>>[
-              tmdb.getRecentlyReleasedMovies(),
-              tmdb.getPopular(MediaType.series),
-              tmdb.getPopular(MediaType.anime),
+              loadLogicalMediaPage(
+                page: 1,
+                pageSize: _boardCacheItemLimit,
+                fetchPage: (int page) =>
+                    tmdb.getRecentlyReleasedMovies(page: page),
+              ),
+              loadLogicalMediaPage(
+                page: 1,
+                pageSize: _boardCacheItemLimit,
+                fetchPage: (int page) =>
+                    tmdb.getPopular(MediaType.series, page: page),
+              ),
+              loadLogicalMediaPage(
+                page: 1,
+                pageSize: _boardCacheItemLimit,
+                fetchPage: (int page) =>
+                    tmdb.getPopular(MediaType.anime, page: page),
+              ),
             ]);
         return _limitBoardRails(
           BoardRails(
@@ -87,12 +105,13 @@ class TmdbCatalogRepository implements CatalogRepository {
     required MediaType? type,
     required String filter,
     required int page,
+    int pageSize = 20,
     String? anilistKind,
   }) {
     final String normalizedSearch = search.trim();
     final String typeKey = type?.name ?? 'all';
     final String key =
-        '$cacheScope.discovery.${_safe(normalizedSearch)}.$filter.$typeKey.$page';
+        '$cacheScope.discovery.${_safe(normalizedSearch)}.$filter.$typeKey.$page.$pageSize';
     return _networkFirst(
       cache: cache,
       key: key,
@@ -100,19 +119,30 @@ class TmdbCatalogRepository implements CatalogRepository {
       fallback: const <MediaItem>[],
       onOffline: onOffline,
       onOnline: onOnline,
-      fetch: () {
+      fetch: () async {
         if (normalizedSearch.isNotEmpty) {
-          return tmdb
-              .search(normalizedSearch, page: page)
-              .then(
-                (List<MediaItem> items) => type == null
-                    ? items
-                    : items
-                          .where((MediaItem item) => item.type == type)
-                          .toList(),
+          return loadLogicalMediaPage(
+            page: page,
+            pageSize: pageSize,
+            fetchPage: (int sourcePage) async {
+              final List<MediaItem> items = await tmdb.search(
+                normalizedSearch,
+                page: sourcePage,
               );
+              return type == null
+                  ? items
+                  : items
+                        .where((MediaItem item) => item.type == type)
+                        .toList(growable: false);
+            },
+          );
         }
-        return tmdb.discoverPage(filter: filter, type: type, page: page);
+        return loadLogicalMediaPage(
+          page: page,
+          pageSize: pageSize,
+          fetchPage: (int sourcePage) =>
+              tmdb.discoverPage(filter: filter, type: type, page: sourcePage),
+        );
       },
       decode: _mediaListFromJson,
       encode: _mediaListToJson,
@@ -189,11 +219,25 @@ class AniListCatalogRepository implements CatalogRepository {
       fetch: () async {
         final List<List<MediaItem>> results =
             await Future.wait(<Future<List<MediaItem>>>[
-              client.getTrendingCatalog(kind: 'anime'),
-              client.getPopularCatalog(kind: 'anime'),
-              client.getFilteredCatalog(kind: 'anime', filter: 'Top Rated'),
+              client.getTrendingCatalog(
+                kind: 'anime',
+                perPage: _boardCacheItemLimit,
+              ),
+              client.getPopularCatalog(
+                kind: 'anime',
+                perPage: _boardCacheItemLimit,
+              ),
+              client.getFilteredCatalog(
+                kind: 'anime',
+                filter: 'Top Rated',
+                perPage: _boardCacheItemLimit,
+              ),
               for (final String filter in _additionalAniListBoardFilters)
-                client.getFilteredCatalog(kind: 'anime', filter: filter),
+                client.getFilteredCatalog(
+                  kind: 'anime',
+                  filter: filter,
+                  perPage: _boardCacheItemLimit,
+                ),
             ]);
         List<MediaItem> recentMovies = results[0];
         if (recentMovies.isNotEmpty) {
@@ -229,6 +273,7 @@ class AniListCatalogRepository implements CatalogRepository {
     required MediaType? type,
     required String filter,
     required int page,
+    int pageSize = 20,
     String? anilistKind,
   }) {
     final String requestedKind = (anilistKind?.trim().isNotEmpty ?? false)
@@ -237,7 +282,7 @@ class AniListCatalogRepository implements CatalogRepository {
     final String kind = requestedKind;
     final String normalizedSearch = search.trim();
     final String key =
-        '$cacheScope.discovery.$kind.${_safe(normalizedSearch)}.$filter.$page';
+        '$cacheScope.discovery.$kind.${_safe(normalizedSearch)}.$filter.$page.$pageSize';
     return _networkFirst(
       cache: cache,
       key: key,
@@ -251,18 +296,28 @@ class AniListCatalogRepository implements CatalogRepository {
             kind: kind,
             query: normalizedSearch,
             page: page,
+            perPage: pageSize,
           );
         }
         if (filter == 'Trending') {
-          return client.getTrendingCatalog(kind: kind, page: page);
+          return client.getTrendingCatalog(
+            kind: kind,
+            page: page,
+            perPage: pageSize,
+          );
         }
         if (filter == 'Popular') {
-          return client.getPopularCatalog(kind: kind, page: page);
+          return client.getPopularCatalog(
+            kind: kind,
+            page: page,
+            perPage: pageSize,
+          );
         }
         return client.getFilteredCatalog(
           kind: kind,
           filter: filter,
           page: page,
+          perPage: pageSize,
         );
       },
       decode: _mediaListFromJson,
@@ -528,8 +583,32 @@ BoardRails _boardFromJson(Map<String, dynamic> json) {
   );
 }
 
-const int _boardCacheSchemaVersion = 2;
-const int _boardCacheItemLimit = 20;
+const int _boardCacheSchemaVersion = 3;
+const int _boardCacheItemLimit = 24;
+
+Future<List<MediaItem>> loadLogicalMediaPage({
+  required int page,
+  required int pageSize,
+  required Future<List<MediaItem>> Function(int page) fetchPage,
+}) async {
+  if (page < 1 || pageSize < 1) return const <MediaItem>[];
+
+  final int start = (page - 1) * pageSize;
+  final int end = start + pageSize;
+  final Map<String, MediaItem> collected = <String, MediaItem>{};
+  int sourcePage = 1;
+  while (collected.length < end) {
+    final List<MediaItem> batch = await fetchPage(sourcePage);
+    if (batch.isEmpty) break;
+    final int previousLength = collected.length;
+    for (final MediaItem item in batch) {
+      collected.putIfAbsent(item.id, () => item);
+    }
+    if (collected.length == previousLength) break;
+    sourcePage += 1;
+  }
+  return collected.values.skip(start).take(pageSize).toList(growable: false);
+}
 
 BoardRails _limitBoardRails(BoardRails rails) {
   return BoardRails(

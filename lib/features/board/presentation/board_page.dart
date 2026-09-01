@@ -35,6 +35,17 @@ import '../../settings/application/settings_state.dart';
 import '../../tracking/application/anilist_library_provider.dart';
 import '../../tracking/presentation/anilist_entry_editor.dart';
 
+const double _kBoardWidePosterWidth = 166;
+
+int _boardMaxColumnsForWidth(double availableWidth) {
+  const double spacing = AppSpacing.lg;
+  const double sevenColumnsWidth = (7 * _kBoardWidePosterWidth) + (6 * spacing);
+  const double eightColumnsWidth = (8 * _kBoardWidePosterWidth) + (7 * spacing);
+  if (availableWidth >= eightColumnsWidth) return 8;
+  if (availableWidth >= sevenColumnsWidth) return 7;
+  return 6;
+}
+
 class BoardPage extends ConsumerStatefulWidget {
   const BoardPage({super.key});
 
@@ -56,6 +67,12 @@ class _BoardPageState extends ConsumerState<BoardPage> {
     final bool loadingInitialBoard =
         asyncRails.isLoading && !asyncRails.hasValue;
     final CatalogMode mode = ref.watch(catalogModeProvider);
+    if (loadingInitialBoard) {
+      const Widget emptyPage = AdaptivePage(child: SizedBox.shrink());
+      return TvPlatform.isAndroidTv
+          ? const TvDirectionalFocus(child: emptyPage)
+          : emptyPage;
+    }
     final MediaItem? hero = rails.heroForSeed(
       _heroSeed,
       preferRecentMovies: mode == CatalogMode.tmdb,
@@ -123,12 +140,7 @@ class _BoardPageState extends ConsumerState<BoardPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
             const CatalogOfflineBanner(),
-            if (hero == null && loadingInitialBoard)
-              const _BoardLoadingAnimation(
-                key: ValueKey<String>('board-metadata-loading'),
-                height: 440,
-              )
-            else if (hero == null)
+            if (hero == null)
               NeutralPlaceholder(
                 title: context.t('Could not load catalog'),
                 message: context.t(
@@ -158,6 +170,12 @@ class _BoardPageState extends ConsumerState<BoardPage> {
                 statusBadgeMap: statusBadges,
                 anilistEntryMap: anilistEntryMap,
                 enableAniListEditing: mode == CatalogMode.anilist,
+                loadMoreQuery: mode == CatalogMode.tmdb
+                    ? const _BoardLoadMoreQuery(
+                        type: MediaType.movie,
+                        filter: 'New Releases',
+                      )
+                    : null,
               ),
             ],
             if (mode == CatalogMode.anilist) ...<Widget>[
@@ -167,7 +185,6 @@ class _BoardPageState extends ConsumerState<BoardPage> {
                   _MediaSection(
                     title: context.t(filter),
                     items: _anilistBoardItems(rails, filter),
-                    maxColumns: filter == 'Top Rated' ? 6 : 5,
                     loadMoreQuery: _BoardLoadMoreQuery(
                       filter: filter,
                       anilistKind: 'anime',
@@ -183,6 +200,10 @@ class _BoardPageState extends ConsumerState<BoardPage> {
                 _MediaSection(
                   title: context.t('Recently Aired Series'),
                   items: rails.recentSeries,
+                  loadMoreQuery: const _BoardLoadMoreQuery(
+                    type: MediaType.series,
+                    filter: 'Popular',
+                  ),
                 ),
               ],
               if (rails.topAnime.isNotEmpty) ...<Widget>[
@@ -190,7 +211,6 @@ class _BoardPageState extends ConsumerState<BoardPage> {
                 _MediaSection(
                   title: context.t('Top Anime'),
                   items: rails.topAnime,
-                  maxColumns: 6,
                   loadMoreQuery: const _BoardLoadMoreQuery(
                     type: MediaType.anime,
                     filter: 'Popular',
@@ -215,7 +235,7 @@ class _BoardPageState extends ConsumerState<BoardPage> {
 }
 
 class _BoardLoadingAnimation extends StatelessWidget {
-  const _BoardLoadingAnimation({required this.height, super.key});
+  const _BoardLoadingAnimation({required this.height});
 
   final double height;
 
@@ -579,7 +599,6 @@ class _MediaSection extends ConsumerStatefulWidget {
   const _MediaSection({
     required this.title,
     required this.items,
-    this.maxColumns = 5,
     this.progressMap = const <String, double>{},
     this.statusBadgeMap = const <String, String>{},
     this.anilistEntryMap = const <String, AniListAnimeListEntry>{},
@@ -589,7 +608,6 @@ class _MediaSection extends ConsumerStatefulWidget {
 
   final String title;
   final List<MediaItem> items;
-  final int maxColumns;
   final Map<String, double> progressMap;
   final Map<String, String> statusBadgeMap;
   final Map<String, AniListAnimeListEntry> anilistEntryMap;
@@ -607,6 +625,8 @@ class _MediaSectionState extends ConsumerState<_MediaSection> {
   int _requestSerial = 0;
   bool _loadingMore = false;
   bool _hasMore = true;
+  int _pageSize = 20;
+  int? _pendingPageSize;
 
   @override
   void initState() {
@@ -629,7 +649,7 @@ class _MediaSectionState extends ConsumerState<_MediaSection> {
         _compactScrollController.position.extentAfter > 220) {
       return;
     }
-    unawaited(_loadMore());
+    unawaited(_loadMore(pageSize: 20, compact: true));
   }
 
   @override
@@ -645,15 +665,40 @@ class _MediaSectionState extends ConsumerState<_MediaSection> {
     }
   }
 
-  List<MediaItem> get _visibleItems {
+  void _schedulePageSize(int pageSize) {
+    if (_pageSize == pageSize || _pendingPageSize == pageSize) return;
+    _pendingPageSize = pageSize;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _pendingPageSize != pageSize) return;
+      _pendingPageSize = null;
+      if (_pageSize == pageSize) return;
+      setState(() {
+        _requestSerial += 1;
+        _additionalItems.clear();
+        _page = 1;
+        _loadingMore = false;
+        _hasMore = true;
+        _pageSize = pageSize;
+      });
+    });
+  }
+
+  List<MediaItem> _visibleItems({
+    required int pageSize,
+    required bool compact,
+  }) {
     final Set<String> seen = <String>{};
+    final Iterable<MediaItem> initialItems =
+        !compact && widget.loadMoreQuery != null
+        ? widget.items.take(pageSize)
+        : widget.items;
     return <MediaItem>[
-      ...widget.items,
+      ...initialItems,
       ..._additionalItems,
     ].where((MediaItem item) => seen.add(item.id)).toList(growable: false);
   }
 
-  Future<void> _loadMore() async {
+  Future<void> _loadMore({required int pageSize, required bool compact}) async {
     final _BoardLoadMoreQuery? query = widget.loadMoreQuery;
     if (query == null || _loadingMore || !_hasMore) return;
 
@@ -674,19 +719,21 @@ class _MediaSectionState extends ConsumerState<_MediaSection> {
         type: query.type,
         filter: query.filter,
         page: nextPage,
+        pageSize: pageSize,
         anilistKind: query.anilistKind,
       );
       if (!mounted || requestId != _requestSerial) return;
 
-      final Set<String> seen = _visibleItems
-          .map((MediaItem item) => item.id)
-          .toSet();
+      final Set<String> seen = _visibleItems(
+        pageSize: pageSize,
+        compact: compact,
+      ).map((MediaItem item) => item.id).toSet();
       setState(() {
         _additionalItems.addAll(
           nextItems.where((MediaItem item) => seen.add(item.id)),
         );
         if (nextItems.isNotEmpty) _page = nextPage;
-        _hasMore = nextItems.isNotEmpty;
+        _hasMore = nextItems.length >= pageSize;
         _loadingMore = false;
       });
     } catch (_) {
@@ -697,7 +744,6 @@ class _MediaSectionState extends ConsumerState<_MediaSection> {
 
   @override
   Widget build(BuildContext context) {
-    final List<MediaItem> items = _visibleItems;
     final bool forceCompact = ref.watch(
       settingsProvider.select(
         (SettingsState settings) => settings.compactCards,
@@ -711,9 +757,21 @@ class _MediaSectionState extends ConsumerState<_MediaSection> {
               forceCompact: forceCompact,
             ) ==
             WindowSizeClass.compact;
+        final int columns = responsiveGridColumnCount(
+          availableWidth: constraints.maxWidth,
+          minItemWidth: 168,
+          maxColumns: 8,
+          maxColumnsForWidth: _boardMaxColumnsForWidth,
+        );
+        final int pageSize = compact ? 20 : columns * 3;
+        _schedulePageSize(pageSize);
+        final List<MediaItem> items = _visibleItems(
+          pageSize: pageSize,
+          compact: compact,
+        );
         final VoidCallback? onShowMore = widget.loadMoreQuery == null
             ? null
-            : () => unawaited(_loadMore());
+            : () => unawaited(_loadMore(pageSize: pageSize, compact: compact));
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
@@ -782,7 +840,8 @@ class _MediaSectionState extends ConsumerState<_MediaSection> {
               else
                 ResponsiveGrid(
                   itemCount: items.length,
-                  maxColumns: widget.maxColumns,
+                  maxColumns: 8,
+                  maxColumnsForWidth: _boardMaxColumnsForWidth,
                   clipBehavior: Clip.none,
                   itemBuilder: (BuildContext context, int index) {
                     final MediaItem item = items[index];

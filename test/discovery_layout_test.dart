@@ -34,16 +34,30 @@ void main() {
   testWidgets(
     'Discovery adds wide columns without changing smaller grid counts',
     (WidgetTester tester) async {
-      await _pumpDiscovery(tester, const Size(1600, 1000));
+      final _DiscoveryCatalogRepository repository =
+          _DiscoveryCatalogRepository();
+      await _pumpDiscovery(
+        tester,
+        const Size(1600, 1000),
+        repository: repository,
+      );
       expect(_gridColumns(tester), 8);
+      expect(repository.lastPageSize, 32);
+
+      tester.view.physicalSize = const Size(1360, 1000);
+      await tester.pumpAndSettle();
+      expect(_gridColumns(tester), 7);
+      expect(repository.lastPageSize, 28);
 
       tester.view.physicalSize = const Size(1280, 1000);
       await tester.pumpAndSettle();
       expect(_gridColumns(tester), 6);
+      expect(repository.lastPageSize, 24);
 
       tester.view.physicalSize = const Size(390, 844);
       await tester.pumpAndSettle();
       expect(_gridColumns(tester), 2);
+      expect(repository.lastPageSize, 8);
       expect(tester.takeException(), isNull);
     },
   );
@@ -90,7 +104,11 @@ void main() {
   });
 }
 
-Future<void> _pumpDiscovery(WidgetTester tester, Size size) async {
+Future<void> _pumpDiscovery(
+  WidgetTester tester,
+  Size size, {
+  CatalogRepository? repository,
+}) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.resetPhysicalSize);
@@ -100,7 +118,7 @@ Future<void> _pumpDiscovery(WidgetTester tester, Size size) async {
     ProviderScope(
       overrides: [
         activeCatalogRepositoryProvider.overrideWithValue(
-          const _DiscoveryCatalogRepository(),
+          repository ?? _DiscoveryCatalogRepository(),
         ),
         anilistAnimeListProvider.overrideWith(_EmptyAniListLibrary.new),
       ],
@@ -142,7 +160,7 @@ class _EmptyAniListLibrary extends AniListLibraryNotifier {
 }
 
 class _DiscoveryCatalogRepository implements CatalogRepository {
-  const _DiscoveryCatalogRepository();
+  int? lastPageSize;
 
   @override
   CatalogMode get mode => CatalogMode.anilist;
@@ -165,11 +183,13 @@ class _DiscoveryCatalogRepository implements CatalogRepository {
     required MediaType? type,
     required String filter,
     required int page,
+    int pageSize = 20,
     String? anilistKind,
   }) async {
+    lastPageSize = pageSize;
     if (page != 1) return const <MediaItem>[];
     return List<MediaItem>.generate(
-      16,
+      pageSize,
       (int index) => MediaItem(
         id: 'anilist:$index',
         title: 'Title $index',

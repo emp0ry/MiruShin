@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mirushin/app/localization/app_localizations.dart';
 import 'package:mirushin/app/theme/app_theme.dart';
+import 'package:mirushin/core/widgets/neutral_placeholder.dart';
 import 'package:mirushin/core/widgets/section_header.dart';
 import 'package:mirushin/features/board/presentation/board_page.dart';
 import 'package:mirushin/features/catalog/application/catalog_mode.dart';
@@ -95,34 +96,85 @@ void main() {
       expect(repository.lastFilter, 'Popular');
       expect(repository.lastPage, 2);
       expect(repository.lastAniListKind, 'anime');
+      expect(repository.lastPageSize, 20);
       expect(tester.takeException(), isNull);
     },
   );
 
-  testWidgets(
-    'Board shows animation instead of no-metadata text while loading',
-    (WidgetTester tester) async {
-      final Completer<BoardRails> railsCompleter = Completer<BoardRails>();
-      await _pumpBoard(
-        tester,
-        railsFuture: railsCompleter.future,
-        settle: false,
-      );
+  testWidgets('wide Board uses up to 8 columns and loads three rows', (
+    WidgetTester tester,
+  ) async {
+    final _RecordingCatalogRepository repository =
+        _RecordingCatalogRepository();
+    await _pumpBoard(
+      tester,
+      size: const Size(1600, 1000),
+      rails: BoardRails(
+        recentSeries: List<MediaItem>.generate(
+          24,
+          (int index) => _item(index + 1),
+        ),
+      ),
+      repository: repository,
+    );
 
-      expect(
-        find.byKey(const ValueKey<String>('board-metadata-loading')),
-        findsOneWidget,
-      );
-      expect(find.text('No live metadata yet'), findsNothing);
+    GridView grid = tester.widget<GridView>(find.byType(GridView));
+    expect(
+      (grid.gridDelegate as SliverGridDelegateWithFixedCrossAxisCount)
+          .crossAxisCount,
+      8,
+    );
+    expect(grid.childrenDelegate.estimatedChildCount, 24);
 
-      railsCompleter.complete(BoardRails(recentSeries: <MediaItem>[_item()]));
-      await tester.pumpAndSettle();
-      expect(
-        find.byKey(const ValueKey<String>('board-metadata-loading')),
-        findsNothing,
-      );
-    },
-  );
+    await tester.ensureVisible(find.text('Load more'));
+    await tester.tap(find.text('Load more'));
+    await tester.pumpAndSettle();
+    expect(repository.lastPageSize, 24);
+
+    tester.view.physicalSize = const Size(1360, 1000);
+    await tester.pumpAndSettle();
+    grid = tester.widget<GridView>(find.byType(GridView));
+    expect(
+      (grid.gridDelegate as SliverGridDelegateWithFixedCrossAxisCount)
+          .crossAxisCount,
+      7,
+    );
+    expect(grid.childrenDelegate.estimatedChildCount, 21);
+
+    tester.view.physicalSize = const Size(1280, 1000);
+    await tester.pumpAndSettle();
+    grid = tester.widget<GridView>(find.byType(GridView));
+    expect(
+      (grid.gridDelegate as SliverGridDelegateWithFixedCrossAxisCount)
+          .crossAxisCount,
+      6,
+    );
+    expect(grid.childrenDelegate.estimatedChildCount, 18);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Board stays empty until the first metadata arrives', (
+    WidgetTester tester,
+  ) async {
+    final Completer<BoardRails> railsCompleter = Completer<BoardRails>();
+    await _pumpBoard(tester, railsFuture: railsCompleter.future, settle: false);
+
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(find.byType(NeutralPlaceholder), findsNothing);
+    expect(
+      find.byKey(const ValueKey<String>('board-page-scroll-view')),
+      findsNothing,
+    );
+    expect(find.text('No live metadata yet'), findsNothing);
+
+    railsCompleter.complete(BoardRails(recentSeries: <MediaItem>[_item()]));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey<String>('board-page-scroll-view')),
+      findsOneWidget,
+    );
+    expect(find.text('Test Anime 1'), findsWidgets);
+  });
 
   testWidgets('AniList Board shows the requested sections in order', (
     WidgetTester tester,
@@ -194,9 +246,10 @@ Future<void> _pumpBoard(
   CatalogRepository? repository,
   List<AniListAnimeListFolder> folders = const <AniListAnimeListFolder>[],
   bool settle = true,
+  Size size = const Size(390, 844),
 }) async {
   assert((rails == null) != (railsFuture == null));
-  tester.view.physicalSize = const Size(390, 844);
+  tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.resetPhysicalSize);
   addTearDown(tester.view.resetDevicePixelRatio);
@@ -248,6 +301,7 @@ class _RecordingCatalogRepository implements CatalogRepository {
   MediaType? lastType;
   String? lastFilter;
   int? lastPage;
+  int? lastPageSize;
   String? lastAniListKind;
 
   @override
@@ -271,12 +325,14 @@ class _RecordingCatalogRepository implements CatalogRepository {
     required MediaType? type,
     required String filter,
     required int page,
+    int pageSize = 20,
     String? anilistKind,
   }) async {
     lastSearch = search;
     lastType = type;
     lastFilter = filter;
     lastPage = page;
+    lastPageSize = pageSize;
     lastAniListKind = anilistKind;
     return <MediaItem>[_item(), _item(5)];
   }

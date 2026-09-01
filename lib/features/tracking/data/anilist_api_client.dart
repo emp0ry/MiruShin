@@ -113,6 +113,7 @@ class AniListApiClient {
     required String kind,
     required String query,
     int page = 1,
+    int perPage = 20,
   }) {
     final String normalizedKind = _normalizedKind(kind);
     final String trimmed = query.trim();
@@ -136,18 +137,24 @@ class AniListApiClient {
       'recommendation' || 'recommendations' => _recommendationsPage(page: page),
       _ =>
         trimmed.isEmpty
-            ? getPopularCatalog(kind: kind, page: page)
+            ? getPopularCatalog(kind: kind, page: page, perPage: perPage)
             : (mediaType == 'ANIME' &&
                       shikimori != null &&
                       _hasCyrillic(trimmed)
-                  ? _searchByCyrillic(trimmed, page)
-                  : _mediaSearchPage(mediaType, trimmed, page)),
+                  ? _searchByCyrillic(trimmed, page, perPage: perPage)
+                  : _mediaSearchPage(
+                      mediaType,
+                      trimmed,
+                      page,
+                      perPage: perPage,
+                    )),
     };
   }
 
   Future<List<MediaItem>> getPopularCatalog({
     required String kind,
     int page = 1,
+    int perPage = 20,
   }) {
     final String normalizedKind = _normalizedKind(kind);
     return switch (normalizedKind) {
@@ -171,6 +178,7 @@ class AniListApiClient {
         normalizedKind == 'manga' ? 'MANGA' : 'ANIME',
         'POPULARITY_DESC',
         page,
+        perPage: perPage,
       ),
     };
   }
@@ -178,6 +186,7 @@ class AniListApiClient {
   Future<List<MediaItem>> getTrendingCatalog({
     required String kind,
     int page = 1,
+    int perPage = 20,
   }) {
     final String normalizedKind = _normalizedKind(kind);
     return switch (normalizedKind) {
@@ -186,6 +195,7 @@ class AniListApiClient {
         normalizedKind == 'manga' ? 'MANGA' : 'ANIME',
         'TRENDING_DESC',
         page,
+        perPage: perPage,
       ),
     };
   }
@@ -194,6 +204,7 @@ class AniListApiClient {
     required String kind,
     required String filter,
     int page = 1,
+    int perPage = 20,
   }) {
     final String normalizedKind = _normalizedKind(kind);
     final String type = normalizedKind == 'manga' ? 'MANGA' : 'ANIME';
@@ -204,6 +215,7 @@ class AniListApiClient {
         sort: query.sort,
         status: query.status,
         page: page,
+        perPage: perPage,
       ),
       'recommendation' || 'recommendations' => _recommendationsPage(page: page),
       'review' || 'reviews' => _reviewPage(search: '', page: page),
@@ -226,6 +238,7 @@ class AniListApiClient {
         sort: query.sort,
         status: query.status,
         page: page,
+        perPage: perPage,
       ),
     };
   }
@@ -250,11 +263,13 @@ class AniListApiClient {
     bool? onList,
     String sort = 'POPULARITY_DESC',
     int page = 1,
+    int perPage = 20,
   }) {
     final Map<String, dynamic> variables = <String, dynamic>{
       'type': type,
       'sort': sort,
       'page': page,
+      'perPage': perPage,
       'format_in': ?(formatIn?.isEmpty == false ? formatIn : null),
       'format_not_in': ?(formatNotIn?.isEmpty == false ? formatNotIn : null),
       'status_in': ?(statusIn?.isEmpty == false ? statusIn : null),
@@ -281,6 +296,7 @@ class AniListApiClient {
         \$type: MediaType,
         \$sort: [MediaSort],
         \$page: Int,
+        \$perPage: Int,
         \$format_in: [MediaFormat],
         \$format_not_in: [MediaFormat],
         \$status_in: [MediaStatus],
@@ -298,7 +314,7 @@ class AniListApiClient {
         \$isLicensed: Boolean,
         \$onList: Boolean
       ) {
-        Page(page: \$page, perPage: 20) {
+        Page(page: \$page, perPage: \$perPage) {
           media(
             type: \$type,
             sort: \$sort,
@@ -553,24 +569,28 @@ class AniListApiClient {
     }
   }
 
-  Future<List<MediaItem>> _searchByCyrillic(String query, int page) async {
+  Future<List<MediaItem>> _searchByCyrillic(
+    String query,
+    int page, {
+    int perPage = 20,
+  }) async {
     final List<ShikimoriSearchHit> hits = await shikimori!.searchByQuery(
       query,
-      limit: 20,
+      limit: perPage,
     );
     if (hits.isEmpty) {
       // Preserve the AniList text-search fallback when Shikimori has no results.
       return _animePage(
         '''
-        query SearchAnime(\$search: String, \$page: Int) {
-          Page(page: \$page, perPage: 20) {
+        query SearchAnime(\$search: String, \$page: Int, \$perPage: Int) {
+          Page(page: \$page, perPage: \$perPage) {
             media(type: ANIME, search: \$search, sort: POPULARITY_DESC) {
               $_mediaFields
             }
           }
         }
         ''',
-        <String, dynamic>{'search': query, 'page': page},
+        <String, dynamic>{'search': query, 'page': page, 'perPage': perPage},
       );
     }
     final List<int> malIds = hits
@@ -1738,14 +1758,20 @@ class AniListApiClient {
   Future<List<MediaItem>> _mediaSearchPage(
     String type,
     String search,
-    int page,
-  ) {
+    int page, {
+    int perPage = 20,
+  }) {
     return _catalogMediaPage(
       type: type,
       query:
           '''
-      query SearchMedia(\$type: MediaType, \$search: String, \$page: Int) {
-        Page(page: \$page, perPage: 20) {
+      query SearchMedia(
+        \$type: MediaType,
+        \$search: String,
+        \$page: Int,
+        \$perPage: Int
+      ) {
+        Page(page: \$page, perPage: \$perPage) {
           media(type: \$type, search: \$search, sort: SEARCH_MATCH$_isAdultClause) {
             $_mediaFields
           }
@@ -1756,24 +1782,40 @@ class AniListApiClient {
         'type': type,
         'search': search,
         'page': page,
+        'perPage': perPage,
       },
     );
   }
 
-  Future<List<MediaItem>> _mediaSortedPage(String type, String sort, int page) {
+  Future<List<MediaItem>> _mediaSortedPage(
+    String type,
+    String sort,
+    int page, {
+    int perPage = 20,
+  }) {
     return _catalogMediaPage(
       type: type,
       query:
           '''
-      query SortedMedia(\$type: MediaType, \$sort: [MediaSort], \$page: Int) {
-        Page(page: \$page, perPage: 20) {
+      query SortedMedia(
+        \$type: MediaType,
+        \$sort: [MediaSort],
+        \$page: Int,
+        \$perPage: Int
+      ) {
+        Page(page: \$page, perPage: \$perPage) {
           media(type: \$type, sort: \$sort$_isAdultClause) {
             $_mediaFields
           }
         }
       }
       ''',
-      variables: <String, dynamic>{'type': type, 'sort': sort, 'page': page},
+      variables: <String, dynamic>{
+        'type': type,
+        'sort': sort,
+        'page': page,
+        'perPage': perPage,
+      },
     );
   }
 
@@ -1782,11 +1824,13 @@ class AniListApiClient {
     required String sort,
     required String? status,
     required int page,
+    int perPage = 20,
   }) {
     final Map<String, dynamic> variables = <String, dynamic>{
       'type': type,
       'sort': sort,
       'page': page,
+      'perPage': perPage,
       'status': ?status,
     };
     return _catalogMediaPage(
@@ -1797,9 +1841,10 @@ class AniListApiClient {
         \$type: MediaType,
         \$sort: [MediaSort],
         \$status: MediaStatus,
-        \$page: Int
+        \$page: Int,
+        \$perPage: Int
       ) {
-        Page(page: \$page, perPage: 20) {
+        Page(page: \$page, perPage: \$perPage) {
           media(type: \$type, sort: \$sort, status: \$status$_isAdultClause) {
             $_mediaFields
           }

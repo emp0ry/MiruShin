@@ -4,6 +4,25 @@ import 'package:flutter/widgets.dart';
 
 import '../../app/theme/app_spacing.dart';
 
+int responsiveGridColumnCount({
+  required double availableWidth,
+  required double minItemWidth,
+  required int maxColumns,
+  int Function(double availableWidth)? maxColumnsForWidth,
+}) {
+  final int effectiveMaxColumns = math.max(
+    1,
+    math.min(
+      maxColumns,
+      maxColumnsForWidth?.call(availableWidth) ?? maxColumns,
+    ),
+  );
+  return math.max(
+    1,
+    math.min(effectiveMaxColumns, (availableWidth / minItemWidth).floor()),
+  );
+}
+
 class ResponsiveGrid extends StatelessWidget {
   const ResponsiveGrid({
     required this.itemCount,
@@ -34,19 +53,11 @@ class ResponsiveGrid extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
-        final int effectiveMaxColumns = math.max(
-          1,
-          math.min(
-            maxColumns,
-            maxColumnsForWidth?.call(constraints.maxWidth) ?? maxColumns,
-          ),
-        );
-        final int columns = math.max(
-          1,
-          math.min(
-            effectiveMaxColumns,
-            (constraints.maxWidth / minItemWidth).floor(),
-          ),
+        final int columns = responsiveGridColumnCount(
+          availableWidth: constraints.maxWidth,
+          minItemWidth: minItemWidth,
+          maxColumns: maxColumns,
+          maxColumnsForWidth: maxColumnsForWidth,
         );
 
         return GridView.builder(

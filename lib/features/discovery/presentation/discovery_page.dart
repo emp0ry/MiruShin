@@ -329,6 +329,8 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
   String? _error;
   String? _settingsSignature;
   int _requestSerial = 0;
+  int _pageSize = 0;
+  int? _pendingPageSize;
 
   _AniListDiscoveryFilter _advancedFilter = const _AniListDiscoveryFilter();
   List<String> _cachedGenres = <String>[];
@@ -364,6 +366,18 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
     if (position.maxScrollExtent - position.pixels < 900) {
       unawaited(_loadMore());
     }
+  }
+
+  void _schedulePageSize(int pageSize) {
+    if (_pageSize == pageSize || _pendingPageSize == pageSize) return;
+    _pendingPageSize = pageSize;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _pendingPageSize != pageSize) return;
+      _pendingPageSize = null;
+      if (_pageSize == pageSize) return;
+      setState(() => _pageSize = pageSize);
+      unawaited(_reload());
+    });
   }
 
   String _settingsKey(SettingsState settings, CatalogMode mode) {
@@ -473,7 +487,7 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
   }
 
   Future<void> _reload() async {
-    if (!mounted) return;
+    if (!mounted || _pageSize < 1) return;
     final int requestId = ++_requestSerial;
     setState(() {
       _loadingInitial = true;
@@ -518,6 +532,8 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
 
   Future<List<MediaItem>> _fetchPage(int page) async {
     try {
+      final int pageSize = _pageSize;
+      if (pageSize < 1) return const <MediaItem>[];
       final String search = _query.trim();
       final CatalogMode mode = ref.read(catalogModeProvider);
 
@@ -526,21 +542,25 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
           search.isEmpty) {
         final TmdbMetadataProvider? tmdb = ref.read(tmdbProviderProvider);
         if (tmdb == null) return const <MediaItem>[];
-        return tmdb.discoverPageAdvanced(
-          filter: _filter,
-          type: _selectedType,
+        return loadLogicalMediaPage(
           page: page,
-          genreIds: _tmdbAdvancedFilter.genreIds.isEmpty
-              ? null
-              : _tmdbAdvancedFilter.genreIds,
-          withoutGenreIds: _tmdbAdvancedFilter.genreNotIds.isEmpty
-              ? null
-              : _tmdbAdvancedFilter.genreNotIds,
-          yearFrom: _tmdbAdvancedFilter.yearFrom,
-          yearTo: _tmdbAdvancedFilter.yearTo,
-          minRating: _tmdbAdvancedFilter.minRating,
-          originalLanguage: _tmdbAdvancedFilter.originalLanguage,
-          includeAdult: _tmdbAdvancedFilter.includeAdult,
+          pageSize: pageSize,
+          fetchPage: (int sourcePage) => tmdb.discoverPageAdvanced(
+            filter: _filter,
+            type: _selectedType,
+            page: sourcePage,
+            genreIds: _tmdbAdvancedFilter.genreIds.isEmpty
+                ? null
+                : _tmdbAdvancedFilter.genreIds,
+            withoutGenreIds: _tmdbAdvancedFilter.genreNotIds.isEmpty
+                ? null
+                : _tmdbAdvancedFilter.genreNotIds,
+            yearFrom: _tmdbAdvancedFilter.yearFrom,
+            yearTo: _tmdbAdvancedFilter.yearTo,
+            minRating: _tmdbAdvancedFilter.minRating,
+            originalLanguage: _tmdbAdvancedFilter.originalLanguage,
+            includeAdult: _tmdbAdvancedFilter.includeAdult,
+          ),
         );
       }
 
@@ -598,6 +618,7 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
               isLicensed: _advancedFilter.isLicensed,
               onList: _advancedFilter.onList,
               page: page,
+              perPage: pageSize,
             );
       }
 
@@ -610,6 +631,7 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
         filter: _filter,
         type: mode == CatalogMode.tmdb ? _selectedType : null,
         page: page,
+        pageSize: pageSize,
         anilistKind: mode == CatalogMode.anilist
             ? _selectedAniListKind.key
             : null,
@@ -827,64 +849,81 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
               ),
             ),
             const SizedBox(height: AppSpacing.xl),
-            if (_loadingInitial)
-              const _DiscoverySkeletonGrid()
-            else if (_error != null && items.isEmpty)
-              NeutralPlaceholder(
-                icon: Icons.cloud_off_rounded,
-                title: context.t('Discovery is offline'),
-                message: _error!,
-                height: 320,
-              )
-            else if (items.isEmpty)
-              NeutralPlaceholder(
-                icon: Icons.manage_search_rounded,
-                title: context.t('No Results Yet'),
-                message: context.t(
-                  'Configure a metadata source in Settings to browse content.',
-                ),
-                height: 320,
-              )
-            else ...<Widget>[
-              ResponsiveGrid(
-                key: const ValueKey<String>('discovery-grid'),
-                itemCount: items.length,
-                maxColumns: 8,
-                maxColumnsForWidth: _discoveryMaxColumnsForWidth,
-                clipBehavior: Clip.none,
-                itemBuilder: (BuildContext context, int index) {
-                  final MediaItem item = items[index];
-                  final AniListAnimeListEntry? entry = anilistEntryMap[item.id];
-                  final VoidCallback? editAniListEntry =
-                      mode == CatalogMode.anilist
-                      ? () => unawaited(
-                          _openAniListEntryEditor(
-                            context,
-                            ref,
-                            item: item,
-                            entry: entry,
-                          ),
-                        )
-                      : null;
-                  return MediaPosterCard(
-                    item: item,
-                    statusBadgeLabel: statusBadges[item.id],
-                    onTap: () => context.push(
-                      AppRoutes.mediaDetailsPath(item.id),
-                      extra: item,
-                    ),
-                    onLongPress: editAniListEntry,
-                    onSecondaryTap: editAniListEntry,
+            LayoutBuilder(
+              builder: (BuildContext context, BoxConstraints constraints) {
+                final int columns = responsiveGridColumnCount(
+                  availableWidth: constraints.maxWidth,
+                  minItemWidth: 168,
+                  maxColumns: 8,
+                  maxColumnsForWidth: _discoveryMaxColumnsForWidth,
+                );
+                _schedulePageSize(columns * 4);
+                if (_loadingInitial || _pageSize == 0) {
+                  return const _DiscoverySkeletonGrid();
+                }
+                if (_error != null && items.isEmpty) {
+                  return NeutralPlaceholder(
+                    icon: Icons.cloud_off_rounded,
+                    title: context.t('Discovery is offline'),
+                    message: _error!,
+                    height: 320,
                   );
-                },
-              ),
-              const SizedBox(height: AppSpacing.xl),
-              _DiscoveryFooter(
-                loadingMore: _loadingMore,
-                hasMore: _hasMore,
-                onLoadMore: _loadMore,
-              ),
-            ],
+                }
+                if (items.isEmpty) {
+                  return NeutralPlaceholder(
+                    icon: Icons.manage_search_rounded,
+                    title: context.t('No Results Yet'),
+                    message: context.t(
+                      'Configure a metadata source in Settings to browse content.',
+                    ),
+                    height: 320,
+                  );
+                }
+                return Column(
+                  children: <Widget>[
+                    ResponsiveGrid(
+                      key: const ValueKey<String>('discovery-grid'),
+                      itemCount: items.length,
+                      maxColumns: 8,
+                      maxColumnsForWidth: _discoveryMaxColumnsForWidth,
+                      clipBehavior: Clip.none,
+                      itemBuilder: (BuildContext context, int index) {
+                        final MediaItem item = items[index];
+                        final AniListAnimeListEntry? entry =
+                            anilistEntryMap[item.id];
+                        final VoidCallback? editAniListEntry =
+                            mode == CatalogMode.anilist
+                            ? () => unawaited(
+                                _openAniListEntryEditor(
+                                  context,
+                                  ref,
+                                  item: item,
+                                  entry: entry,
+                                ),
+                              )
+                            : null;
+                        return MediaPosterCard(
+                          item: item,
+                          statusBadgeLabel: statusBadges[item.id],
+                          onTap: () => context.push(
+                            AppRoutes.mediaDetailsPath(item.id),
+                            extra: item,
+                          ),
+                          onLongPress: editAniListEntry,
+                          onSecondaryTap: editAniListEntry,
+                        );
+                      },
+                    ),
+                    const SizedBox(height: AppSpacing.xl),
+                    _DiscoveryFooter(
+                      loadingMore: _loadingMore,
+                      hasMore: _hasMore,
+                      onLoadMore: _loadMore,
+                    ),
+                  ],
+                );
+              },
+            ),
           ],
         ),
       ),
