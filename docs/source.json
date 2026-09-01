@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.7.5",
+          "date": "2026-08-31",
+          "localizedDescription": "- Added a Fanart.tv-powered Gallery to Media Details with 4K-first backgrounds, cached results, and an optional securely stored API key in Settings.\n- Added a fullscreen Gallery viewer with original-resolution artwork, swipe and arrow navigation, zooming, and an image counter.\n- Improved fullscreen posters and backgrounds to use the highest available image quality, with download buttons for posters, backgrounds, and Gallery images using the platform save or share dialog.\n- Improved Discovery on large screens with responsive filter controls and up to eight poster columns while preserving compact mobile layouts.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.7.5/MiruShin-ios-v2.7.5.ipa",
+          "size": 29013223,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.7.4",
           "date": "2026-08-31",
           "localizedDescription": "- Added cross-platform MiruShin deep links for opening AniList and TMDB titles directly in the app.\n- Added shareable MiruShin links to media details, and updated Discord Rich Presence links to open the currently watched title directly in MiruShin.\n- Opening an AniList or TMDB MiruShin link now automatically switches to the matching catalog.\n- Watch with Friends default invites now use normal clickable HTTPS links, while existing `mirushin://` invite links remain supported.\n- Improved Self-hosted Relay invites with cleaner direct HTTPS links and browser landing pages for opening rooms in MiruShin.\n- Added automatic `mirushin://` protocol handling across desktop and mobile platforms, including improved portable Windows and Linux support.\n- Added a Setup Guide button for Self-hosted Relay configuration, with English, Russian, and Japanese localization.\n- Improved macOS fullscreen transitions so the player waits for the native fullscreen transition to actually finish before closing or opening the next episode.\n- Improved timeline hover and drag handling, preventing seek previews and player controls from getting stuck after fullscreen or window-state changes.\n- Improved progressive seek previews to prefer the later thumbnail when two cached frames are equally close to the selected position.\n- Fixed backup exports not correctly including some saved list-based settings and filters on desktop platforms.",
@@ -527,11 +535,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.7.4",
+      "version": "2.7.5",
       "versionDate": "2026-08-31",
-      "versionDescription": "- Added cross-platform MiruShin deep links for opening AniList and TMDB titles directly in the app.\n- Added shareable MiruShin links to media details, and updated Discord Rich Presence links to open the currently watched title directly in MiruShin.\n- Opening an AniList or TMDB MiruShin link now automatically switches to the matching catalog.\n- Watch with Friends default invites now use normal clickable HTTPS links, while existing `mirushin://` invite links remain supported.\n- Improved Self-hosted Relay invites with cleaner direct HTTPS links and browser landing pages for opening rooms in MiruShin.\n- Added automatic `mirushin://` protocol handling across desktop and mobile platforms, including improved portable Windows and Linux support.\n- Added a Setup Guide button for Self-hosted Relay configuration, with English, Russian, and Japanese localization.\n- Improved macOS fullscreen transitions so the player waits for the native fullscreen transition to actually finish before closing or opening the next episode.\n- Improved timeline hover and drag handling, preventing seek previews and player controls from getting stuck after fullscreen or window-state changes.\n- Improved progressive seek previews to prefer the later thumbnail when two cached frames are equally close to the selected position.\n- Fixed backup exports not correctly including some saved list-based settings and filters on desktop platforms.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.7.4/MiruShin-ios-v2.7.4.ipa",
-      "size": 28959746,
+      "versionDescription": "- Added a Fanart.tv-powered Gallery to Media Details with 4K-first backgrounds, cached results, and an optional securely stored API key in Settings.\n- Added a fullscreen Gallery viewer with original-resolution artwork, swipe and arrow navigation, zooming, and an image counter.\n- Improved fullscreen posters and backgrounds to use the highest available image quality, with download buttons for posters, backgrounds, and Gallery images using the platform save or share dialog.\n- Improved Discovery on large screens with responsive filter controls and up to eight poster columns while preserving compact mobile layouts.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.7.5/MiruShin-ios-v2.7.5.ipa",
+      "size": 29013223,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
