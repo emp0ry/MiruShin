@@ -378,12 +378,14 @@ class _HeroSection extends ConsumerWidget {
             WindowSizeClass.compact;
         return RepaintBoundary(
           child: ClipRRect(
+            key: const ValueKey<String>('board-hero-clip'),
             borderRadius: AppRadius.all(AppRadius.xxl),
             clipBehavior: Clip.hardEdge,
             child: SizedBox(
               height: compact ? 380 : 540,
               width: double.infinity,
               child: Stack(
+                key: const ValueKey<String>('board-hero-stack'),
                 fit: StackFit.expand,
                 clipBehavior: Clip.hardEdge,
                 children: <Widget>[
@@ -522,10 +524,11 @@ class _HeroSection extends ConsumerWidget {
 
                   // Covers the tiny scrolling hairline at the bottom edge.
                   Positioned(
+                    key: const ValueKey<String>('board-hero-bottom-hairline'),
                     left: 0,
                     right: 0,
                     bottom: 0,
-                    height: 2,
+                    height: 1,
                     child: ColoredBox(
                       color: Colors.black.withValues(alpha: 0.55),
                     ),

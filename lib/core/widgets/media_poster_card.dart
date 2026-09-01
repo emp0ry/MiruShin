@@ -14,6 +14,8 @@ import 'metadata_chip.dart';
 import 'skeleton_box.dart';
 import 'tv_focusable.dart';
 
+const Color _posterHairlineColor = Color(0x8C000000);
+
 class MediaPosterCard extends ConsumerStatefulWidget {
   const MediaPosterCard({
     required this.item,
@@ -110,32 +112,47 @@ class _MediaPosterCardState extends ConsumerState<MediaPosterCard> {
                 if (_pressed != value) setState(() => _pressed = value);
               },
               child: ClipRRect(
+                key: const ValueKey<String>('media-poster-clip'),
                 borderRadius: AppRadius.all(AppRadius.lg),
+                clipBehavior: Clip.hardEdge,
                 child: Stack(
+                  key: const ValueKey<String>('media-poster-stack'),
                   fit: StackFit.expand,
+                  clipBehavior: Clip.hardEdge,
                   children: <Widget>[
-                    if (item.posterUrl.isEmpty)
-                      _PosterFallback(title: item.title)
-                    else
-                      CachedNetworkImage(
-                        imageUrl: item.posterUrl,
-                        fit: BoxFit.cover,
-                        placeholder: (BuildContext context, String url) =>
-                            const SkeletonBox(),
-                        errorWidget:
-                            (BuildContext context, String url, Object error) =>
-                                _PosterFallback(title: item.title),
-                      ),
-                    DecoratedBox(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: <Color>[
-                            Colors.transparent,
-                            Colors.black.withValues(alpha: 0.24),
-                            Colors.black.withValues(alpha: 0.92),
-                          ],
+                    Positioned.fill(
+                      child: item.posterUrl.isEmpty
+                          ? _PosterFallback(title: item.title)
+                          : CachedNetworkImage(
+                              imageUrl: item.posterUrl,
+                              fit: BoxFit.cover,
+                              placeholder: (BuildContext context, String url) =>
+                                  const SkeletonBox(),
+                              errorWidget:
+                                  (
+                                    BuildContext context,
+                                    String url,
+                                    Object error,
+                                  ) => _PosterFallback(title: item.title),
+                            ),
+                    ),
+                    Positioned(
+                      left: 0,
+                      top: 0,
+                      right: -1,
+                      bottom: 0,
+                      child: DecoratedBox(
+                        key: const ValueKey<String>('media-poster-gradient'),
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: <Color>[
+                              Colors.transparent,
+                              Colors.black.withValues(alpha: 0.24),
+                              Colors.black,
+                            ],
+                          ),
                         ),
                       ),
                     ),
@@ -198,6 +215,16 @@ class _MediaPosterCardState extends ConsumerState<MediaPosterCard> {
                           ],
                         ],
                       ),
+                    ),
+                    Positioned(
+                      key: const ValueKey<String>(
+                        'media-poster-bottom-hairline',
+                      ),
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      height: 1,
+                      child: const ColoredBox(color: _posterHairlineColor),
                     ),
                   ],
                 ),

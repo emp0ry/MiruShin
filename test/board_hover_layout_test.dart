@@ -56,6 +56,45 @@ void main() {
       isTrue,
     );
     expect(pageScrollView.clipBehavior, Clip.none);
+
+    final Positioned heroHairline = tester.widget<Positioned>(
+      find.byKey(const ValueKey<String>('board-hero-bottom-hairline')),
+    );
+    final List<Positioned> posterHairlines = tester
+        .widgetList<Positioned>(
+          find.byKey(const ValueKey<String>('media-poster-bottom-hairline')),
+        )
+        .toList();
+    final ClipRRect heroClip = tester.widget<ClipRRect>(
+      find.byKey(const ValueKey<String>('board-hero-clip')),
+    );
+    final Stack heroStack = tester.widget<Stack>(
+      find.byKey(const ValueKey<String>('board-hero-stack')),
+    );
+    final Iterable<ClipRRect> posterClips = tester.widgetList<ClipRRect>(
+      find.byKey(const ValueKey<String>('media-poster-clip')),
+    );
+    final Iterable<Stack> posterStacks = tester.widgetList<Stack>(
+      find.byKey(const ValueKey<String>('media-poster-stack')),
+    );
+    expect(heroClip.clipBehavior, Clip.hardEdge);
+    expect(heroStack.clipBehavior, Clip.hardEdge);
+    expect(posterClips, isNotEmpty);
+    expect(
+      posterClips.every((ClipRRect clip) => clip.clipBehavior == Clip.hardEdge),
+      isTrue,
+    );
+    expect(posterStacks, isNotEmpty);
+    expect(
+      posterStacks.every((Stack stack) => stack.clipBehavior == Clip.hardEdge),
+      isTrue,
+    );
+    expect(heroHairline.height, 1);
+    expect(posterHairlines, isNotEmpty);
+    expect(
+      posterHairlines.every((Positioned hairline) => hairline.height == 1),
+      isTrue,
+    );
     expect(tester.takeException(), isNull);
   });
 
