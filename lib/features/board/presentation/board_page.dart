@@ -47,9 +47,14 @@ class _BoardPageState extends ConsumerState<BoardPage> {
 
   @override
   Widget build(BuildContext context) {
-    final BoardRails rails = ref
-        .watch(boardRailsProvider)
-        .maybeWhen(data: (BoardRails value) => value, orElse: BoardRails.empty);
+    final AsyncValue<BoardRails> asyncRails = ref.watch(boardRailsProvider);
+    final BoardRails rails = asyncRails.maybeWhen(
+      skipLoadingOnReload: true,
+      data: (BoardRails value) => value,
+      orElse: BoardRails.empty,
+    );
+    final bool loadingInitialBoard =
+        asyncRails.isLoading && !asyncRails.hasValue;
     final CatalogMode mode = ref.watch(catalogModeProvider);
     final MediaItem? hero = rails.heroForSeed(
       _heroSeed,
@@ -118,9 +123,14 @@ class _BoardPageState extends ConsumerState<BoardPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
             const CatalogOfflineBanner(),
-            if (hero == null)
+            if (hero == null && loadingInitialBoard)
+              const _BoardLoadingAnimation(
+                key: ValueKey<String>('board-metadata-loading'),
+                height: 440,
+              )
+            else if (hero == null)
               NeutralPlaceholder(
-                title: context.t('No live metadata yet'),
+                title: context.t('Could not load catalog'),
                 message: context.t(
                   'Configure a metadata source in Settings to populate the board.',
                 ),
@@ -187,11 +197,13 @@ class _BoardPageState extends ConsumerState<BoardPage> {
                   ),
                 ),
               ],
-              const SizedBox(height: AppSpacing.xxl),
-              _MediaSection(
-                title: context.t('Recently Added to Library'),
-                items: recentlyAdded,
-              ),
+              if (recentlyAdded.isNotEmpty) ...<Widget>[
+                const SizedBox(height: AppSpacing.xxl),
+                _MediaSection(
+                  title: context.t('Recently Added to Library'),
+                  items: recentlyAdded,
+                ),
+              ],
             ],
             const SizedBox(height: AppSpacing.xxl),
           ],
@@ -199,6 +211,29 @@ class _BoardPageState extends ConsumerState<BoardPage> {
       ),
     );
     return TvPlatform.isAndroidTv ? TvDirectionalFocus(child: page) : page;
+  }
+}
+
+class _BoardLoadingAnimation extends StatelessWidget {
+  const _BoardLoadingAnimation({required this.height, super.key});
+
+  final double height;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      height: height,
+      child: Center(
+        child: Semantics(
+          label: context.t('Loading...'),
+          child: const SizedBox.square(
+            dimension: 42,
+            child: CircularProgressIndicator(strokeWidth: 3),
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -567,10 +602,35 @@ class _MediaSection extends ConsumerStatefulWidget {
 
 class _MediaSectionState extends ConsumerState<_MediaSection> {
   final List<MediaItem> _additionalItems = <MediaItem>[];
+  late final ScrollController _compactScrollController;
   int _page = 1;
   int _requestSerial = 0;
   bool _loadingMore = false;
   bool _hasMore = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _compactScrollController = ScrollController()
+      ..addListener(_onCompactScroll);
+  }
+
+  @override
+  void dispose() {
+    _compactScrollController
+      ..removeListener(_onCompactScroll)
+      ..dispose();
+    super.dispose();
+  }
+
+  void _onCompactScroll() {
+    if (!_compactScrollController.hasClients ||
+        _compactScrollController.position.pixels <= 0 ||
+        _compactScrollController.position.extentAfter > 220) {
+      return;
+    }
+    unawaited(_loadMore());
+  }
 
   @override
   void didUpdateWidget(covariant _MediaSection oldWidget) {
@@ -657,26 +717,9 @@ class _MediaSectionState extends ConsumerState<_MediaSection> {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            SectionHeader(
-              title: widget.title,
-              trailing: compact && onShowMore != null
-                  ? _SectionLoadMoreButton(
-                      onPressed: onShowMore,
-                      compact: true,
-                      loading: _loadingMore,
-                      hasMore: _hasMore,
-                    )
-                  : null,
-            ),
+            SectionHeader(title: widget.title),
             if (items.isEmpty)
-              NeutralPlaceholder(
-                title: context.t('No live metadata yet'),
-                message: context.t(
-                  'Configure a metadata source in Settings to load live data.',
-                ),
-                height: 240,
-                icon: Icons.grid_view_rounded,
-              )
+              const _BoardLoadingAnimation(height: 240)
             else ...<Widget>[
               if (compact)
                 SizedBox(
@@ -685,12 +728,25 @@ class _MediaSectionState extends ConsumerState<_MediaSection> {
                     key: const ValueKey<String>(
                       'media-section-horizontal-list',
                     ),
+                    controller: _compactScrollController,
                     scrollDirection: Axis.horizontal,
                     clipBehavior: Clip.none,
-                    itemCount: items.length,
+                    itemCount: items.length + (_loadingMore ? 1 : 0),
                     separatorBuilder: (_, _) =>
                         const SizedBox(width: AppSpacing.md),
                     itemBuilder: (BuildContext context, int index) {
+                      if (index == items.length) {
+                        return const SizedBox(
+                          key: ValueKey<String>('compact-row-loading-more'),
+                          width: 64,
+                          child: Center(
+                            child: SizedBox.square(
+                              dimension: 24,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          ),
+                        );
+                      }
                       final MediaItem item = items[index];
                       final AniListAnimeListEntry? entry =
                           widget.anilistEntryMap[item.id];
@@ -779,13 +835,11 @@ class _SectionLoadMoreButton extends StatelessWidget {
     required this.onPressed,
     required this.loading,
     required this.hasMore,
-    this.compact = false,
   });
 
   final VoidCallback onPressed;
   final bool loading;
   final bool hasMore;
-  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -797,15 +851,6 @@ class _SectionLoadMoreButton extends StatelessWidget {
     }
     return OutlinedButton.icon(
       onPressed: loading ? null : onPressed,
-      style: compact
-          ? OutlinedButton.styleFrom(
-              visualDensity: VisualDensity.compact,
-              padding: const EdgeInsets.symmetric(
-                horizontal: AppSpacing.sm,
-                vertical: AppSpacing.xs,
-              ),
-            )
-          : null,
       icon: loading
           ? const SizedBox.square(
               dimension: 16,

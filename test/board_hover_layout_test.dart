@@ -1,10 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mirushin/app/localization/app_localizations.dart';
 import 'package:mirushin/app/theme/app_theme.dart';
-import 'package:mirushin/core/widgets/media_poster_card.dart';
 import 'package:mirushin/core/widgets/section_header.dart';
 import 'package:mirushin/features/board/presentation/board_page.dart';
 import 'package:mirushin/features/catalog/application/catalog_mode.dart';
@@ -56,29 +57,72 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('Load more appends the next page on Board without navigation', (
-    WidgetTester tester,
-  ) async {
-    final _RecordingCatalogRepository repository =
-        _RecordingCatalogRepository();
-    await _pumpBoard(
-      tester,
-      rails: BoardRails(recentSeries: <MediaItem>[_item()]),
-      repository: repository,
-    );
+  testWidgets(
+    'compact Board loads the next page near the end without a button',
+    (WidgetTester tester) async {
+      final _RecordingCatalogRepository repository =
+          _RecordingCatalogRepository();
+      await _pumpBoard(
+        tester,
+        rails: BoardRails(
+          recentSeries: List<MediaItem>.generate(
+            4,
+            (int index) => _item(index + 1),
+          ),
+        ),
+        repository: repository,
+      );
 
-    expect(find.byType(MediaPosterCard), findsOneWidget);
-    await tester.tap(find.widgetWithText(OutlinedButton, 'Load more'));
-    await tester.pumpAndSettle();
+      ListView compactRow = tester.widget<ListView>(
+        find.byKey(const ValueKey<String>('media-section-horizontal-list')),
+      );
+      expect(compactRow.childrenDelegate.estimatedChildCount, 7);
+      expect(find.text('Load more'), findsNothing);
 
-    expect(find.byType(MediaPosterCard), findsNWidgets(2));
-    expect(repository.lastSearch, '');
-    expect(repository.lastType, isNull);
-    expect(repository.lastFilter, 'Popular');
-    expect(repository.lastPage, 2);
-    expect(repository.lastAniListKind, 'anime');
-    expect(tester.takeException(), isNull);
-  });
+      await tester.drag(
+        find.byKey(const ValueKey<String>('media-section-horizontal-list')),
+        const Offset(-800, 0),
+      );
+      await tester.pumpAndSettle();
+
+      compactRow = tester.widget<ListView>(
+        find.byKey(const ValueKey<String>('media-section-horizontal-list')),
+      );
+      expect(compactRow.childrenDelegate.estimatedChildCount, 9);
+      expect(find.text('Load more'), findsNothing);
+      expect(repository.lastSearch, '');
+      expect(repository.lastType, isNull);
+      expect(repository.lastFilter, 'Popular');
+      expect(repository.lastPage, 2);
+      expect(repository.lastAniListKind, 'anime');
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'Board shows animation instead of no-metadata text while loading',
+    (WidgetTester tester) async {
+      final Completer<BoardRails> railsCompleter = Completer<BoardRails>();
+      await _pumpBoard(
+        tester,
+        railsFuture: railsCompleter.future,
+        settle: false,
+      );
+
+      expect(
+        find.byKey(const ValueKey<String>('board-metadata-loading')),
+        findsOneWidget,
+      );
+      expect(find.text('No live metadata yet'), findsNothing);
+
+      railsCompleter.complete(BoardRails(recentSeries: <MediaItem>[_item()]));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey<String>('board-metadata-loading')),
+        findsNothing,
+      );
+    },
+  );
 
   testWidgets('AniList Board shows the requested sections in order', (
     WidgetTester tester,
@@ -145,10 +189,13 @@ void main() {
 
 Future<void> _pumpBoard(
   WidgetTester tester, {
-  required BoardRails rails,
+  BoardRails? rails,
+  Future<BoardRails>? railsFuture,
   CatalogRepository? repository,
   List<AniListAnimeListFolder> folders = const <AniListAnimeListFolder>[],
+  bool settle = true,
 }) async {
+  assert((rails == null) != (railsFuture == null));
   tester.view.physicalSize = const Size(390, 844);
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.resetPhysicalSize);
@@ -157,7 +204,9 @@ Future<void> _pumpBoard(
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
-        boardRailsProvider.overrideWith((Ref ref) async => rails),
+        boardRailsProvider.overrideWith(
+          (Ref ref) => railsFuture ?? Future<BoardRails>.value(rails!),
+        ),
         if (repository != null)
           activeCatalogRepositoryProvider.overrideWithValue(repository),
         anilistAnimeListProvider.overrideWith(
@@ -178,7 +227,11 @@ Future<void> _pumpBoard(
       ),
     ),
   );
-  await tester.pumpAndSettle();
+  if (settle) {
+    await tester.pumpAndSettle();
+  } else {
+    await tester.pump();
+  }
 }
 
 class _TestAniListLibrary extends AniListLibraryNotifier {
@@ -225,7 +278,7 @@ class _RecordingCatalogRepository implements CatalogRepository {
     lastFilter = filter;
     lastPage = page;
     lastAniListKind = anilistKind;
-    return <MediaItem>[_item(), _item(2)];
+    return <MediaItem>[_item(), _item(5)];
   }
 }
 
