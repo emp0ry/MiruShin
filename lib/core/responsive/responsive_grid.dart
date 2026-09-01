@@ -15,6 +15,7 @@ class ResponsiveGrid extends StatelessWidget {
     this.childAspectRatio = 0.62,
     this.physics = const NeverScrollableScrollPhysics(),
     this.shrinkWrap = true,
+    this.clipBehavior = Clip.hardEdge,
     super.key,
   });
 
@@ -27,6 +28,7 @@ class ResponsiveGrid extends StatelessWidget {
   final double childAspectRatio;
   final ScrollPhysics physics;
   final bool shrinkWrap;
+  final Clip clipBehavior;
 
   @override
   Widget build(BuildContext context) {
@@ -51,6 +53,7 @@ class ResponsiveGrid extends StatelessWidget {
           itemCount: itemCount,
           physics: physics,
           shrinkWrap: shrinkWrap,
+          clipBehavior: clipBehavior,
           padding: EdgeInsets.zero,
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
             crossAxisCount: columns,

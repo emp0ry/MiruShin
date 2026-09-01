@@ -564,7 +564,11 @@ class _MediaSection extends ConsumerWidget {
                 SizedBox(
                   height: 300,
                   child: ListView.separated(
+                    key: const ValueKey<String>(
+                      'media-section-horizontal-list',
+                    ),
                     scrollDirection: Axis.horizontal,
+                    clipBehavior: Clip.none,
                     itemCount: items.length,
                     separatorBuilder: (_, _) =>
                         const SizedBox(width: AppSpacing.md),
@@ -605,6 +609,7 @@ class _MediaSection extends ConsumerWidget {
                 ResponsiveGrid(
                   itemCount: items.length,
                   maxColumns: maxColumns,
+                  clipBehavior: Clip.none,
                   itemBuilder: (BuildContext context, int index) {
                     final MediaItem item = items[index];
                     final AniListAnimeListEntry? entry =

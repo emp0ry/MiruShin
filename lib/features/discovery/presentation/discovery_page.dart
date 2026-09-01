@@ -849,6 +849,7 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
                 itemCount: items.length,
                 maxColumns: 8,
                 maxColumnsForWidth: _discoveryMaxColumnsForWidth,
+                clipBehavior: Clip.none,
                 itemBuilder: (BuildContext context, int index) {
                   final MediaItem item = items[index];
                   final AniListAnimeListEntry? entry = anilistEntryMap[item.id];

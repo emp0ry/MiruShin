@@ -48,6 +48,14 @@ void main() {
     },
   );
 
+  testWidgets('Discovery grid does not clip poster hover overflow', (
+    WidgetTester tester,
+  ) async {
+    await _pumpDiscovery(tester, const Size(1600, 1000));
+
+    expect(_discoveryGrid(tester).clipBehavior, Clip.none);
+  });
+
   testWidgets('Anime and Manga sit left of Filters on the lower filter row', (
     WidgetTester tester,
   ) async {
@@ -106,13 +114,17 @@ Future<void> _pumpDiscovery(WidgetTester tester, Size size) async {
 }
 
 int _gridColumns(WidgetTester tester) {
+  return (_discoveryGrid(tester).gridDelegate
+          as SliverGridDelegateWithFixedCrossAxisCount)
+      .crossAxisCount;
+}
+
+GridView _discoveryGrid(WidgetTester tester) {
   final Finder grid = find.descendant(
     of: find.byKey(const ValueKey<String>('discovery-grid')),
     matching: find.byType(GridView),
   );
-  final GridView widget = tester.widget<GridView>(grid);
-  return (widget.gridDelegate as SliverGridDelegateWithFixedCrossAxisCount)
-      .crossAxisCount;
+  return tester.widget<GridView>(grid);
 }
 
 class _EmptyAniListLibrary extends AniListLibraryNotifier {
