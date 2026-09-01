@@ -43,6 +43,9 @@ import 'fanart_gallery.dart';
 import 'media_links_dialog.dart';
 import 'poster_fullscreen_viewer.dart';
 
+const double _kDetailsHeroHeight = 420;
+const double _kCompactDetailsHeroHeight = 380;
+
 class MediaDetailsPage extends ConsumerStatefulWidget {
   const MediaDetailsPage({required this.id, this.initialItem, super.key});
 
@@ -80,7 +83,7 @@ class _MediaDetailsPageState extends ConsumerState<MediaDetailsPage> {
     if (item == null && asyncDetails.isLoading) {
       pageState = const SkeletonBox(
         key: ValueKey<String>('details-loading'),
-        height: 520,
+        height: _kDetailsHeroHeight,
         radius: AppRadius.xxl,
       );
     } else if (item == null) {
@@ -874,7 +877,9 @@ class _DetailsHero extends ConsumerWidget {
               color:
                   palette.surfaceColor, // use your page/background color here
               child: SizedBox(
-                height: compact ? 380 : 540,
+                height: compact
+                    ? _kCompactDetailsHeroHeight
+                    : _kDetailsHeroHeight,
                 width: double.infinity,
                 child: Stack(
                   fit: StackFit.expand,

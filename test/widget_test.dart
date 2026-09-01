@@ -335,6 +335,10 @@ void main() {
       final Finder detailsHero = find.byKey(
         const ValueKey<String>('details-hero'),
       );
+      expect(
+        tester.getSize(detailsHero).height,
+        expectCompactPoster ? 380 : 420,
+      );
       final Finder heroOverview = find.descendant(
         of: detailsHero,
         matching: find.text(item.overview),
