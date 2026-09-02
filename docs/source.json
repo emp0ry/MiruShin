@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.7.6",
+          "date": "2026-09-02",
+          "localizedDescription": "- Expanded the AniList Board with Favorites, Airing, Upcoming, Finished, Newest, and Recently Updated sections.\n- Added adaptive pagination to Board and Discovery: compact rows load automatically, while wide grids offer Load More and fetch results based on screen size.\n- Made compact cards the default and improved responsive layouts with up to eight columns.\n- Polished poster clipping, gradients, hover animations, and button press effects.\n- Reduced the media-details hero height and improved Board loading feedback.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.7.6/MiruShin-ios-v2.7.6.ipa",
+          "size": 29014629,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.7.5",
           "date": "2026-08-31",
           "localizedDescription": "- Added a Fanart.tv-powered Gallery to Media Details with 4K-first backgrounds, cached results, and an optional securely stored API key in Settings.\n- Added a fullscreen Gallery viewer with original-resolution artwork, swipe and arrow navigation, zooming, and an image counter.\n- Improved fullscreen posters and backgrounds to use the highest available image quality, with download buttons for posters, backgrounds, and Gallery images using the platform save or share dialog.\n- Improved Discovery on large screens with responsive filter controls and up to eight poster columns while preserving compact mobile layouts.",
@@ -535,11 +543,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.7.5",
-      "versionDate": "2026-08-31",
-      "versionDescription": "- Added a Fanart.tv-powered Gallery to Media Details with 4K-first backgrounds, cached results, and an optional securely stored API key in Settings.\n- Added a fullscreen Gallery viewer with original-resolution artwork, swipe and arrow navigation, zooming, and an image counter.\n- Improved fullscreen posters and backgrounds to use the highest available image quality, with download buttons for posters, backgrounds, and Gallery images using the platform save or share dialog.\n- Improved Discovery on large screens with responsive filter controls and up to eight poster columns while preserving compact mobile layouts.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.7.5/MiruShin-ios-v2.7.5.ipa",
-      "size": 29013223,
+      "version": "2.7.6",
+      "versionDate": "2026-09-02",
+      "versionDescription": "- Expanded the AniList Board with Favorites, Airing, Upcoming, Finished, Newest, and Recently Updated sections.\n- Added adaptive pagination to Board and Discovery: compact rows load automatically, while wide grids offer Load More and fetch results based on screen size.\n- Made compact cards the default and improved responsive layouts with up to eight columns.\n- Polished poster clipping, gradients, hover animations, and button press effects.\n- Reduced the media-details hero height and improved Board loading feedback.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.7.6/MiruShin-ios-v2.7.6.ipa",
+      "size": 29014629,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
