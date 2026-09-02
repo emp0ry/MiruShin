@@ -147,7 +147,7 @@ class ProfilePage extends ConsumerWidget {
               ResponsiveGrid(
                 itemCount: _profileActions.length,
                 minItemWidth: 180,
-                maxColumns: 4,
+                maxColumns: 5,
                 childAspectRatio: 1.15,
                 itemBuilder: (BuildContext context, int index) {
                   final _ProfileAction action = _profileActions[index];
