@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.7.7",
+          "date": "2026-09-02",
+          "localizedDescription": "- Fixed Compact Cards appearing outside the row edges while scrolling, while preserving hover effects.\n- Compact Cards are now disabled by default; existing saved preferences remain unchanged.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.7.7/MiruShin-ios-v2.7.7.ipa",
+          "size": 29015030,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.7.6",
           "date": "2026-09-02",
           "localizedDescription": "- Expanded the AniList Board with Favorites, Airing, Upcoming, Finished, Newest, and Recently Updated sections.\n- Added adaptive pagination to Board and Discovery: compact rows load automatically, while wide grids offer Load More and fetch results based on screen size.\n- Made compact cards the default and improved responsive layouts with up to eight columns.\n- Polished poster clipping, gradients, hover animations, and button press effects.\n- Reduced the media-details hero height and improved Board loading feedback.",
@@ -543,11 +551,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.7.6",
+      "version": "2.7.7",
       "versionDate": "2026-09-02",
-      "versionDescription": "- Expanded the AniList Board with Favorites, Airing, Upcoming, Finished, Newest, and Recently Updated sections.\n- Added adaptive pagination to Board and Discovery: compact rows load automatically, while wide grids offer Load More and fetch results based on screen size.\n- Made compact cards the default and improved responsive layouts with up to eight columns.\n- Polished poster clipping, gradients, hover animations, and button press effects.\n- Reduced the media-details hero height and improved Board loading feedback.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.7.6/MiruShin-ios-v2.7.6.ipa",
-      "size": 29014629,
+      "versionDescription": "- Fixed Compact Cards appearing outside the row edges while scrolling, while preserving hover effects.\n- Compact Cards are now disabled by default; existing saved preferences remain unchanged.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.7.7/MiruShin-ios-v2.7.7.ipa",
+      "size": 29015030,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
