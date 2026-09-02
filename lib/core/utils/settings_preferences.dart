@@ -74,7 +74,7 @@ class SettingsPreferences {
 
   bool readCompactMode() => _preferences.getBool(compactModeKey) ?? false;
 
-  bool readCompactCards() => _preferences.getBool(compactCardsKey) ?? true;
+  bool readCompactCards() => _preferences.getBool(compactCardsKey) ?? false;
 
   bool readDiscordRpcEnabled() =>
       _preferences.getBool(discordRpcEnabledKey) ?? true;

@@ -36,6 +36,7 @@ import '../../tracking/application/anilist_library_provider.dart';
 import '../../tracking/presentation/anilist_entry_editor.dart';
 
 const double _kBoardWidePosterWidth = 166;
+const double _kPosterRowVerticalOverflow = AppSpacing.xxl + AppSpacing.sm;
 
 int _boardMaxColumnsForWidth(double availableWidth) {
   const double spacing = AppSpacing.lg;
@@ -785,59 +786,67 @@ class _MediaSectionState extends ConsumerState<_MediaSection> {
               if (compact)
                 SizedBox(
                   height: 300,
-                  child: ListView.separated(
+                  child: ClipRect(
                     key: const ValueKey<String>(
-                      'media-section-horizontal-list',
+                      'media-section-horizontal-clip',
                     ),
-                    controller: _compactScrollController,
-                    scrollDirection: Axis.horizontal,
-                    clipBehavior: Clip.none,
-                    itemCount: items.length + (_loadingMore ? 1 : 0),
-                    separatorBuilder: (_, _) =>
-                        const SizedBox(width: AppSpacing.md),
-                    itemBuilder: (BuildContext context, int index) {
-                      if (index == items.length) {
-                        return const SizedBox(
-                          key: ValueKey<String>('compact-row-loading-more'),
-                          width: 64,
-                          child: Center(
-                            child: SizedBox.square(
-                              dimension: 24,
-                              child: CircularProgressIndicator(strokeWidth: 2),
+                    clipper: const _HorizontalPosterRowClipper(),
+                    child: ListView.separated(
+                      key: const ValueKey<String>(
+                        'media-section-horizontal-list',
+                      ),
+                      controller: _compactScrollController,
+                      scrollDirection: Axis.horizontal,
+                      clipBehavior: Clip.none,
+                      itemCount: items.length + (_loadingMore ? 1 : 0),
+                      separatorBuilder: (_, _) =>
+                          const SizedBox(width: AppSpacing.md),
+                      itemBuilder: (BuildContext context, int index) {
+                        if (index == items.length) {
+                          return const SizedBox(
+                            key: ValueKey<String>('compact-row-loading-more'),
+                            width: 64,
+                            child: Center(
+                              child: SizedBox.square(
+                                dimension: 24,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
                             ),
+                          );
+                        }
+                        final MediaItem item = items[index];
+                        final AniListAnimeListEntry? entry =
+                            widget.anilistEntryMap[item.id];
+                        final VoidCallback? editAniListEntry =
+                            widget.enableAniListEditing
+                            ? () => unawaited(
+                                _openAniListEntryEditor(
+                                  context,
+                                  ref,
+                                  item: item,
+                                  entry: entry,
+                                ),
+                              )
+                            : null;
+                        return SizedBox(
+                          width: 172,
+                          child: MediaPosterCard(
+                            item: item,
+                            compact: false,
+                            watchProgress: widget.progressMap[item.id],
+                            statusBadgeLabel: widget.statusBadgeMap[item.id],
+                            onTap: () => context.push(
+                              AppRoutes.mediaDetailsPath(item.id),
+                              extra: item,
+                            ),
+                            onLongPress: editAniListEntry,
+                            onSecondaryTap: editAniListEntry,
                           ),
                         );
-                      }
-                      final MediaItem item = items[index];
-                      final AniListAnimeListEntry? entry =
-                          widget.anilistEntryMap[item.id];
-                      final VoidCallback? editAniListEntry =
-                          widget.enableAniListEditing
-                          ? () => unawaited(
-                              _openAniListEntryEditor(
-                                context,
-                                ref,
-                                item: item,
-                                entry: entry,
-                              ),
-                            )
-                          : null;
-                      return SizedBox(
-                        width: 172,
-                        child: MediaPosterCard(
-                          item: item,
-                          compact: false,
-                          watchProgress: widget.progressMap[item.id],
-                          statusBadgeLabel: widget.statusBadgeMap[item.id],
-                          onTap: () => context.push(
-                            AppRoutes.mediaDetailsPath(item.id),
-                            extra: item,
-                          ),
-                          onLongPress: editAniListEntry,
-                          onSecondaryTap: editAniListEntry,
-                        ),
-                      );
-                    },
+                      },
+                    ),
                   ),
                 )
               else
@@ -890,6 +899,21 @@ class _MediaSectionState extends ConsumerState<_MediaSection> {
       },
     );
   }
+}
+
+class _HorizontalPosterRowClipper extends CustomClipper<Rect> {
+  const _HorizontalPosterRowClipper();
+
+  @override
+  Rect getClip(Size size) => Rect.fromLTRB(
+    0,
+    -_kPosterRowVerticalOverflow,
+    size.width,
+    size.height + _kPosterRowVerticalOverflow,
+  );
+
+  @override
+  bool shouldReclip(_HorizontalPosterRowClipper oldClipper) => false;
 }
 
 class _SectionLoadMoreButton extends StatelessWidget {
