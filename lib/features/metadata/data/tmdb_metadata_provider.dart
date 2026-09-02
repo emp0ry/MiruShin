@@ -38,6 +38,8 @@ class TmdbMetadataProvider implements PagedDiscoveryProvider {
   final String language;
   final String region;
   final Map<int, Future<int?>> _tvdbIdRequests = <int, Future<int?>>{};
+  final Map<TmdbMediaIdentity, Future<String?>> _imdbIdRequests =
+      <TmdbMediaIdentity, Future<String?>>{};
 
   /// When `true`, adult (18+) results are included in TMDB search and discovery.
   /// Trailer lookups always force this off regardless of this flag.
@@ -470,6 +472,22 @@ class TmdbMetadataProvider implements PagedDiscoveryProvider {
       final Object? data = response.data;
       if (data is! Map) return null;
       return _nullableInt(data['tvdb_id']);
+    });
+  }
+
+  Future<String?> imdbIdForTmdbMedia(TmdbMediaIdentity identity) {
+    return _imdbIdRequests.putIfAbsent(identity, () async {
+      _assertConfigured();
+      final String mediaType = identity.kind == TmdbMediaKind.movie
+          ? 'movie'
+          : 'tv';
+      final Response<dynamic> response = await _get(
+        '/$mediaType/${identity.id}/external_ids',
+      );
+      final Object? data = response.data;
+      if (data is! Map) return null;
+      final String imdbId = _string(data['imdb_id']).trim();
+      return RegExp(r'^tt\d+$').hasMatch(imdbId) ? imdbId : null;
     });
   }
 

@@ -38,6 +38,7 @@ import '../../settings/application/settings_state.dart';
 import '../../tracking/application/anilist_library_provider.dart';
 import '../../tracking/presentation/anilist_entry_editor.dart';
 import '../../tracking/presentation/anilist_favorite_button.dart';
+import '../application/imdb_rating_provider.dart';
 import '../data/anime_themes_client.dart';
 import 'fanart_gallery.dart';
 import 'media_links_dialog.dart';
@@ -1069,6 +1070,9 @@ class _HeroCopy extends ConsumerWidget {
         catalogModeForMediaId(item.id) ?? ref.watch(catalogModeProvider);
     final String formatLabel = _mediaKindLabel(item);
     final String personalStatusLabel = _personalStatusLabel(ref, item, mode);
+    final double? imdbRating = ref
+        .watch(imdbRatingProvider(ImdbRatingRequest(item)))
+        .maybeWhen(data: (double? value) => value, orElse: () => null);
     final TextTheme textTheme = Theme.of(context).textTheme;
     final TextStyle? baseTitleStyle = compact
         ? textTheme.headlineLarge
@@ -1148,6 +1152,14 @@ class _HeroCopy extends ConsumerWidget {
                 MetadataChip(
                   icon: Icons.star_rounded,
                   label: item.rating.toStringAsFixed(1),
+                  color: AppColors.accentAmber,
+                  onImage: true,
+                ),
+              if (imdbRating != null && imdbRating > 0 && imdbRating <= 10)
+                MetadataChip(
+                  key: const ValueKey<String>('details-imdb-rating'),
+                  icon: Icons.star_rounded,
+                  label: 'IMDB ${imdbRating.toStringAsFixed(1)}',
                   color: AppColors.accentAmber,
                   onImage: true,
                 ),

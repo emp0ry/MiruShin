@@ -6,6 +6,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mirushin/app/app.dart';
 import 'package:mirushin/app/localization/app_localizations.dart';
 import 'package:mirushin/app/theme/app_theme.dart';
+import 'package:mirushin/core/widgets/metadata_chip.dart';
+import 'package:mirushin/features/media_details/application/imdb_rating_provider.dart';
 import 'package:mirushin/features/media_details/presentation/media_details_page.dart';
 import 'package:mirushin/features/settings/application/settings_state.dart';
 import 'package:mirushin/features/watch_party/application/watch_party_controller.dart';
@@ -261,6 +263,11 @@ void main() {
       tester.view.devicePixelRatio = 1;
       await tester.pumpWidget(
         ProviderScope(
+          overrides: [
+            imdbRatingProvider.overrideWith(
+              (Ref ref, ImdbRatingRequest request) async => 8.4,
+            ),
+          ],
           child: MaterialApp(
             locale: const Locale('en'),
             theme: AppTheme.dark(),
@@ -285,6 +292,24 @@ void main() {
         await tester.pumpAndSettle();
       }
       expect(find.text('Edit'), findsOneWidget);
+      expect(find.text('IMDB 8.4'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey<String>('details-imdb-rating')),
+        findsOneWidget,
+      );
+      final List<String> heroChipLabels = tester
+          .widgetList<MetadataChip>(
+            find.descendant(
+              of: find.byKey(const ValueKey<String>('details-hero')),
+              matching: find.byType(MetadataChip),
+            ),
+          )
+          .map((MetadataChip chip) => chip.label)
+          .toList(growable: false);
+      expect(
+        heroChipLabels.indexOf('IMDB 8.4'),
+        heroChipLabels.indexOf('8.4') + 1,
+      );
       expect(
         find.byKey(const ValueKey<String>('details-watch-action')),
         findsOneWidget,
@@ -519,6 +544,11 @@ void main() {
 
     await tester.pumpWidget(
       ProviderScope(
+        overrides: [
+          imdbRatingProvider.overrideWith(
+            (Ref ref, ImdbRatingRequest request) async => 8.4,
+          ),
+        ],
         child: MaterialApp(
           locale: const Locale('en'),
           theme: AppTheme.dark(),
@@ -536,6 +566,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+
+    expect(find.text('IMDB 8.4'), findsOneWidget);
 
     final Finder linksAction = find.byKey(
       const ValueKey<String>('details-links-action'),
