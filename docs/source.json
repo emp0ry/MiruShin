@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.7.8",
+          "date": "2026-09-02",
+          "localizedDescription": "- Added clearly labeled IMDb ratings to TMDB movie/series and matched AniList anime detail pages, displayed directly after the original score.\n- Profile action cards now fit up to five per row on larger screens, with additional cards wrapping cleanly.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.7.8/MiruShin-ios-v2.7.8.ipa",
+          "size": 29016982,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.7.7",
           "date": "2026-09-02",
           "localizedDescription": "- Fixed Compact Cards appearing outside the row edges while scrolling, while preserving hover effects.\n- Compact Cards are now disabled by default; existing saved preferences remain unchanged.",
@@ -551,11 +559,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.7.7",
+      "version": "2.7.8",
       "versionDate": "2026-09-02",
-      "versionDescription": "- Fixed Compact Cards appearing outside the row edges while scrolling, while preserving hover effects.\n- Compact Cards are now disabled by default; existing saved preferences remain unchanged.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.7.7/MiruShin-ios-v2.7.7.ipa",
-      "size": 29015030,
+      "versionDescription": "- Added clearly labeled IMDb ratings to TMDB movie/series and matched AniList anime detail pages, displayed directly after the original score.\n- Profile action cards now fit up to five per row on larger screens, with additional cards wrapping cleanly.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.7.8/MiruShin-ios-v2.7.8.ipa",
+      "size": 29016982,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
