@@ -149,7 +149,7 @@ class MiruShinMediaDeepLink extends MiruShinDeepLink {
     _ => throw StateError('Unsupported provider/media-kind combination.'),
   };
 
-  /// Canonical public HTTPS link used for sharing and web previews.
+  /// Canonical public HTTPS link used for sharing.
   Uri get shareUri => mirushinWebsiteUri(<String>[
     provider.name,
     kind.name,

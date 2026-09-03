@@ -4,9 +4,9 @@
     <meta charset="utf-8">
     <meta name="language" content="en">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="color-scheme" content="dark light">
+    <meta name="color-scheme" content="dark">
     <meta name="theme-color" content="#120b24">
-    <meta name="description" content="The MiruShin page you requested could not be found. Return to the official MiruShin homepage or open the GitHub repository.">
+    <meta name="description" content="Open this media directly in MiruShin.">
     <meta name="author" content="emp0ry">
     <meta name="publisher" content="emp0ry">
     <meta name="application-name" content="MiruShin">
@@ -34,13 +34,13 @@
     <link rel="alternate" href="https://mirushin.emp0ry.com/404.html" hreflang="en">
     <link rel="alternate" href="https://mirushin.emp0ry.com/404.html" hreflang="x-default">
     <link rel="sitemap" type="application/xml" href="https://mirushin.emp0ry.com/sitemap.xml">
-    <link rel="icon" href="/assets/favicon-32x32.png" type="image/png" sizes="32x32">
-    <link rel="icon" href="/assets/favicon-16x16.png" type="image/png" sizes="16x16">
-    <link rel="icon" href="/assets/logo.ico" sizes="any">
-    <link rel="shortcut icon" href="/assets/logo.ico" type="image/x-icon">
-    <link rel="apple-touch-icon" sizes="180x180" href="/assets/apple-touch-icon.png">
-    <link rel="apple-touch-icon-precomposed" sizes="180x180" href="/assets/apple-touch-icon.png">
-    <link rel="manifest" href="/site.webmanifest">
+    <link rel="icon" href="assets/favicon-32x32.png" type="image/png" sizes="32x32">
+    <link rel="icon" href="assets/favicon-16x16.png" type="image/png" sizes="16x16">
+    <link rel="icon" href="assets/logo.ico" sizes="any">
+    <link rel="shortcut icon" href="assets/logo.ico" type="image/x-icon">
+    <link rel="apple-touch-icon" sizes="180x180" href="assets/apple-touch-icon.png">
+    <link rel="apple-touch-icon-precomposed" sizes="180x180" href="assets/apple-touch-icon.png">
+    <link rel="manifest" href="site.webmanifest">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link
@@ -50,8 +50,8 @@
     <meta property="og:locale" content="en_US">
     <meta property="og:type" content="website">
     <meta property="og:site_name" content="MiruShin">
-    <meta property="og:title" content="Page Not Found | MiruShin">
-    <meta property="og:description" content="The MiruShin page you requested could not be found. Return to the official homepage or open the GitHub repository.">
+    <meta property="og:title" content="Open in MiruShin">
+    <meta property="og:description" content="Open this media directly in MiruShin.">
     <meta property="og:url" content="https://mirushin.emp0ry.com/404.html">
     <meta property="og:image" content="https://mirushin.emp0ry.com/assets/social-preview.png">
     <meta property="og:image:secure_url" content="https://mirushin.emp0ry.com/assets/social-preview.png">
@@ -60,12 +60,30 @@
     <meta property="og:image:height" content="630">
     <meta property="og:image:alt" content="MiruShin social preview showing the discovery board and popular anime rail.">
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="Page Not Found | MiruShin">
-    <meta name="twitter:description" content="The MiruShin page you requested could not be found. Return to the official homepage or open the GitHub repository.">
+    <meta name="twitter:title" content="Open in MiruShin">
+    <meta name="twitter:description" content="Open this media directly in MiruShin.">
     <meta name="twitter:image" content="https://mirushin.emp0ry.com/assets/social-preview.png">
     <meta name="twitter:image:alt" content="MiruShin social preview showing the discovery board and popular anime rail.">
-    <link rel="stylesheet" href="/styles.css">
-    <link rel="stylesheet" href="/media-link.css">
+    <link rel="stylesheet" href="styles.css">
+    <script>
+      (() => {
+        if (location.search || location.hash) return;
+        const match = /^\/(anilist|tmdb)\/(anime|manga|movie|tv)\/([1-9]\d*)$/.exec(location.pathname);
+        if (!match) return;
+
+        const provider = match[1];
+        const type = match[2];
+        const id = Number(match[3]);
+        const supported =
+          (provider === 'anilist' && (type === 'anime' || type === 'manga')) ||
+          (provider === 'tmdb' && (type === 'movie' || type === 'tv'));
+        if (!supported || !Number.isSafeInteger(id) || id > 2147483647) return;
+
+        const opener = new URL('/open.html', location.origin);
+        opener.searchParams.set('target', `mirushin://${provider}/${type}/${id}`);
+        location.replace(opener.href);
+      })();
+    </script>
     <script type="application/ld+json">
     {
       "@context": "https://schema.org",
@@ -89,9 +107,9 @@
     }
     </script>
   </head>
-  <body data-page="document" data-static-media-fallback>
+  <body data-page="document">
     <div class="backdrop"></div>
-    <main id="not-found" class="not-found">
+    <main class="not-found">
       <div class="document-card not-found-card">
         <img src="assets/logo.png" alt="" width="64" height="64">
         <span class="section-kicker">404</span>
@@ -106,24 +124,5 @@
         </div>
       </div>
     </main>
-    <main id="media-link-fallback" class="media-shell" hidden>
-      <article class="media-card">
-        <div class="media-poster-wrap">
-          <img class="media-poster media-poster-fallback" src="/assets/social-preview.png" alt="MiruShin social preview" width="1200" height="630">
-        </div>
-        <div class="media-copy">
-          <div class="media-brand"><img src="/assets/logo.png" alt="" width="32" height="32"> MiruShin</div>
-          <p class="media-eyebrow">Open media</p>
-          <h1>Open in MiruShin</h1>
-          <p class="media-description">Open this media directly in MiruShin.</p>
-          <div class="media-actions">
-            <a id="open-in-mirushin" class="media-button media-button-primary">Open in MiruShin</a>
-            <a class="media-button" href="/">Visit MiruShin</a>
-          </div>
-          <p class="media-note">This static fallback keeps clean links functional. Rich media previews require the server-side renderer described in the deployment guide.</p>
-        </div>
-      </article>
-    </main>
-    <script type="module" src="/media-link.mjs"></script>
   </body>
 </html>

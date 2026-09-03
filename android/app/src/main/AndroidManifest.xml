@@ -64,17 +64,6 @@
                 <category android:name="android.intent.category.BROWSABLE"/>
                 <data android:scheme="mirushin"/>
             </intent-filter>
-            <intent-filter android:autoVerify="true">
-                <action android:name="android.intent.action.VIEW"/>
-                <category android:name="android.intent.category.DEFAULT"/>
-                <category android:name="android.intent.category.BROWSABLE"/>
-                <data android:scheme="https"/>
-                <data android:host="mirushin.emp0ry.com"/>
-                <data android:pathPrefix="/anilist/anime/"/>
-                <data android:pathPrefix="/anilist/manga/"/>
-                <data android:pathPrefix="/tmdb/movie/"/>
-                <data android:pathPrefix="/tmdb/tv/"/>
-            </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
