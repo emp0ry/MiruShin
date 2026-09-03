@@ -95,6 +95,12 @@ desktop integration uses the same scheme declaration. For the portable
 `./install-url-handler.sh --remove` before deleting that copy. Removal only
 clears the handler when it still points to the same portable executable.
 
+Media sharing uses clean public links such as
+`https://mirushin.emp0ry.com/anilist/anime/21` and
+`https://mirushin.emp0ry.com/tmdb/movie/550`. Their app-link, legacy-link,
+social-preview, and hosting contract is documented in
+[`docs/DEEP_LINKS.md`](docs/DEEP_LINKS.md).
+
 ### iOS one-tap install
 
 MiruShin works with **AltStore**, **SideStore**, **Feather**, and **LiveContainer**, so you can install the `.ipa` and get future updates automatically. Tap a button **on your iPhone or iPad** (with the installer app already set up):

@@ -62,7 +62,7 @@ Future<void> _showMediaLinksDialog(
             const SizedBox(height: 12),
             _MediaLinkEntry(
               label: dialogContext.t('MiruShin link'),
-              value: link.webOpenUri.toString(),
+              value: link.shareUri.toString(),
               icon: Icons.link_rounded,
             ),
           ],

@@ -1,0 +1,48 @@
+[build]
+  publish = "docs"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
+[[redirects]]
+  from = "/open.html"
+  to = "/.netlify/functions/media-preview?legacy=1"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/anilist/anime/:id"
+  to = "/.netlify/functions/media-preview?provider=anilist&type=anime&id=:id"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/anilist/manga/:id"
+  to = "/.netlify/functions/media-preview?provider=anilist&type=manga&id=:id"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/tmdb/movie/:id"
+  to = "/.netlify/functions/media-preview?provider=tmdb&type=movie&id=:id"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/tmdb/tv/:id"
+  to = "/.netlify/functions/media-preview?provider=tmdb&type=tv&id=:id"
+  status = 200
+  force = true
+
+[[headers]]
+  for = "/.well-known/apple-app-site-association"
+  [headers.values]
+    Content-Type = "application/json"
+    Cache-Control = "public, max-age=3600"
+
+[[headers]]
+  for = "/.well-known/assetlinks.json"
+  [headers.values]
+    Content-Type = "application/json"
+    Cache-Control = "public, max-age=3600"

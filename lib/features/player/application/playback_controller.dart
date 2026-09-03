@@ -811,7 +811,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       mediaType: item.mediaType,
       externalIds: item.externalIds,
     );
-    return link?.webOpenUri.toString() ?? '';
+    return link?.shareUri.toString() ?? '';
   }
 
   Future<void> load(MediaPlaybackItem item) async {

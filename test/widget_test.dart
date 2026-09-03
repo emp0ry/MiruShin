@@ -333,10 +333,7 @@ void main() {
       expect(find.text('https://www.themoviedb.org/movie/1'), findsOneWidget);
       expect(find.text('MiruShin link'), findsOneWidget);
       expect(
-        find.text(
-          'https://mirushin.emp0ry.com/open.html?target='
-          'mirushin%3A%2F%2Ftmdb%2Fmovie%2F1',
-        ),
+        find.text('https://mirushin.emp0ry.com/tmdb/movie/1'),
         findsOneWidget,
       );
       clipboardCall = null;
@@ -345,8 +342,7 @@ void main() {
       expect(clipboardCall?.method, 'Clipboard.setData');
       expect(
         (clipboardCall?.arguments as Map<Object?, Object?>?)?['text'],
-        'https://mirushin.emp0ry.com/open.html?target='
-        'mirushin%3A%2F%2Ftmdb%2Fmovie%2F1',
+        'https://mirushin.emp0ry.com/tmdb/movie/1',
       );
       await tester.tap(find.text('Close'));
       await tester.pumpAndSettle();
@@ -578,10 +574,7 @@ void main() {
     expect(find.text('AniList link'), findsOneWidget);
     expect(find.text('https://anilist.co/anime/1'), findsOneWidget);
     expect(
-      find.text(
-        'https://mirushin.emp0ry.com/open.html?target='
-        'mirushin%3A%2F%2Fanilist%2Fanime%2F1',
-      ),
+      find.text('https://mirushin.emp0ry.com/anilist/anime/1'),
       findsOneWidget,
     );
     await tester.tap(find.text('Close'));

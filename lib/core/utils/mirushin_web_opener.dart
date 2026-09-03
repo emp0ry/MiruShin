@@ -1,8 +1,27 @@
 import '../constants/app_constants.dart';
 
-final Uri _mirushinWebOpener = Uri.parse(
-  AppConstants.appWebsiteUrl,
-).resolve('open.html');
+final Uri _mirushinWebsiteOrigin = Uri.parse(AppConstants.appWebsiteUrl);
+final Uri _mirushinWebOpener = _mirushinWebsiteOrigin.resolve('open.html');
+
+/// Builds an absolute URL on MiruShin's public website.
+Uri mirushinWebsiteUri(Iterable<String> pathSegments) {
+  final List<String> segments = pathSegments.toList(growable: false);
+  if (segments.any((String segment) => segment.isEmpty)) {
+    throw ArgumentError.value(
+      segments,
+      'pathSegments',
+      'Path segments must not be empty.',
+    );
+  }
+  return _mirushinWebsiteOrigin.replace(pathSegments: segments);
+}
+
+/// Whether [uri] has the exact trusted MiruShin website origin.
+bool isMirushinWebsiteUri(Uri uri) =>
+    uri.scheme.toLowerCase() == _mirushinWebsiteOrigin.scheme &&
+    uri.host.toLowerCase() == _mirushinWebsiteOrigin.host &&
+    uri.port == _mirushinWebsiteOrigin.port &&
+    uri.userInfo.isEmpty;
 
 /// Wraps an internal MiruShin URI in the public HTTPS app opener.
 Uri mirushinWebOpenUri(Uri target) {
@@ -20,11 +39,8 @@ Uri mirushinWebOpenUri(Uri target) {
 
 /// Returns the internal target only for the canonical MiruShin HTTPS opener.
 Uri? tryUnwrapMirushinWebOpenUri(Uri uri) {
-  if (uri.scheme.toLowerCase() != _mirushinWebOpener.scheme ||
-      uri.host.toLowerCase() != _mirushinWebOpener.host ||
-      uri.port != _mirushinWebOpener.port ||
+  if (!isMirushinWebsiteUri(uri) ||
       uri.path != _mirushinWebOpener.path ||
-      uri.userInfo.isNotEmpty ||
       uri.hasFragment) {
     return null;
   }

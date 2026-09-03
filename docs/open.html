@@ -3,49 +3,50 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="color-scheme" content="dark">
-    <meta name="theme-color" content="#0a0011">
-    <meta name="robots" content="noindex, nofollow">
+    <meta name="color-scheme" content="dark light">
+    <meta name="theme-color" content="#120b24">
+    <meta name="application-name" content="MiruShin">
+    <meta name="description" content="Open this link directly in MiruShin.">
+    <meta name="robots" content="noindex,nofollow">
     <meta name="referrer" content="no-referrer">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-mirushin-open'; style-src 'nonce-mirushin-open'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; img-src 'self'; script-src 'self'; style-src 'self'">
     <title>Open in MiruShin</title>
-    <style nonce="mirushin-open">
-      :root { font-family: Inter, system-ui, sans-serif; }
-      body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0a0011; color: #f7efff; }
-      main { width: min(32rem, calc(100% - 3rem)); box-sizing: border-box; padding: 2rem; border: 1px solid #493556; border-radius: 1.25rem; background: #170d1e; text-align: center; box-shadow: 0 1rem 3rem #0008; }
-      h1 { margin: .25rem 0 .75rem; font-size: clamp(1.6rem, 7vw, 2.35rem); }
-      p { color: #cabdd2; line-height: 1.55; }
-      a { display: inline-block; margin-top: 1rem; padding: .85rem 1.25rem; border-radius: 999px; background: #c985ff; color: #170d1e; font-weight: 750; text-decoration: none; }
-      [hidden] { display: none; }
-    </style>
+    <link rel="canonical" href="https://mirushin.emp0ry.com/open.html">
+    <link rel="icon" href="/assets/favicon-32x32.png" type="image/png" sizes="32x32">
+    <link rel="icon" href="/assets/logo.ico" sizes="any">
+    <link rel="apple-touch-icon" sizes="180x180" href="/assets/apple-touch-icon.png">
+    <link rel="stylesheet" href="/media-link.css">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="MiruShin">
+    <meta property="og:title" content="Open in MiruShin">
+    <meta property="og:description" content="Open this link directly in MiruShin.">
+    <meta property="og:url" content="https://mirushin.emp0ry.com/open.html">
+    <meta property="og:image" content="https://mirushin.emp0ry.com/assets/social-preview.png">
+    <meta property="og:image:secure_url" content="https://mirushin.emp0ry.com/assets/social-preview.png">
+    <meta property="og:image:type" content="image/png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="MiruShin social preview">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Open in MiruShin">
+    <meta name="twitter:description" content="Open this link directly in MiruShin.">
+    <meta name="twitter:image" content="https://mirushin.emp0ry.com/assets/social-preview.png">
+    <meta name="twitter:image:alt" content="MiruShin social preview">
+    <script type="module" src="/legacy-open.mjs"></script>
   </head>
   <body>
-    <main>
-      <h1>Open in MiruShin</h1>
-      <p id="status">Checking this media link…</p>
-      <a id="open" hidden>Open in MiruShin</a>
+    <main class="media-shell">
+      <section class="media-card media-simple-card">
+        <div class="media-copy">
+          <div class="media-brand"><img src="/assets/logo.png" alt="" width="32" height="32"> MiruShin</div>
+          <h1>Open in MiruShin</h1>
+          <p id="status" class="media-description">Checking this MiruShin link…</p>
+          <div class="media-actions">
+            <a id="open-in-mirushin" class="media-button media-button-primary" hidden>Open in MiruShin</a>
+            <a class="media-button" href="/">Visit MiruShin</a>
+          </div>
+        </div>
+      </section>
     </main>
-    <script nonce="mirushin-open">
-      (() => {
-        const status = document.getElementById('status');
-        const button = document.getElementById('open');
-        const raw = new URLSearchParams(location.search).get('target') || '';
-        let target;
-        try { target = new URL(raw); } catch (_) { target = null; }
-        const valid = target && raw.length <= 256 &&
-          target.protocol === 'mirushin:' && !target.username &&
-          !target.password && !target.port && !target.search && !target.hash &&
-          ((target.hostname === 'anilist' && /^\/(anime|manga)\/[1-9]\d*$/.test(target.pathname)) ||
-           (target.hostname === 'tmdb' && /^\/(movie|tv)\/[1-9]\d*$/.test(target.pathname)));
-        if (!valid) {
-          status.textContent = 'This MiruShin media link is invalid.';
-          return;
-        }
-        button.href = target.href;
-        button.hidden = false;
-        status.textContent = 'MiruShin should open automatically. Use the button if your browser asks for confirmation.';
-        location.replace(target.href);
-      })();
-    </script>
   </body>
 </html>

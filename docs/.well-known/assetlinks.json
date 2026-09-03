@@ -1,0 +1,14 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.emp0ry.mirushin",
+      "sha256_cert_fingerprints": [
+        "F0:9A:3E:1D:E4:74:2A:E8:92:F1:D1:5D:06:52:66:EE:98:4C:A7:8F:6D:79:DD:68:1C:43:8C:6B:A9:BF:7F:BB"
+      ]
+    }
+  }
+]
