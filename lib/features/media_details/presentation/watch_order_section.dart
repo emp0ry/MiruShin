@@ -195,6 +195,7 @@ class _WatchOrderTile extends StatelessWidget {
       context.t(entry.isMainline ? 'Main story' : 'Extra'),
       if (media.format.isNotEmpty) media.format.replaceAll('_', ' '),
       if (media.startDate.year != null) '${media.startDate.year}',
+      if (item.rating > 0) '★ ${item.rating.toStringAsFixed(1)}',
       if (current) context.t('Current title'),
     ];
     Widget placeholder() => ColoredBox(
