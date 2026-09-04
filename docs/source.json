@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.7.10",
+          "date": "2026-09-04",
+          "localizedDescription": "- Added automatic anime Watch Order with full franchise discovery and a Main story only filter.\n- Added AniList progress and bold, theme-colored status labels to Watch Order.\n- Replaced Related Titles with a cleaner, transparent Watch Order list.\n- Cached Anime Themes for the current session to prevent repeated loading.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.7.10/MiruShin-ios-v2.7.10.ipa",
+          "size": 29053166,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.7.9",
           "date": "2026-09-03",
           "localizedDescription": "- Added clean share links for AniList anime and manga and TMDB movies and TV shows.\n- Improved link safety while keeping existing MiruShin links fully compatible.\n- Restored the original website design and generic MiruShin social preview.",
@@ -567,11 +575,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.7.9",
-      "versionDate": "2026-09-03",
-      "versionDescription": "- Added clean share links for AniList anime and manga and TMDB movies and TV shows.\n- Improved link safety while keeping existing MiruShin links fully compatible.\n- Restored the original website design and generic MiruShin social preview.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.7.9/MiruShin-ios-v2.7.9.ipa",
-      "size": 29025748,
+      "version": "2.7.10",
+      "versionDate": "2026-09-04",
+      "versionDescription": "- Added automatic anime Watch Order with full franchise discovery and a Main story only filter.\n- Added AniList progress and bold, theme-colored status labels to Watch Order.\n- Replaced Related Titles with a cleaner, transparent Watch Order list.\n- Cached Anime Themes for the current session to prevent repeated loading.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.7.10/MiruShin-ios-v2.7.10.ipa",
+      "size": 29053166,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
