@@ -1,5 +1,7 @@
 import 'package:dio/dio.dart';
 
+import '../domain/shikimori_franchise.dart';
+
 typedef ShikimoriRussianDetails = ({
   String title,
   String description,
@@ -38,6 +40,107 @@ class ShikimoriClient {
   static const String _graphqlUrl = 'https://shikimori.io/api/graphql';
   static const Duration _cacheTtl = Duration(hours: 12);
   static const int _maxCacheSize = 300;
+
+  /// The REST route accepts the usual MAL-compatible ID, but graph node IDs
+  /// belong to Shikimori. Resolve `malId` explicitly before querying AniList.
+  Future<ShikimoriFranchise> fetchAnimeFranchise(int malId) async {
+    if (malId <= 0) return const ShikimoriFranchise();
+    final options = Options(
+      headers: const <String, String>{
+        'Accept': 'application/json',
+        'User-Agent': 'MiruShin/1.0',
+      },
+    );
+    final Response<dynamic> response;
+    try {
+      response = await _dio.get<dynamic>(
+        '$_restUrl/$malId/franchise',
+        options: options,
+      );
+    } on DioException catch (error) {
+      if (error.response?.statusCode == 404) return const ShikimoriFranchise();
+      rethrow;
+    }
+    final body = response.data;
+    if (body is! Map || body['nodes'] is! List || body['links'] is! List) {
+      throw const FormatException('Invalid Shikimori franchise response');
+    }
+    final ids = <int>{};
+    for (final node in body['nodes'] as List) {
+      final id = node is Map ? _parseInt(node['id']) : null;
+      if (id != null && id > 0) ids.add(id);
+    }
+    if (ids.isEmpty) return const ShikimoriFranchise();
+    final currentId = _parseInt(body['current_id']);
+    if (!ids.contains(currentId)) return const ShikimoriFranchise();
+    final sortedIds = ids.toList()..sort();
+    final malById = <int, int>{};
+    for (var offset = 0; offset < sortedIds.length; offset += 50) {
+      final batch = sortedIds.sublist(
+        offset,
+        (offset + 50).clamp(0, sortedIds.length),
+      );
+      final result = await _dio.post<dynamic>(
+        _graphqlUrl,
+        data: <String, dynamic>{
+          'query':
+              r'query FranchiseIds($ids: String!) { animes(ids: $ids, limit: 50) { id malId } }',
+          'variables': <String, dynamic>{'ids': batch.join(',')},
+        },
+        options: options,
+      );
+      final payload = result.data;
+      if (payload is! Map ||
+          (payload['errors'] is List &&
+              (payload['errors'] as List).isNotEmpty)) {
+        throw const FormatException('Shikimori franchise ID lookup failed');
+      }
+      final data = payload['data'];
+      final animes = data is Map ? data['animes'] : null;
+      if (animes is! List) {
+        throw const FormatException('Missing Shikimori anime IDs');
+      }
+      for (final anime in animes) {
+        if (anime is! Map) continue;
+        final id = _parseInt(anime['id']);
+        final mappedMalId = _parseInt(anime['malId']);
+        if (id != null &&
+            batch.contains(id) &&
+            mappedMalId != null &&
+            mappedMalId > 0) {
+          malById[id] = mappedMalId;
+        }
+      }
+    }
+    // Never accept a franchise belonging to an unrelated, colliding ID.
+    if (malById[currentId] != malId) return const ShikimoriFranchise();
+    final links = <ShikimoriFranchiseLink>[];
+    for (final link in body['links'] as List) {
+      if (link is! Map) continue;
+      final source = malById[_parseInt(link['source_id'])];
+      final target = malById[_parseInt(link['target_id'])];
+      final relation = link['relation'];
+      if (source == null ||
+          target == null ||
+          source == target ||
+          relation is! String) {
+        continue;
+      }
+      final normalized = relation.toUpperCase();
+      links.add(
+        ShikimoriFranchiseLink(
+          source,
+          target,
+          normalized == 'PARENT_STORY' ? 'PARENT' : normalized,
+        ),
+      );
+    }
+    return ShikimoriFranchise(
+      malIds: malById.values.toSet().toList()..sort(),
+      links: links,
+      unmappedCount: ids.length - malById.length,
+    );
+  }
 
   // Direct GraphQL lookup by MAL ID avoids redirects.
   Future<String?> findRussianTitleByMalId(int malId) async {

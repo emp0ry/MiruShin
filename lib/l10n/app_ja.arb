@@ -1409,5 +1409,15 @@
   "MiruShin link": "MiruShinリンク",
   "Copy link": "リンクをコピー",
   "Link copied": "リンクをコピーしました",
-  "Share the MiruShin link to open this title directly in the app.": "MiruShinリンクを共有すると、この作品をアプリで直接開けます。"
+  "Share the MiruShin link to open this title directly in the app.": "MiruShinリンクを共有すると、この作品をアプリで直接開けます。",
+  "Main story only": "本編のみ",
+  "Main story": "本編",
+  "Extra": "番外編",
+  "Current title": "表示中の作品",
+  "Related titles": "関連作品",
+  "Watch order could not be loaded.": "視聴順序を読み込めませんでした。",
+  "Automatic order. Side stories may be watched separately.": "自動で並べた順序です。番外編は個別に視聴できます。",
+  "Some franchise entries are unavailable ({count}).": "一部のシリーズ作品を表示できません（{count}件）。",
+  "Conflicting sequence data was resolved by release date.": "矛盾する順序は公開日をもとに並べました。",
+  "No main story could be identified.": "本編を特定できませんでした。"
 }

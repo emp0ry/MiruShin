@@ -1409,5 +1409,15 @@
   "MiruShin link": "MiruShin link",
   "Copy link": "Copy link",
   "Link copied": "Link copied",
-  "Share the MiruShin link to open this title directly in the app.": "Share the MiruShin link to open this title directly in the app."
+  "Share the MiruShin link to open this title directly in the app.": "Share the MiruShin link to open this title directly in the app.",
+  "Main story only": "Main story only",
+  "Main story": "Main story",
+  "Extra": "Extra",
+  "Current title": "Current title",
+  "Related titles": "Related titles",
+  "Watch order could not be loaded.": "Watch order could not be loaded.",
+  "Automatic order. Side stories may be watched separately.": "Automatic order. Side stories may be watched separately.",
+  "Some franchise entries are unavailable ({count}).": "Some franchise entries are unavailable ({count}).",
+  "Conflicting sequence data was resolved by release date.": "Conflicting sequence data was resolved by release date.",
+  "No main story could be identified.": "No main story could be identified."
 }

@@ -1414,5 +1414,15 @@
   "MiruShin link": "Ссылка MiruShin",
   "Copy link": "Копировать ссылку",
   "Link copied": "Ссылка скопирована",
-  "Share the MiruShin link to open this title directly in the app.": "Отправьте ссылку MiruShin, чтобы открыть этот тайтл прямо в приложении."
+  "Share the MiruShin link to open this title directly in the app.": "Отправьте ссылку MiruShin, чтобы открыть этот тайтл прямо в приложении.",
+  "Main story only": "Только основная история",
+  "Main story": "Основная история",
+  "Extra": "Дополнение",
+  "Current title": "Текущий тайтл",
+  "Related titles": "Связанные тайтлы",
+  "Watch order could not be loaded.": "Не удалось загрузить порядок просмотра.",
+  "Automatic order. Side stories may be watched separately.": "Автоматический порядок. Побочные истории можно смотреть отдельно.",
+  "Some franchise entries are unavailable ({count}).": "Некоторые тайтлы франшизы недоступны ({count}).",
+  "Conflicting sequence data was resolved by release date.": "Противоречия в связях разрешены по датам выхода.",
+  "No main story could be identified.": "Не удалось определить основную историю."
 }

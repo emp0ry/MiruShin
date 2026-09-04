@@ -36,7 +36,7 @@ final tmdbProviderProvider = Provider<TmdbMetadataProvider?>((Ref ref) {
 
 // Shikimori
 
-final _shikimoriClientProvider = Provider<ShikimoriClient>(
+final shikimoriClientProvider = Provider<ShikimoriClient>(
   (Ref ref) => ShikimoriClient(),
 );
 
@@ -49,7 +49,7 @@ final anilistApiClientProvider = Provider<AniListApiClient>((Ref ref) {
     accessToken: token.isEmpty ? null : token,
     titleLanguage: ref.watch(aniListEffectiveTitleLanguageProvider),
     showAdultContent: ref.watch(aniListEffectiveAdultContentProvider),
-    shikimori: ref.watch(_shikimoriClientProvider),
+    shikimori: ref.watch(shikimoriClientProvider),
   );
 });
 

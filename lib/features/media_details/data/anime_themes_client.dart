@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../shared/models/media_item.dart';
@@ -23,10 +24,34 @@ class AnimeThemesClient {
       'resources,images,animethemes.song,animethemes.animethemeentries.videos';
 
   final Dio _dio;
+  // The shared client lives for the app session. Keep completed lookups and
+  // coalesce requests when the same title is opened while its lookup is running.
+  final Map<String, AnimeThemesAnime?> _sessionCache = {};
+  final Map<String, Future<AnimeThemesAnime?>> _pending = {};
 
-  Future<AnimeThemesAnime?> findForMediaItem(MediaItem item) async {
-    if (item.type != MediaType.anime) return null;
+  Future<AnimeThemesAnime?> findForMediaItem(MediaItem item) {
+    if (item.type != MediaType.anime || _titleQueries(item).isEmpty) {
+      return SynchronousFuture<AnimeThemesAnime?>(null);
+    }
+    if (_sessionCache.containsKey(item.id)) {
+      // Complete synchronously so FutureBuilder does not flash its loading row.
+      return SynchronousFuture<AnimeThemesAnime?>(_sessionCache[item.id]);
+    }
+    return _pending.putIfAbsent(
+      item.id,
+      () => _fetchForMediaItem(item)
+          .then((AnimeThemesAnime? anime) {
+            _sessionCache[item.id] = anime;
+            return anime;
+          })
+          .whenComplete(() {
+            // Failed requests are not cached and can be retried on the next visit.
+            _pending.remove(item.id);
+          }),
+    );
+  }
 
+  Future<AnimeThemesAnime?> _fetchForMediaItem(MediaItem item) async {
     final List<String> queries = _titleQueries(item);
     if (queries.isEmpty) return null;
 

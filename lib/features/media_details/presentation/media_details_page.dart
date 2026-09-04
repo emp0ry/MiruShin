@@ -43,6 +43,7 @@ import '../data/anime_themes_client.dart';
 import 'fanart_gallery.dart';
 import 'media_links_dialog.dart';
 import 'poster_fullscreen_viewer.dart';
+import 'watch_order_section.dart';
 
 const double _kDetailsHeroHeight = 420;
 const double _kCompactDetailsHeroHeight = 380;
@@ -206,7 +207,8 @@ class _DetailsBody extends ConsumerWidget {
           const SizedBox(height: AppSpacing.xxl),
           _AnimeThemesPanel(item: item),
         ],
-        if (item.seasons.isNotEmpty) ...<Widget>[
+        WatchOrderSection(item: item),
+        if (mode == CatalogMode.tmdb && item.seasons.isNotEmpty) ...<Widget>[
           const SizedBox(height: AppSpacing.xxl),
           _SeasonsPanel(item: item),
         ],
@@ -2281,7 +2283,7 @@ class _SeasonsPanel extends ConsumerWidget {
         children: <Widget>[
           SectionHeader(
             title: context.t(
-              mode == CatalogMode.anilist ? 'Watch Order' : 'Seasons',
+              mode == CatalogMode.anilist ? 'Related titles' : 'Seasons',
             ),
           ),
           ...sorted.map((MediaSeason season) {

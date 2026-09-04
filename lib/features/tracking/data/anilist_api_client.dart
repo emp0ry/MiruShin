@@ -3,6 +3,7 @@ import 'package:dio/dio.dart';
 import '../../../shared/models/anilist_models.dart';
 import '../../../shared/models/calendar_item.dart';
 import '../../../shared/models/media_item.dart';
+import '../../media_details/domain/watch_order.dart';
 import '../../metadata/data/shikimori_client.dart';
 import '../../profile/domain/anilist_profile_models.dart';
 
@@ -383,6 +384,100 @@ class AniListApiClient {
 
   Future<MediaItem?> getAnimeDetails(int id) async {
     return getMediaDetails(id, type: 'ANIME');
+  }
+
+  /// Bounded public metadata queries; user progress comes from the live library
+  /// providers, so cached franchise metadata never stores a viewer's state.
+  Future<List<WatchOrderMedia>> fetchWatchOrderMedia(List<int> malIds) async {
+    final ids = malIds.where((id) => id > 0).toSet().toList()..sort();
+    final result = <int, WatchOrderMedia>{};
+    for (var offset = 0; offset < ids.length; offset += 50) {
+      final batch = ids.sublist(offset, (offset + 50).clamp(0, ids.length));
+      final data = await _post(
+        r'''
+        query WatchOrderMedia($ids: [Int]) {
+          Page(page: 1, perPage: 50) {
+            media(type: ANIME, idMal_in: $ids''' +
+            _isAdultClause +
+            r''') {
+              id idMal type format isAdult
+              title { romaji english native }
+              coverImage { extraLarge }
+              episodes duration status averageScore
+              startDate { year month day }
+              relations { edges { relationType(version: 2) node { id type } } }
+            }
+          }
+        }
+        ''',
+        <String, dynamic>{'ids': batch},
+      );
+      final page = data['Page'];
+      final media = page is Map ? page['media'] : null;
+      if (media is! List) {
+        throw const FormatException('Missing AniList franchise media');
+      }
+      final batchRecords = <WatchOrderMedia>[];
+      for (final raw in media) {
+        if (raw is! Map<String, dynamic> || raw['type'] != 'ANIME') continue;
+        final id = _int(raw['id']);
+        final malId = _int(raw['idMal']);
+        if (id <= 0 ||
+            !batch.contains(malId) ||
+            (!showAdultContent && raw['isAdult'] == true)) {
+          continue;
+        }
+        final relations = <WatchOrderRelation>[];
+        final connection = raw['relations'];
+        final edges = connection is Map ? connection['edges'] : null;
+        if (edges is List) {
+          for (final edge in edges) {
+            if (edge is! Map || edge['node'] is! Map) continue;
+            final node = edge['node'] as Map;
+            final target = _int(node['id']);
+            if (node['type'] != 'ANIME' || target <= 0 || target == id) {
+              continue;
+            }
+            relations.add(
+              WatchOrderRelation(target, _string(edge['relationType'])),
+            );
+          }
+        }
+        batchRecords.add(
+          WatchOrderMedia(
+            item: _mediaFromJson({...raw, 'relations': null}),
+            id: id,
+            malId: malId,
+            format: _string(raw['format']),
+            startDate: WatchOrderDate.fromJson(
+              raw['startDate'] is Map<String, dynamic>
+                  ? raw['startDate'] as Map<String, dynamic>
+                  : const {},
+            ),
+            relations: relations,
+          ),
+        );
+      }
+      // Use the existing batch title lookup without per-title search fallbacks.
+      final russianTitles = _wantsRussian
+          ? await shikimori!.batchRussianTitles(
+              batchRecords.map((record) => record.malId).toList(),
+            )
+          : const <int, String>{};
+      for (final record in batchRecords) {
+        result[record.id] = WatchOrderMedia(
+          item: russianTitles[record.malId] == null
+              ? record.item
+              : record.item.copyWith(title: russianTitles[record.malId]),
+          id: record.id,
+          malId: record.malId,
+          format: record.format,
+          startDate: record.startDate,
+          relations: record.relations,
+        );
+      }
+    }
+    return result.values.toList();
   }
 
   Future<MediaItem?> getMediaDetails(int id, {String type = 'ANIME'}) async {
