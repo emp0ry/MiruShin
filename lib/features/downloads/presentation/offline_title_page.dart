@@ -809,18 +809,28 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
           .then(
             (Object? result) async {
               if (!mounted) return;
-              // Resolve continuation synchronously from the immutable snapshot
-              // before deleting or refreshing any download provider state.
+              // Auto-next must see episodes that completed while this player
+              // route was open. Manual episode selection remains tied to the
+              // immutable list that was exposed by the opened player.
+              final bool useLatestDownloads = result is PlayerNextEpisodeResult;
+              final List<DownloadedEpisode> continuationSnapshot =
+                  useLatestDownloads
+                  ? offlineModuleEpisodesFor(ep, ref.read(downloadsProvider))
+                  : transitionSnapshot;
+              // Resolve before auto-delete removes the current episode from
+              // provider state and from the snapshot carried into the next
+              // player route.
               final OfflinePlayerContinuation? continuation =
                   offlinePlayerContinuationForResult(
                     result: result,
                     current: ep,
-                    moduleEpisodes: transitionSnapshot,
+                    moduleEpisodes: continuationSnapshot,
                   );
               debugPrint(
                 'OfflineNext: current=S${ep.seasonNumber}E${ep.displayNumber} '
                 'result=${result.runtimeType} '
-                'snapshotEpisodes=${transitionSnapshot.length} '
+                'snapshot=${useLatestDownloads ? 'latest' : 'transition'} '
+                'snapshotEpisodes=${continuationSnapshot.length} '
                 'candidate=${continuation == null ? 'none' : 'S${continuation.episode.seasonNumber}E${continuation.episode.displayNumber}'} '
                 'continuationFound=${continuation != null}',
               );
@@ -829,11 +839,11 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
               if (!mounted) return;
               final List<DownloadedEpisode> nextSnapshot = deletion.deleted
                   ? List<DownloadedEpisode>.unmodifiable(
-                      transitionSnapshot.where(
+                      continuationSnapshot.where(
                         (DownloadedEpisode episode) => episode.id != ep.id,
                       ),
                     )
-                  : transitionSnapshot;
+                  : continuationSnapshot;
               debugPrint(
                 'OfflineNext: oldResourcesReleased=true '
                 'autoDelete=${deletion.enabled} '

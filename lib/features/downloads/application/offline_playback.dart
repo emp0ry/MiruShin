@@ -102,6 +102,23 @@ DownloadedEpisode? nextDownloadedEpisode(
   return sorted[index + 1];
 }
 
+/// Takes a fresh download-state snapshot for the current title and addon.
+///
+/// Offline auto-next uses this after the player route closes so episodes that
+/// finished downloading during playback are immediately available.
+List<DownloadedEpisode> offlineModuleEpisodesFor(
+  DownloadedEpisode current,
+  Iterable<DownloadedEpisode> downloads,
+) {
+  return List<DownloadedEpisode>.unmodifiable(
+    downloads.where(
+      (DownloadedEpisode episode) =>
+          episode.mediaId == current.mediaId &&
+          episode.addonId == current.addonId,
+    ),
+  );
+}
+
 DownloadedEpisode? downloadedEpisodeByHref(
   String href,
   List<DownloadedEpisode> moduleEpisodes,

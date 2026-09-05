@@ -245,6 +245,51 @@ void main() {
       );
     });
 
+    test('auto-next sees an episode completed during playback', () {
+      final DownloadedEpisode current = _episode(1);
+      final DownloadedEpisode downloading = _episode(
+        2,
+        status: DownloadStatus.downloading,
+      );
+      final List<DownloadedEpisode> transitionSnapshot =
+          List<DownloadedEpisode>.unmodifiable(<DownloadedEpisode>[
+            current,
+            downloading,
+          ]);
+
+      expect(
+        offlinePlayerContinuationForResult(
+          result: const PlayerNextEpisodeResult(startInFullscreen: true),
+          current: current,
+          moduleEpisodes: transitionSnapshot,
+        ),
+        isNull,
+        reason: 'EP2 was not complete when EP1 playback started',
+      );
+
+      final List<DownloadedEpisode> latestModuleEpisodes =
+          offlineModuleEpisodesFor(current, <DownloadedEpisode>[
+            current,
+            downloading.copyWith(status: DownloadStatus.completed),
+            _episode(2, id: 'other-addon-episode-2', addonId: 'other-addon'),
+            _episode(2, id: 'other-media-episode-2', media: _otherMedia),
+          ]);
+      final OfflinePlayerContinuation? continuation =
+          offlinePlayerContinuationForResult(
+            result: const PlayerNextEpisodeResult(startInFullscreen: true),
+            current: current,
+            moduleEpisodes: latestModuleEpisodes,
+          );
+
+      expect(
+        latestModuleEpisodes.map((DownloadedEpisode episode) => episode.id),
+        <String>[current.id, downloading.id],
+      );
+      expect(continuation?.episode.id, downloading.id);
+      expect(continuation?.startInFullscreen, isTrue);
+      expect(continuation?.startPolicy, PlaybackStartPolicy.forceBeginning);
+    });
+
     test('captures next from snapshot before current is deleted', () {
       final List<DownloadedEpisode> snapshot =
           List<DownloadedEpisode>.unmodifiable(<DownloadedEpisode>[
@@ -336,6 +381,23 @@ const MediaItem _media = MediaItem(
   statusLabel: 'Releasing',
 );
 
+const MediaItem _otherMedia = MediaItem(
+  id: 'anilist:2',
+  title: 'Other Anime',
+  originalTitle: 'Other Anime',
+  overview: '',
+  type: MediaType.anime,
+  year: 2026,
+  posterUrl: '',
+  backdropUrl: '',
+  rating: 0,
+  genres: <String>[],
+  sourceProvider: 'AniList',
+  externalIds: <String, String>{},
+  episodeCount: 12,
+  statusLabel: 'Releasing',
+);
+
 DownloadedEpisode _episode(
   int number, {
   int season = 1,
@@ -346,15 +408,17 @@ DownloadedEpisode _episode(
   List<DownloadedSubtitle> subtitles = const <DownloadedSubtitle>[],
   DownloadKind kind = DownloadKind.mp4,
   String videoFileName = 'video.mp4',
+  String addonId = 'addon',
+  MediaItem media = _media,
   String? id,
   String? href,
 }) {
   final DateTime now = DateTime(2026);
   return DownloadedEpisode(
     id: id ?? 'episode-$season-$number',
-    mediaId: _media.id,
-    media: _media,
-    addonId: 'addon',
+    mediaId: media.id,
+    media: media,
+    addonId: addonId,
     addonName: 'Addon',
     episodeHref: href ?? '/episode-$number',
     episodeNumber: number.toDouble(),
