@@ -24,7 +24,7 @@ extension SeekPreviewModeLabel on SeekPreviewMode {
 
   String get description => switch (this) {
     SeekPreviewMode.progressive =>
-      'Builds previews across the online timeline in the background.',
+      'Builds previews across the timeline in the background.',
     SeekPreviewMode.onDemand =>
       'Builds a preview only when you move across the timeline.',
   };

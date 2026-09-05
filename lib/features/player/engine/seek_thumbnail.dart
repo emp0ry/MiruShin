@@ -79,7 +79,6 @@ bool shouldProgressivelyGenerateSeekThumbnails({
 }) {
   return enabled &&
       mode == SeekPreviewMode.progressive &&
-      !plan.isOffline &&
       plan.candidates.isNotEmpty;
 }
 

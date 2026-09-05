@@ -151,56 +151,70 @@ void main() {
       }
     });
 
-    test('runs only for online progressive plans', () {
+    test('runs for online and downloaded progressive plans', () {
       const SeekThumbnailSource onlineSource = SeekThumbnailSource(
         source: PlayerSource(url: 'https://cdn.example/video.m3u8'),
         sourceKey: 'online',
         decoderKey: 'online',
         label: '144p',
         isOffline: false,
+        kind: SeekThumbnailSourceKind.networkHls,
       );
-      const SeekThumbnailSource offlineSource = SeekThumbnailSource(
+      const SeekThumbnailSource localFileSource = SeekThumbnailSource(
         source: PlayerSource(url: 'C:/downloads/video.mp4'),
-        sourceKey: 'offline',
-        decoderKey: 'offline',
+        sourceKey: 'local-file',
+        decoderKey: 'local-file',
         label: 'Downloaded',
         isOffline: true,
+        kind: SeekThumbnailSourceKind.localFile,
+      );
+      const SeekThumbnailSource localHlsSource = SeekThumbnailSource(
+        source: PlayerSource(url: 'C:/downloads/video/index.m3u8'),
+        sourceKey: 'local-hls',
+        decoderKey: 'local-hls',
+        label: 'Downloaded',
+        isOffline: true,
+        kind: SeekThumbnailSourceKind.localHls,
       );
       const SeekThumbnailPlan onlinePlan = SeekThumbnailPlan(
         sessionKey: 'online-session',
         candidates: <SeekThumbnailSource>[onlineSource],
         isOffline: false,
       );
-      const SeekThumbnailPlan offlinePlan = SeekThumbnailPlan(
-        sessionKey: 'offline-session',
-        candidates: <SeekThumbnailSource>[offlineSource],
+      const SeekThumbnailPlan localFilePlan = SeekThumbnailPlan(
+        sessionKey: 'local-file-session',
+        candidates: <SeekThumbnailSource>[localFileSource],
+        isOffline: true,
+      );
+      const SeekThumbnailPlan localHlsPlan = SeekThumbnailPlan(
+        sessionKey: 'local-hls-session',
+        candidates: <SeekThumbnailSource>[localHlsSource],
         isOffline: true,
       );
 
-      expect(
-        shouldProgressivelyGenerateSeekThumbnails(
-          enabled: true,
-          mode: SeekPreviewMode.progressive,
-          plan: onlinePlan,
-        ),
-        isTrue,
-      );
-      expect(
-        shouldProgressivelyGenerateSeekThumbnails(
-          enabled: true,
-          mode: SeekPreviewMode.progressive,
-          plan: offlinePlan,
-        ),
-        isFalse,
-      );
-      expect(
-        shouldProgressivelyGenerateSeekThumbnails(
-          enabled: true,
-          mode: SeekPreviewMode.onDemand,
-          plan: onlinePlan,
-        ),
-        isFalse,
-      );
+      for (final SeekThumbnailPlan plan in <SeekThumbnailPlan>[
+        onlinePlan,
+        localFilePlan,
+        localHlsPlan,
+      ]) {
+        expect(
+          shouldProgressivelyGenerateSeekThumbnails(
+            enabled: true,
+            mode: SeekPreviewMode.progressive,
+            plan: plan,
+          ),
+          isTrue,
+        );
+        expect(
+          shouldProgressivelyGenerateSeekThumbnails(
+            enabled: true,
+            mode: SeekPreviewMode.onDemand,
+            plan: plan,
+          ),
+          isFalse,
+          reason: 'On demand must not start background timeline generation',
+        );
+      }
       expect(
         shouldProgressivelyGenerateSeekThumbnails(
           enabled: false,
@@ -208,7 +222,7 @@ void main() {
           plan: onlinePlan,
         ),
         isFalse,
-        reason: 'the master switch must prevent background network work',
+        reason: 'the master switch must prevent background generation',
       );
     });
   });

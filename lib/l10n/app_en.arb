@@ -415,7 +415,7 @@
   "Seek previews": "Seek previews",
   "Progressive timeline": "Progressive timeline",
   "On demand": "On demand",
-  "Builds previews across the online timeline in the background.": "Builds previews across the online timeline in the background.",
+  "Builds previews across the timeline in the background.": "Builds previews across the timeline in the background.",
   "Builds a preview only when you move across the timeline.": "Builds a preview only when you move across the timeline.",
   "Playing in {seconds}s": "Playing in {seconds}s",
   "Please sign in to export": "Please sign in to export",
