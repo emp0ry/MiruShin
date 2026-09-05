@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.7.11",
+          "date": "2026-09-05",
+          "localizedDescription": "- Progressive Timeline previews now work for downloaded videos, including local files and offline HLS streams.\n- Offline auto-next now detects episodes that finish downloading during playback while preserving fullscreen and auto-delete behavior.\n- Improved AniList reliability with a 30-second timeout and one automatic retry before falling back to cached data.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.7.11/MiruShin-ios-v2.7.11.ipa",
+          "size": 29056234,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.7.10",
           "date": "2026-09-04",
           "localizedDescription": "- Added automatic anime Watch Order with full franchise discovery and a Main story only filter.\n- Added AniList progress and bold, theme-colored status labels to Watch Order.\n- Replaced Related Titles with a cleaner, transparent Watch Order list.\n- Cached Anime Themes for the current session to prevent repeated loading.",
@@ -575,11 +583,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.7.10",
-      "versionDate": "2026-09-04",
-      "versionDescription": "- Added automatic anime Watch Order with full franchise discovery and a Main story only filter.\n- Added AniList progress and bold, theme-colored status labels to Watch Order.\n- Replaced Related Titles with a cleaner, transparent Watch Order list.\n- Cached Anime Themes for the current session to prevent repeated loading.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.7.10/MiruShin-ios-v2.7.10.ipa",
-      "size": 29053166,
+      "version": "2.7.11",
+      "versionDate": "2026-09-05",
+      "versionDescription": "- Progressive Timeline previews now work for downloaded videos, including local files and offline HLS streams.\n- Offline auto-next now detects episodes that finish downloading during playback while preserving fullscreen and auto-delete behavior.\n- Improved AniList reliability with a 30-second timeout and one automatic retry before falling back to cached data.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.7.11/MiruShin-ios-v2.7.11.ipa",
+      "size": 29056234,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
