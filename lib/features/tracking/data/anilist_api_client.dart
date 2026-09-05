@@ -23,15 +23,20 @@ class AniListMediaTagInfo {
 }
 
 class AniListApiClient {
+  static const Duration defaultReceiveTimeout = Duration(seconds: 30);
+  static const Duration defaultTimeoutRetryDelay = Duration(seconds: 1);
+
   AniListApiClient({
     String? accessToken,
     Dio? dio,
     Duration connectTimeout = const Duration(seconds: 12),
-    Duration receiveTimeout = const Duration(seconds: 18),
+    Duration receiveTimeout = defaultReceiveTimeout,
+    Duration timeoutRetryDelay = defaultTimeoutRetryDelay,
     this.titleLanguage = 'ENGLISH',
     this.showAdultContent = false,
     this.shikimori,
   }) : _accessToken = accessToken,
+       _timeoutRetryDelay = timeoutRetryDelay,
        _dio =
            dio ??
            Dio(
@@ -44,6 +49,7 @@ class AniListApiClient {
 
   final Dio _dio;
   final String? _accessToken;
+  final Duration _timeoutRetryDelay;
   final String titleLanguage;
   final bool showAdultContent;
   final ShikimoriClient? shikimori;
@@ -2266,7 +2272,7 @@ class AniListApiClient {
       throw StateError('AniList access token is not configured.');
     }
 
-    final Response<dynamic> response = await _dio.post<dynamic>(
+    Future<Response<dynamic>> send() => _dio.post<dynamic>(
       '',
       data: <String, dynamic>{'query': query, 'variables': variables},
       options: Options(
@@ -2277,6 +2283,18 @@ class AniListApiClient {
         },
       ),
     );
+
+    Response<dynamic> response;
+    try {
+      response = await send();
+    } on DioException catch (error) {
+      // A receive timeout can happen after AniList applied a mutation. Retrying
+      // toggle-style writes could undo the first request, while read failures
+      // are safe to retry before the catalog falls back to cache.
+      if (!_isTimeout(error) || _isMutation(query)) rethrow;
+      await Future<void>.delayed(_timeoutRetryDelay);
+      response = await send();
+    }
 
     final Object? body = response.data;
     if (body is! Map<String, dynamic>) {
@@ -2292,6 +2310,16 @@ class AniListApiClient {
     }
     return data;
   }
+
+  bool _isTimeout(DioException error) => switch (error.type) {
+    DioExceptionType.connectionTimeout ||
+    DioExceptionType.sendTimeout ||
+    DioExceptionType.receiveTimeout => true,
+    _ => false,
+  };
+
+  bool _isMutation(String document) =>
+      RegExp(r'^\s*mutation\b', caseSensitive: false).hasMatch(document);
 
   AniListAnimeListFolder _folderFromJson(Map<String, dynamic> json) {
     final AniListListStatus? status = json['status'] == null
