@@ -512,7 +512,10 @@ bool _rotatingEpisodeQueryKey(String value) {
 bool _skipSeasonPicker(MediaItem item) {
   if (item.type == MediaType.movie) return true;
   // Skip the franchise season picker because AniList IDs represent individual seasons.
-  if (item.type == MediaType.anime && item.id.startsWith('anilist:')) {
+  if (item.type == MediaType.anime &&
+      (item.id.startsWith('anilist:') ||
+          item.id.startsWith('mal:') ||
+          item.id.startsWith('shikimori:'))) {
     return true;
   }
   // No season data yet -> show picker while details load.

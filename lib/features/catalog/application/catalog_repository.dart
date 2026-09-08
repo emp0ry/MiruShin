@@ -6,6 +6,7 @@ import '../../../shared/models/media_item.dart';
 import '../../metadata/application/media_catalog.dart';
 import '../../metadata/data/tmdb_metadata_provider.dart';
 import '../../tracking/data/anilist_api_client.dart';
+import '../../tracking/data/mal_api_client.dart';
 import 'catalog_mode.dart';
 
 typedef CatalogOfflineCallback =
@@ -189,8 +190,12 @@ class AniListCatalogRepository implements CatalogRepository {
     required this.cache,
     required this.cacheScope,
     this.tmdb,
+    this.malFallback,
+    this.resolveMalId,
     this.viewerId,
     this.hasAccessToken = false,
+    this.onPrimaryFailure,
+    this.onPrimarySuccess,
     this.onOffline,
     this.onOnline,
   });
@@ -199,8 +204,12 @@ class AniListCatalogRepository implements CatalogRepository {
   final MetadataCacheStore cache;
   final String cacheScope;
   final TmdbMetadataProvider? tmdb;
+  final MalApiClient? malFallback;
+  final Future<int?> Function(String mediaId)? resolveMalId;
   final int? viewerId;
   final bool hasAccessToken;
+  final void Function(Object error)? onPrimaryFailure;
+  final void Function()? onPrimarySuccess;
   final CatalogOfflineCallback? onOffline;
   final CatalogOnlineCallback? onOnline;
 
@@ -216,29 +225,34 @@ class AniListCatalogRepository implements CatalogRepository {
           json['schemaVersion'] == _boardCacheSchemaVersion,
       onOffline: onOffline,
       onOnline: onOnline,
-      fetch: () async {
-        final List<List<MediaItem>> results =
-            await Future.wait(<Future<List<MediaItem>>>[
-              client.getTrendingCatalog(
-                kind: 'anime',
-                perPage: _boardCacheItemLimit,
-              ),
-              client.getPopularCatalog(
-                kind: 'anime',
-                perPage: _boardCacheItemLimit,
-              ),
+      fetch: () => _withMalFallback<BoardRails>(() async {
+        // Use one cheap primary probe before starting the remaining Board
+        // requests. During an AniList outage this reaches MAL after one failed
+        // read instead of launching all nine AniList reads in parallel.
+        final List<MediaItem> trending = await client.getTrendingCatalog(
+          kind: 'anime',
+          perPage: _boardCacheItemLimit,
+        );
+        final List<List<MediaItem>> results = <List<MediaItem>>[
+          trending,
+          ...await Future.wait(<Future<List<MediaItem>>>[
+            client.getPopularCatalog(
+              kind: 'anime',
+              perPage: _boardCacheItemLimit,
+            ),
+            client.getFilteredCatalog(
+              kind: 'anime',
+              filter: 'Top Rated',
+              perPage: _boardCacheItemLimit,
+            ),
+            for (final String filter in _additionalAniListBoardFilters)
               client.getFilteredCatalog(
                 kind: 'anime',
-                filter: 'Top Rated',
+                filter: filter,
                 perPage: _boardCacheItemLimit,
               ),
-              for (final String filter in _additionalAniListBoardFilters)
-                client.getFilteredCatalog(
-                  kind: 'anime',
-                  filter: filter,
-                  perPage: _boardCacheItemLimit,
-                ),
-            ]);
+          ]),
+        ];
         List<MediaItem> recentMovies = results[0];
         if (recentMovies.isNotEmpty) {
           final MediaItem enriched = await client.enrichHeroOverview(
@@ -263,7 +277,7 @@ class AniListCatalogRepository implements CatalogRepository {
             },
           ),
         );
-      },
+      }, _malBoardRails),
     );
   }
 
@@ -290,36 +304,46 @@ class AniListCatalogRepository implements CatalogRepository {
       fallback: const <MediaItem>[],
       onOffline: onOffline,
       onOnline: onOnline,
-      fetch: () {
-        if (normalizedSearch.isNotEmpty) {
-          return client.searchCatalog(
+      fetch: () => _withMalFallback<List<MediaItem>>(
+        () {
+          if (normalizedSearch.isNotEmpty) {
+            return client.searchCatalog(
+              kind: kind,
+              query: normalizedSearch,
+              page: page,
+              perPage: pageSize,
+            );
+          }
+          if (filter == 'Trending') {
+            return client.getTrendingCatalog(
+              kind: kind,
+              page: page,
+              perPage: pageSize,
+            );
+          }
+          if (filter == 'Popular') {
+            return client.getPopularCatalog(
+              kind: kind,
+              page: page,
+              perPage: pageSize,
+            );
+          }
+          return client.getFilteredCatalog(
             kind: kind,
-            query: normalizedSearch,
+            filter: filter,
             page: page,
             perPage: pageSize,
           );
-        }
-        if (filter == 'Trending') {
-          return client.getTrendingCatalog(
-            kind: kind,
-            page: page,
-            perPage: pageSize,
-          );
-        }
-        if (filter == 'Popular') {
-          return client.getPopularCatalog(
-            kind: kind,
-            page: page,
-            perPage: pageSize,
-          );
-        }
-        return client.getFilteredCatalog(
-          kind: kind,
-          filter: filter,
-          page: page,
-          perPage: pageSize,
-        );
-      },
+        },
+        (MalApiClient mal) => normalizedSearch.isNotEmpty
+            ? mal.searchAnime(normalizedSearch, page: page, pageSize: pageSize)
+            : mal.fetchAnimeRanking(
+                rankingType: _malRankingType(filter),
+                page: page,
+                pageSize: pageSize,
+              ),
+        enabled: kind.toLowerCase() == 'anime',
+      ),
       decode: _mediaListFromJson,
       encode: _mediaListToJson,
     );
@@ -335,7 +359,7 @@ class AniListCatalogRepository implements CatalogRepository {
       onOffline: onOffline,
       onOnline: onOnline,
       fetch: () async {
-        final MediaItem? item = await client.getCatalogDetails(id);
+        final MediaItem? item = await _detailsWithFallback(id);
         if (item == null || item.trailer != null || tmdb == null) {
           return item;
         }
@@ -359,10 +383,84 @@ class AniListCatalogRepository implements CatalogRepository {
       fallback: const <CalendarItem>[],
       onOffline: onOffline,
       onOnline: onOnline,
-      fetch: () => client.getAiringAnime(from: from, to: to),
+      fetch: () =>
+          _primaryRead(() => client.getAiringAnime(from: from, to: to)),
       decode: _calendarListFromJson,
       encode: _calendarListToJson,
     );
+  }
+
+  Future<T> _primaryRead<T>(Future<T> Function() operation) async {
+    try {
+      final T result = await operation();
+      onPrimarySuccess?.call();
+      return result;
+    } catch (error) {
+      onPrimaryFailure?.call(error);
+      rethrow;
+    }
+  }
+
+  Future<T> _withMalFallback<T>(
+    Future<T> Function() primary,
+    Future<T> Function(MalApiClient mal) fallback, {
+    bool enabled = true,
+  }) async {
+    try {
+      return await _primaryRead(primary);
+    } catch (_) {
+      final MalApiClient? mal = enabled ? malFallback : null;
+      if (mal == null) rethrow;
+      return fallback(mal);
+    }
+  }
+
+  Future<BoardRails> _malBoardRails(MalApiClient mal) async {
+    final List<String> rankings = <String>[
+      'airing',
+      'bypopularity',
+      'all',
+      for (final String filter in _additionalAniListBoardFilters)
+        _malRankingType(filter),
+    ];
+    final List<List<MediaItem>> results = await Future.wait(
+      rankings.map(
+        (String ranking) => mal.fetchAnimeRanking(
+          rankingType: ranking,
+          pageSize: _boardCacheItemLimit,
+        ),
+      ),
+    );
+    return _limitBoardRails(
+      BoardRails(
+        recentMovies: results[0],
+        recentSeries: results[1],
+        topAnime: results[2],
+        additionalSections: <String, List<MediaItem>>{
+          for (
+            int index = 0;
+            index < _additionalAniListBoardFilters.length;
+            index += 1
+          )
+            _additionalAniListBoardFilters[index]: results[index + 3],
+        },
+      ),
+    );
+  }
+
+  Future<MediaItem?> _detailsWithFallback(String id) async {
+    final int? directMalId = _malIdFromMediaId(id);
+    if (directMalId != null) {
+      return malFallback?.fetchAnimeDetails(directMalId);
+    }
+    try {
+      return await _primaryRead(() => client.getCatalogDetails(id));
+    } catch (_) {
+      final MalApiClient? mal = malFallback;
+      final int? mappedMalId = await resolveMalId?.call(id);
+      if (mal == null || mappedMalId == null) rethrow;
+      return mal.fetchAnimeDetails(mappedMalId);
+    }
   }
 }
 
@@ -374,6 +472,23 @@ const List<String> _additionalAniListBoardFilters = <String>[
   'Newest',
   'Recently Updated',
 ];
+
+String _malRankingType(String filter) {
+  return switch (filter) {
+    'Popular' => 'bypopularity',
+    'Favorites' => 'favorite',
+    'Airing' || 'Trending' || 'Recently Updated' => 'airing',
+    'Upcoming' => 'upcoming',
+    _ => 'all',
+  };
+}
+
+int? _malIdFromMediaId(String id) {
+  final List<String> parts = id.trim().toLowerCase().split(':');
+  if (parts.length != 2 || parts.first != 'mal') return null;
+  final int? parsed = int.tryParse(parts.last);
+  return parsed != null && parsed > 0 ? parsed : null;
+}
 
 /// Returns the previous complete board snapshot immediately, then replaces the
 /// stored snapshot in the background for the next app launch.

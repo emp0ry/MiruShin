@@ -42,8 +42,7 @@ class _WatchOrderSectionState extends ConsumerState<WatchOrderSection> {
   Widget build(BuildContext context) {
     final item = widget.item;
     final malId = int.tryParse(item.externalIds['mal'] ?? '');
-    if (!item.id.startsWith('anilist:') ||
-        item.id.startsWith('anilist:manga:') ||
+    if (item.id.startsWith('anilist:manga:') ||
         item.externalIds['anilist_type'] == 'MANGA' ||
         item.type != MediaType.anime ||
         malId == null ||
@@ -70,7 +69,7 @@ class _WatchOrderSectionState extends ConsumerState<WatchOrderSection> {
         final entries = order.entries
             .where((entry) => !_mainOnly || entry.isMainline)
             .toList();
-        final progress = <int, AniListAnimeListEntry>{};
+        final progress = <String, AniListAnimeListEntry>{};
         for (final provider in [
           anilistAnimePreviewListProvider,
           anilistAnimeListProvider,
@@ -84,10 +83,14 @@ class _WatchOrderSectionState extends ConsumerState<WatchOrderSection> {
               );
           for (final folder in folders) {
             for (final entry in folder.entries) {
-              final id = int.tryParse(
+              final int? aniListId = int.tryParse(
                 entry.mediaItem.externalIds['anilist'] ?? '',
               );
-              if (id != null) progress[id] = entry;
+              final int? entryMalId = int.tryParse(
+                entry.mediaItem.externalIds['mal'] ?? '',
+              );
+              if (aniListId != null) progress['anilist:$aniListId'] = entry;
+              if (entryMalId != null) progress['mal:$entryMalId'] = entry;
             }
           }
         }
@@ -143,8 +146,10 @@ class _WatchOrderSectionState extends ConsumerState<WatchOrderSection> {
             _WatchOrderTile(
               entry: entries[i],
               number: i + 1,
-              current: entries[i].media.item.id == item.id,
-              progress: progress[entries[i].media.id],
+              current: entries[i].media.malId == malId,
+              progress:
+                  progress['anilist:${entries[i].media.item.externalIds['anilist'] ?? ''}'] ??
+                  progress['mal:${entries[i].media.malId}'],
             ),
           ],
           if (entries.length > _visibleCount) ...[

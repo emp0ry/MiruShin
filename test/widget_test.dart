@@ -8,12 +8,17 @@ import 'package:mirushin/app/localization/app_localizations.dart';
 import 'package:mirushin/app/theme/app_theme.dart';
 import 'package:mirushin/core/widgets/metadata_chip.dart';
 import 'package:mirushin/features/media_details/application/imdb_rating_provider.dart';
+import 'package:mirushin/features/media_details/application/watch_order_provider.dart';
+import 'package:mirushin/features/media_details/domain/watch_order.dart';
 import 'package:mirushin/features/media_details/presentation/media_details_page.dart';
+import 'package:mirushin/features/metadata/application/metadata_providers.dart';
 import 'package:mirushin/features/settings/application/settings_state.dart';
+import 'package:mirushin/features/tracking/application/anilist_library_provider.dart';
 import 'package:mirushin/features/watch_party/application/watch_party_controller.dart';
 import 'package:mirushin/features/watch_party/domain/watch_party_models.dart';
 import 'package:mirushin/features/watch_party/presentation/join_room_screen.dart';
 import 'package:mirushin/features/watch_party/presentation/watch_party_screen.dart';
+import 'package:mirushin/shared/models/anilist_models.dart';
 import 'package:mirushin/shared/models/media_item.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -586,6 +591,107 @@ void main() {
     expect(find.text('favorites'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('MAL fallback details keep Watch and Edit enabled', (
+    WidgetTester tester,
+  ) async {
+    const MediaItem item = MediaItem(
+      id: 'mal:5114',
+      title: 'Fullmetal Alchemist: Brotherhood',
+      originalTitle: 'Hagane no Renkinjutsushi',
+      overview: 'MAL fallback details.',
+      type: MediaType.anime,
+      year: 2009,
+      posterUrl: '',
+      backdropUrl: '',
+      rating: 9.1,
+      genres: <String>['Action'],
+      sourceProvider: 'MyAnimeList',
+      externalIds: <String, String>{'mal': '5114'},
+      episodeCount: 64,
+      statusLabel: 'FINISHED_AIRING',
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          settingsProvider.overrideWith(_AniListOutageSettings.new),
+          mediaDetailsProvider.overrideWith((Ref ref, String id) async => item),
+          anilistAnimeListProvider.overrideWith(_EmptyAniListLibrary.new),
+          anilistAnimePreviewListProvider.overrideWith(
+            (Ref ref) async => const <AniListAnimeListFolder>[],
+          ),
+          watchOrderProvider(
+            5114,
+          ).overrideWith((Ref ref) async => const WatchOrder()),
+        ],
+        child: MaterialApp(
+          locale: const Locale('en'),
+          theme: AppTheme.dark(),
+          supportedLocales: AppLocalizations.supportedLocales,
+          localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
+            AppLocalizations.delegate,
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+          home: const Scaffold(
+            body: MediaDetailsPage(id: 'mal:5114', initialItem: item),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final Finder watch = find.byKey(
+      const ValueKey<String>('details-watch-action'),
+    );
+    final Finder edit = find.byKey(
+      const ValueKey<String>('details-edit-action'),
+    );
+    expect(watch, findsOneWidget);
+    expect(edit, findsOneWidget);
+    expect(
+      find.byKey(const ValueKey<String>('tracker-favorite-anime:mal:5114')),
+      findsOneWidget,
+    );
+    expect(
+      tester
+          .widget<InkWell>(
+            find.descendant(of: watch, matching: find.byType(InkWell)),
+          )
+          .onTap,
+      isNotNull,
+    );
+    expect(
+      tester
+          .widget<InkWell>(
+            find.descendant(of: edit, matching: find.byType(InkWell)),
+          )
+          .onTap,
+      isNotNull,
+    );
+    await tester.tap(edit);
+    await tester.pumpAndSettle();
+    expect(find.text('Edit'), findsWidgets);
+    expect(find.text('Not chosen'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+}
+
+class _AniListOutageSettings extends SettingsController {
+  @override
+  SettingsState build() => SettingsState(
+    anilistAccessToken: 'saved-token',
+    anilistExpiresAt: DateTime.utc(2100),
+    anilistViewerId: 1,
+  );
+}
+
+class _EmptyAniListLibrary extends AniListLibraryNotifier {
+  @override
+  Future<List<AniListAnimeListFolder>> build() async =>
+      const <AniListAnimeListFolder>[];
 }
 
 class _IdleWatchPartyController extends WatchPartyController {

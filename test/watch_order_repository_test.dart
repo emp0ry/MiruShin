@@ -5,6 +5,8 @@ import 'package:mirushin/features/media_details/domain/watch_order.dart';
 import 'package:mirushin/features/metadata/data/shikimori_client.dart';
 import 'package:mirushin/features/metadata/domain/shikimori_franchise.dart';
 import 'package:mirushin/features/tracking/data/anilist_api_client.dart';
+import 'package:mirushin/features/tracking/data/mal_api_client.dart';
+import 'package:mirushin/shared/models/media_item.dart';
 
 import 'support/watch_order_fixtures.dart';
 
@@ -44,6 +46,39 @@ class FakeAniList extends AniListApiClient {
     requested = malIds;
     if (fail) throw StateError('rate limited');
     return media;
+  }
+}
+
+class FakeMal extends MalApiClient {
+  FakeMal() : super(accessToken: 'token');
+
+  final List<int> requested = <int>[];
+  bool fail = false;
+
+  @override
+  Future<MediaItem?> fetchAnimeDetails(int malId) async {
+    requested.add(malId);
+    if (fail) throw StateError('MAL unavailable');
+    return MediaItem(
+      id: 'mal:$malId',
+      title: 'MAL Anime $malId',
+      originalTitle: '',
+      overview: '',
+      type: MediaType.anime,
+      year: 2000 + malId - 101,
+      posterUrl: '',
+      backdropUrl: '',
+      rating: 8,
+      genres: const <String>[],
+      sourceProvider: 'MyAnimeList',
+      externalIds: <String, String>{
+        'mal': '$malId',
+        'mal_media_type': 'TV',
+        'mal_start_date': '${2000 + malId - 101}-01-01',
+      },
+      episodeCount: 12,
+      statusLabel: 'FINISHED_AIRING',
+    );
   }
 }
 
@@ -163,6 +198,113 @@ void main() {
       expect(shikimori.calls, 2);
     },
   );
+
+  test(
+    'AniList outage falls back to MAL metadata and Shikimori order',
+    () async {
+      final FakeMal mal = FakeMal();
+      anilist.fail = true;
+      shikimori.franchise = const ShikimoriFranchise(
+        malIds: <int>[101, 102, 103],
+        links: <ShikimoriFranchiseLink>[
+          ShikimoriFranchiseLink(101, 102, 'SEQUEL'),
+          ShikimoriFranchiseLink(102, 103, 'SEQUEL'),
+        ],
+      );
+      repository = WatchOrderRepository(
+        shikimori: shikimori,
+        anilist: anilist,
+        malFallback: mal,
+        cache: cache,
+      );
+
+      final WatchOrder order = await repository.get(101);
+
+      expect(order.entries.map((entry) => entry.media.malId), <int>[
+        101,
+        102,
+        103,
+      ]);
+      expect(order.entries.first.media.item.id, 'mal:101');
+      expect(order.entries.first.media.startDate.year, 2000);
+      expect(mal.requested, <int>[101, 102, 103]);
+      expect(cache.values.values.single['source'], 'fallback');
+    },
+  );
+
+  test(
+    'public Shikimori cards remain usable when AniList and MAL fail',
+    () async {
+      anilist.fail = true;
+      shikimori.franchise = const ShikimoriFranchise(
+        malIds: <int>[101, 102],
+        links: <ShikimoriFranchiseLink>[
+          ShikimoriFranchiseLink(101, 102, 'SEQUEL'),
+        ],
+        members: <ShikimoriFranchiseMember>[
+          ShikimoriFranchiseMember(
+            shikimoriId: 1001,
+            malId: 101,
+            name: 'First',
+            episodes: 12,
+          ),
+          ShikimoriFranchiseMember(
+            shikimoriId: 1002,
+            malId: 102,
+            name: 'Second',
+            episodes: 24,
+          ),
+        ],
+      );
+
+      final WatchOrder order = await repository.get(101);
+
+      expect(order.entries.map((entry) => entry.media.item.title), <String>[
+        'First',
+        'Second',
+      ]);
+      expect(order.entries.first.media.item.externalIds['shikimori'], '1001');
+    },
+  );
+
+  test('expired cache is still served when discovery is offline', () async {
+    final WatchOrder online = await repository.get(101);
+    cache.values.values.single['fetchedAt'] = DateTime.now()
+        .subtract(const Duration(days: 30))
+        .millisecondsSinceEpoch;
+    shikimori.fail = true;
+    anilist.fail = true;
+
+    final WatchOrder offline = await repository.get(101);
+
+    expect(
+      offline.entries.map((entry) => entry.media.id),
+      online.entries.map((entry) => entry.media.id),
+    );
+  });
+
+  test('short fallback cache retries AniList after recovery', () async {
+    DateTime now = DateTime.utc(2026, 9, 8, 12);
+    final FakeMal mal = FakeMal();
+    anilist.fail = true;
+    repository = WatchOrderRepository(
+      shikimori: shikimori,
+      anilist: anilist,
+      malFallback: mal,
+      cache: cache,
+      now: () => now,
+    );
+    await repository.get(101);
+    expect(cache.values.values.single['source'], 'fallback');
+
+    now = now.add(const Duration(minutes: 11));
+    anilist.fail = false;
+    final WatchOrder recovered = await repository.get(101);
+
+    expect(recovered.entries.first.media.item.id, 'anilist:1');
+    expect(anilist.calls, 2);
+    expect(cache.values.values.single['source'], 'anilist');
+  });
 
   test('Shikimori parent links fill absent AniList attachments', () async {
     shikimori.franchise = const ShikimoriFranchise(

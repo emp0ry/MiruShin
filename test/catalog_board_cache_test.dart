@@ -2,10 +2,12 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mirushin/core/cache/metadata_cache_store.dart';
+import 'package:mirushin/features/catalog/application/catalog_mode.dart';
 import 'package:mirushin/features/catalog/application/catalog_repository.dart';
 import 'package:mirushin/features/metadata/application/media_catalog.dart';
 import 'package:mirushin/features/metadata/data/tmdb_metadata_provider.dart';
 import 'package:mirushin/features/tracking/data/anilist_api_client.dart';
+import 'package:mirushin/features/tracking/data/mal_api_client.dart';
 import 'package:mirushin/shared/models/media_item.dart';
 
 void main() {
@@ -135,6 +137,10 @@ void main() {
 
       expect(shown.topAnime.first.title, 'cached-top 0');
       await Future<void>.delayed(Duration.zero);
+      expect(refreshClient.callCount, 1);
+
+      refreshClient.complete('fresh');
+      await refreshWritten.timeout(const Duration(seconds: 1));
       expect(refreshClient.callCount, 9);
       expect(refreshClient.requestedFilters, <String>[
         'Top Rated',
@@ -145,9 +151,6 @@ void main() {
         'Newest',
         'Recently Updated',
       ]);
-
-      refreshClient.complete('fresh');
-      await refreshWritten.timeout(const Duration(seconds: 1));
 
       final Map<String, dynamic>? stored = await cache.read(
         'test.anilist.board.public',
@@ -240,6 +243,74 @@ void main() {
       expect(restored?.seasons.single.episodeCount, 12);
       expect(refresh.callCount, 1);
     });
+  });
+
+  group('AniList MAL fallback', () {
+    test('cold Board falls back to MAL rankings after AniList fails', () async {
+      final _FallbackMalClient mal = _FallbackMalClient();
+      final _FailingAniListClient aniList = _FailingAniListClient();
+      final List<Object> primaryFailures = <Object>[];
+      final BoardRails rails = await AniListCatalogRepository(
+        client: aniList,
+        malFallback: mal,
+        cache: _RecordingCacheStore(),
+        cacheScope: 'test.anilist.fallback',
+        onPrimaryFailure: primaryFailures.add,
+      ).boardRails();
+
+      expect(rails.topAnime, hasLength(24));
+      expect(rails.topAnime.first.id, startsWith('mal:'));
+      expect(rails.topAnime.first.sourceProvider, 'MyAnimeList');
+      expect(mal.requestedRankings, hasLength(9));
+      expect(primaryFailures, hasLength(1));
+      expect(aniList.callCount, 1);
+    });
+
+    test(
+      'Discovery search and MAL details stay usable during outage',
+      () async {
+        final _FallbackMalClient mal = _FallbackMalClient();
+        final AniListCatalogRepository repository = AniListCatalogRepository(
+          client: _FailingAniListClient(),
+          malFallback: mal,
+          cache: _RecordingCacheStore(),
+          cacheScope: 'test.anilist.fallback',
+        );
+
+        final List<MediaItem> results = await repository.discover(
+          search: 'Fullmetal Alchemist',
+          type: MediaType.anime,
+          filter: 'Trending',
+          page: 1,
+        );
+        final MediaItem? details = await repository.details(results.single.id);
+
+        expect(results.single.id, 'mal:5114');
+        expect(details?.id, 'mal:5114');
+        expect(details?.overview, isNotEmpty);
+        expect(catalogModeForMediaId('mal:5114'), CatalogMode.anilist);
+        expect(mediaIdBelongsToMode('mal:5114', CatalogMode.anilist), isTrue);
+      },
+    );
+
+    test(
+      'known AniList identity resolves to MAL details during outage',
+      () async {
+        final AniListCatalogRepository repository = AniListCatalogRepository(
+          client: _FailingAniListClient(),
+          malFallback: _FallbackMalClient(),
+          resolveMalId: (String mediaId) async =>
+              mediaId == 'anilist:anime:21' ? 5114 : null,
+          cache: _RecordingCacheStore(),
+          cacheScope: 'test.anilist.identity-fallback',
+        );
+
+        final MediaItem? details = await repository.details('anilist:anime:21');
+
+        expect(details?.id, 'mal:5114');
+        expect(details?.sourceProvider, 'MyAnimeList');
+      },
+    );
   });
 }
 
@@ -443,6 +514,98 @@ class _BlockingDetailsAniListClient extends AniListApiClient {
     callCount += 1;
     return _request.future;
   }
+}
+
+class _FailingAniListClient extends AniListApiClient {
+  int callCount = 0;
+
+  Future<T> _failure<T>() {
+    callCount += 1;
+    return Future<T>.error(StateError('AniList outage'));
+  }
+
+  @override
+  Future<List<MediaItem>> getTrendingCatalog({
+    required String kind,
+    int page = 1,
+    int perPage = 20,
+  }) => _failure<List<MediaItem>>();
+
+  @override
+  Future<List<MediaItem>> getPopularCatalog({
+    required String kind,
+    int page = 1,
+    int perPage = 20,
+  }) => _failure<List<MediaItem>>();
+
+  @override
+  Future<List<MediaItem>> getFilteredCatalog({
+    required String kind,
+    required String filter,
+    int page = 1,
+    int perPage = 20,
+  }) => _failure<List<MediaItem>>();
+
+  @override
+  Future<List<MediaItem>> searchCatalog({
+    required String kind,
+    required String query,
+    int page = 1,
+    int perPage = 20,
+  }) => _failure<List<MediaItem>>();
+
+  @override
+  Future<MediaItem?> getCatalogDetails(String id) => _failure<MediaItem?>();
+}
+
+class _FallbackMalClient extends MalApiClient {
+  _FallbackMalClient() : super(accessToken: 'test');
+
+  final List<String> requestedRankings = <String>[];
+
+  @override
+  Future<List<MediaItem>> fetchAnimeRanking({
+    required String rankingType,
+    int page = 1,
+    int pageSize = 20,
+  }) async {
+    requestedRankings.add(rankingType);
+    return List<MediaItem>.generate(
+      pageSize,
+      (int index) => _malItem(index + 1, title: '$rankingType $index'),
+      growable: false,
+    );
+  }
+
+  @override
+  Future<List<MediaItem>> searchAnime(
+    String query, {
+    int page = 1,
+    int pageSize = 20,
+  }) async => <MediaItem>[_malItem(5114, title: 'Fullmetal Alchemist')];
+
+  @override
+  Future<MediaItem?> fetchAnimeDetails(int malId) async =>
+      _malItem(malId, title: 'Fullmetal Alchemist', details: true);
+}
+
+MediaItem _malItem(int malId, {required String title, bool details = false}) {
+  return MediaItem(
+    id: 'mal:$malId',
+    title: title,
+    originalTitle: '鋼の錬金術師',
+    overview: details ? 'MAL fallback details' : '',
+    type: MediaType.anime,
+    year: 2009,
+    posterUrl: 'https://example.com/mal-$malId.jpg',
+    backdropUrl: '',
+    rating: 9.1,
+    genres: const <String>['Action'],
+    sourceProvider: 'MyAnimeList',
+    externalIds: <String, String>{'mal': '$malId'},
+    episodeCount: 64,
+    statusLabel: 'FINISHED_AIRING',
+  );
 }
 
 MediaItem _detailsItem(String prefix, String id) {

@@ -9,6 +9,7 @@ import 'package:mirushin/features/media_details/domain/watch_order_resolver.dart
 import 'package:mirushin/features/media_details/presentation/watch_order_section.dart';
 import 'package:mirushin/features/tracking/application/anilist_library_provider.dart';
 import 'package:mirushin/shared/models/anilist_models.dart';
+import 'package:mirushin/shared/models/media_item.dart';
 
 import 'support/watch_order_fixtures.dart';
 
@@ -39,6 +40,29 @@ WatchOrder sampleOrder() => const WatchOrderResolver().resolve([
   watchMedia(2, year: 2020, format: 'OVA'),
   watchMedia(3, year: 2010),
 ]);
+
+WatchOrderMedia malWatchMedia(int malId, {String? title}) => WatchOrderMedia(
+  id: malId,
+  malId: malId,
+  format: 'TV',
+  startDate: const WatchOrderDate(year: 2020),
+  item: MediaItem(
+    id: 'mal:$malId',
+    title: title ?? 'MAL Anime $malId',
+    originalTitle: '',
+    overview: '',
+    type: MediaType.anime,
+    year: 2020,
+    posterUrl: '',
+    backdropUrl: '',
+    rating: 8,
+    genres: const <String>[],
+    sourceProvider: 'MyAnimeList',
+    externalIds: <String, String>{'mal': '$malId'},
+    episodeCount: 12,
+    statusLabel: 'FINISHED_AIRING',
+  ),
+);
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -132,6 +156,49 @@ void main() {
     await tester.tap(find.text('Anime 3'));
     await tester.pumpAndSettle();
     expect(find.text('Opened anilist:3'), findsOneWidget);
+  });
+
+  testWidgets('MAL fallback card shows Watch Order and MAL-matched progress', (
+    tester,
+  ) async {
+    final TestLibrary library = TestLibrary();
+    final WatchOrder order = const WatchOrderResolver().resolve(
+      <WatchOrderMedia>[
+        malWatchMedia(101, title: 'Current MAL title'),
+        malWatchMedia(102),
+      ],
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          watchOrderProvider(101).overrideWith((ref) async => order),
+          anilistAnimeListProvider.overrideWith(() => library),
+          anilistAnimePreviewListProvider.overrideWith(
+            (ref) async => const <AniListAnimeListFolder>[],
+          ),
+        ],
+        child: MaterialApp(
+          localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
+            AppLocalizations.delegate,
+          ],
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: WatchOrderSection(
+                item: malWatchMedia(101, title: 'Current MAL title').item,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    library.setProgress(7, AniListListStatus.current);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Watch Order'), findsOneWidget);
+    expect(find.textContaining('Current title'), findsOneWidget);
+    expect(find.text('Watching · 7 / 12'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('failed loading has a working retry', (tester) async {

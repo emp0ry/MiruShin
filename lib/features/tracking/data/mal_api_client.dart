@@ -31,7 +31,14 @@ class MalApiClient {
   final Future<String?> Function()? _onRefreshToken;
 
   static const String _listFields =
-      'list_status,num_episodes,media_type,main_picture,alternative_titles,start_season,mean';
+      'list_status,num_episodes,media_type,main_picture,alternative_titles,'
+      'start_season,mean,genres,status,source,nsfw,'
+      'average_episode_duration';
+  static const String _catalogFields =
+      'num_episodes,media_type,main_picture,alternative_titles,start_season,'
+      'start_date,mean,synopsis,genres,status,source,nsfw,'
+      'average_episode_duration,'
+      'pictures';
 
   Future<TrackerViewer> fetchViewer() async {
     final Response<dynamic> response = await _get(
@@ -75,6 +82,50 @@ class MalApiClient {
     return _foldersFromNodes(nodes);
   }
 
+  /// Search/read endpoints used only when AniList reads are unavailable.
+  /// They never mutate MAL and require the already connected MAL session.
+  Future<List<MediaItem>> searchAnime(
+    String query, {
+    int page = 1,
+    int pageSize = 20,
+  }) async {
+    final String normalized = query.trim();
+    if (normalized.isEmpty) return const <MediaItem>[];
+    return _fetchCatalogPage(
+      '/anime',
+      page: page,
+      pageSize: pageSize,
+      queryParameters: <String, dynamic>{'q': normalized, 'nsfw': true},
+    );
+  }
+
+  Future<List<MediaItem>> fetchAnimeRanking({
+    required String rankingType,
+    int page = 1,
+    int pageSize = 20,
+  }) {
+    return _fetchCatalogPage(
+      '/anime/ranking',
+      page: page,
+      pageSize: pageSize,
+      queryParameters: <String, dynamic>{
+        'ranking_type': rankingType,
+        'nsfw': true,
+      },
+    );
+  }
+
+  Future<MediaItem?> fetchAnimeDetails(int malId) async {
+    if (malId <= 0) return null;
+    final Response<dynamic> response = await _get(
+      '/anime/$malId',
+      queryParameters: const <String, dynamic>{'fields': _catalogFields},
+    );
+    final Object? data = response.data;
+    if (data is! Map<String, dynamic>) return null;
+    return _mediaFromNode(data, malId);
+  }
+
   Future<void> updateStatus({
     required int malId,
     AniListListStatus? status,
@@ -102,6 +153,37 @@ class MalApiClient {
 
   // Internal helpers
 
+  Future<List<MediaItem>> _fetchCatalogPage(
+    String path, {
+    required int page,
+    required int pageSize,
+    required Map<String, dynamic> queryParameters,
+  }) async {
+    final int safePage = page < 1 ? 1 : page;
+    final int safeSize = pageSize.clamp(1, 100);
+    final Response<dynamic> response = await _get(
+      path,
+      queryParameters: <String, dynamic>{
+        ...queryParameters,
+        'limit': safeSize,
+        'offset': (safePage - 1) * safeSize,
+        'fields': _catalogFields,
+      },
+    );
+    final Object? body = response.data;
+    final Object? data = body is Map<String, dynamic> ? body['data'] : null;
+    if (data is! List<dynamic>) return const <MediaItem>[];
+    return <MediaItem>[
+      for (final Object? wrapper in data)
+        if (wrapper is Map<String, dynamic> &&
+            wrapper['node'] is Map<String, dynamic>)
+          _mediaFromNode(
+            wrapper['node'] as Map<String, dynamic>,
+            _int((wrapper['node'] as Map<String, dynamic>)['id']),
+          ),
+    ].where((MediaItem item) => item.externalIds['mal'] != '0').toList();
+  }
+
   List<AniListAnimeListFolder> _foldersFromNodes(
     List<Map<String, dynamic>> nodes,
   ) {
@@ -114,9 +196,9 @@ class MalApiClient {
       final Map<String, dynamic> ls = listStatus is Map<String, dynamic>
           ? listStatus
           : const <String, dynamic>{};
-      final AniListListStatus status = malStatusToCanonical(
-        ls['status'] as String?,
-      );
+      final AniListListStatus status = ls['is_rewatching'] == true
+          ? AniListListStatus.repeating
+          : malStatusToCanonical(ls['status'] as String?);
       grouped
           .putIfAbsent(status, () => <AniListAnimeListEntry>[])
           .add(_entryFromNode(node, ls, status));
@@ -156,6 +238,14 @@ class MalApiClient {
       progress: _int(listStatus['num_episodes_watched']),
       score: rawScore > 0 ? rawScore : null,
       mediaItem: _mediaFromNode(node, malId),
+      notes: _string(listStatus['comments']),
+      repeat: _int(listStatus['num_times_rewatched']),
+      createdAt: _epochSeconds(listStatus['created_at']),
+      updatedAt: _epochSeconds(listStatus['updated_at']),
+      startedAt: _date(listStatus['start_date']),
+      completedAt: _date(listStatus['finish_date']),
+      avgScore: _meanScore(node['mean']),
+      format: _mediaFormat(node['media_type']),
     );
   }
 
@@ -170,23 +260,64 @@ class MalApiClient {
     final String original = altTitles is Map<String, dynamic>
         ? _string(altTitles['ja'])
         : '';
+    final List<String> aliases = <String>{
+      if (altTitles is Map<String, dynamic>) _string(altTitles['en']),
+      if (altTitles is Map<String, dynamic>) _string(altTitles['ja']),
+      if (altTitles is Map<String, dynamic> && altTitles['synonyms'] is List)
+        ...(altTitles['synonyms'] as List<dynamic>).whereType<String>().map(
+          (String value) => value.trim(),
+        ),
+    }.where((String value) => value.isNotEmpty).toList(growable: false);
     final Object? season = node['start_season'];
     final int year = season is Map<String, dynamic> ? _int(season['year']) : 0;
+    final Object? pictures = node['pictures'];
+    String backdrop = '';
+    if (pictures is List<dynamic> && pictures.isNotEmpty) {
+      final Object? first = pictures.first;
+      if (first is Map<String, dynamic>) {
+        backdrop = _string(first['large']);
+        if (backdrop.isEmpty) backdrop = _string(first['medium']);
+      }
+    }
+    final Object? rawGenres = node['genres'];
+    final List<String> genres = rawGenres is List<dynamic>
+        ? rawGenres
+              .whereType<Map<String, dynamic>>()
+              .map((Map<String, dynamic> genre) => _string(genre['name']))
+              .where((String name) => name.isNotEmpty)
+              .toList(growable: false)
+        : const <String>[];
+    final int durationSeconds = _int(node['average_episode_duration']);
+    final String source = _string(node['source']).toUpperCase();
+    final String nsfw = _string(node['nsfw']).toLowerCase();
+    final String mediaType = _string(node['media_type']).toUpperCase();
+    final String startDate = _string(node['start_date']);
     return MediaItem(
       id: 'mal:$malId',
       title: _string(node['title']),
       originalTitle: original,
-      overview: '',
+      overview: _string(node['synopsis']),
       type: MediaType.anime,
       year: year,
       posterUrl: poster,
-      backdropUrl: '',
+      backdropUrl: backdrop,
       rating: _double(node['mean']),
-      genres: const <String>[],
+      genres: genres,
       sourceProvider: 'MyAnimeList',
-      externalIds: <String, String>{'mal': '$malId'},
+      externalIds: <String, String>{
+        'mal': '$malId',
+        if (source.isNotEmpty) 'mal_source': source,
+        if (nsfw.isNotEmpty) 'mal_nsfw': nsfw,
+        if (mediaType.isNotEmpty) 'mal_media_type': mediaType,
+        if (startDate.isNotEmpty) 'mal_start_date': startDate,
+      },
+      runtimeMinutes: durationSeconds > 0
+          ? (durationSeconds / 60).round()
+          : null,
       episodeCount: _nullableInt(node['num_episodes']),
-      statusLabel: '',
+      statusLabel: _string(node['status']).toUpperCase(),
+      aliases: aliases,
+      originalLanguage: 'ja',
     );
   }
 
@@ -260,5 +391,36 @@ class MalApiClient {
   static String? _nullableString(Object? value) {
     final String parsed = _string(value);
     return parsed.isEmpty ? null : parsed;
+  }
+
+  static int? _epochSeconds(Object? value) {
+    final DateTime? parsed = DateTime.tryParse('${value ?? ''}');
+    return parsed?.toUtc().millisecondsSinceEpoch == null
+        ? null
+        : parsed!.toUtc().millisecondsSinceEpoch ~/ 1000;
+  }
+
+  static DateTime? _date(Object? value) {
+    final String raw = _string(value);
+    return raw.isEmpty ? null : DateTime.tryParse(raw);
+  }
+
+  static int? _meanScore(Object? value) {
+    final double parsed = _double(value);
+    if (parsed <= 0) return null;
+    return (parsed * 10).round().clamp(1, 100);
+  }
+
+  static String? _mediaFormat(Object? value) {
+    return switch (_string(value).toLowerCase()) {
+      'tv' => 'TV',
+      'movie' => 'Movie',
+      'ova' => 'OVA',
+      'ona' => 'ONA',
+      'special' => 'Special',
+      'music' => 'Music',
+      'tv_special' => 'TV Special',
+      _ => null,
+    };
   }
 }

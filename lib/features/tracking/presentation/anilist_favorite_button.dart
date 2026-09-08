@@ -5,6 +5,7 @@ import '../../../app/localization/app_localizations.dart';
 import '../../../shared/models/media_item.dart';
 import '../../settings/application/settings_state.dart';
 import '../application/anilist_favorite_provider.dart';
+import '../domain/tracking_sync_models.dart';
 
 class AniListFavoriteButton extends ConsumerStatefulWidget {
   const AniListFavoriteButton({
@@ -26,23 +27,33 @@ class _AniListFavoriteButtonState extends ConsumerState<AniListFavoriteButton> {
 
   @override
   Widget build(BuildContext context) {
+    final MediaIdentity identity = MediaIdentity.fromExternalIds(
+      widget.item.externalIds,
+      mediaId: widget.item.id,
+    );
     final int? mediaId = aniListMediaIdOf(widget.item);
     final String token = ref.watch(
       settingsProvider.select(
         (SettingsState settings) => settings.anilistAccessToken.trim(),
       ),
     );
-    if (mediaId == null || token.isEmpty) return const SizedBox.shrink();
+    if ((identity.anilistId == null && identity.malId == null) ||
+        token.isEmpty) {
+      return const SizedBox.shrink();
+    }
 
     final bool itemFavourite = aniListItemIsFavourite(widget.item);
-    final bool? serverFavourite = ref
-        .watch(anilistMediaFavoriteStatusProvider(mediaId))
-        .maybeWhen(data: (bool? value) => value, orElse: () => null);
+    final bool? serverFavourite = mediaId == null
+        ? null
+        : ref
+              .watch(anilistMediaFavoriteStatusProvider(mediaId))
+              .maybeWhen(data: (bool? value) => value, orElse: () => null);
     final bool baseFavourite = serverFavourite ?? itemFavourite;
     final bool favourite =
         ref.watch(
           anilistFavoriteProvider.select(
-            (Map<int, bool> overrides) => overrides[mediaId],
+            (Map<String, bool> overrides) =>
+                localFavoriteFor(overrides, identity),
           ),
         ) ??
         baseFavourite;
@@ -53,6 +64,7 @@ class _AniListFavoriteButtonState extends ConsumerState<AniListFavoriteButton> {
         : Theme.of(context).colorScheme.onSurface;
 
     return IconButton(
+      key: ValueKey<String>('tracker-favorite-${identity.localId}'),
       tooltip: context.t(favourite ? 'Remove favorite' : 'Add favorite'),
       onPressed: _busy
           ? null
@@ -61,11 +73,7 @@ class _AniListFavoriteButtonState extends ConsumerState<AniListFavoriteButton> {
               try {
                 await ref
                     .read(anilistFavoriteProvider.notifier)
-                    .toggle(
-                      mediaId: mediaId,
-                      isManga: isAniListMangaItem(widget.item),
-                      current: favourite,
-                    );
+                    .toggle(item: widget.item, current: favourite);
               } catch (_) {
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(

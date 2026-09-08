@@ -48,6 +48,7 @@ import '../../metadata/domain/tmdb_episode_metadata.dart';
 import '../../player/domain/player_models.dart';
 import '../../settings/application/settings_state.dart';
 import '../../tracking/application/anilist_library_provider.dart';
+import '../../tracking/domain/tracking_sync_models.dart';
 import '../application/stream_selection_preferences.dart';
 import '../application/watch_session.dart';
 import '../domain/normalized_models.dart';
@@ -3608,23 +3609,26 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
         );
   }
 
-  int _anilistEpisodeProgress({
-    required bool externalVisualsEnabled,
-    required bool useAniListProgress,
-    required int? anilistId,
+  int _trackerEpisodeProgress({
+    required bool useTrackerProgress,
+    required MediaItem item,
   }) {
-    if (!externalVisualsEnabled || !useAniListProgress || anilistId == null) {
-      return 0;
-    }
+    if (!useTrackerProgress) return 0;
+    final MediaIdentity identity = MediaIdentity.fromExternalIds(
+      item.externalIds,
+      mediaId: item.id,
+    );
+    if (!identity.hasProviderId) return 0;
 
     int progress = 0;
     void scanFolders(List<AniListAnimeListFolder> folders) {
       for (final AniListAnimeListFolder folder in folders) {
         for (final AniListAnimeListEntry entry in folder.entries) {
-          final int? entryAnilistId = int.tryParse(
-            entry.mediaItem.externalIds['anilist'] ?? '',
+          final MediaIdentity entryIdentity = MediaIdentity.fromExternalIds(
+            entry.mediaItem.externalIds,
+            mediaId: entry.mediaItem.id,
           );
-          if (entryAnilistId == anilistId && entry.progress > progress) {
+          if (entryIdentity.matches(identity) && entry.progress > progress) {
             progress = entry.progress;
           }
         }
@@ -3840,10 +3844,9 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
                 );
               }
 
-              final int anilistProgress = _anilistEpisodeProgress(
-                externalVisualsEnabled: externalVisualsEnabled,
-                useAniListProgress: useAniListProgress,
-                anilistId: anilistId,
+              final int trackerProgress = _trackerEpisodeProgress(
+                useTrackerProgress: useAniListProgress,
+                item: widget.item,
               );
 
               // Compute the max watched episode number from soraEpisodeProgress
@@ -3886,11 +3889,11 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
                 }
               }
 
-              // In AniList mode, AniList is the sole source of truth. Never
-              // fall back to local data, so that AniList decrements/resets
-              // are immediately reflected in the episode list.
+              // In tracker mode, use the provider-neutral local-first state.
+              // It contains fresh remote data when available and queued local
+              // progress while the primary provider is unavailable.
               final int effectiveContinued = useAniListProgress
-                  ? anilistProgress
+                  ? trackerProgress
                   : (maxLocalWatched > 0
                         ? maxLocalWatched
                         : maxPositionWatched);

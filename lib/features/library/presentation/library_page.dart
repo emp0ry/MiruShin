@@ -194,7 +194,11 @@ class _LibraryPageState extends ConsumerState<LibraryPage>
       return _LocalLibraryView(items: localLibrary);
     }
 
-    final bool connected = settings.anilistAccessToken.trim().isNotEmpty;
+    final bool animeConnected =
+        settings.hasAniListSession ||
+        settings.hasMalSession ||
+        settings.hasShikimoriSession;
+    final bool mangaConnected = settings.hasAniListSession;
     return Column(
       children: <Widget>[
         const CatalogOfflineBanner(),
@@ -218,14 +222,14 @@ class _LibraryPageState extends ConsumerState<LibraryPage>
             controller: _mainTab,
             children: <Widget>[
               _AniListDataTab(
-                connected: connected,
+                connected: animeConnected,
                 mediaType: 'ANIME',
                 defaultPage: settings.anilistLibraryDefaultPage,
                 emptyMessage:
                     'Add anime to your AniList account to see them here.',
               ),
               _AniListDataTab(
-                connected: connected,
+                connected: mangaConnected,
                 mediaType: 'MANGA',
                 defaultPage: settings.anilistLibraryDefaultPage,
                 emptyMessage:
@@ -397,7 +401,7 @@ class _AniListDataTabState extends ConsumerState<_AniListDataTab>
         const <AniListAnimeListFolder>[];
 
     final AsyncValue<List<AniListAnimeListFolder>>? previewRussianLists =
-        wantsRussianTitles
+        wantsRussianTitles && !useTrackerSource
         ? ref.watch(
             isMangaTab
                 ? anilistMangaPreviewRussianListProvider
@@ -405,7 +409,7 @@ class _AniListDataTabState extends ConsumerState<_AniListDataTab>
           )
         : null;
     final AsyncValue<List<AniListAnimeListFolder>>? fullRussianLists =
-        wantsRussianTitles && fullLists.hasValue
+        wantsRussianTitles && !useTrackerSource && fullLists.hasValue
         ? ref.watch(
             isMangaTab
                 ? anilistMangaRussianListProvider
@@ -3026,7 +3030,10 @@ IncludeExcludeState _boolIncludeExcludeState(bool? value) {
 }
 
 String _anilistSourceValue(MediaItem item) {
-  return item.externalIds['anilist_source']?.trim() ?? '';
+  return (item.externalIds['anilist_source'] ??
+          item.externalIds['mal_source'] ??
+          '')
+      .trim();
 }
 
 String _humanizeAniListFormat(String raw) {
@@ -3230,6 +3237,13 @@ bool? _anilistBoolMetadata(MediaItem item, String key) {
   final String? value = item.externalIds[key]?.trim().toLowerCase();
   if (value == 'true') return true;
   if (value == 'false') return false;
+  if (key == 'anilist_is_adult') {
+    return switch (item.externalIds['mal_nsfw']?.trim().toLowerCase()) {
+      'gray' || 'black' => true,
+      'white' => false,
+      _ => null,
+    };
+  }
   return null;
 }
 

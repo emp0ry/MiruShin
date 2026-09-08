@@ -1,12 +1,16 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../shared/models/media_item.dart';
 import '../../settings/application/settings_state.dart';
 import '../data/anilist_api_client.dart';
+import '../domain/tracking_sync_models.dart';
 import 'anilist_library_provider.dart';
+import 'tracker_sync_coordinator.dart';
 
 final anilistFavoriteProvider =
-    NotifierProvider<AniListFavoriteController, Map<int, bool>>(
+    NotifierProvider<AniListFavoriteController, Map<String, bool>>(
       AniListFavoriteController.new,
     );
 
@@ -20,37 +24,81 @@ final anilistMediaFavoriteStatusProvider = FutureProvider.autoDispose
       ).fetchMediaFavouriteStatus(mediaId);
     });
 
-class AniListFavoriteController extends Notifier<Map<int, bool>> {
+class AniListFavoriteController extends Notifier<Map<String, bool>> {
+  bool _loadingPersisted = false;
+
   @override
-  Map<int, bool> build() => const <int, bool>{};
+  Map<String, bool> build() {
+    if (!_loadingPersisted) {
+      _loadingPersisted = true;
+      unawaited(_loadPersisted());
+    }
+    return const <String, bool>{};
+  }
 
-  Future<void> toggle({
-    required int mediaId,
-    required bool isManga,
-    required bool current,
-  }) async {
+  Future<void> _loadPersisted() async {
+    final List<LocalMediaFavoriteState> favorites = await ref
+        .read(trackingSyncStoreProvider)
+        .loadFavorites();
+    state = <String, bool>{
+      for (final LocalMediaFavoriteState favorite in favorites)
+        for (final String key in favoriteIdentityKeys(favorite.identity))
+          key: favorite.favorite,
+      ...state,
+    };
+  }
+
+  Future<void> toggle({required MediaItem item, required bool current}) async {
+    final MediaIdentity identity = MediaIdentity.fromExternalIds(
+      item.externalIds,
+      mediaId: item.id,
+    );
     final bool next = !current;
-    state = <int, bool>{...state, mediaId: next};
+    final Map<String, bool> previous = state;
+    state = <String, bool>{
+      ...state,
+      for (final String key in favoriteIdentityKeys(identity)) key: next,
+    };
 
-    final SettingsState settings = ref.read(settingsProvider);
-    final String token = settings.anilistAccessToken.trim();
     try {
-      await AniListApiClient(
-        accessToken: token,
-      ).toggleFavouriteMedia(mediaId: mediaId, isManga: isManga);
-      // Keep the optimistic value. AniList often returns the pre-toggle state
-      // immediately after mutations, which would revert the visual update.
+      await ref
+          .read(trackerSyncCoordinatorProvider)
+          .pushFavorite(mediaItem: item, favorite: next);
+      // Keep the local desired value while an offline AniList delivery is
+      // pending. The adapter checks server state before toggling, so replay is
+      // idempotent even if the first response was lost.
+      final bool isManga = isAniListMangaItem(item);
       if (isManga) {
         invalidateAniListMangaLibraryProviders(ref.invalidate);
       } else {
         invalidateAniListAnimeLibraryProviders(ref.invalidate);
       }
-      ref.invalidate(anilistMediaFavoriteStatusProvider(mediaId));
+      final int? mediaId = aniListMediaIdOf(item);
+      if (mediaId != null) {
+        ref.invalidate(anilistMediaFavoriteStatusProvider(mediaId));
+      }
     } catch (_) {
-      state = <int, bool>{...state, mediaId: current};
+      state = previous;
       rethrow;
     }
   }
+}
+
+Iterable<String> favoriteIdentityKeys(MediaIdentity identity) sync* {
+  yield identity.localId;
+  if (identity.anilistId != null) yield 'anilist:${identity.anilistId}';
+  if (identity.malId != null) yield 'mal:${identity.malId}';
+  if (identity.shikimoriId != null) {
+    yield 'shikimori:${identity.shikimoriId}';
+  }
+}
+
+bool? localFavoriteFor(Map<String, bool> favorites, MediaIdentity identity) {
+  for (final String key in favoriteIdentityKeys(identity)) {
+    final bool? value = favorites[key];
+    if (value != null) return value;
+  }
+  return null;
 }
 
 int? aniListMediaIdOf(MediaItem item) {

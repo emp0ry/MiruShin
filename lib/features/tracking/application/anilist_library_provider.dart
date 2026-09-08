@@ -1,8 +1,6 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/cache/metadata_cache_store.dart';
 import '../../../shared/models/anilist_models.dart';
@@ -15,10 +13,8 @@ import '../../profile/application/anilist_user_settings_provider.dart';
 import '../../profile/domain/anilist_profile_models.dart';
 import '../../settings/application/settings_state.dart';
 import '../data/anilist_api_client.dart';
-
-final anilistEditQueueProvider = Provider<AniListEditQueue>(
-  (Ref ref) => const AniListEditQueue(),
-);
+import '../domain/tracker_models.dart';
+import 'tracker_sync_coordinator.dart';
 
 enum AniListLibraryLoadPhase { idle, loading, success, failed }
 
@@ -913,9 +909,10 @@ Future<List<AniListAnimeListFolder>> _fetchCollection(
 
   List<AniListAnimeListFolder>? fetchedFolders;
   Object? fetchError;
+  final TrackerSyncCoordinator sync = ref.read(trackerSyncCoordinatorProvider);
   try {
-    if (flushQueue) {
-      await ref.read(anilistEditQueueProvider).flush(token: token);
+    if (flushQueue || statuses == null) {
+      await sync.flushPending();
     }
     fetchedFolders = await client.fetchMediaListCollection(
       userId: viewerId,
@@ -924,21 +921,50 @@ Future<List<AniListAnimeListFolder>> _fetchCollection(
           ?.map((AniListListStatus status) => status.graphQlValue)
           .toList(growable: false),
     );
+    if (mediaType == 'ANIME') {
+      final List<AniListAnimeListFolder> merged = await sync.ingestAnimeLibrary(
+        source: TrackerSource.anilist,
+        folders: fetchedFolders,
+      );
+      fetchedFolders = _filterFoldersByStatus(merged, statuses);
+    }
     await cache.write(cacheKey, _encode(fetchedFolders));
   } catch (error) {
     fetchError = error;
   }
 
   if (fetchError != null) {
+    await sync.recordProviderFailure(TrackerSource.anilist, fetchError);
     final Map<String, dynamic>? cached = await cache.read(cacheKey);
+    List<AniListAnimeListFolder> fallback = cached == null
+        ? <AniListAnimeListFolder>[]
+        : _decode(cached);
+    if (mediaType == 'ANIME') {
+      if (fallback.isNotEmpty) {
+        fallback = _filterFoldersByStatus(
+          await sync.ingestAnimeLibrary(
+            source: TrackerSource.anilist,
+            folders: fallback,
+          ),
+          statuses,
+        );
+      }
+      final TrackerLibrarySnapshot secondary = await sync.refreshAnimeLibrary(
+        preferred: TrackerSource.anilist,
+        excluded: const <TrackerSource>{TrackerSource.anilist},
+      );
+      if (secondary.folders.isNotEmpty) {
+        fallback = _filterFoldersByStatus(secondary.folders, statuses);
+      }
+    }
     _setAniListLibraryLoadStatus(
       ref,
       mediaType: mediaType,
       statuses: statuses,
       phase: AniListLibraryLoadPhase.failed,
-      usingCache: cached != null,
+      usingCache: fallback.isNotEmpty,
     );
-    return cached == null ? <AniListAnimeListFolder>[] : _decode(cached);
+    return fallback;
   }
 
   _setAniListLibraryLoadStatus(
@@ -960,6 +986,20 @@ Future<List<AniListAnimeListFolder>> _fetchCollection(
   return fetchedFolders!;
 }
 
+List<AniListAnimeListFolder> _filterFoldersByStatus(
+  List<AniListAnimeListFolder> folders,
+  List<AniListListStatus>? statuses,
+) {
+  if (statuses == null || statuses.isEmpty) return folders;
+  final Set<AniListListStatus> allowed = statuses.toSet();
+  return folders
+      .where(
+        (AniListAnimeListFolder folder) =>
+            folder.status != null && allowed.contains(folder.status),
+      )
+      .toList(growable: false);
+}
+
 Map<String, dynamic> _encode(List<AniListAnimeListFolder> folders) {
   return <String, dynamic>{
     'folders': folders
@@ -975,265 +1015,4 @@ List<AniListAnimeListFolder> _decode(Map<String, dynamic> json) {
       .whereType<Map<String, dynamic>>()
       .map(AniListAnimeListFolder.fromJson)
       .toList(growable: false);
-}
-
-class AniListEditQueue {
-  const AniListEditQueue();
-
-  static const String _key = 'anilist.pendingEdits';
-
-  Future<void> queueAdd({
-    required int mediaId,
-    required AniListListStatus status,
-  }) async {
-    await _upsert(_QueuedAniListEdit.add(mediaId: mediaId, status: status));
-  }
-
-  Future<void> queueProgress({
-    required int mediaId,
-    required int progress,
-    AniListListStatus? status,
-  }) async {
-    await _upsert(
-      _QueuedAniListEdit.progress(
-        mediaId: mediaId,
-        progress: progress,
-        status: status,
-      ),
-    );
-  }
-
-  Future<void> queueEntry({
-    required int mediaId,
-    AniListListStatus? status,
-    required int progress,
-    required double score,
-    required String notes,
-    required int repeat,
-  }) async {
-    await _upsert(
-      _QueuedAniListEdit.entry(
-        mediaId: mediaId,
-        status: status,
-        progress: progress,
-        score: score,
-        notes: notes,
-        repeat: repeat,
-      ),
-    );
-  }
-
-  Future<void> queueDelete({required int entryId, required int mediaId}) async {
-    await _upsert(
-      _QueuedAniListEdit.delete(entryId: entryId, mediaId: mediaId),
-    );
-  }
-
-  Future<void> flush({required String token}) async {
-    if (token.trim().isEmpty) return;
-    final List<_QueuedAniListEdit> edits = await _load();
-    if (edits.isEmpty) return;
-    final AniListApiClient client = AniListApiClient(accessToken: token);
-    final List<_QueuedAniListEdit> remaining = <_QueuedAniListEdit>[];
-    for (final _QueuedAniListEdit edit in edits) {
-      try {
-        switch (edit.kind) {
-          case _QueuedAniListEditKind.add:
-            await client.addToList(
-              edit.mediaId,
-              edit.status ?? AniListListStatus.current,
-            );
-          case _QueuedAniListEditKind.progress:
-            await client.updateProgress(
-              mediaId: edit.mediaId,
-              progress: edit.progress,
-              status: edit.status,
-            );
-          case _QueuedAniListEditKind.entry:
-            await client.updateListEntry(
-              mediaId: edit.mediaId,
-              status: edit.status,
-              progress: edit.progress,
-              scoreRaw: edit.score == null
-                  ? null
-                  : aniListDisplayScoreToRaw(edit.score!),
-              notes: edit.notes,
-              repeat: edit.repeat,
-            );
-          case _QueuedAniListEditKind.delete:
-            if (edit.entryId == null) {
-              throw StateError('Queued AniList delete is missing entry id.');
-            }
-            await client.deleteListEntry(edit.entryId!);
-        }
-      } catch (_) {
-        remaining.add(edit);
-      }
-    }
-    await _save(remaining);
-  }
-
-  Future<void> _upsert(_QueuedAniListEdit edit) async {
-    final List<_QueuedAniListEdit> edits = await _load();
-    edits.removeWhere(
-      (_QueuedAniListEdit current) =>
-          current.key == edit.key ||
-          (edit.kind == _QueuedAniListEditKind.delete &&
-              current.mediaId == edit.mediaId),
-    );
-    edits.add(edit);
-    await _save(edits);
-  }
-
-  Future<List<_QueuedAniListEdit>> _load() async {
-    final SharedPreferences prefs = await SharedPreferences.getInstance();
-    final List<String> raw = prefs.getStringList(_key) ?? const <String>[];
-    return raw
-        .map((String value) {
-          try {
-            final Object? decoded = jsonDecode(value);
-            return decoded is Map<String, dynamic>
-                ? _QueuedAniListEdit.fromJson(decoded)
-                : null;
-          } catch (_) {
-            return null;
-          }
-        })
-        .whereType<_QueuedAniListEdit>()
-        .where((_QueuedAniListEdit edit) => edit.mediaId > 0)
-        .toList();
-  }
-
-  Future<void> _save(List<_QueuedAniListEdit> edits) async {
-    final SharedPreferences prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList(
-      _key,
-      edits
-          .map((_QueuedAniListEdit edit) => jsonEncode(edit.toJson()))
-          .toList(growable: false),
-    );
-  }
-}
-
-enum _QueuedAniListEditKind { add, progress, entry, delete }
-
-class _QueuedAniListEdit {
-  const _QueuedAniListEdit({
-    required this.kind,
-    required this.mediaId,
-    required this.status,
-    required this.progress,
-    this.entryId,
-    this.score,
-    this.notes,
-    this.repeat,
-  });
-
-  factory _QueuedAniListEdit.add({
-    required int mediaId,
-    required AniListListStatus status,
-  }) {
-    return _QueuedAniListEdit(
-      kind: _QueuedAniListEditKind.add,
-      mediaId: mediaId,
-      status: status,
-      progress: 0,
-    );
-  }
-
-  factory _QueuedAniListEdit.progress({
-    required int mediaId,
-    required int progress,
-    AniListListStatus? status,
-  }) {
-    return _QueuedAniListEdit(
-      kind: _QueuedAniListEditKind.progress,
-      mediaId: mediaId,
-      status: status,
-      progress: progress,
-    );
-  }
-
-  factory _QueuedAniListEdit.entry({
-    required int mediaId,
-    AniListListStatus? status,
-    required int progress,
-    required double score,
-    required String notes,
-    required int repeat,
-  }) {
-    return _QueuedAniListEdit(
-      kind: _QueuedAniListEditKind.entry,
-      mediaId: mediaId,
-      status: status,
-      progress: progress,
-      score: score,
-      notes: notes,
-      repeat: repeat,
-    );
-  }
-
-  factory _QueuedAniListEdit.delete({
-    required int entryId,
-    required int mediaId,
-  }) {
-    return _QueuedAniListEdit(
-      kind: _QueuedAniListEditKind.delete,
-      entryId: entryId,
-      mediaId: mediaId,
-      status: AniListListStatus.planning,
-      progress: 0,
-    );
-  }
-
-  factory _QueuedAniListEdit.fromJson(Map<String, dynamic> json) {
-    final String kindName = json['kind']?.toString() ?? 'progress';
-    return _QueuedAniListEdit(
-      kind: _QueuedAniListEditKind.values.firstWhere(
-        (_QueuedAniListEditKind kind) => kind.name == kindName,
-        orElse: () => _QueuedAniListEditKind.progress,
-      ),
-      entryId: int.tryParse(json['entryId']?.toString() ?? ''),
-      mediaId: int.tryParse(json['mediaId']?.toString() ?? '') ?? 0,
-      status: json['status'] == null
-          ? null
-          : AniListListStatusLabel.fromGraphQl(json['status']?.toString()),
-      progress: int.tryParse(json['progress']?.toString() ?? '') ?? 0,
-      score: double.tryParse(json['score']?.toString() ?? ''),
-      notes: json['notes']?.toString(),
-      repeat: int.tryParse(json['repeat']?.toString() ?? ''),
-    );
-  }
-
-  final _QueuedAniListEditKind kind;
-  final int? entryId;
-  final int mediaId;
-  final AniListListStatus? status;
-  final int progress;
-  final double? score;
-  final String? notes;
-  final int? repeat;
-
-  String get key {
-    if (kind == _QueuedAniListEditKind.add) {
-      return '${kind.name}:$mediaId';
-    }
-    if (kind == _QueuedAniListEditKind.delete) {
-      return '${kind.name}:${entryId ?? mediaId}';
-    }
-    return 'entry:$mediaId';
-  }
-
-  Map<String, dynamic> toJson() {
-    return <String, dynamic>{
-      'kind': kind.name,
-      if (entryId != null) 'entryId': entryId,
-      'mediaId': mediaId,
-      if (status != null) 'status': status!.graphQlValue,
-      'progress': progress,
-      if (score != null) 'score': score,
-      if (notes != null) 'notes': notes,
-      if (repeat != null) 'repeat': repeat,
-    };
-  }
 }

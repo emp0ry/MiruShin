@@ -293,6 +293,14 @@ Map<String, String> _anilistStatusBadges(
         badges['anilist:$anilistId'] = label;
         badges['anilist:manga:$anilistId'] = label;
       }
+      final String? malId = entry.mediaItem.externalIds['mal'];
+      if (malId != null && malId.isNotEmpty) {
+        badges['mal:$malId'] = label;
+      }
+      final String? shikimoriId = entry.mediaItem.externalIds['shikimori'];
+      if (shikimoriId != null && shikimoriId.isNotEmpty) {
+        badges['shikimori:$shikimoriId'] = label;
+      }
     }
   }
   return badges;
@@ -310,6 +318,14 @@ Map<String, AniListAnimeListEntry> _anilistEntryMap(
       if (anilistId != null && anilistId.isNotEmpty) {
         entries['anilist:$anilistId'] = entry;
         entries['anilist:manga:$anilistId'] = entry;
+      }
+      final String? malId = entry.mediaItem.externalIds['mal'];
+      if (malId != null && malId.isNotEmpty) {
+        entries['mal:$malId'] = entry;
+      }
+      final String? shikimoriId = entry.mediaItem.externalIds['shikimori'];
+      if (shikimoriId != null && shikimoriId.isNotEmpty) {
+        entries['shikimori:$shikimoriId'] = entry;
       }
     }
   }

@@ -9,14 +9,14 @@ import '../../../app/deep_links/mirushin_deep_link.dart';
 import '../../../app/localization/app_localizations.dart';
 import '../../../core/platform/tv_platform.dart';
 import '../../../shared/models/anilist_models.dart';
+import '../../../shared/models/media_item.dart';
 import '../../addons/data/anime_titles_service.dart';
-import '../../catalog/application/catalog_mode.dart';
 import '../../library/application/local_library_provider.dart';
 import '../../profile/application/anilist_user_settings_provider.dart';
 import '../../settings/application/settings_state.dart';
 import '../../tracking/application/anilist_library_provider.dart';
+import '../../tracking/application/tracker_library_provider.dart';
 import '../../tracking/application/tracker_sync_coordinator.dart';
-import '../../tracking/data/anilist_api_client.dart';
 import '../../watch/application/stream_selection_preferences.dart';
 import '../../watch/domain/normalized_models.dart';
 import '../data/discord_rpc_service.dart';
@@ -330,7 +330,7 @@ class PlaybackController extends Notifier<PlaybackState> {
   DateTime? _settlingSeekUntil;
   DateTime? _settlingSeekEarliestClear;
   int _temporarySpeedHolds = 0;
-  final Set<String> _syncedToAnilist = <String>{};
+  final Set<String> _syncedTrackerProgress = <String>{};
 
   // Cache of Russian (Shikimori) titles resolved on demand for the now-playing
   // surfaces, keyed by AniList id. Lets the media session / Discord show the
@@ -2460,7 +2460,7 @@ class PlaybackController extends Notifier<PlaybackState> {
           (ref.read(playerSettingsProvider).value ?? const PlayerSettings())
               .autoAnilistSync;
       if (syncEnabled) {
-        unawaited(_trySyncAniList(item, item.episodeNumber.round()));
+        unawaited(_trySyncTrackers(item, item.episodeNumber.round()));
       }
     }
   }
@@ -4101,128 +4101,70 @@ class PlaybackController extends Notifier<PlaybackState> {
         (ref.read(playerSettingsProvider).value ?? const PlayerSettings())
             .autoAnilistSync;
     if (syncEnabled && watched) {
-      unawaited(_trySyncAniList(item, item.episodeNumber.round()));
-      // Fan out the same progress to any connected secondary trackers (MAL /
-      // Shikimori). The coordinator no-ops when those services are signed out
-      // or the item lacks a MAL id, so this is safe regardless of catalog mode.
-      // Also drain any edits queued while offline (cheap when the queue is
-      // empty) so syncing recovers even when AniList stays the primary source.
-      final TrackerSyncCoordinator coordinator = ref.read(
-        trackerSyncCoordinatorProvider,
-      );
-      unawaited(coordinator.flushPending());
-      unawaited(
-        coordinator.pushEpisodeProgress(
-          externalIds: item.externalIds,
-          episode: item.episodeNumber.round(),
-          total: item.episodeCount,
-        ),
-      );
+      // Record once in the provider-neutral journal, then let each connected
+      // target acknowledge its own delivery independently.
+      unawaited(_trySyncTrackers(item, item.episodeNumber.round()));
     }
   }
 
-  Future<void> _trySyncAniList(
+  Future<void> _trySyncTrackers(
     MediaPlaybackItem item,
     int episodeNumber,
   ) async {
-    if (ref.read(catalogModeProvider) != CatalogMode.anilist) return;
-    final String? anilistIdStr = _anilistIdOf(item);
-    if (anilistIdStr == null) return;
-    final int? anilistId = int.tryParse(anilistIdStr);
-    if (anilistId == null || anilistId <= 0) return;
-
-    final String syncKey = '$anilistId:$episodeNumber';
-    if (_syncedToAnilist.contains(syncKey)) return;
-
-    // Don't overwrite a higher AniList progress when the user re-watches an
-    // older episode. Also capture total episode count for completion detection.
-    final List<AniListAnimeListFolder> folders =
-        ref.read(anilistAnimeListProvider).value ?? <AniListAnimeListFolder>[];
-    int? totalEpisodes;
-    for (final AniListAnimeListFolder folder in folders) {
-      for (final AniListAnimeListEntry entry in folder.entries) {
-        final int? entryId = int.tryParse(
-          entry.mediaItem.externalIds['anilist'] ?? '',
+    final String identity =
+        item.externalIds['anilist'] ??
+        item.externalIds['mal'] ??
+        item.externalIds['shikimori'] ??
+        item.id;
+    final String key = '$identity:$episodeNumber';
+    if (!_syncedTrackerProgress.add(key)) return;
+    await ref
+        .read(trackerSyncCoordinatorProvider)
+        .pushEpisodeProgress(
+          externalIds: item.externalIds,
+          mediaId: item.id,
+          mediaTitle: item.title,
+          mediaItem: _trackingMediaItem(item),
+          episode: episodeNumber,
+          total: item.episodeCount,
         );
-        if (entryId == anilistId) {
-          totalEpisodes = entry.mediaItem.episodeCount;
-          if (entry.progress >= episodeNumber) return;
-          break;
-        }
-      }
-    }
-
-    // Mark completed when the user finishes the final episode.
-    final AniListListStatus targetStatus =
-        (totalEpisodes != null &&
-            totalEpisodes > 0 &&
-            episodeNumber >= totalEpisodes)
-        ? AniListListStatus.completed
-        : AniListListStatus.current;
-
-    _syncedToAnilist.add(syncKey);
-
-    final SettingsState settings = ref.read(settingsProvider);
-    final String token = settings.anilistAccessToken.trim();
-    if (token.isEmpty) return;
-
-    try {
-      final AniListApiClient client = AniListApiClient(accessToken: token);
-      await client.updateProgress(
-        mediaId: anilistId,
-        progress: episodeNumber,
-        status: targetStatus,
-      );
-      try {
-        final AniListAnimeListEntry? updatedEntry = await client
-            .fetchMediaListEntry(
-              userId: settings.anilistViewerId,
-              mediaId: anilistId,
-            );
-        if (updatedEntry == null) {
-          ref
-              .read(anilistAnimeListProvider.notifier)
-              .updateEntryProgress(
-                anilistId,
-                episodeNumber,
-                status: targetStatus,
-              );
-          invalidateAniListAnimePreviewLibraryProvider(ref.invalidate);
-        } else {
-          ref
-              .read(anilistAnimeListProvider.notifier)
-              .replaceEntry(mediaId: anilistId, entry: updatedEntry);
-          invalidateAniListAnimePreviewLibraryProvider(ref.invalidate);
-        }
-      } catch (_) {
-        ref
-            .read(anilistAnimeListProvider.notifier)
-            .updateEntryProgress(
-              anilistId,
-              episodeNumber,
-              status: targetStatus,
-            );
-        invalidateAniListAnimePreviewLibraryProvider(ref.invalidate);
-      }
-    } catch (_) {
-      await ref
-          .read(anilistEditQueueProvider)
-          .queueProgress(
-            mediaId: anilistId,
-            progress: episodeNumber,
-            status: targetStatus,
-          );
+    final int? anilistId = int.tryParse(item.externalIds['anilist'] ?? '');
+    if (anilistId != null && anilistId > 0) {
+      final AniListListStatus status =
+          item.episodeCount != null &&
+              item.episodeCount! > 0 &&
+              episodeNumber >= item.episodeCount!
+          ? AniListListStatus.completed
+          : AniListListStatus.current;
       ref
           .read(anilistAnimeListProvider.notifier)
-          .updateEntryProgress(anilistId, episodeNumber, status: targetStatus);
+          .updateEntryProgress(anilistId, episodeNumber, status: status);
       invalidateAniListAnimePreviewLibraryProvider(ref.invalidate);
+    } else {
+      invalidateAniListAnimeLibraryProviders(ref.invalidate);
     }
+    ref.invalidate(trackerAnimeListProvider);
   }
+}
 
-  String? _anilistIdOf(MediaPlaybackItem item) {
-    final String? fromExternal = item.externalIds['anilist'];
-    if (fromExternal != null && fromExternal.isNotEmpty) return fromExternal;
-    if (item.id.startsWith('anilist:')) return item.id.substring(8);
-    return null;
-  }
+MediaItem _trackingMediaItem(MediaPlaybackItem item) {
+  return MediaItem(
+    id: item.id,
+    title: item.title,
+    originalTitle: item.originalTitle,
+    overview: '',
+    type: item.mediaType,
+    year: 0,
+    posterUrl: item.posterUrl,
+    backdropUrl: item.backdropUrl,
+    rating: 0,
+    genres: const <String>[],
+    sourceProvider: 'MiruShin Local',
+    externalIds: <String, String>{
+      for (final MapEntry<String, String> entry in item.externalIds.entries)
+        if (!entry.key.startsWith('sora_')) entry.key: entry.value,
+    },
+    episodeCount: item.episodeCount,
+    statusLabel: '',
+  );
 }

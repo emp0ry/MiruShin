@@ -729,6 +729,18 @@ class AniListApiClient {
     );
   }
 
+  /// Resolves the AniList identity for a MAL-backed local journal entry.
+  /// This is intentionally a read: mutations stay queued while AniList is
+  /// unavailable and can be delivered once this lookup succeeds.
+  Future<MediaItem?> resolveAnimeByMalId(int malId) async {
+    if (malId <= 0) return null;
+    final List<MediaItem> items = await _fetchByMalIds(<int>[malId]);
+    for (final MediaItem item in items) {
+      if (int.tryParse(item.externalIds['mal'] ?? '') == malId) return item;
+    }
+    return null;
+  }
+
   Future<MediaItem?> getCatalogDetails(String id) async {
     final List<String> parts = id.split(':');
     if (parts.length == 2 && parts.first == 'anilist') {

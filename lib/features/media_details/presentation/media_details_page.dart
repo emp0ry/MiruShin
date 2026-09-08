@@ -36,6 +36,7 @@ import '../../player/domain/player_models.dart';
 import '../../profile/application/anilist_user_settings_provider.dart';
 import '../../settings/application/settings_state.dart';
 import '../../tracking/application/anilist_library_provider.dart';
+import '../../tracking/domain/tracking_sync_models.dart';
 import '../../tracking/presentation/anilist_entry_editor.dart';
 import '../../tracking/presentation/anilist_favorite_button.dart';
 import '../application/imdb_rating_provider.dart';
@@ -218,8 +219,11 @@ class _DetailsBody extends ConsumerWidget {
 }
 
 AniListAnimeListEntry? _findAniListEntry(WidgetRef ref, MediaItem item) {
-  final int? anilistId = _aniListId(item);
-  if (anilistId == null) return null;
+  final MediaIdentity identity = MediaIdentity.fromExternalIds(
+    item.externalIds,
+    mediaId: item.id,
+  );
+  if (!identity.hasProviderId) return null;
 
   final bool isManga = _isAniListManga(item);
   final List<AniListAnimeListFolder> fullFolders = ref
@@ -230,7 +234,7 @@ AniListAnimeListEntry? _findAniListEntry(WidgetRef ref, MediaItem item) {
         orElse: () => const <AniListAnimeListFolder>[],
       );
   final AniListAnimeListEntry? fullEntry = _findAniListEntryInFolders(
-    anilistId,
+    identity,
     fullFolders,
   );
   if (fullEntry != null) return fullEntry;
@@ -246,26 +250,25 @@ AniListAnimeListEntry? _findAniListEntry(WidgetRef ref, MediaItem item) {
         data: (List<AniListAnimeListFolder> folders) => folders,
         orElse: () => const <AniListAnimeListFolder>[],
       );
-  return _findAniListEntryInFolders(anilistId, previewFolders);
+  return _findAniListEntryInFolders(identity, previewFolders);
 }
 
 AniListAnimeListEntry? _findAniListEntryInFolders(
-  int anilistId,
+  MediaIdentity identity,
   List<AniListAnimeListFolder> folders,
 ) {
   for (final AniListAnimeListFolder folder in folders) {
     for (final AniListAnimeListEntry entry in folder.entries) {
-      if (entryAniListId(entry) == anilistId) {
+      final MediaIdentity entryIdentity = MediaIdentity.fromExternalIds(
+        entry.mediaItem.externalIds,
+        mediaId: entry.mediaItem.id,
+      );
+      if (entryIdentity.matches(identity)) {
         return entry;
       }
     }
   }
   return null;
-}
-
-int? _aniListId(MediaItem item) {
-  final String? anilistId = item.externalIds['anilist'];
-  return anilistId == null ? null : int.tryParse(anilistId);
 }
 
 bool _isAniListManga(MediaItem item) {
@@ -274,8 +277,12 @@ bool _isAniListManga(MediaItem item) {
 }
 
 bool _isAniListAnime(MediaItem item) {
+  if (_isAniListManga(item) || item.type != MediaType.anime) return false;
   return item.externalIds['anilist_type'] == 'ANIME' ||
-      RegExp(r'^anilist:\d+$').hasMatch(item.id);
+      RegExp(r'^(anilist|mal|shikimori):\d+$').hasMatch(item.id) ||
+      item.externalIds['anilist'] != null ||
+      item.externalIds['mal'] != null ||
+      item.externalIds['shikimori'] != null;
 }
 
 String _aniListStatusLabel(AniListListStatus status, MediaItem item) {
@@ -1299,8 +1306,10 @@ class _ActionPanel extends ConsumerWidget {
       localLibraryProvider.notifier,
     );
 
-    final bool hasAnilist = anilistToken.isNotEmpty;
-    final int? anilistId = _aniListId(item);
+    final MediaIdentity identity = MediaIdentity.fromExternalIds(
+      item.externalIds,
+      mediaId: item.id,
+    );
     final bool isAniListAnime = _isAniListAnime(item);
     final bool canWatch =
         mode == CatalogMode.tmdb ||
@@ -1308,9 +1317,15 @@ class _ActionPanel extends ConsumerWidget {
     final bool canPlayTrailer =
         item.trailer?.isYouTube == true &&
         (item.trailer?.youtubeId.isNotEmpty ?? false);
-    final bool canAddToAniList =
-        mode == CatalogMode.anilist && hasAnilist && anilistId != null;
-    final AniListAnimeListEntry? anilistEntry = canAddToAniList
+    final bool canEditTracking =
+        mode == CatalogMode.anilist &&
+        identity.hasProviderId &&
+        ((anilistToken.isNotEmpty &&
+                (identity.anilistId != null || identity.malId != null)) ||
+            (settings.hasMalSession && identity.malId != null) ||
+            (settings.hasShikimoriSession &&
+                (identity.shikimoriId != null || identity.malId != null)));
+    final AniListAnimeListEntry? anilistEntry = canEditTracking
         ? _findAniListEntry(ref, item)
         : null;
 
@@ -1335,7 +1350,7 @@ class _ActionPanel extends ConsumerWidget {
       if (mode == CatalogMode.anilist)
         _DetailsActionButton(
           key: const ValueKey<String>('details-edit-action'),
-          onPressed: canAddToAniList
+          onPressed: canEditTracking
               ? () => _editAniListEntry(
                   context,
                   ref,

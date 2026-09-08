@@ -4,6 +4,9 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mirushin/features/metadata/data/shikimori_client.dart';
+import 'package:mirushin/features/tracking/data/shikimori_api_client.dart'
+    as tracking;
+import 'package:mirushin/shared/models/anilist_models.dart';
 
 void main() {
   test('batchRussianTitles fetches large libraries in chunks', () async {
@@ -179,6 +182,26 @@ void main() {
 
     expect(details?.youtubeTrailerUrl, isEmpty);
   });
+
+  test('tracking uses MAL id as Shikimori anime target_id', () async {
+    final _FakeShikimoriAdapter adapter = _FakeShikimoriAdapter();
+    final Dio dio = Dio()..httpClientAdapter = adapter;
+    final tracking.ShikimoriApiClient client = tracking.ShikimoriApiClient(
+      accessToken: 'token',
+      userId: 7,
+      dio: dio,
+    );
+
+    await client.updateUserRate(
+      malId: 5114,
+      status: AniListListStatus.current,
+      episodes: 3,
+      score: 8.4,
+    );
+
+    expect(adapter.createdUserRate?['target_id'], 5114);
+    expect(adapter.createdUserRate?['target_type'], 'Anime');
+  });
 }
 
 class _FakeShikimoriAdapter implements HttpClientAdapter {
@@ -187,6 +210,7 @@ class _FakeShikimoriAdapter implements HttpClientAdapter {
       <int, Map<String, Object>>{};
   final Map<String, List<Map<String, Object>>> searchResults =
       <String, List<Map<String, Object>>>{};
+  Map<String, dynamic>? createdUserRate;
 
   @override
   Future<ResponseBody> fetch(
@@ -194,6 +218,20 @@ class _FakeShikimoriAdapter implements HttpClientAdapter {
     Stream<Uint8List>? requestStream,
     Future<void>? cancelFuture,
   ) async {
+    if (options.uri.path == '/api/v2/user_rates') {
+      if (options.method == 'GET') {
+        return _json('[]');
+      }
+      final Object? payload = options.data;
+      if (payload is Map<String, dynamic>) {
+        final Object? rate = payload['user_rate'];
+        if (rate is Map<String, dynamic>) {
+          createdUserRate = Map<String, dynamic>.from(rate);
+        }
+      }
+      return _json('{}');
+    }
+
     final RegExpMatch? detailMatch = RegExp(
       r'/api/animes/(\d+)$',
     ).firstMatch(options.uri.path);

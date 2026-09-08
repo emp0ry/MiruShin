@@ -75,6 +75,7 @@ class ShikimoriClient {
     if (!ids.contains(currentId)) return const ShikimoriFranchise();
     final sortedIds = ids.toList()..sort();
     final malById = <int, int>{};
+    final memberById = <int, Map<dynamic, dynamic>>{};
     for (var offset = 0; offset < sortedIds.length; offset += 50) {
       final batch = sortedIds.sublist(
         offset,
@@ -84,7 +85,7 @@ class ShikimoriClient {
         _graphqlUrl,
         data: <String, dynamic>{
           'query':
-              r'query FranchiseIds($ids: String!) { animes(ids: $ids, limit: 50) { id malId } }',
+              r'query FranchiseIds($ids: String!) { animes(ids: $ids, limit: 50) { id malId name russian episodes score poster { originalUrl mainUrl } } }',
           'variables': <String, dynamic>{'ids': batch.join(',')},
         },
         options: options,
@@ -109,11 +110,33 @@ class ShikimoriClient {
             mappedMalId != null &&
             mappedMalId > 0) {
           malById[id] = mappedMalId;
+          memberById[id] = anime;
         }
       }
     }
     // Never accept a franchise belonging to an unrelated, colliding ID.
     if (malById[currentId] != malId) return const ShikimoriFranchise();
+    final members = <ShikimoriFranchiseMember>[];
+    for (final anime in malById.entries) {
+      final Map<dynamic, dynamic>? raw = memberById[anime.key];
+      final Object? poster = raw?['poster'];
+      final String posterUrl = poster is Map
+          ? _parseString(poster['originalUrl']).isNotEmpty
+                ? _parseString(poster['originalUrl'])
+                : _parseString(poster['mainUrl'])
+          : '';
+      members.add(
+        ShikimoriFranchiseMember(
+          shikimoriId: anime.key,
+          malId: anime.value,
+          name: _parseString(raw?['name']),
+          russian: _parseString(raw?['russian']),
+          posterUrl: posterUrl,
+          episodes: _parseInt(raw?['episodes']),
+          score: _parseDouble(raw?['score']),
+        ),
+      );
+    }
     final links = <ShikimoriFranchiseLink>[];
     for (final link in body['links'] as List) {
       if (link is! Map) continue;
@@ -138,6 +161,7 @@ class ShikimoriClient {
     return ShikimoriFranchise(
       malIds: malById.values.toSet().toList()..sort(),
       links: links,
+      members: members,
       unmappedCount: ids.length - malById.length,
     );
   }
@@ -620,6 +644,15 @@ class ShikimoriClient {
     if (value is int) return value;
     if (value is String) return int.tryParse(value);
     return null;
+  }
+
+  static double _parseDouble(Object? value) {
+    if (value is num) return value.toDouble();
+    return double.tryParse('${value ?? ''}') ?? 0;
+  }
+
+  static String _parseString(Object? value) {
+    return value is String ? value.trim() : '';
   }
 
   void _putCache(String key, String? value) {

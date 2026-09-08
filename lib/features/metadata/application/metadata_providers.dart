@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/cache/metadata_cache_store.dart';
@@ -7,7 +9,11 @@ import '../../catalog/application/catalog_repository.dart';
 import '../../catalog/application/catalog_status.dart';
 import '../../profile/application/anilist_user_settings_provider.dart';
 import '../../settings/application/settings_state.dart';
+import '../../tracking/application/tracker_sync_coordinator.dart';
 import '../../tracking/data/anilist_api_client.dart';
+import '../../tracking/data/mal_api_client.dart';
+import '../../tracking/domain/tracker_models.dart';
+import '../../tracking/domain/tracking_sync_models.dart';
 import '../data/anime_episode_metadata_client.dart';
 import '../data/shikimori_client.dart';
 import '../data/tmdb_metadata_provider.dart';
@@ -72,6 +78,14 @@ final catalogRepositoryProvider = Provider.family<CatalogRepository?, CatalogMod
   final bool aniListAdultContent = ref.watch(
     aniListEffectiveAdultContentProvider,
   );
+  final String malToken = settings.malAccessToken.trim();
+  final MalApiClient? malFallback =
+      settings.hasMalSession && malToken.isNotEmpty
+      ? MalApiClient(
+          accessToken: malToken,
+          onRefreshToken: ref.read(settingsProvider.notifier).refreshMalToken,
+        )
+      : null;
   CatalogOfflineCallback offlineCallback(CatalogMode mode, String sourceName) {
     return (
       Object error, {
@@ -113,8 +127,36 @@ final catalogRepositoryProvider = Provider.family<CatalogRepository?, CatalogMod
       cacheScope:
           'anilist.$aniListTitleLanguage.${aniListAdultContent ? 'adult' : 'safe'}',
       tmdb: ref.watch(tmdbProviderProvider),
+      malFallback: malFallback,
+      resolveMalId: (String mediaId) async {
+        final int? anilistId = int.tryParse(mediaId.split(':').last);
+        if (anilistId == null || anilistId <= 0) return null;
+        final List<UserMediaState> states = await ref
+            .read(trackingSyncStoreProvider)
+            .loadStates();
+        for (final UserMediaState state in states) {
+          if (state.identity.anilistId == anilistId) {
+            return state.identity.malId;
+          }
+        }
+        return null;
+      },
       viewerId: settings.anilistViewerId,
       hasAccessToken: settings.anilistAccessToken.trim().isNotEmpty,
+      onPrimaryFailure: (Object error) {
+        unawaited(
+          ref
+              .read(trackerSyncCoordinatorProvider)
+              .recordProviderFailure(TrackerSource.anilist, error),
+        );
+      },
+      onPrimarySuccess: () {
+        unawaited(
+          ref
+              .read(trackerSyncCoordinatorProvider)
+              .recordProviderSuccess(TrackerSource.anilist),
+        );
+      },
       onOffline: offlineCallback(CatalogMode.anilist, 'AniList'),
       onOnline: onlineCallback(CatalogMode.anilist),
     ),

@@ -112,6 +112,8 @@ class ShikimoriApiClient {
               progress: _int(rate['episodes']),
               score: score > 0 ? score : null,
               mediaItem: _mediaFromNode(nodes[targetId], targetId),
+              createdAt: _epochSeconds(rate['created_at']),
+              updatedAt: _epochSeconds(rate['updated_at']),
             ),
           );
     }
@@ -209,7 +211,7 @@ class ShikimoriApiClient {
           '/api/graphql',
           data: <String, dynamic>{
             'query':
-                '{ animes(ids: "$joined", limit: 50) { id name russian episodes score poster { originalUrl mainUrl } } }',
+                '{ animes(ids: "$joined", limit: 50) { id malId name russian episodes score poster { originalUrl mainUrl } } }',
           },
           authenticated: false,
         );
@@ -234,7 +236,7 @@ class ShikimoriApiClient {
     return result;
   }
 
-  MediaItem _mediaFromNode(Map<String, dynamic>? node, int malId) {
+  MediaItem _mediaFromNode(Map<String, dynamic>? node, int shikimoriId) {
     final Object? poster = node?['poster'];
     final String posterUrl = poster is Map<String, dynamic>
         ? _absoluteUrl(
@@ -245,9 +247,10 @@ class ShikimoriApiClient {
         : '';
     final String title = _string(node?['name']);
     final String russian = _string(node?['russian']);
+    final int malId = _int(node?['malId']);
     return MediaItem(
-      id: 'mal:$malId',
-      title: title.isNotEmpty ? title : 'Anime #$malId',
+      id: malId > 0 ? 'mal:$malId' : 'shikimori:$shikimoriId',
+      title: title.isNotEmpty ? title : 'Anime #$shikimoriId',
       originalTitle: russian,
       overview: '',
       type: MediaType.anime,
@@ -257,7 +260,10 @@ class ShikimoriApiClient {
       rating: _double(node?['score']),
       genres: const <String>[],
       sourceProvider: 'Shikimori',
-      externalIds: <String, String>{'mal': '$malId'},
+      externalIds: <String, String>{
+        'shikimori': '$shikimoriId',
+        if (malId > 0) 'mal': '$malId',
+      },
       aliases: russian.isNotEmpty ? <String>[russian] : const <String>[],
       episodeCount: _nullableInt(node?['episodes']),
       statusLabel: '',
@@ -337,5 +343,12 @@ class ShikimoriApiClient {
   static String? _nullableString(Object? value) {
     final String parsed = _string(value);
     return parsed.isEmpty ? null : parsed;
+  }
+
+  static int? _epochSeconds(Object? value) {
+    final DateTime? parsed = DateTime.tryParse('${value ?? ''}');
+    return parsed?.toUtc().millisecondsSinceEpoch == null
+        ? null
+        : parsed!.toUtc().millisecondsSinceEpoch ~/ 1000;
   }
 }

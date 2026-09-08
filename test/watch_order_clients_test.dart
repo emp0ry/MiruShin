@@ -88,7 +88,16 @@ void main() {
           return {
             'data': {
               'animes': [
-                for (final id in ids) {'id': '$id', 'malId': '${id - 1000}'},
+                for (final id in ids)
+                  {
+                    'id': '$id',
+                    'malId': '${id - 1000}',
+                    'name': 'Anime ${id - 1000}',
+                    'russian': 'Аниме ${id - 1000}',
+                    'episodes': 12,
+                    'score': 8.25,
+                    'poster': {'mainUrl': 'https://example.com/$id.jpg'},
+                  },
               ],
             },
           };
@@ -96,6 +105,11 @@ void main() {
       );
       final franchise = await client.fetchAnimeFranchise(1);
       expect(franchise.malIds, List.generate(53, (i) => i + 1));
+      expect(franchise.members, hasLength(53));
+      expect(franchise.members.first.name, 'Anime 1');
+      expect(franchise.members.first.russian, 'Аниме 1');
+      expect(franchise.members.first.score, 8.25);
+      expect(franchise.members.first.posterUrl, contains('1001.jpg'));
       expect(batches.map((batch) => batch.length), [50, 3]);
       expect(franchise.links, hasLength(2));
       expect(franchise.links.first.sourceMalId, 53);
@@ -303,4 +317,25 @@ void main() {
       );
     },
   );
+
+  test('AniList identity can be resolved from a queued MAL id', () async {
+    final client = AniListApiClient(
+      dio: fakeDio((options) {
+        expect(options.data['query'], contains('idMal_in:'));
+        expect(options.data['variables']['ids'], <int>[5114]);
+        return {
+          'data': {
+            'Page': {
+              'media': <Map<String, dynamic>>[anime(5114)],
+            },
+          },
+        };
+      }),
+    );
+
+    final result = await client.resolveAnimeByMalId(5114);
+
+    expect(result?.externalIds['mal'], '5114');
+    expect(result?.externalIds['anilist'], '15114');
+  });
 }
