@@ -94,12 +94,11 @@ void main() {
       );
     });
 
-    test('can ignore passive Cloudflare scripts only for Apple WebKit', () {
+    test('ignores a passive Cloudflare script on a completed document', () {
       const String passiveDocument =
           '<main>Latest episodes</main>'
           '<script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script>';
 
-      // The default preserves the existing Windows/WebView2 classification.
       expect(
         CloudflareChallenge.isChallengeDocument(
           title: 'Anime catalog',
@@ -107,15 +106,32 @@ void main() {
           text: 'Latest episodes',
           html: passiveDocument,
         ),
-        isTrue,
+        isFalse,
       );
+
+      // A caller may still classify the script as active when it has stronger
+      // navigation evidence that this is the current interstitial.
       expect(
         CloudflareChallenge.isChallengeDocument(
           title: 'Anime catalog',
           url: 'https://example.com/',
           text: 'Latest episodes',
           html: passiveDocument,
-          trustPassiveChallengeScript: false,
+          trustPassiveChallengeScript: true,
+        ),
+        isTrue,
+      );
+    });
+
+    test('matches the completed example document reported by WebView2', () {
+      expect(
+        CloudflareChallenge.isChallengeDocument(
+          title: 'example',
+          url: 'https://example.com/',
+          text: 'Latest releases',
+          html:
+              '<main>Latest releases</main>'
+              '<script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script>',
         ),
         isFalse,
       );
@@ -167,6 +183,30 @@ void main() {
         isFalse,
       );
     });
+
+    test(
+      'the same retained-widget policy is safe for every browser engine',
+      () {
+        expect(
+          CloudflareChallenge.hasBlockingChallengeSelector(
+            hasStrongSelector: false,
+            hasTurnstileSelector: false,
+            turnstileSolved: false,
+            navigatedAfterChallenge: false,
+          ),
+          isFalse,
+        );
+        expect(
+          CloudflareChallenge.hasBlockingChallengeSelector(
+            hasStrongSelector: false,
+            hasTurnstileSelector: true,
+            turnstileSolved: false,
+            navigatedAfterChallenge: true,
+          ),
+          isFalse,
+        );
+      },
+    );
   });
 
   test('service reports an interactive solve while it is in flight', () async {

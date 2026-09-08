@@ -658,6 +658,20 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
     'iframe[src*="challenges.cloudflare.com"]',
     'iframe[src*="turnstile"]'
   ];
+  const isVisible = (element) => {
+    if (!element) return false;
+    const style = window.getComputedStyle(element);
+    if (style.display === 'none' ||
+        style.visibility === 'hidden' ||
+        Number(style.opacity) === 0) {
+      return false;
+    }
+    const rect = element.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  };
+  const hasVisibleSelector = (selectors) => selectors.some(
+    (selector) => Array.from(document.querySelectorAll(selector)).some(isVisible)
+  );
   const responses = Array.from(
     document.querySelectorAll('[name="cf-turnstile-response"]')
   );
@@ -667,12 +681,8 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
     readyState: document.readyState,
     title: document.title || '',
     href: location.href || '',
-    hasStrongSelector: strongSelectors.some(
-      (selector) => document.querySelector(selector) !== null
-    ),
-    hasTurnstileSelector: turnstileSelectors.some(
-      (selector) => document.querySelector(selector) !== null
-    ),
+    hasStrongSelector: hasVisibleSelector(strongSelectors),
+    hasTurnstileSelector: hasVisibleSelector(turnstileSelectors),
     hasPassiveChallengeScript,
     turnstileSolved: responses.some(
       (response) => (response.value || '').trim().length > 0
@@ -696,24 +706,17 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
       final bool hasTurnstileSelector = state['hasTurnstileSelector'] == true;
       final bool hasPassiveChallengeScript =
           state['hasPassiveChallengeScript'] == true;
-      if (_usesAppleWebKit) {
-        _turnstileSolved = _turnstileSolved || state['turnstileSolved'] == true;
-      }
-      final bool hasSelector = _usesAppleWebKit
-          ? CloudflareChallenge.hasBlockingChallengeSelector(
-              hasStrongSelector: hasStrongSelector,
-              hasTurnstileSelector: hasTurnstileSelector,
-              turnstileSolved: _turnstileSolved,
-              navigatedAfterChallenge: _navigatedAfterChallenge,
-            )
-          : hasStrongSelector ||
-                hasTurnstileSelector ||
-                hasPassiveChallengeScript;
+      _turnstileSolved = _turnstileSolved || state['turnstileSolved'] == true;
+      final bool hasSelector = CloudflareChallenge.hasBlockingChallengeSelector(
+        hasStrongSelector: hasStrongSelector,
+        hasTurnstileSelector: hasTurnstileSelector,
+        turnstileSolved: _turnstileSolved,
+        navigatedAfterChallenge: _navigatedAfterChallenge,
+      );
       final bool hasMarker = CloudflareChallenge.isChallengeDocument(
         url: href,
         text: text,
         html: html,
-        trustPassiveChallengeScript: !_usesAppleWebKit,
       );
 
       if (kDebugMode) {
@@ -737,12 +740,18 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
         hasSelector: hasSelector,
         isLoading: readyState == 'loading',
         trustTitle: trustTitle,
-        trustPassiveChallengeScript: !_usesAppleWebKit,
       )) {
         _challengeObserved = true;
         return true;
       }
-      if (title.trim().isEmpty && text.trim().isEmpty) return true;
+      // A stale challenge title alone is not a clean document. Require either
+      // ordinary body text or a non-challenge title before accepting it.
+      final bool staleChallengeTitle =
+          !trustTitle && CloudflareChallenge.isChallengeDocument(title: title);
+      if (text.trim().isEmpty &&
+          (title.trim().isEmpty || staleChallengeTitle)) {
+        return true;
+      }
       return false;
     } catch (error) {
       if (kDebugMode) {
@@ -797,23 +806,6 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
           'status=$_mainFrameHttpStatus',
         );
       }
-      if (!_usesAppleWebKit) {
-        // Keep the proven Windows/WebView2 and Android behavior unchanged.
-        if (title.isEmpty) return true;
-        if (CloudflareChallenge.isChallengeDocument(title: title, url: url) ||
-            _mainFrameHttpStatus == 403 ||
-            _mainFrameHttpStatus == 503) {
-          _challengeObserved = true;
-          return true;
-        }
-        final bool? domShowsChallenge = await _domShowsChallenge(
-          controller,
-          trustTitle: true,
-        );
-        if (domShowsChallenge != null) return domShowsChallenge;
-        return true;
-      }
-
       final bool challengeWasObserved = _challengeObserved;
       final bool challengeTitle = CloudflareChallenge.isChallengeDocument(
         title: title,
@@ -832,10 +824,13 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
           _mainFrameHttpStatus == 503) {
         return true;
       }
+      // WebView2 can momentarily report no title while committing a document.
+      // Its DOM probe is not authoritative until a title is available.
+      if (!_usesAppleWebKit && title.isEmpty) return true;
       final bool? domShowsChallenge = await _domShowsChallenge(
         controller,
-        // Once the challenge itself has definitely been seen, prefer the
-        // current DOM over WKWebView's sometimes-stale native page title.
+        // Once the challenge itself has definitely been seen, prefer the live
+        // document over a stale native title on every browser engine.
         trustTitle: !challengeWasObserved,
       );
       if (domShowsChallenge != null) return domShowsChallenge;
@@ -995,7 +990,7 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
                   },
                   onCreateWindow: _handleCreateWindow,
                   onLoadStart: (_, WebUri? url) {
-                    if (_usesAppleWebKit && _challengeObserved) {
+                    if (_challengeObserved) {
                       _navigatedAfterChallenge = true;
                     }
                     _markWebViewActivity();

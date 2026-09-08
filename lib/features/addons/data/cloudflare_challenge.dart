@@ -82,9 +82,10 @@ class CloudflareChallenge {
   /// solver use native title/navigation events before resorting to a DOM probe.
   /// Set [trustTitle] to false after a challenge was already observed so a
   /// stale WKWebView title cannot outweigh a clean live URL and document.
-  /// [trustPassiveChallengeScript] remains true for the existing WebView2
-  /// behavior; Apple WebKit callers disable it because clean sites can retain
-  /// Cloudflare's background `jsd` script after verification.
+  /// [trustPassiveChallengeScript] is deliberately false by default: every
+  /// browser engine can retain Cloudflare's background `jsd` script after the
+  /// protected document has already loaded. Callers may opt in only when that
+  /// script is known to belong to the active interstitial.
   static bool isChallengeDocument({
     String title = '',
     String url = '',
@@ -93,7 +94,7 @@ class CloudflareChallenge {
     bool hasSelector = false,
     bool isLoading = false,
     bool trustTitle = true,
-    bool trustPassiveChallengeScript = true,
+    bool trustPassiveChallengeScript = false,
   }) {
     if (isLoading || hasSelector) return true;
     final String document = '$url\n$text\n$html'.toLowerCase();
@@ -117,9 +118,10 @@ class CloudflareChallenge {
 
   /// Whether structural DOM evidence still represents a blocking challenge.
   ///
-  /// A normal site can retain a generic Turnstile widget after verification.
-  /// Strong interstitial nodes always block, while generic Turnstile nodes stop
-  /// blocking after their token completes or the challenged document navigates.
+  /// A normal site can retain a generic Turnstile widget after verification on
+  /// WebView2 as well as WebKit. Strong visible interstitial nodes always block,
+  /// while generic visible Turnstile nodes stop blocking after their token
+  /// completes or the challenged document navigates.
   static bool hasBlockingChallengeSelector({
     required bool hasStrongSelector,
     required bool hasTurnstileSelector,
