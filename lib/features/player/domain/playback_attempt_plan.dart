@@ -21,6 +21,32 @@ class PlaybackAttempt {
   }
 }
 
+/// Whether [url] is downloaded segmented media represented by a local HLS
+/// playlist. Downloaded DASH presentations use the same `.m3u8` container, so
+/// this intentionally classifies by the stored URL rather than stream type.
+bool isLocalSegmentedPlaybackSource(String url) {
+  final Uri? uri = Uri.tryParse(url);
+  return uri?.scheme.toLowerCase() == 'file' &&
+      (uri?.path.toLowerCase().endsWith('.m3u8') ?? false);
+}
+
+/// Whether a playback source can use MiruShin's loopback media proxy.
+///
+/// Local HLS needs this route too: some native backends accept its segments
+/// over HTTP but reject the exact same playlist when opened as a `file://` URL.
+bool isPlaybackSourceProxyEligible({
+  required String url,
+  required bool inlineDash,
+  required bool usesBrowserBackend,
+}) {
+  if (usesBrowserBackend) return false;
+  final String scheme = Uri.tryParse(url)?.scheme.toLowerCase() ?? '';
+  return scheme == 'http' ||
+      scheme == 'https' ||
+      inlineDash ||
+      isLocalSegmentedPlaybackSource(url);
+}
+
 /// Produces one immutable, deterministic attempt sequence for a stream open.
 ///
 /// Auto prefers MPV and exhausts its proxy/direct routes before trying FVP.

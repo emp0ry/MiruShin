@@ -1627,16 +1627,16 @@ class PlaybackController extends Notifier<PlaybackState> {
     required String url,
     required StreamType streamType,
   }) {
-    final Uri? uri = Uri.tryParse(url);
-    final String scheme = uri?.scheme.toLowerCase() ?? '';
     final bool inlineDash = LocalHlsProxy.isInlineDashUrl(url);
-    final bool network = scheme == 'http' || scheme == 'https';
-    final bool localSegmentedMedia =
-        scheme == 'file' && url.toLowerCase().contains('.m3u8');
-    // Local media has no remote headers, TLS, or CDN requests for the proxy to
-    // repair. Direct file access also avoids pauses at segment boundaries.
-    final bool proxyEligible =
-        !usesBrowserPlayerEngine && (network || inlineDash);
+    final bool localSegmentedMedia = isLocalSegmentedPlaybackSource(url);
+    // A local HLS manifest remains proxy-eligible. FVP/MDK on Apple platforms
+    // can reject a segmented `file://` source while accepting the same files
+    // through the loopback HLS proxy.
+    final bool proxyEligible = isPlaybackSourceProxyEligible(
+      url: url,
+      inlineDash: inlineDash,
+      usesBrowserBackend: usesBrowserPlayerEngine,
+    );
     final bool directEligible = !inlineDash;
 
     return buildPlaybackAttemptPlan(

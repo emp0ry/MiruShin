@@ -35,12 +35,15 @@ class SoraJsRuntime {
   static const int _maxSearchBodyBytes = 96 * 1024;
   // Episode APIs can include many voiceover/player entries in one JSON body.
   static const int _maxBodyBytes = 8 * 1024 * 1024;
+  static const Duration _appleCloudflareFailureCooldown = Duration(seconds: 30);
 
   final SoraAddonStore _store;
   final Dio _dio;
   final CloudflareChallengeService _cf = CloudflareChallengeService.instance;
   final Map<String, _CloudflareWebViewSession> _cloudflareWebViewSessions =
       <String, _CloudflareWebViewSession>{};
+  final Map<String, DateTime> _appleCloudflareSuppressedUntil =
+      <String, DateTime>{};
   final Map<String, _LoadedSoraModule> _loaded = <String, _LoadedSoraModule>{};
   final List<String> _loadOrder = <String>[];
   Future<void> _jsTail = Future<void>.value();
@@ -99,6 +102,11 @@ class SoraJsRuntime {
         return false;
     }
   }
+
+  bool get _usesAppleWebKit =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.iOS ||
+          defaultTargetPlatform == TargetPlatform.macOS);
 
   JavascriptRuntime _runtime() {
     final JavascriptRuntime? existing = _sharedRuntime;
@@ -449,12 +457,21 @@ class SoraJsRuntime {
   ) async {
     // Safety valve: an addon that never resolves must not hang the queue.
     const Duration callTimeout = Duration(seconds: 45);
-    final Stopwatch sw = Stopwatch()..start();
+    Duration executionElapsed = Duration.zero;
+    DateTime lastTick = DateTime.now();
     while (!completer.isCompleted) {
       try {
         rt.executePendingJob();
       } catch (_) {}
-      if (sw.elapsed >= callTimeout) {
+      final DateTime now = DateTime.now();
+      // A person completing a visible Apple Security Check must not consume
+      // the add-on's normal 45-second execution budget. Windows keeps its
+      // existing timeout behavior unchanged.
+      if (!(_usesAppleWebKit && _cf.hasActiveSolve)) {
+        executionElapsed += now.difference(lastTick);
+      }
+      lastTick = now;
+      if (executionElapsed >= callTimeout) {
         if (!completer.isCompleted) {
           completer.complete(
             jsonEncode(<String, Object?>{'ok': false, 'error': 'timeout'}),
@@ -857,6 +874,53 @@ class SoraJsRuntime {
     );
   }
 
+  String _cloudflareOriginKey(Uri uri) => Uri(
+    scheme: uri.scheme.toLowerCase(),
+    host: uri.host.toLowerCase(),
+    port: uri.hasPort ? uri.port : null,
+  ).toString();
+
+  bool _appleCloudflareSolveIsSuppressed(Uri uri) {
+    if (!_usesAppleWebKit) return false;
+    final String key = _cloudflareOriginKey(uri);
+    final DateTime? until = _appleCloudflareSuppressedUntil[key];
+    if (until == null) return false;
+    if (DateTime.now().isBefore(until)) return true;
+    _appleCloudflareSuppressedUntil.remove(key);
+    return false;
+  }
+
+  void _suppressAppleCloudflareSolve(Uri uri) {
+    if (!_usesAppleWebKit) return;
+    _appleCloudflareSuppressedUntil[_cloudflareOriginKey(uri)] = DateTime.now()
+        .add(_appleCloudflareFailureCooldown);
+  }
+
+  void _clearAppleCloudflareSuppression(Uri uri) {
+    if (!_usesAppleWebKit) return;
+    _appleCloudflareSuppressedUntil.remove(_cloudflareOriginKey(uri));
+  }
+
+  Future<void> _discardAppleCloudflareWebViewSession(Uri uri) async {
+    if (!_usesAppleWebKit) return;
+    final String key = Uri(
+      scheme: uri.scheme,
+      host: uri.host,
+      port: uri.hasPort ? uri.port : null,
+      path: '/',
+    ).toString();
+    final _CloudflareWebViewSession? session = _cloudflareWebViewSessions
+        .remove(key);
+    if (session == null) return;
+    if (kDebugMode) {
+      debugPrint(
+        '[Cloudflare] disposing stale Apple browser session before '
+        'interactive verification for ${uri.host}.',
+      );
+    }
+    await session.dispose(waitForRequests: false);
+  }
+
   /// Runs [send] and, if the response is a Cloudflare challenge, presents the
   /// interactive solver and retries with the freshly captured clearance.
   ///
@@ -876,7 +940,10 @@ class SoraJsRuntime {
 
     final Uri uri = request.uri;
     Response<String> response = await send(uri);
-    if (!_isCloudflareChallenge(response)) return response;
+    if (!_isCloudflareChallenge(response)) {
+      _clearAppleCloudflareSuppression(uri);
+      return response;
+    }
 
     // Dart deliberately does not forward sensitive headers such as Cookie to a
     // different host during an automatic redirect. The browser can solve on
@@ -884,6 +951,15 @@ class SoraJsRuntime {
     final Uri challengeUri = response.realUri.host.isNotEmpty
         ? response.realUri
         : uri;
+    if (_appleCloudflareSolveIsSuppressed(challengeUri)) {
+      if (kDebugMode) {
+        debugPrint(
+          '[Cloudflare] Apple retry still cooling down for '
+          '${challengeUri.host}; skipping another Security Check.',
+        );
+      }
+      return response;
+    }
 
     final String? existing = await _cf.cookies.cookieFor(challengeUri);
     if (existing != null && existing.isNotEmpty) {
@@ -891,16 +967,28 @@ class SoraJsRuntime {
           await _sendWithCloudflareWebView(request.withUri(challengeUri));
       if (browserResponse != null) {
         response = browserResponse;
-        if (!_isCloudflareChallenge(response)) return response;
+        if (!_isCloudflareChallenge(response)) {
+          _clearAppleCloudflareSuppression(challengeUri);
+          return response;
+        }
         await _cf.cookies.clear(challengeUri);
       } else {
         // Unit-test environments and installations without an embedded WebView
         // get the stable cookie retry rather than failing the request.
         response = await send(challengeUri);
-        if (!_isCloudflareChallenge(response)) return response;
+        if (!_isCloudflareChallenge(response)) {
+          _clearAppleCloudflareSuppression(challengeUri);
+          return response;
+        }
         await _cf.cookies.clear(challengeUri);
       }
     }
+
+    // WKWebView instances share one persistent website data store. Keeping the
+    // failed hidden transport alive while the visible challenge runs can let
+    // two browser contexts update the same Cloudflare state. Apple starts the
+    // interactive flow with one clean, visible context; WebView2 is untouched.
+    await _discardAppleCloudflareWebViewSession(challengeUri);
 
     final CloudflareSolveResult? solved = await _cf.solve(
       url: challengeUri,
@@ -909,7 +997,10 @@ class SoraJsRuntime {
     // A successful WebView solve is enough even when an HttpOnly clearance
     // cookie cannot be read through the platform cookie API. The browser retry
     // below still shares that cookie store and browser fingerprint.
-    if (solved == null) return response;
+    if (solved == null) {
+      _suppressAppleCloudflareSolve(challengeUri);
+      return response;
+    }
     final Uri replayUri = _cloudflareReplayUri(solved, challengeUri);
 
     final Response<String>? browserResponse = await _sendWithCloudflareWebView(
@@ -918,6 +1009,9 @@ class SoraJsRuntime {
     if (browserResponse != null) {
       if (_isCloudflareChallenge(browserResponse)) {
         await _cf.cookies.clear(replayUri);
+        _suppressAppleCloudflareSolve(replayUri);
+      } else {
+        _clearAppleCloudflareSuppression(replayUri);
       }
       return browserResponse;
     }
@@ -925,6 +1019,9 @@ class SoraJsRuntime {
     response = await send(replayUri);
     if (_isCloudflareChallenge(response)) {
       await _cf.cookies.clear(replayUri);
+      _suppressAppleCloudflareSolve(replayUri);
+    } else {
+      _clearAppleCloudflareSuppression(replayUri);
     }
     return response;
   }

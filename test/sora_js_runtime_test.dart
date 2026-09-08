@@ -488,6 +488,112 @@ async function searchResults(keyword) {
     },
     skip: !Platform.isWindows,
   );
+
+  test(
+    'macOS suppresses repeated solver dialogs after a rejected replay',
+    () async {
+      final TargetPlatform? previousPlatform =
+          debugDefaultTargetPlatformOverride;
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      addTearDown(() {
+        debugDefaultTargetPlatformOverride = previousPlatform;
+      });
+
+      final Directory temp = await Directory.systemTemp.createTemp('sora_js_');
+      addTearDown(() => temp.delete(recursive: true));
+
+      final Uri challengedUri = Uri.parse(
+        'https://apple-rejected.example.test/api?m=search&q=demo',
+      );
+      final _AlwaysCloudflareChallengeAdapter adapter =
+          _AlwaysCloudflareChallengeAdapter();
+      final Dio dio = Dio()..httpClientAdapter = adapter;
+      int solverCalls = 0;
+      CloudflareChallengeService.instance.registerSolver(({
+        required Uri url,
+        required String userAgent,
+      }) async {
+        solverCalls++;
+        return (
+          cookies: 'cf_clearance=apple-rejected-token',
+          effectiveUri: url,
+          userAgent: 'macOS WebKit Test UA',
+        );
+      });
+      addTearDown(() async {
+        CloudflareChallengeService.instance.registerSolver(null);
+        await CloudflareChallengeService.instance.cookies.clear(challengedUri);
+      });
+
+      final File script = File('${temp.path}/module.js');
+      await script.writeAsString('''
+async function searchResults(keyword) {
+  const response = await fetchv2(${jsonEncode(challengedUri.toString())}, {});
+  try {
+    return JSON.stringify(await response.json());
+  } catch (_) {
+    return '[]';
+  }
+}
+''');
+      final SoraInstalledAddon addon = SoraInstalledAddon(
+        id: 'macos-rejected-cloudflare',
+        manifestUrl: 'https://manifest.example.test/addon.json',
+        manifest: SoraAddonManifest.fromJson(<String, dynamic>{
+          'sourceName': 'macOS Rejected Cloudflare Test',
+          'iconUrl': 'https://manifest.example.test/icon.png',
+          'author': <String, dynamic>{'name': 'Tester'},
+          'version': '1.0.0',
+          'language': 'en',
+          'streamType': 'HLS',
+          'quality': '1080p',
+          'baseUrl': 'https://apple-rejected.example.test',
+          'searchBaseUrl': challengedUri.toString(),
+          'scriptUrl': 'https://manifest.example.test/module.js',
+          'type': 'anime',
+          'downloadSupport': false,
+        }),
+        manifestPath: '${temp.path}/manifest.json',
+        scriptPath: script.path,
+        enabled: true,
+        installedAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+        lastCheckedAt: DateTime.now(),
+        lastError: null,
+        order: 0,
+      );
+      final SoraAddonStore store = SoraAddonStore(
+        supportDirectoryProvider: () async => temp,
+      );
+      final SoraJsRuntime runtime = SoraJsRuntime(store: store, dio: dio);
+      addTearDown(runtime.invalidateAll);
+
+      final List<SoraTitleVariant> variants = const <SoraTitleVariant>[
+        SoraTitleVariant(languageCode: 'en', title: 'Demo'),
+      ];
+      expect(
+        await runtime.searchResults(
+          addon: addon,
+          keyword: 'First',
+          languageCode: 'en',
+          titleVariants: variants,
+        ),
+        isEmpty,
+      );
+      expect(
+        await runtime.searchResults(
+          addon: addon,
+          keyword: 'Second',
+          languageCode: 'en',
+          titleVariants: variants,
+        ),
+        isEmpty,
+      );
+
+      expect(solverCalls, 1);
+      expect(adapter.requests, hasLength(3));
+    },
+  );
 }
 
 class _FakeAdapter implements HttpClientAdapter {
@@ -592,6 +698,31 @@ class _CloudflareRedirectAdapter implements HttpClientAdapter {
       ];
     }
     return challenged;
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
+
+class _AlwaysCloudflareChallengeAdapter implements HttpClientAdapter {
+  final List<RequestOptions> requests = <RequestOptions>[];
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    requests.add(options);
+    return ResponseBody.fromString(
+      '<title>Just a moment...</title>'
+      '<script src="/cdn-cgi/challenge-platform/test.js"></script>',
+      403,
+      headers: <String, List<String>>{
+        Headers.contentTypeHeader: <String>['text/html'],
+        'server': <String>['cloudflare'],
+      },
+    );
   }
 
   @override

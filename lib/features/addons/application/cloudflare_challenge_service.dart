@@ -36,6 +36,13 @@ class CloudflareChallengeService {
   final Map<String, Future<CloudflareSolveResult?>> _inFlight =
       <String, Future<CloudflareSolveResult?>>{};
 
+  /// Whether an interactive Security Check is currently waiting on the user.
+  ///
+  /// Apple add-on calls use this to pause their execution budget while the
+  /// full-screen WKWebView owns the request. The solver has its own bounded
+  /// timeout, so this cannot leave an add-on call waiting indefinitely.
+  bool get hasActiveSolve => _inFlight.isNotEmpty;
+
   /// Registered by the UI layer (see app bootstrap). Passing null unregisters.
   void registerSolver(CloudflareSolver? solver) => _solver = solver;
 

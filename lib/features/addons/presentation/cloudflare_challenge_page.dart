@@ -13,9 +13,10 @@ import '../data/cloudflare_challenge.dart';
 ///
 /// Mirrors the proven reference recipe (Sora/Shirox's `CloudflareBypassManager`):
 ///
-/// - Navigates to the **site root** `scheme://host/`, not the API endpoint the
-///   fetch was aimed at. Cloudflare's JS challenge / Turnstile only runs in a
-///   real document context; an API URL just returns the challenge body.
+/// - Starts at the **site root** `scheme://host/`, matching the proven Windows
+///   flow. Apple WebKit then navigates the same visible browser to the exact
+///   challenged URL. This preserves the root page's browser state while letting
+///   an endpoint-scoped managed challenge execute as a real document.
 /// - Sets **no custom User-Agent**. Turnstile fingerprints the real browser, so
 ///   spoofing the UA makes Cloudflare reject the challenge even after the user
 ///   taps. Instead the page captures the WebView's *native* UA and reports it,
@@ -27,8 +28,10 @@ import '../data/cloudflare_challenge.dart';
 /// Completion is confirmed from both cookie state and the live document. This
 /// also works when a platform keeps the HttpOnly `cf_clearance` cookie hidden
 /// from Dart: after an actual challenge was observed, a stable clean document
-/// proves that the shared browser session is ready. The host then removes the
-/// overlay. It is hosted in an [OverlayEntry] (not a route), so a source flow
+/// proves that the shared browser session is ready. On Apple WebKit, where a
+/// challenged request can open an already-clean target document, that clean
+/// document is itself sufficient. The host then removes the overlay. It is
+/// hosted in an [OverlayEntry] (not a route), so a source flow
 /// that pops its own routes cannot tear it down before the user solves it.
 class CloudflareChallengePage extends StatefulWidget {
   const CloudflareChallengePage({
@@ -64,6 +67,11 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
   static const int _clearanceConfirmPolls = 3;
   static const int _cleanPageConfirmPolls = 2;
   static const Duration _completionIdleDelay = Duration(milliseconds: 500);
+  static const int _appleWarmupConfirmPolls = 3;
+  // Cloudflare's passive JavaScript detection can expose cf_clearance before
+  // the browser-side verification has actually settled. A two-second native
+  // WKWebView reproduction still challenged the API; five seconds completed.
+  static const Duration _appleWarmupIdleDelay = Duration(seconds: 5);
 
   final CookieManager _cookies = CookieManager.instance();
   InAppWebViewController? _controller;
@@ -78,6 +86,9 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
   int _clearanceSeen = 0;
   int _cleanPageSeen = 0;
   bool _challengeObserved = false;
+  bool _navigatedAfterChallenge = false;
+  bool _turnstileSolved = false;
+  bool _appleTargetNavigationStarted = false;
   DateTime? _clearanceFirstSeenAt;
   DateTime _lastWebViewActivityAt = DateTime.now();
   bool _clearanceCheckInFlight = false;
@@ -97,6 +108,11 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
   bool get _isWindows =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
 
+  bool get _usesAppleWebKit =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.iOS ||
+          defaultTargetPlatform == TargetPlatform.macOS);
+
   /// The page we actually load: the site root, where the challenge can run.
   late final WebUri _rootUri = WebUri(
     Uri(
@@ -106,6 +122,13 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
       path: '/',
     ).toString(),
   );
+
+  bool get _appleNeedsTargetNavigation {
+    if (!_usesAppleWebKit) return false;
+    return widget.url.path != '/' ||
+        widget.url.hasQuery ||
+        widget.url.hasFragment;
+  }
 
   @override
   void initState() {
@@ -442,8 +465,17 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
 
       _cleanPageSeen++;
       final bool cookieReady = cleared && _clearanceSettled();
+      if (_appleNeedsTargetNavigation && !_appleTargetNavigationStarted) {
+        final bool warmupReady =
+            _cleanPageSeen >= _appleWarmupConfirmPolls &&
+            DateTime.now().difference(_lastWebViewActivityAt) >=
+                _appleWarmupIdleDelay;
+        if (!warmupReady) return;
+        await _openAppleChallengeTarget();
+        return;
+      }
       final bool browserSessionReady =
-          _challengeObserved &&
+          (_usesAppleWebKit || _challengeObserved) &&
           _cleanPageSeen >= _cleanPageConfirmPolls &&
           DateTime.now().difference(_lastWebViewActivityAt) >=
               _completionIdleDelay;
@@ -489,6 +521,34 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
       if (_finishRequested && !_completed) {
         _completeFinish(_pendingFinishResult);
       }
+    }
+  }
+
+  Future<void> _openAppleChallengeTarget() async {
+    final InAppWebViewController? controller = _controller;
+    if (controller == null || _appleTargetNavigationStarted) return;
+    _appleTargetNavigationStarted = true;
+    _challengeObserved = false;
+    _navigatedAfterChallenge = false;
+    _turnstileSolved = false;
+    _clearanceSeen = 0;
+    _clearanceFirstSeenAt = null;
+    _cleanPageSeen = 0;
+    _mainFrameHttpStatus = null;
+    _markWebViewActivity();
+    if (kDebugMode) {
+      debugPrint(
+        '[Cloudflare] Apple browser warm-up complete; opening protected URL: '
+        '${widget.url}',
+      );
+    }
+    try {
+      await controller.loadUrl(
+        urlRequest: URLRequest(url: WebUri(widget.url.toString())),
+      );
+    } catch (_) {
+      _appleTargetNavigationStarted = false;
+      rethrow;
     }
   }
 
@@ -573,7 +633,10 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
     return trimmed;
   }
 
-  Future<bool?> _domShowsChallenge(InAppWebViewController controller) async {
+  Future<bool?> _domShowsChallenge(
+    InAppWebViewController controller, {
+    required bool trustTitle,
+  }) async {
     try {
       final Object? raw = await controller
           .evaluateJavascript(
@@ -581,24 +644,39 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
 (() => {
   const text = (document.body?.innerText || '').toLowerCase();
   const html = (document.documentElement?.innerHTML || '').toLowerCase();
-  const selectors = [
+  const strongSelectors = [
     '#challenge-stage',
     '#challenge-running',
     '#challenge-spinner',
     '#cf-challenge-running',
     '#cf-please-wait',
+    'form[action*="__cf_chl"]'
+  ];
+  const turnstileSelectors = [
     '.cf-turnstile',
     '[name="cf-turnstile-response"]',
-    'form[action*="__cf_chl"]',
     'iframe[src*="challenges.cloudflare.com"]',
-    'iframe[src*="turnstile"]',
-    'script[src*="/cdn-cgi/challenge-platform"]'
+    'iframe[src*="turnstile"]'
   ];
+  const responses = Array.from(
+    document.querySelectorAll('[name="cf-turnstile-response"]')
+  );
+  const hasPassiveChallengeScript =
+    document.querySelector('script[src*="/cdn-cgi/challenge-platform"]') !== null;
   return {
     readyState: document.readyState,
     title: document.title || '',
     href: location.href || '',
-    hasSelector: selectors.some((selector) => document.querySelector(selector) !== null),
+    hasStrongSelector: strongSelectors.some(
+      (selector) => document.querySelector(selector) !== null
+    ),
+    hasTurnstileSelector: turnstileSelectors.some(
+      (selector) => document.querySelector(selector) !== null
+    ),
+    hasPassiveChallengeScript,
+    turnstileSolved: responses.some(
+      (response) => (response.value || '').trim().length > 0
+    ),
     text: text.slice(0, 5000),
     html: html.slice(0, 12000)
   };
@@ -614,18 +692,39 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
       final String title = '${state['title']}'.toLowerCase();
       final String text = '${state['text']}'.toLowerCase();
       final String html = '${state['html']}'.toLowerCase();
-      final bool hasSelector = state['hasSelector'] == true;
+      final bool hasStrongSelector = state['hasStrongSelector'] == true;
+      final bool hasTurnstileSelector = state['hasTurnstileSelector'] == true;
+      final bool hasPassiveChallengeScript =
+          state['hasPassiveChallengeScript'] == true;
+      if (_usesAppleWebKit) {
+        _turnstileSolved = _turnstileSolved || state['turnstileSolved'] == true;
+      }
+      final bool hasSelector = _usesAppleWebKit
+          ? CloudflareChallenge.hasBlockingChallengeSelector(
+              hasStrongSelector: hasStrongSelector,
+              hasTurnstileSelector: hasTurnstileSelector,
+              turnstileSolved: _turnstileSolved,
+              navigatedAfterChallenge: _navigatedAfterChallenge,
+            )
+          : hasStrongSelector ||
+                hasTurnstileSelector ||
+                hasPassiveChallengeScript;
       final bool hasMarker = CloudflareChallenge.isChallengeDocument(
-        title: title,
         url: href,
         text: text,
         html: html,
+        trustPassiveChallengeScript: !_usesAppleWebKit,
       );
 
       if (kDebugMode) {
         debugPrint(
           '[Cloudflare] dom: ready=$readyState '
-          'selector=$hasSelector marker=$hasMarker '
+          'strongSelector=$hasStrongSelector '
+          'turnstileSelector=$hasTurnstileSelector '
+          'passiveScript=$hasPassiveChallengeScript '
+          'turnstileSolved=$_turnstileSolved '
+          'postChallengeNavigation=$_navigatedAfterChallenge '
+          'blockingSelector=$hasSelector marker=$hasMarker '
           'title="$title" href="$href"',
         );
       }
@@ -637,6 +736,8 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
         html: html,
         hasSelector: hasSelector,
         isLoading: readyState == 'loading',
+        trustTitle: trustTitle,
+        trustPassiveChallengeScript: !_usesAppleWebKit,
       )) {
         _challengeObserved = true;
         return true;
@@ -696,14 +797,47 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
           'status=$_mainFrameHttpStatus',
         );
       }
-      if (title.isEmpty) return true;
-      if (CloudflareChallenge.isChallengeDocument(title: title, url: url) ||
+      if (!_usesAppleWebKit) {
+        // Keep the proven Windows/WebView2 and Android behavior unchanged.
+        if (title.isEmpty) return true;
+        if (CloudflareChallenge.isChallengeDocument(title: title, url: url) ||
+            _mainFrameHttpStatus == 403 ||
+            _mainFrameHttpStatus == 503) {
+          _challengeObserved = true;
+          return true;
+        }
+        final bool? domShowsChallenge = await _domShowsChallenge(
+          controller,
+          trustTitle: true,
+        );
+        if (domShowsChallenge != null) return domShowsChallenge;
+        return true;
+      }
+
+      final bool challengeWasObserved = _challengeObserved;
+      final bool challengeTitle = CloudflareChallenge.isChallengeDocument(
+        title: title,
+      );
+      final bool challengeUrl = CloudflareChallenge.isChallengeDocument(
+        url: url,
+      );
+      if (challengeTitle ||
+          challengeUrl ||
           _mainFrameHttpStatus == 403 ||
           _mainFrameHttpStatus == 503) {
         _challengeObserved = true;
+      }
+      if (challengeUrl ||
+          _mainFrameHttpStatus == 403 ||
+          _mainFrameHttpStatus == 503) {
         return true;
       }
-      final bool? domShowsChallenge = await _domShowsChallenge(controller);
+      final bool? domShowsChallenge = await _domShowsChallenge(
+        controller,
+        // Once the challenge itself has definitely been seen, prefer the
+        // current DOM over WKWebView's sometimes-stale native page title.
+        trustTitle: !challengeWasObserved,
+      );
       if (domShowsChallenge != null) return domShowsChallenge;
       return true;
     } catch (_) {
@@ -861,6 +995,9 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
                   },
                   onCreateWindow: _handleCreateWindow,
                   onLoadStart: (_, WebUri? url) {
+                    if (_usesAppleWebKit && _challengeObserved) {
+                      _navigatedAfterChallenge = true;
+                    }
                     _markWebViewActivity();
                     _mainFrameLoading = true;
                     _mainFrameHttpStatus = null;
@@ -873,7 +1010,11 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
                   onLoadStop: (_, WebUri? url) {
                     _markWebViewActivity();
                     _mainFrameLoading = false;
-                    _mainFrameHttpStatus = null;
+                    // Preserve Apple's 403/503 until the next navigation. It
+                    // lets periodic checks recognize the active interstitial
+                    // from native state without repeatedly evaluating its DOM.
+                    // Keep the established WebView2 behavior unchanged.
+                    if (!_usesAppleWebKit) _mainFrameHttpStatus = null;
                     if (kDebugMode) {
                       debugPrint('[Cloudflare] onLoadStop: $url');
                     }
@@ -886,11 +1027,17 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
                     if (mounted) {
                       setState(() => _loading = progress < 100);
                     }
+                    if (_usesAppleWebKit && progress >= 100) {
+                      unawaited(_checkForClearance());
+                    }
                   },
                   onUpdateVisitedHistory: (_, WebUri? url, _) {
                     _markWebViewActivity();
                     if (kDebugMode) {
                       debugPrint('[Cloudflare] history: $url');
+                    }
+                    if (_usesAppleWebKit) {
+                      unawaited(_checkForClearance());
                     }
                   },
                   onTitleChanged: (_, String? title) {
@@ -907,7 +1054,18 @@ class _CloudflareChallengePageState extends State<CloudflareChallengePage>
                     if (request.isForMainFrame != false) {
                       _mainFrameLoading = false;
                       _mainFrameHttpStatus = errorResponse.statusCode;
+                      if (_usesAppleWebKit &&
+                          (errorResponse.statusCode == 403 ||
+                              errorResponse.statusCode == 503)) {
+                        // WKWebView may navigate away from the interstitial
+                        // before the next DOM poll. Remember the HTTP evidence
+                        // now so a subsequently loaded clean site can finish.
+                        _challengeObserved = true;
+                      }
                       _markWebViewActivity();
+                      if (_usesAppleWebKit) {
+                        unawaited(_checkForClearance());
+                      }
                     }
                   },
                   onReceivedError: (_, _, WebResourceError error) {

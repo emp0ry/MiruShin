@@ -80,6 +80,11 @@ class CloudflareChallenge {
   /// Whether the current browser document still looks like a Cloudflare
   /// interstitial. Keeping this classification pure lets the interactive
   /// solver use native title/navigation events before resorting to a DOM probe.
+  /// Set [trustTitle] to false after a challenge was already observed so a
+  /// stale WKWebView title cannot outweigh a clean live URL and document.
+  /// [trustPassiveChallengeScript] remains true for the existing WebView2
+  /// behavior; Apple WebKit callers disable it because clean sites can retain
+  /// Cloudflare's background `jsd` script after verification.
   static bool isChallengeDocument({
     String title = '',
     String url = '',
@@ -87,10 +92,43 @@ class CloudflareChallenge {
     String html = '',
     bool hasSelector = false,
     bool isLoading = false,
+    bool trustTitle = true,
+    bool trustPassiveChallengeScript = true,
   }) {
     if (isLoading || hasSelector) return true;
-    final String haystack = '$title\n$url\n$text\n$html'.toLowerCase();
-    return _documentMarkers.any(haystack.contains);
+    final String document = '$url\n$text\n$html'.toLowerCase();
+    if (_documentMarkers.any(
+      (String marker) =>
+          (trustPassiveChallengeScript ||
+              marker != 'cdn-cgi/challenge-platform') &&
+          document.contains(marker),
+    )) {
+      return true;
+    }
+
+    // WKWebView can retain the interstitial's title briefly after Cloudflare
+    // has replaced/navigated the document. Callers that already observed the
+    // challenge can therefore ask us to classify the live URL/body without
+    // letting that stale title keep the solver open forever.
+    if (!trustTitle) return false;
+    final String normalizedTitle = title.toLowerCase();
+    return _documentMarkers.any(normalizedTitle.contains);
+  }
+
+  /// Whether structural DOM evidence still represents a blocking challenge.
+  ///
+  /// A normal site can retain a generic Turnstile widget after verification.
+  /// Strong interstitial nodes always block, while generic Turnstile nodes stop
+  /// blocking after their token completes or the challenged document navigates.
+  static bool hasBlockingChallengeSelector({
+    required bool hasStrongSelector,
+    required bool hasTurnstileSelector,
+    required bool turnstileSolved,
+    required bool navigatedAfterChallenge,
+  }) {
+    if (hasStrongSelector) return true;
+    if (!hasTurnstileSelector) return false;
+    return !turnstileSolved && !navigatedAfterChallenge;
   }
 
   static String _header(Map<String, dynamic> headers, String name) {

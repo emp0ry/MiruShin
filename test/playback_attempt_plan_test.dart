@@ -97,4 +97,43 @@ void main() {
 
     expect(labels(attempts), <String>['browser + direct']);
   });
+
+  test('downloaded HLS is eligible for proxy and direct fallback', () {
+    const String url =
+        'file:///Users/example/Library/Application%20Support/MiruShin/'
+        'downloads/title/episode/index.m3u8';
+
+    expect(isLocalSegmentedPlaybackSource(url), isTrue);
+    expect(
+      isPlaybackSourceProxyEligible(
+        url: url,
+        inlineDash: false,
+        usesBrowserBackend: false,
+      ),
+      isTrue,
+    );
+
+    final List<PlaybackAttempt> attempts = buildPlaybackAttemptPlan(
+      preference: PlayerBackend.auto,
+      mpvAvailable: false,
+      fvpAvailable: true,
+      proxyEligible: true,
+      directEligible: true,
+    );
+    expect(labels(attempts), <String>['FVP + local proxy', 'FVP + direct']);
+  });
+
+  test('ordinary local files do not start a redundant proxy', () {
+    const String url = 'file:///downloads/title/episode/video.mp4';
+
+    expect(isLocalSegmentedPlaybackSource(url), isFalse);
+    expect(
+      isPlaybackSourceProxyEligible(
+        url: url,
+        inlineDash: false,
+        usesBrowserBackend: false,
+      ),
+      isFalse,
+    );
+  });
 }
