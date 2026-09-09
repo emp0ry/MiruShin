@@ -218,6 +218,7 @@ class SoraAddonPreview {
     required this.manifestJson,
     required this.scriptCode,
     required this.scriptUrl,
+    this.localManifestCode,
   });
 
   final String manifestUrl;
@@ -225,6 +226,7 @@ class SoraAddonPreview {
   final Map<String, dynamic> manifestJson;
   final String scriptCode;
   final String scriptUrl;
+  final String? localManifestCode;
 }
 
 class SoraInstalledAddon {
@@ -253,6 +255,9 @@ class SoraInstalledAddon {
   final DateTime updatedAt;
   final DateTime? lastCheckedAt;
   final String? lastError;
+
+  bool get isLocal =>
+      Uri.tryParse(manifestUrl)?.scheme == 'mirushin-local-addon';
 
   SoraInstalledAddon copyWith({
     SoraAddonManifest? manifest,

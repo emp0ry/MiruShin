@@ -1,8 +1,10 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mirushin/features/addons/data/sora_addon_clipboard.dart';
 import 'package:mirushin/features/addons/data/sora_addon_store.dart';
 import 'package:mirushin/features/addons/domain/sora_models.dart';
 
@@ -61,7 +63,95 @@ void main() {
       expect(await store.loadInstalled(), isEmpty);
     },
   );
+
+  test(
+    'local clipboard files install the copied script without network access',
+    () async {
+      final Directory temp = await Directory.systemTemp.createTemp(
+        'sora_local_store_',
+      );
+      addTearDown(() => temp.delete(recursive: true));
+
+      final _FakeAdapter adapter = _FakeAdapter(<String, String>{});
+      final Dio dio = Dio()..httpClientAdapter = adapter;
+      final SoraAddonStore store = SoraAddonStore(
+        dio: dio,
+        supportDirectoryProvider: () async => temp,
+      );
+      const String script = '''
+async function searchResults() { return "[]"; }
+async function extractDetails() { return "{}"; }
+async function extractEpisodes() { return "[]"; }
+async function extractStreamUrl() { return "{}"; }
+''';
+      final SoraLocalAddonFiles files =
+          SoraLocalAddonFiles.fromFiles(<SoraAddonClipboardFile>[
+            SoraAddonClipboardFile(
+              name: 'yummyanime.json',
+              bytes: Uint8List.fromList(utf8.encode(_yummyAnimeManifest)),
+            ),
+            SoraAddonClipboardFile(
+              name: 'yummyanime.js',
+              bytes: Uint8List.fromList(utf8.encode(script)),
+            ),
+          ]);
+
+      final SoraAddonPreview preview = await store.previewFromLocalFiles(files);
+
+      expect(preview.manifest.sourceName, 'YummyAnime');
+      expect(
+        preview.manifest.scriptUrl,
+        'https://git.luna-app.eu/50n50/sources/raw/branch/main/'
+        'yummyanime/yummyanime.js',
+      );
+      expect(preview.scriptUrl, 'yummyanime.js');
+      expect(adapter.requestedUrls, isEmpty);
+
+      final SoraInstalledAddon installed = await store.installFromPreview(
+        preview,
+      );
+
+      expect(installed.isLocal, isTrue);
+      expect(
+        await File(installed.manifestPath).readAsString(),
+        _yummyAnimeManifest,
+      );
+      expect(await File(installed.scriptPath).readAsString(), script);
+      expect(await store.readScript(installed), script);
+      expect(adapter.requestedUrls, isEmpty);
+
+      final SoraInstalledAddon updated = await store.update(installed);
+      expect(updated, same(installed));
+      expect(adapter.requestedUrls, isEmpty);
+    },
+  );
 }
+
+const String _yummyAnimeManifest = '''{
+  "sourceName": "YummyAnime",
+  "iconUrl": "https://site.yummyani.me/img/icon/yummy-192.png",
+  "author": {
+    "name": "emp0ry",
+    "icon": "https://avatars.githubusercontent.com/u/64217088"
+  },
+  "version": "1.0.4",
+  "language": "Russian",
+  "streamType": "HLS",
+  "quality": "1080p",
+  "baseUrl": "https://api.yani.tv",
+  "searchBaseUrl": "https://api.yani.tv/search?limit=30&q=%s",
+  "scriptUrl": "https://git.luna-app.eu/50n50/sources/raw/branch/main/yummyanime/yummyanime.js",
+  "asyncJS": true,
+  "streamAsyncJS": true,
+  "softsub": false,
+  "type": "anime",
+  "downloadSupport": false,
+  "supportsMojuru": true,
+  "supportsDartotsu": true,
+  "supportsSora": true,
+  "supportsLuna": true
+}
+''';
 
 String _manifest({required String version}) {
   return '''
@@ -87,6 +177,7 @@ class _FakeAdapter implements HttpClientAdapter {
 
   final Map<String, String> responses;
   final Set<String> failUrls = <String>{};
+  final List<String> requestedUrls = <String>[];
 
   @override
   Future<ResponseBody> fetch(
@@ -95,6 +186,7 @@ class _FakeAdapter implements HttpClientAdapter {
     Future<void>? cancelFuture,
   ) async {
     final String url = options.uri.toString();
+    requestedUrls.add(url);
     if (failUrls.contains(url)) {
       throw DioException(
         requestOptions: options,

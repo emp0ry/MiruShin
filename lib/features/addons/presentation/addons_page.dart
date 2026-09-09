@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:cached_network_image/cached_network_image.dart';
@@ -11,6 +12,7 @@ import 'package:go_router/go_router.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:super_clipboard/super_clipboard.dart';
 
 import '../../../app/app_routes.dart';
 import '../../../app/localization/app_localizations.dart';
@@ -28,6 +30,7 @@ import '../../../core/widgets/section_header.dart';
 import '../../../core/widgets/skeleton_box.dart';
 import '../../../core/widgets/tv_text_field_focus.dart';
 import '../application/sora_addons_provider.dart';
+import '../data/sora_addon_clipboard.dart';
 import '../domain/sora_models.dart';
 
 class AddonsPage extends ConsumerStatefulWidget {
@@ -848,20 +851,138 @@ class _AddAddonDialogState extends ConsumerState<_AddAddonDialog> {
   bool _loading = false;
 
   @override
+  void initState() {
+    super.initState();
+    ClipboardEvents.instance?.registerPasteEventListener(_onWebPaste);
+  }
+
+  @override
   void dispose() {
+    ClipboardEvents.instance?.unregisterPasteEventListener(_onWebPaste);
     _controller.dispose();
     super.dispose();
   }
 
-  Future<void> _pasteFromClipboard() async {
-    final ClipboardData? data = await Clipboard.getData(Clipboard.kTextPlain);
-    final String text = data?.text?.trim() ?? '';
-    if (text.isEmpty) return;
-    _controller.text = text;
-    _controller.selection = TextSelection.collapsed(offset: text.length);
-    if (_preview != null) {
+  void _onWebPaste(ClipboardReadEvent event) {
+    if (_loading) return;
+    final Future<ClipboardReader> reader = event.getClipboardReader();
+    unawaited(
+      _readPaste(
+        () async => ref.read(soraAddonClipboardProvider).read(await reader),
+        replaceText: false,
+      ),
+    );
+  }
+
+  Future<void> _pasteFromClipboard({bool replaceText = true}) {
+    return _readPaste(
+      ref.read(soraAddonClipboardProvider).readSystemClipboard,
+      replaceText: replaceText,
+    );
+  }
+
+  Future<void> _readPaste(
+    Future<SoraAddonClipboardContent> Function() read, {
+    required bool replaceText,
+  }) async {
+    if (_loading) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final SoraAddonClipboardContent content = await read();
+      final SoraLocalAddonFiles? localFiles = content.localFiles;
+      if (localFiles != null) {
+        final SoraAddonPreview? result = await ref
+            .read(soraAddonsProvider.notifier)
+            .previewFromLocalFiles(localFiles);
+        if (!mounted) return;
+        setState(() {
+          _preview = result;
+          _error = result == null
+              ? ref.read(soraAddonsProvider).error ??
+                    context.t('Could not preview addon.')
+              : null;
+        });
+        return;
+      }
+      final String text = replaceText ? content.text.trim() : content.text;
+      if (text.isEmpty || !mounted) return;
+      _insertClipboardText(text, replaceText: replaceText);
       setState(() => _preview = null);
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _preview = null;
+        _error = error is SoraAddonException ? error.message : error.toString();
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _loading = false);
+      }
     }
+  }
+
+  void _insertClipboardText(String text, {required bool replaceText}) {
+    if (replaceText) {
+      _controller.value = TextEditingValue(
+        text: text,
+        selection: TextSelection.collapsed(offset: text.length),
+      );
+      return;
+    }
+    final TextEditingValue current = _controller.value;
+    final TextSelection selection = current.selection.isValid
+        ? current.selection
+        : TextSelection.collapsed(offset: current.text.length);
+    final int start = selection.start.clamp(0, current.text.length);
+    final int end = selection.end.clamp(start, current.text.length);
+    final String updated = current.text.replaceRange(start, end, text);
+    _controller.value = TextEditingValue(
+      text: updated,
+      selection: TextSelection.collapsed(offset: start + text.length),
+    );
+  }
+
+  Widget _buildContextMenu(
+    BuildContext context,
+    EditableTextState editableTextState,
+  ) {
+    void paste() {
+      editableTextState.hideToolbar();
+      unawaited(_pasteFromClipboard(replaceText: false));
+    }
+
+    final List<ContextMenuButtonItem> items = editableTextState
+        .contextMenuButtonItems
+        .map(
+          (ContextMenuButtonItem item) =>
+              item.type == ContextMenuButtonType.paste
+              ? item.copyWith(onPressed: paste)
+              : item,
+        )
+        .toList(growable: true);
+    if (!items.any(
+      (ContextMenuButtonItem item) => item.type == ContextMenuButtonType.paste,
+    )) {
+      final int afterCopy = items.lastIndexWhere(
+        (ContextMenuButtonItem item) =>
+            item.type == ContextMenuButtonType.cut ||
+            item.type == ContextMenuButtonType.copy,
+      );
+      items.insert(
+        afterCopy + 1,
+        ContextMenuButtonItem(
+          onPressed: paste,
+          type: ContextMenuButtonType.paste,
+        ),
+      );
+    }
+    return AdaptiveTextSelectionToolbar.buttonItems(
+      anchors: editableTextState.contextMenuAnchors,
+      buttonItems: items,
+    );
   }
 
   @override
@@ -883,26 +1004,38 @@ class _AddAddonDialogState extends ConsumerState<_AddAddonDialog> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
               TvTextFieldFocus(
-                child: TextField(
-                  controller: _controller,
-                  autofocus: true,
-                  keyboardType: TextInputType.url,
-                  decoration: InputDecoration(
-                    labelText: context.t('Manifest URL or addon ID'),
-                    hintText: 'https://example.com/addon.json  ·  Ag9V',
-                    prefixIcon: const Icon(Icons.link_rounded),
-                    suffixIcon: IconButton(
-                      tooltip: context.t('Paste'),
-                      icon: const Icon(Icons.content_paste_rounded),
-                      onPressed: _loading ? null : _pasteFromClipboard,
-                    ),
-                  ),
-                  onChanged: (_) {
-                    if (_preview != null) {
-                      setState(() => _preview = null);
-                    }
+                child: Actions(
+                  actions: <Type, Action<Intent>>{
+                    if (!kIsWeb)
+                      PasteTextIntent: CallbackAction<PasteTextIntent>(
+                        onInvoke: (PasteTextIntent intent) {
+                          unawaited(_pasteFromClipboard(replaceText: false));
+                          return null;
+                        },
+                      ),
                   },
-                  onSubmitted: (_) => _loading ? null : _previewUrl(),
+                  child: TextField(
+                    controller: _controller,
+                    autofocus: true,
+                    keyboardType: TextInputType.url,
+                    contextMenuBuilder: _buildContextMenu,
+                    decoration: InputDecoration(
+                      labelText: context.t('Manifest URL or addon ID'),
+                      hintText: 'https://example.com/addon.json  ·  Ag9V',
+                      prefixIcon: const Icon(Icons.link_rounded),
+                      suffixIcon: IconButton(
+                        tooltip: context.t('Paste'),
+                        icon: const Icon(Icons.content_paste_rounded),
+                        onPressed: _loading ? null : _pasteFromClipboard,
+                      ),
+                    ),
+                    onChanged: (_) {
+                      if (_preview != null) {
+                        setState(() => _preview = null);
+                      }
+                    },
+                    onSubmitted: (_) => _loading ? null : _previewUrl(),
+                  ),
                 ),
               ),
               if (_error != null) ...<Widget>[

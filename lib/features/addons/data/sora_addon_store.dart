@@ -8,6 +8,7 @@ import '../../../core/env/env.dart';
 import '../../../core/platform/io_compat.dart' if (dart.library.io) 'dart:io';
 import '../domain/addon_source_models.dart';
 import '../domain/sora_models.dart';
+import 'sora_addon_clipboard.dart';
 
 class SoraAddonImportResult {
   const SoraAddonImportResult({
@@ -156,6 +157,63 @@ class SoraAddonStore {
     );
   }
 
+  Future<SoraAddonPreview> previewFromLocalFiles(
+    SoraLocalAddonFiles files,
+  ) async {
+    final String manifestCode = _decodeUtf8(
+      files.manifest.bytes,
+      label: 'Addon manifest',
+    );
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(manifestCode);
+    } on FormatException catch (error) {
+      throw SoraAddonException('Manifest is not valid JSON: ${error.message}.');
+    }
+    if (decoded is! Map) {
+      throw const SoraAddonException('Manifest JSON must be an object.');
+    }
+    final Map<String, dynamic> manifestJson = decoded.map(
+      (Object? key, Object? value) =>
+          MapEntry<String, dynamic>(key.toString(), value),
+    );
+    final Map<String, dynamic> normalizedManifestJson =
+        Map<String, dynamic>.from(manifestJson);
+    if (_firstString(normalizedManifestJson, const <String>[
+      'sourceName',
+      'name',
+      'title',
+    ]).isEmpty) {
+      normalizedManifestJson['sourceName'] = _sourceNameFromFileName(
+        files.manifest.name,
+      );
+    }
+    final SoraAddonManifest manifest = SoraAddonManifest.fromJson(
+      normalizedManifestJson,
+    );
+    manifest.validate();
+    final String scriptCode = _decodeUtf8(
+      files.script.bytes,
+      label: 'Addon script',
+    );
+    if (scriptCode.trim().isEmpty) {
+      throw const SoraAddonException('Addon script is empty.');
+    }
+    final String identity = '${manifest.sourceName}\n${manifest.author.name}'
+        .trim()
+        .toLowerCase();
+    final String manifestUrl =
+        'mirushin-local-addon://clipboard/${_fnv1a(identity)}';
+    return SoraAddonPreview(
+      manifestUrl: manifestUrl,
+      manifest: manifest,
+      manifestJson: normalizedManifestJson,
+      scriptCode: scriptCode,
+      scriptUrl: files.script.name,
+      localManifestCode: manifestCode,
+    );
+  }
+
   /// Fetches and parses a module catalog (an array of module entries) from a
   /// user-added source URL. Reuses the shared Dio/proxy/error handling.
   Future<List<AddonCatalogEntry>> fetchCatalog(String url) async {
@@ -220,7 +278,8 @@ class SoraAddonStore {
     final File manifestFile = File('${addonDirectory.path}/manifest.json');
     final File scriptFile = File('${addonDirectory.path}/module.js');
     await manifestFile.writeAsString(
-      const JsonEncoder.withIndent('  ').convert(preview.manifestJson),
+      preview.localManifestCode ??
+          const JsonEncoder.withIndent('  ').convert(preview.manifestJson),
     );
     await scriptFile.writeAsString(preview.scriptCode);
 
@@ -249,6 +308,9 @@ class SoraAddonStore {
   }
 
   Future<SoraInstalledAddon> update(SoraInstalledAddon addon) async {
+    if (addon.isLocal) {
+      return addon;
+    }
     final DateTime checkedAt = DateTime.now();
     try {
       final SoraAddonPreview preview = await previewFromUrl(addon.manifestUrl);
@@ -743,6 +805,26 @@ class SoraAddonStore {
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
     return cleaned.isEmpty ? manifestUri.host : cleaned;
+  }
+
+  String _sourceNameFromFileName(String fileName) {
+    final String base = fileName.toLowerCase().endsWith('.json')
+        ? fileName.substring(0, fileName.length - 5)
+        : fileName;
+    final String cleaned = base
+        .replaceAll(RegExp(r'[_-]+'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    return cleaned.isEmpty ? 'Sora Addon' : cleaned;
+  }
+
+  String _decodeUtf8(List<int> bytes, {required String label}) {
+    try {
+      final String decoded = utf8.decode(bytes, allowMalformed: false);
+      return decoded.startsWith('\ufeff') ? decoded.substring(1) : decoded;
+    } on FormatException {
+      throw SoraAddonException('$label is not valid UTF-8.');
+    }
   }
 
   Future<File> _registryFile() async {

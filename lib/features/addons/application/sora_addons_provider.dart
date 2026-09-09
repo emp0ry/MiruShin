@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../settings/application/settings_state.dart';
+import '../data/sora_addon_clipboard.dart';
 import '../data/sora_addon_store.dart';
 import '../data/sora_js_runtime.dart';
 import '../domain/sora_models.dart';
@@ -13,6 +14,12 @@ final soraAddonStoreProvider = Provider<SoraAddonStore>((Ref ref) {
       settingsProvider.select((SettingsState s) => s.soraWebProxyUrl),
     ),
   );
+});
+
+final soraAddonClipboardProvider = Provider<SoraAddonClipboardReader>((
+  Ref ref,
+) {
+  return const SoraAddonClipboardReader();
 });
 
 final soraJsRuntimeProvider = Provider<SoraJsRuntime>((Ref ref) {
@@ -125,6 +132,26 @@ class SoraAddonsController extends Notifier<SoraAddonsState> {
       final SoraAddonPreview preview = await ref
           .read(soraAddonStoreProvider)
           .previewFromUrl(url);
+      state = state.copyWith(preview: preview, previewing: false);
+      return preview;
+    } on Object catch (error) {
+      state = state.copyWith(
+        previewing: false,
+        error: _friendlyError(error),
+        clearPreview: true,
+      );
+      return null;
+    }
+  }
+
+  Future<SoraAddonPreview?> previewFromLocalFiles(
+    SoraLocalAddonFiles files,
+  ) async {
+    state = state.copyWith(previewing: true, clearError: true);
+    try {
+      final SoraAddonPreview preview = await ref
+          .read(soraAddonStoreProvider)
+          .previewFromLocalFiles(files);
       state = state.copyWith(preview: preview, previewing: false);
       return preview;
     } on Object catch (error) {
