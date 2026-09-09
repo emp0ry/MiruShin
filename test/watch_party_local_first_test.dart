@@ -122,6 +122,44 @@ void main() {
       expect(guard.isCurrent(secondEpisode), isFalse);
       expect(guard.isCurrent(latestVoiceover), isTrue);
     });
+
+    test('matching download replaces an already open online source', () {
+      expect(
+        shouldReuseCurrentWatchPartySource(
+          sameCurrentSource: true,
+          currentSourceIsOffline: false,
+          hasPlayableDownload: true,
+        ),
+        isFalse,
+      );
+      expect(
+        shouldReuseCurrentWatchPartySource(
+          sameCurrentSource: true,
+          currentSourceIsOffline: false,
+          hasPlayableDownload: false,
+        ),
+        isTrue,
+      );
+    });
+
+    test('matching offline source is reused without a reload', () {
+      expect(
+        shouldReuseCurrentWatchPartySource(
+          sameCurrentSource: true,
+          currentSourceIsOffline: true,
+          hasPlayableDownload: true,
+        ),
+        isTrue,
+      );
+      expect(
+        shouldReuseCurrentWatchPartySource(
+          sameCurrentSource: false,
+          currentSourceIsOffline: true,
+          hasPlayableDownload: true,
+        ),
+        isFalse,
+      );
+    });
   });
 
   group('watch-party local match', () {

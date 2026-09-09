@@ -86,16 +86,6 @@ class WatchPartyGuestResolver {
       playback.setCurrentItemProgressIgnored(false);
       currentState = _ref.read(playbackControllerProvider);
     }
-    if (!forceReload && _isSameSource(currentState, descriptor)) {
-      return _align(
-        playback,
-        generation: generation,
-        position: position,
-        speed: speed,
-        temporarySpeedActive: temporarySpeedActive,
-        playing: playing,
-      );
-    }
 
     final DownloadController downloads = _ref.read(downloadsProvider.notifier);
     await downloads.ensureLoaded();
@@ -111,6 +101,29 @@ class WatchPartyGuestResolver {
             isPlayable: (DownloadedEpisode episode) =>
                 store.hasPlayableFile(rootPath, episode),
           );
+    currentState = _ref.read(playbackControllerProvider);
+    final bool sameCurrentSource = _isSameSource(currentState, descriptor);
+    final bool currentSourceIsOffline = currentState.server?.id == 'offline';
+
+    // A matching local download must be considered before reusing an already
+    // initialized online source. Otherwise a guest who had the same episode
+    // open online would never switch to the downloaded copy when joining or
+    // receiving a fresh party snapshot.
+    if (!forceReload &&
+        shouldReuseCurrentWatchPartySource(
+          sameCurrentSource: sameCurrentSource,
+          currentSourceIsOffline: currentSourceIsOffline,
+          hasPlayableDownload: localMatch != null,
+        )) {
+      return _align(
+        playback,
+        generation: generation,
+        position: position,
+        speed: speed,
+        temporarySpeedActive: temporarySpeedActive,
+        playing: playing,
+      );
+    }
 
     final bool addonInstalled =
         _ref.read(soraAddonsProvider).byId(descriptor.soraAddonId) != null;
@@ -402,4 +415,13 @@ class WatchPartyGuestResolver {
   }
 
   bool _isCurrent(int generation) => _guard.isCurrent(generation);
+}
+
+bool shouldReuseCurrentWatchPartySource({
+  required bool sameCurrentSource,
+  required bool currentSourceIsOffline,
+  required bool hasPlayableDownload,
+}) {
+  if (!sameCurrentSource) return false;
+  return currentSourceIsOffline || !hasPlayableDownload;
 }
