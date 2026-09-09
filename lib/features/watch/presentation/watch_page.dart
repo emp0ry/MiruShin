@@ -3810,7 +3810,10 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
                       ),
                       const SizedBox(width: AppSpacing.sm),
                       OutlinedButton.icon(
-                        onPressed: singleStatus != null || _downloadBusy
+                        onPressed:
+                            _downloadBusy ||
+                                singleStatus == DownloadStatus.downloading ||
+                                singleStatus == DownloadStatus.queued
                             ? null
                             : () => unawaited(
                                 _enqueueDownloads(
@@ -4155,7 +4158,10 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
         try {
           bundle = episode.href == episodes.first.href
               ? choice.bundle
-              : await _resolveDownloadBundle(episode);
+              : await _resolveDownloadBundle(
+                  episode,
+                  voiceover: choice.preference.voiceoverId,
+                );
         } catch (_) {
           skipped.add(episode);
           continue;
@@ -4170,7 +4176,7 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
           continue;
         }
 
-        await notifier.enqueue(
+        final bool added = await notifier.enqueue(
           item: widget.item,
           source: widget.source,
           episode: episode,
@@ -4178,13 +4184,24 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
           availableEpisodeLimit: availableEpisodeLimit,
           streamPreference: choice.preference,
         );
-        queued.add(episode);
+        if (added) queued.add(episode);
       }
       if (!mounted) return;
       if (skipped.isNotEmpty) {
         _showSkippedDownloadsWarning(skipped);
       }
-      if (queued.isEmpty) return;
+      if (queued.isEmpty) {
+        if (skipped.isEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                context.t('Selected stream is already downloaded.'),
+              ),
+            ),
+          );
+        }
+        return;
+      }
       _setDownloadMode(false);
       // Open the title's downloads page so the user can watch progress.
       context.push(
@@ -4262,7 +4279,48 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
           },
         );
     if (selected == null) return null;
-    if (!_isDownloadableSelection(selected)) {
+    final DownloadStreamPreference preference = _downloadPreferenceFromBundle(
+      selected,
+    );
+    NormalizedStreamBundle selectedForDownload = selected;
+    final String selectedVoiceover = preference.voiceoverId.trim();
+    if (selectedVoiceover.isNotEmpty &&
+        selectedVoiceover != bundle.selectedVoiceOver?.id) {
+      try {
+        final NormalizedStreamBundle resolvedVoiceover =
+            await _resolveDownloadBundle(episode, voiceover: selectedVoiceover);
+        final NormalizedStreamBundle? matchedVoiceover =
+            _bundleWithDownloadPreference(resolvedVoiceover, preference);
+        if (matchedVoiceover == null) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  context.t('Selected stream is not downloadable.'),
+                ),
+              ),
+            );
+          }
+          return null;
+        }
+        selectedForDownload = matchedVoiceover;
+      } catch (error) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                context.tf(
+                  'Stream resolution failed: {error}',
+                  <String, Object?>{'error': error},
+                ),
+              ),
+            ),
+          );
+        }
+        return null;
+      }
+    }
+    if (!_isDownloadableSelection(selectedForDownload)) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -4273,14 +4331,15 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
       return null;
     }
     return _DownloadStreamChoice(
-      bundle: selected,
-      preference: _downloadPreferenceFromBundle(selected),
+      bundle: selectedForDownload,
+      preference: preference,
     );
   }
 
   Future<NormalizedStreamBundle> _resolveDownloadBundle(
-    SoraEpisode episode,
-  ) async {
+    SoraEpisode episode, {
+    String? voiceover,
+  }) async {
     final SoraInstalledAddon? addon = ref
         .read(soraAddonsProvider)
         .byId(widget.source.addonId);
@@ -4289,7 +4348,11 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
     }
     final SoraResolvedStreams streams = await ref
         .read(soraJsRuntimeProvider)
-        .extractStreams(addon: addon, episode: episode, voiceover: null);
+        .extractStreams(
+          addon: addon,
+          episode: episode,
+          voiceover: voiceover?.trim().isEmpty == true ? null : voiceover,
+        );
     return parseSoraStreamBundle(
       streams,
       streamType: addon.manifest.streamType,
@@ -4326,7 +4389,10 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
           return selected.withQuality(quality);
         }
       }
-      return null;
+      // The selected quality is a preference, not part of stream identity.
+      // Keep the exact server/voiceover and let the downloader choose the
+      // best remaining quality from that server.
+      return selected;
     }
     return selected;
   }

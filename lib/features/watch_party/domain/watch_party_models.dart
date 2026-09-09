@@ -106,10 +106,28 @@ class SourceDescriptor {
 
   bool sameEpisodeAs(SourceDescriptor? other) {
     if (other == null) return false;
-    return soraAddonId == other.soraAddonId &&
-        soraEpisodeHref == other.soraEpisodeHref &&
+    return _sameMediaAs(other) &&
+        soraAddonId == other.soraAddonId &&
+        _normalizeEpisodeHref(soraEpisodeHref) ==
+            _normalizeEpisodeHref(other.soraEpisodeHref) &&
         seasonNumber == other.seasonNumber &&
         episodeNumber == other.episodeNumber;
+  }
+
+  bool _sameMediaAs(SourceDescriptor other) {
+    if (mediaType != other.mediaType) return false;
+    if (mediaId == other.mediaId) return true;
+    for (final String key in const <String>[
+      'anilist',
+      'mal',
+      'shikimori',
+      'tmdb',
+    ]) {
+      final String left = externalIds[key]?.trim() ?? '';
+      final String right = other.externalIds[key]?.trim() ?? '';
+      if (left.isNotEmpty && left == right) return true;
+    }
+    return false;
   }
 
   bool sameSelectionAs(SourceDescriptor? other) {
@@ -178,6 +196,22 @@ class SourceDescriptor {
       episodeCount: (json['episodeCount'] as num?)?.toInt(),
     );
   }
+}
+
+String _normalizeEpisodeHref(String value) {
+  final String trimmed = value.trim();
+  final Uri? uri = Uri.tryParse(trimmed);
+  if (uri == null || !uri.hasScheme) {
+    return trimmed.replaceFirst(RegExp(r'/+$'), '');
+  }
+  return uri
+      .replace(
+        scheme: uri.scheme.toLowerCase(),
+        host: uri.host.toLowerCase(),
+        path: uri.path.replaceFirst(RegExp(r'/+$'), ''),
+        fragment: '',
+      )
+      .toString();
 }
 
 class WatchPartyPermissions {

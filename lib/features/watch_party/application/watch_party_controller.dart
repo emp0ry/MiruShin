@@ -4,7 +4,6 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../player/application/playback_controller.dart';
-import '../../player/domain/player_models.dart';
 import '../data/default_watch_party_transport.dart';
 import '../data/self_hosted_relay_transport.dart';
 import '../data/signaling_service.dart';
@@ -14,11 +13,47 @@ import '../domain/watch_party_models.dart';
 import '../domain/watch_party_qr.dart';
 import 'watch_party_connection_settings.dart';
 import 'watch_party_guest_resolver.dart';
+import 'watch_party_source_descriptor.dart';
 
 final watchPartyProvider =
     NotifierProvider<WatchPartyController, WatchPartyRoomState>(
       WatchPartyController.new,
     );
+
+class WatchPartySourceApplyPolicy {
+  const WatchPartySourceApplyPolicy({
+    required this.shouldApply,
+    required this.forceReload,
+    required this.syncInitialQuality,
+  });
+
+  final bool shouldApply;
+  final bool forceReload;
+  final bool syncInitialQuality;
+}
+
+WatchPartySourceApplyPolicy watchPartySourceApplyPolicy({
+  required WatchPartyConnectionMode connectionMode,
+  required SourceDescriptor descriptor,
+  required SourceDescriptor? lastAppliedSource,
+  required WatchPartyEventType eventType,
+  required bool hasPendingGuestStreamRequest,
+}) {
+  // Keep both transports on the same stream semantics. Quality is local after
+  // the initial selection and never turns a snapshot into a source reload.
+  switch (connectionMode) {
+    case WatchPartyConnectionMode.defaultConnection:
+    case WatchPartyConnectionMode.selfHostedRelay:
+      return WatchPartySourceApplyPolicy(
+        shouldApply:
+            hasPendingGuestStreamRequest ||
+            eventType == WatchPartyEventType.stateSnapshot ||
+            !descriptor.sameStreamAs(lastAppliedSource),
+        forceReload: hasPendingGuestStreamRequest,
+        syncInitialQuality: lastAppliedSource == null,
+      );
+  }
+}
 
 /// Orchestrates the whole watch party: the Worker pairing handshake, the P2P
 /// WebRTC connection, and the bridge between [PlaybackController] and the peer.
@@ -380,6 +415,13 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
     );
   }
 
+  void retryHostSource() {
+    if (!state.isGuest || !state.isConnected) return;
+    _lastAppliedSource = null;
+    state = state.copyWith(clearError: true);
+    _send(WatchPartyEvent(type: WatchPartyEventType.helloRequest));
+  }
+
   // WebRTC wiring
 
   void _bindWebrtc(WebRtcSyncService webrtc, {required WatchPartyRole role}) {
@@ -585,21 +627,18 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
     final bool temporarySpeedActive = ref
         .read(playbackControllerProvider)
         .temporarySpeedActive;
-    final bool relayMode =
-        state.connectionMode == WatchPartyConnectionMode.selfHostedRelay;
-    final bool alreadySelected = relayMode
-        ? requested.sameSelectionAs(current)
-        : requested.sameStreamAs(current);
+    final bool alreadySelected = requested.sameStreamAs(current);
     try {
-      await resolver.apply(
+      final bool applied = await resolver.apply(
         requested,
         position: position,
         speed: speed,
         temporarySpeedActive: temporarySpeedActive,
         playing: playing,
-        syncQuality: relayMode,
+        syncQuality: false,
         forceReload: !alreadySelected,
       );
+      if (!applied) return;
       // A real reload broadcasts from PlaybackController.load(). An unchanged
       // request still needs an acknowledgement to clear the guest's pending
       // request and reassert the host's authoritative selection.
@@ -699,32 +738,34 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
     if (descriptor == null || resolver == null) return;
     final bool hasPendingGuestStreamRequest =
         _pendingGuestStreamRequest != null;
-    final bool relayMode =
-        state.connectionMode == WatchPartyConnectionMode.selfHostedRelay;
-    final bool syncInitialQuality = _lastAppliedSource == null || relayMode;
-    if (!hasPendingGuestStreamRequest &&
-        (relayMode
-            ? descriptor.sameSelectionAs(_lastAppliedSource)
-            : descriptor.sameStreamAs(_lastAppliedSource)) &&
-        event.type != WatchPartyEventType.stateSnapshot) {
-      return;
-    }
+    final WatchPartySourceApplyPolicy policy = watchPartySourceApplyPolicy(
+      connectionMode: state.connectionMode,
+      descriptor: descriptor,
+      lastAppliedSource: _lastAppliedSource,
+      eventType: event.type,
+      hasPendingGuestStreamRequest: hasPendingGuestStreamRequest,
+    );
+    if (!policy.shouldApply) return;
     _pendingGuestStreamRequest = null;
-    _lastAppliedSource = descriptor;
     try {
-      await resolver.apply(
+      final bool applied = await resolver.apply(
         descriptor,
         position: _expectedPosition(event),
         speed: event.speed,
         temporarySpeedActive: event.temporarySpeedActive,
         playing: event.isPlaying,
-        syncQuality: syncInitialQuality,
-        forceReload: hasPendingGuestStreamRequest,
+        syncQuality: policy.syncInitialQuality,
+        forceReload: policy.forceReload,
       );
+      if (!applied) return;
+      _lastAppliedSource = descriptor;
+      state = state.copyWith(clearError: true);
     } on Object catch (error) {
       // Non-fatal: the party stays connected, the host keeps playing.
       state = state.copyWith(
-        lastError: 'Could not load the host\'s source: $error',
+        lastError: error is WatchPartySourceUnavailable
+            ? error.message
+            : 'Could not load the host\'s source: $error',
       );
     }
   }
@@ -787,29 +828,7 @@ class WatchPartyController extends Notifier<WatchPartyRoomState>
   }
 
   SourceDescriptor? _currentDescriptor() {
-    final MediaPlaybackItem? item = ref.read(playbackControllerProvider).item;
-    if (item == null) return null;
-    final String addonId = item.externalIds['sora_addon_id'] ?? '';
-    final String href = item.externalIds['sora_episode_href'] ?? '';
-    if (addonId.isEmpty || href.isEmpty) return null;
-    final PlaybackState playback = ref.read(playbackControllerProvider);
-    return SourceDescriptor(
-      mediaId: item.id,
-      title: item.title,
-      originalTitle: item.originalTitle,
-      posterUrl: item.posterUrl,
-      backdropUrl: item.backdropUrl,
-      mediaType: item.mediaType,
-      externalIds: item.externalIds,
-      soraAddonId: addonId,
-      soraEpisodeHref: href,
-      seasonNumber: item.seasonNumber,
-      episodeNumber: item.episodeNumber,
-      serverId: playback.server?.id,
-      voiceoverId: playback.voiceover?.id,
-      qualityId: playback.quality?.id,
-      episodeCount: item.episodeCount,
-    );
+    return watchPartySourceDescriptorFor(ref.read(playbackControllerProvider));
   }
 
   // Signaling polling

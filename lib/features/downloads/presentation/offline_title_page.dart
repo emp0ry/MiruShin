@@ -36,6 +36,7 @@ import '../application/download_episode_display.dart';
 import '../application/download_settings.dart';
 import '../application/downloads_provider.dart';
 import '../application/offline_playback.dart';
+import '../domain/download_identity.dart';
 import '../domain/download_models.dart';
 import 'downloaded_artwork_image.dart';
 
@@ -71,6 +72,7 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
   static const MethodChannel _windowChannel = MethodChannel('mirushin/window');
 
   String? _selectedAddonId;
+  final Map<String, String> _selectedVariantByAddon = <String, String>{};
   final Map<String, int> _selectedSeasonByAddon = <String, int>{};
   Timer? _wakelockTimer;
   bool _wakelockHeld = false;
@@ -91,6 +93,7 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
     if (oldWidget.mediaId != widget.mediaId ||
         oldWidget.initialAddonId != widget.initialAddonId) {
       _selectedAddonId = null;
+      _selectedVariantByAddon.clear();
       _selectedSeasonByAddon.clear();
     }
   }
@@ -163,17 +166,46 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
     final List<DownloadedEpisode> moduleEpisodes = episodes
         .where((DownloadedEpisode e) => e.addonId == selected)
         .toList(growable: false);
+    final Map<String, DownloadedEpisode> streamVariants =
+        <String, DownloadedEpisode>{};
+    for (final DownloadedEpisode episode in moduleEpisodes) {
+      final String key = downloadStreamVariantKey(episode.streamPreference);
+      final DownloadedEpisode? current = streamVariants[key];
+      if (current == null || episode.updatedAt.isAfter(current.updatedAt)) {
+        streamVariants[key] = episode;
+      }
+    }
+    final String? requestedVariant = _selectedVariantByAddon[selected];
+    final String selectedVariant =
+        requestedVariant != null && streamVariants.containsKey(requestedVariant)
+        ? requestedVariant
+        : (streamVariants.entries.toList()..sort(
+                (
+                  MapEntry<String, DownloadedEpisode> left,
+                  MapEntry<String, DownloadedEpisode> right,
+                ) => right.value.updatedAt.compareTo(left.value.updatedAt),
+              ))
+              .first
+              .key;
+    final List<DownloadedEpisode> selectedStreamEpisodes = moduleEpisodes
+        .where(
+          (DownloadedEpisode episode) =>
+              downloadStreamVariantKey(episode.streamPreference) ==
+              selectedVariant,
+        )
+        .toList(growable: false);
     final List<_OfflineSeasonOption> seasonOptions = _seasonOptions(
       media,
-      moduleEpisodes,
+      selectedStreamEpisodes,
     );
     final bool useSeasonFlow = _usesOfflineSeasonFlow(media, seasonOptions);
+    final String seasonSelectionKey = '$selected|$selectedVariant';
     final int? selectedSeason = useSeasonFlow
-        ? _selectedSeason(selected, seasonOptions)
+        ? _selectedSeason(seasonSelectionKey, seasonOptions)
         : null;
     final List<DownloadedEpisode> visibleEpisodes = selectedSeason == null
-        ? moduleEpisodes
-        : moduleEpisodes
+        ? selectedStreamEpisodes
+        : selectedStreamEpisodes
               .where((DownloadedEpisode e) => e.seasonNumber == selectedSeason)
               .toList(growable: false);
     final DownloadedEpisode? continueEpisode = offlineContinueEpisode(
@@ -220,6 +252,32 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
                           );
                         }).toList(),
                       ),
+                      if (streamVariants.length > 1) ...<Widget>[
+                        const SizedBox(height: AppSpacing.lg),
+                        Text(
+                          context.t('Soundtrack'),
+                          style: Theme.of(context).textTheme.labelMedium,
+                        ),
+                        const SizedBox(height: AppSpacing.sm),
+                        Wrap(
+                          spacing: AppSpacing.sm,
+                          runSpacing: AppSpacing.sm,
+                          children: streamVariants.entries.map((
+                            MapEntry<String, DownloadedEpisode> variant,
+                          ) {
+                            return ChoiceChip(
+                              label: Text(
+                                _downloadVariantLabel(context, variant.value),
+                              ),
+                              selected: variant.key == selectedVariant,
+                              onSelected: (_) => setState(
+                                () => _selectedVariantByAddon[selected] =
+                                    variant.key,
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -228,7 +286,7 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
                 if (useSeasonFlow && selectedSeason != null) ...<Widget>[
                   _seasonPickerCard(
                     context,
-                    selected,
+                    seasonSelectionKey,
                     seasonOptions,
                     selectedSeason,
                   ),
@@ -250,7 +308,7 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
                         context,
                         controller,
                         media,
-                        moduleEpisodes,
+                        selectedStreamEpisodes,
                         selectedSeason,
                         continueEpisode?.id,
                       ),
@@ -268,7 +326,7 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
             bottom: AppSpacing.xl,
             child: SafeArea(
               child: FilledButton.icon(
-                onPressed: () => _play(continueEpisode, moduleEpisodes),
+                onPressed: () => _play(continueEpisode, selectedStreamEpisodes),
                 icon: const Icon(Icons.play_arrow_rounded, size: 18),
                 label: Text(
                   continueEpisode.displayNumber.isEmpty
@@ -336,6 +394,25 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
       ep.seasonNumber,
       ep.episodeNumber,
     );
+  }
+
+  String _downloadVariantLabel(
+    BuildContext context,
+    DownloadedEpisode episode,
+  ) {
+    final DownloadStreamPreference preference = episode.streamPreference;
+    final String voiceover = preference.voiceoverLabel.trim().isNotEmpty
+        ? preference.voiceoverLabel.trim()
+        : preference.voiceoverId.trim();
+    final String server = preference.serverTitle.trim().isNotEmpty
+        ? preference.serverTitle.trim()
+        : preference.serverId.trim();
+    if (voiceover.isNotEmpty && server.isNotEmpty && voiceover != server) {
+      return '$voiceover · $server';
+    }
+    if (voiceover.isNotEmpty) return voiceover;
+    if (server.isNotEmpty) return server;
+    return context.t('Downloaded');
   }
 
   List<Widget> _buildEpisodeRows(
@@ -789,8 +866,10 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
       debugPrint('OfflineNext: pushNext=false reason=download-root-missing');
       return;
     }
-    final List<DownloadedEpisode> transitionSnapshot =
-        List<DownloadedEpisode>.unmodifiable(moduleEpisodes);
+    final List<DownloadedEpisode> transitionSnapshot = offlineModuleEpisodesFor(
+      ep,
+      moduleEpisodes,
+    );
     final MediaPlaybackItem item = buildOfflinePlaybackItem(
       episode: ep,
       rootPath: rootPath,

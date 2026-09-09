@@ -120,6 +120,32 @@ class _ActivePartyCard extends ConsumerWidget {
         ],
         const SizedBox(height: 12),
         WatchPartyStatusText(party: party),
+        if (party.isGuest &&
+            party.isConnected &&
+            party.lastError?.trim().isNotEmpty == true) ...<Widget>[
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: colors.errorContainer,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(
+              context.t(party.lastError!),
+              textAlign: TextAlign.center,
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: colors.onErrorContainer),
+            ),
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: () =>
+                ref.read(watchPartyProvider.notifier).retryHostSource(),
+            icon: const Icon(Icons.refresh_rounded),
+            label: Text(context.t('Retry')),
+          ),
+        ],
         if (party.connectionMode ==
             WatchPartyConnectionMode.selfHostedRelay) ...<Widget>[
           const SizedBox(height: 8),

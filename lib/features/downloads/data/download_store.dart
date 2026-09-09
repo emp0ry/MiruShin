@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../domain/download_identity.dart';
 import '../domain/download_models.dart';
 
 /// Persists the downloads registry and resolves on-disk paths.
@@ -13,7 +14,7 @@ import '../domain/download_models.dart';
 /// Layout under `{applicationSupport}/downloads`:
 /// ```
 /// registry.json
-/// {mediaId}/{addonId}/S{season}E{ep}/   <- DownloadedEpisode.relDir
+/// {mediaId}/{addonId}/S{season}E{ep}/{streamVariant}/
 ///     video.mp4 | index.m3u8 (+ seg_*.ts, key.bin)
 ///     sub_{lang}.{ext}
 /// ```
@@ -43,6 +44,7 @@ class DownloadStore {
     required String addonId,
     required int seasonNumber,
     required double episodeNumber,
+    DownloadStreamPreference streamPreference = DownloadStreamPreference.empty,
   }) {
     final String epToken =
         (episodeNumber == episodeNumber.roundToDouble()
@@ -53,7 +55,12 @@ class DownloadStore {
       sanitizeForPath(mediaId),
       sanitizeForPath(addonId),
       'S${seasonNumber}E$epToken',
+      downloadStreamVariantPathToken(streamPreference),
     );
+  }
+
+  bool hasPlayableFile(String rootPath, DownloadedEpisode episode) {
+    return File(videoPath(rootPath, episode)).existsSync();
   }
 
   Future<Directory> ensureEpisodeDir(

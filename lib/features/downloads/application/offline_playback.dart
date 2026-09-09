@@ -2,6 +2,7 @@ import 'package:path/path.dart' as p;
 
 import '../../../shared/models/media_item.dart';
 import '../../player/domain/player_models.dart';
+import '../domain/download_identity.dart';
 import '../domain/download_models.dart';
 import 'download_episode_display.dart';
 
@@ -14,6 +15,7 @@ MediaPlaybackItem buildOfflinePlaybackItem({
   required String rootPath,
   List<DownloadedEpisode> moduleEpisodes = const <DownloadedEpisode>[],
   PlaybackStartPolicy startPolicy = PlaybackStartPolicy.resumeSaved,
+  Duration startPosition = Duration.zero,
 }) {
   final String videoPath = p.join(
     rootPath,
@@ -78,6 +80,17 @@ MediaPlaybackItem buildOfflinePlaybackItem({
         episode.videoFileName,
       ),
       'mirushin_offline_quality': episode.qualityLabel,
+      if (episode.streamPreference.serverId.trim().isNotEmpty)
+        offlineOriginServerIdKey: episode.streamPreference.serverId.trim(),
+      if (episode.streamPreference.voiceoverId.trim().isNotEmpty)
+        offlineOriginVoiceoverIdKey: episode.streamPreference.voiceoverId
+            .trim(),
+      if (episode.qualityLabel.trim().isNotEmpty)
+        offlineOriginQualityIdKey: episode.qualityLabel.trim(),
+      if (episode.media.posterUrl.trim().isNotEmpty)
+        offlineOriginPosterUrlKey: episode.media.posterUrl.trim(),
+      if (episode.media.backdropUrl.trim().isNotEmpty)
+        offlineOriginBackdropUrlKey: episode.media.backdropUrl.trim(),
     },
     servers: <MediaServer>[server],
     seasons: _buildSeasons(moduleEpisodes, rootPath: rootPath),
@@ -86,6 +99,7 @@ MediaPlaybackItem buildOfflinePlaybackItem({
     seasonNumber: episode.seasonNumber,
     episodeNumber: episode.episodeNumber,
     episodeCount: media.episodeCount,
+    startPosition: startPosition,
     startPolicy: startPolicy,
   );
 }
@@ -114,7 +128,11 @@ List<DownloadedEpisode> offlineModuleEpisodesFor(
     downloads.where(
       (DownloadedEpisode episode) =>
           episode.mediaId == current.mediaId &&
-          episode.addonId == current.addonId,
+          episode.addonId == current.addonId &&
+          sameDownloadedStreamVariant(
+            episode.streamPreference,
+            current.streamPreference,
+          ),
     ),
   );
 }
@@ -154,23 +172,6 @@ int _currentDownloadIndex(
         e.seasonNumber == current.seasonNumber &&
         e.episodeNumber == current.episodeNumber,
   );
-}
-
-String normalizeDownloadedEpisodeHref(String value) {
-  final String trimmed = value.trim();
-  final Uri? uri = Uri.tryParse(trimmed);
-  if (uri == null || !uri.hasScheme) {
-    return trimmed.replaceFirst(RegExp(r'/+$'), '');
-  }
-  final String path = uri.path.replaceFirst(RegExp(r'/+$'), '');
-  return uri
-      .replace(
-        scheme: uri.scheme.toLowerCase(),
-        host: uri.host.toLowerCase(),
-        path: path,
-        fragment: '',
-      )
-      .toString();
 }
 
 class OfflinePlayerContinuation {

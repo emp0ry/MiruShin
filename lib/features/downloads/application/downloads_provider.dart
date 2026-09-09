@@ -13,6 +13,7 @@ import '../../catalog/application/catalog_mode.dart';
 import '../../watch/domain/normalized_models.dart';
 import '../data/download_engine.dart';
 import '../data/download_store.dart';
+import '../domain/download_identity.dart';
 import '../domain/download_models.dart';
 import 'download_episode_availability.dart';
 import 'download_stream_candidates.dart';
@@ -33,11 +34,26 @@ final downloadsProvider =
 /// `addonId|episodeHref` -> status, for fast badge lookups in the episode picker.
 final downloadedKeysProvider = Provider<Map<String, DownloadStatus>>((Ref ref) {
   final List<DownloadedEpisode> list = ref.watch(downloadsProvider);
-  return <String, DownloadStatus>{
-    for (final DownloadedEpisode e in list)
-      '${e.addonId}|${e.episodeHref}': e.status,
-  };
+  final Map<String, DownloadStatus> result = <String, DownloadStatus>{};
+  for (final DownloadedEpisode episode in list) {
+    final String key = '${episode.addonId}|${episode.episodeHref}';
+    final DownloadStatus? current = result[key];
+    if (current == null ||
+        _downloadStatusPriority(episode.status) >
+            _downloadStatusPriority(current)) {
+      result[key] = episode.status;
+    }
+  }
+  return result;
 });
+
+int _downloadStatusPriority(DownloadStatus status) => switch (status) {
+  DownloadStatus.downloading => 5,
+  DownloadStatus.queued => 4,
+  DownloadStatus.paused => 3,
+  DownloadStatus.failed => 2,
+  DownloadStatus.completed => 1,
+};
 
 class DownloadController extends Notifier<List<DownloadedEpisode>> {
   late DownloadStore _store;
@@ -79,7 +95,7 @@ class DownloadController extends Notifier<List<DownloadedEpisode>> {
     unawaited(_pump());
   }
 
-  Future<void> _ensureLoaded() => _initFuture ??= _init();
+  Future<void> ensureLoaded() => _initFuture ??= _init();
 
   String? get rootPath => _rootPath;
 
@@ -118,7 +134,7 @@ class DownloadController extends Notifier<List<DownloadedEpisode>> {
 
   // Mutations
 
-  Future<void> enqueue({
+  Future<bool> enqueue({
     required MediaItem item,
     required SoraSearchResult source,
     required SoraEpisode episode,
@@ -126,9 +142,24 @@ class DownloadController extends Notifier<List<DownloadedEpisode>> {
     int? availableEpisodeLimit,
     DownloadStreamPreference streamPreference = DownloadStreamPreference.empty,
   }) async {
-    await _ensureLoaded();
-    final String id = '${item.id}::${source.addonId}::${episode.href}';
-    if (_byId(id) != null) return;
+    await ensureLoaded();
+    final String id = downloadEpisodeRecordId(
+      mediaId: item.id,
+      addonId: source.addonId,
+      episodeHref: episode.href,
+      seasonNumber: seasonNumber,
+      episodeNumber: episode.number,
+      streamPreference: streamPreference,
+    );
+    if (_hasDownloadTarget(
+      mediaId: item.id,
+      addonId: source.addonId,
+      episode: episode,
+      seasonNumber: seasonNumber,
+      streamPreference: streamPreference,
+    )) {
+      return false;
+    }
 
     final SoraInstalledAddon? addon = ref
         .read(soraAddonsProvider)
@@ -155,6 +186,7 @@ class DownloadController extends Notifier<List<DownloadedEpisode>> {
       addonId: source.addonId,
       seasonNumber: seasonNumber,
       episodeNumber: episode.number,
+      streamPreference: streamPreference,
     );
     final DateTime now = DateTime.now();
     final DownloadedEpisode record = DownloadedEpisode(
@@ -185,6 +217,7 @@ class DownloadController extends Notifier<List<DownloadedEpisode>> {
     state = <DownloadedEpisode>[...state, record];
     await _persist();
     unawaited(_pump());
+    return true;
   }
 
   Future<void> pauseResume(String id) async {
@@ -208,6 +241,31 @@ class DownloadController extends Notifier<List<DownloadedEpisode>> {
       await _persist();
       unawaited(_pump());
     }
+  }
+
+  bool _hasDownloadTarget({
+    required String mediaId,
+    required String addonId,
+    required SoraEpisode episode,
+    required int seasonNumber,
+    required DownloadStreamPreference streamPreference,
+  }) {
+    final String normalizedHref = normalizeDownloadedEpisodeHref(episode.href);
+    return state.any((DownloadedEpisode existing) {
+      if (existing.mediaId != mediaId || existing.addonId != addonId) {
+        return false;
+      }
+      final bool sameEpisode =
+          existing.seasonNumber == seasonNumber &&
+          existing.episodeNumber == episode.number &&
+          normalizeDownloadedEpisodeHref(existing.episodeHref) ==
+              normalizedHref;
+      return sameEpisode &&
+          sameDownloadedStreamVariant(
+            existing.streamPreference,
+            streamPreference,
+          );
+    });
   }
 
   Future<void> retry(String id) => pauseResume(id);
@@ -294,7 +352,11 @@ class DownloadController extends Notifier<List<DownloadedEpisode>> {
       SoraSearchResult? source = _sourceFromEpisodeMap(item.episodeData);
       SoraResolvedStreams streams = await ref
           .read(soraJsRuntimeProvider)
-          .extractStreams(addon: addon, episode: episode, voiceover: null);
+          .extractStreams(
+            addon: addon,
+            episode: episode,
+            voiceover: _downloadVoiceover(item.streamPreference),
+          );
       if (token.isCancelled) throw const DownloadCancelledException();
 
       NormalizedStreamBundle bundle = parseSoraStreamBundle(
@@ -453,7 +515,7 @@ class DownloadController extends Notifier<List<DownloadedEpisode>> {
             .extractStreams(
               addon: addon,
               episode: refreshed.episode,
-              voiceover: null,
+              voiceover: _downloadVoiceover(item.streamPreference),
             );
         if (token.isCancelled) throw const DownloadCancelledException();
         final NormalizedStreamBundle refreshedBundle = parseSoraStreamBundle(
@@ -607,6 +669,11 @@ class DownloadController extends Notifier<List<DownloadedEpisode>> {
       400 || 401 || 403 || 404 || 410 => true,
       _ => false,
     };
+  }
+
+  String? _downloadVoiceover(DownloadStreamPreference preference) {
+    final String voiceover = preference.voiceoverId.trim();
+    return voiceover.isEmpty ? null : voiceover;
   }
 
   Future<({SoraEpisode episode, SoraSearchResult source})?>
