@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.8.4",
+          "date": "2026-09-09",
+          "localizedDescription": "- Fixed Watch With Friends falling back to online playback for single-source add-ons when the same episode is already downloaded.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.8.4/MiruShin-ios-v2.8.4.ipa",
+          "size": 29673229,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.8.3",
           "date": "2026-09-09",
           "localizedDescription": "- Watch With Friends now prefers a compatible downloaded episode before falling back to online streaming.",
@@ -623,11 +631,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.8.3",
+      "version": "2.8.4",
       "versionDate": "2026-09-09",
-      "versionDescription": "- Watch With Friends now prefers a compatible downloaded episode before falling back to online streaming.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.8.3/MiruShin-ios-v2.8.3.ipa",
-      "size": 29673345,
+      "versionDescription": "- Fixed Watch With Friends falling back to online playback for single-source add-ons when the same episode is already downloaded.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.8.4/MiruShin-ios-v2.8.4.ipa",
+      "size": 29673229,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
