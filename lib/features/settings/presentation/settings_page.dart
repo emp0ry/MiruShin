@@ -74,6 +74,10 @@ class SettingsPage extends ConsumerWidget {
           SectionHeader(title: context.t('Settings')),
           const SizedBox(height: AppSpacing.lg),
           const _UpdateSection(),
+          if (!showAniListSettings) ...<Widget>[
+            const SupportMiruShinCard(),
+            const SizedBox(height: AppSpacing.lg),
+          ],
           if (showAniListSettings) ...<Widget>[
             const _AccountSection(),
             const SizedBox(height: AppSpacing.lg),
