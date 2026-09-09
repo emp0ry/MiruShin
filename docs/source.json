@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.8.1",
+          "date": "2026-09-09",
+          "localizedDescription": "- Fixed MAL and Shikimori fallback responses overriding AniList library status and progress after an AniList outage.\n- AniList now remains canonical when selected as the primary tracker, while fallback snapshots stay available without reopening completed titles.\n- Local changes made during an outage remain queued and sync to AniList first, then independently to connected MyAnimeList and Shikimori accounts.\n- Prevented automatic playback progress from reopening completed titles or dropping rewatching status.\n- Entry edits now sync only fields that actually changed, so score or notes edits cannot overwrite status or progress.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.8.1/MiruShin-ios-v2.8.1.ipa",
+          "size": 29125325,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.8.0",
           "date": "2026-09-09",
           "localizedDescription": "- Added MyAnimeList fallback for AniList outages across Board, Discovery, media details, Library, and Watch Order, with automatic return to AniList after recovery.\n- Added local-first tracking: progress, favorites, status, score, notes, repeat count, and dates are saved locally and safely synchronized later.\n- AniList, MAL, and Shikimori now synchronize independently using stable media identity, offline mutation queues, provider health tracking, and conflict resolution.\n- Library filters, sorting, Watch, Edit, Play, and continue-watching now work with locally cached and MAL fallback data during AniList outages.\n- Fixed AniList outage banner spacing in Library to match Board and Discovery.\n- Fixed security verification compatibility across Windows and macOS.\n- Watch with Friends now automatically uses a matching downloaded episode on each guest’s device, whether the host is watching online or offline.\n- Video quality can differ between participants while the episode, module, server, and voiceover remain synchronized.\n- Added seamless online fallback, safer reconnects, retryable missing-module errors, and support for multiple downloaded voiceovers without file conflicts.\n- Added a dedicated Buy Me a Coffee support card after Accounts in AniList Settings and below MiruShin updates in TMDB Settings.",
@@ -599,11 +607,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.8.0",
+      "version": "2.8.1",
       "versionDate": "2026-09-09",
-      "versionDescription": "- Added MyAnimeList fallback for AniList outages across Board, Discovery, media details, Library, and Watch Order, with automatic return to AniList after recovery.\n- Added local-first tracking: progress, favorites, status, score, notes, repeat count, and dates are saved locally and safely synchronized later.\n- AniList, MAL, and Shikimori now synchronize independently using stable media identity, offline mutation queues, provider health tracking, and conflict resolution.\n- Library filters, sorting, Watch, Edit, Play, and continue-watching now work with locally cached and MAL fallback data during AniList outages.\n- Fixed AniList outage banner spacing in Library to match Board and Discovery.\n- Fixed security verification compatibility across Windows and macOS.\n- Watch with Friends now automatically uses a matching downloaded episode on each guest’s device, whether the host is watching online or offline.\n- Video quality can differ between participants while the episode, module, server, and voiceover remain synchronized.\n- Added seamless online fallback, safer reconnects, retryable missing-module errors, and support for multiple downloaded voiceovers without file conflicts.\n- Added a dedicated Buy Me a Coffee support card after Accounts in AniList Settings and below MiruShin updates in TMDB Settings.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.8.0/MiruShin-ios-v2.8.0.ipa",
-      "size": 29125285,
+      "versionDescription": "- Fixed MAL and Shikimori fallback responses overriding AniList library status and progress after an AniList outage.\n- AniList now remains canonical when selected as the primary tracker, while fallback snapshots stay available without reopening completed titles.\n- Local changes made during an outage remain queued and sync to AniList first, then independently to connected MyAnimeList and Shikimori accounts.\n- Prevented automatic playback progress from reopening completed titles or dropping rewatching status.\n- Entry edits now sync only fields that actually changed, so score or notes edits cannot overwrite status or progress.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.8.1/MiruShin-ios-v2.8.1.ipa",
+      "size": 29125325,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
