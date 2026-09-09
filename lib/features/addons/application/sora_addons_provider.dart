@@ -239,6 +239,10 @@ class SoraAddonsController extends Notifier<SoraAddonsState> {
     return ref.read(soraAddonStoreProvider).exportInstalledJson();
   }
 
+  Future<SoraAddonExport> exportInstalled() {
+    return ref.read(soraAddonStoreProvider).exportInstalled();
+  }
+
   Future<SoraAddonImportResult> importInstalledJson(String raw) async {
     state = state.copyWith(updating: true, clearError: true);
     try {

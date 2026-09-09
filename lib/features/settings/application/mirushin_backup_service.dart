@@ -312,7 +312,7 @@ class MiruShinBackupService {
         files[_safeRelativePath(key.substring(_webSoraFilePrefix.length))] =
             value;
       }
-      return files;
+      return _rewriteSoraRegistryPaths(files);
     }
 
     final Directory? root = await _soraRootDirectory();
@@ -325,13 +325,19 @@ class MiruShinBackupService {
       );
       files[relative] = await entity.readAsString();
     }
-    return Map<String, String>.fromEntries(
+    final Map<String, String> sorted = Map<String, String>.fromEntries(
       files.entries.toList()..sort((a, b) => a.key.compareTo(b.key)),
     );
+    return _rewriteSoraRegistryPaths(sorted);
   }
 
   Future<void> _replaceSoraFiles(Map<String, String> files) async {
     if (kIsWeb) {
+      final Map<String, String> rebased = _rewriteSoraRegistryPaths(
+        files,
+        rootPath: 'mirushin_web/sora_addons',
+        posixRoot: true,
+      );
       final List<String> oldKeys = _preferences
           .getKeys()
           .where((String key) => key.startsWith(_webSoraFilePrefix))
@@ -339,7 +345,7 @@ class MiruShinBackupService {
       for (final String key in oldKeys) {
         await _preferences.remove(key);
       }
-      for (final MapEntry<String, String> entry in files.entries) {
+      for (final MapEntry<String, String> entry in rebased.entries) {
         await _preferences.setString(
           '$_webSoraFilePrefix${_safeRelativePath(entry.key)}',
           entry.value,
@@ -357,10 +363,14 @@ class MiruShinBackupService {
       }
       return;
     }
+    final Map<String, String> rebased = _rewriteSoraRegistryPaths(
+      files,
+      rootPath: root.path,
+    );
     if (await root.exists()) await root.delete(recursive: true);
-    if (files.isEmpty) return;
+    if (rebased.isEmpty) return;
     await root.create(recursive: true);
-    for (final MapEntry<String, String> entry in files.entries) {
+    for (final MapEntry<String, String> entry in rebased.entries) {
       final String relative = _safeRelativePath(entry.key);
       final File target = File(
         p.joinAll(<String>[root.path, ...p.posix.split(relative)]),
@@ -368,6 +378,66 @@ class MiruShinBackupService {
       await target.parent.create(recursive: true);
       await target.writeAsString(entry.value, flush: true);
     }
+  }
+
+  Map<String, String> _rewriteSoraRegistryPaths(
+    Map<String, String> files, {
+    String? rootPath,
+    bool posixRoot = false,
+  }) {
+    final Map<String, String> rewritten = Map<String, String>.from(files);
+    final String? rawRegistry = rewritten['registry.json'];
+    if (rawRegistry == null) return rewritten;
+
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(rawRegistry);
+    } on FormatException catch (error) {
+      throw MiruShinBackupException('Addon registry is not valid JSON: $error');
+    }
+    final Map<String, dynamic> registry = _stringMap(decoded, 'addon registry');
+    final Object? rawAddons = registry['addons'];
+    if (rawAddons is! List<dynamic>) {
+      throw const MiruShinBackupException(
+        'Addon registry addons must be a list.',
+      );
+    }
+    final List<Map<String, dynamic>> addons = <Map<String, dynamic>>[];
+    for (final Object? rawAddon in rawAddons) {
+      final Map<String, dynamic> addon = _stringMap(
+        rawAddon,
+        'addon registry entry',
+      );
+      final Object? rawId = addon['id'];
+      if (rawId is! String || !_isSafeAddonDirectoryName(rawId)) {
+        throw MiruShinBackupException(
+          'Addon registry contains an invalid addon id: $rawId.',
+        );
+      }
+      final String manifestRelative = p.posix.join(rawId, 'manifest.json');
+      final String scriptRelative = p.posix.join(rawId, 'module.js');
+      addon['manifestPath'] = rootPath == null
+          ? manifestRelative
+          : posixRoot
+          ? p.posix.join(rootPath, manifestRelative)
+          : p.joinAll(<String>[rootPath, rawId, 'manifest.json']);
+      addon['scriptPath'] = rootPath == null
+          ? scriptRelative
+          : posixRoot
+          ? p.posix.join(rootPath, scriptRelative)
+          : p.joinAll(<String>[rootPath, rawId, 'module.js']);
+      addons.add(addon);
+    }
+    registry['addons'] = addons;
+    rewritten['registry.json'] = const JsonEncoder.withIndent(
+      '  ',
+    ).convert(registry);
+    return rewritten;
+  }
+
+  bool _isSafeAddonDirectoryName(String value) {
+    if (value.isEmpty || value == '.' || value == '..') return false;
+    return RegExp(r'^[A-Za-z0-9._-]+$').hasMatch(value);
   }
 
   Future<Directory?> _soraRootDirectory() async {

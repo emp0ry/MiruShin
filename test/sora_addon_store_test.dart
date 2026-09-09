@@ -36,6 +36,18 @@ void main() {
       final SoraInstalledAddon installed = await store.installFromPreview(
         preview,
       );
+      final SoraAddonExport remoteExport = await store.exportInstalled();
+      final Map<String, dynamic> remoteDocument = Map<String, dynamic>.from(
+        jsonDecode(remoteExport.remoteJson) as Map,
+      );
+      final Map<String, dynamic> exportedAddon = Map<String, dynamic>.from(
+        (remoteDocument['addons'] as List<dynamic>).single as Map,
+      );
+      expect(remoteExport.remoteAddonCount, 1);
+      expect(remoteExport.localAddons, isEmpty);
+      expect(exportedAddon['manifestUrl'], 'https://example.com/addon.json');
+      expect(exportedAddon.containsKey('manifestPath'), isFalse);
+      expect(exportedAddon.containsKey('scriptPath'), isFalse);
       expect(
         await File(installed.scriptPath).readAsString(),
         contains('searchResults'),
@@ -123,6 +135,42 @@ async function extractStreamUrl() { return "{}"; }
       final SoraInstalledAddon updated = await store.update(installed);
       expect(updated, same(installed));
       expect(adapter.requestedUrls, isEmpty);
+
+      final SoraAddonExport localExport = await store.exportInstalled();
+      expect(localExport.remoteAddonCount, 0);
+      expect(localExport.shouldIncludeRemoteJson, isFalse);
+      expect(localExport.localAddons, hasLength(1));
+      final SoraLocalAddonExport exported = localExport.localAddons.single;
+      expect(exported.manifestFileName, 'YummyAnime.json');
+      expect(exported.scriptFileName, 'YummyAnime.js');
+      expect(exported.manifestCode, _yummyAnimeManifest);
+      expect(exported.scriptCode, script);
+
+      final Directory restoredTemp = await Directory.systemTemp.createTemp(
+        'sora_local_export_restore_',
+      );
+      addTearDown(() => restoredTemp.delete(recursive: true));
+      final SoraAddonStore restoredStore = SoraAddonStore(
+        dio: Dio()..httpClientAdapter = _FakeAdapter(<String, String>{}),
+        supportDirectoryProvider: () async => restoredTemp,
+      );
+      final SoraAddonPreview restoredPreview = await restoredStore
+          .previewFromLocalFiles(
+            SoraLocalAddonFiles.fromFiles(<SoraAddonClipboardFile>[
+              SoraAddonClipboardFile(
+                name: exported.manifestFileName,
+                bytes: Uint8List.fromList(utf8.encode(exported.manifestCode)),
+              ),
+              SoraAddonClipboardFile(
+                name: exported.scriptFileName,
+                bytes: Uint8List.fromList(utf8.encode(exported.scriptCode)),
+              ),
+            ]),
+          );
+      final SoraInstalledAddon restored = await restoredStore
+          .installFromPreview(restoredPreview);
+      expect(restored.isLocal, isTrue);
+      expect(await restoredStore.readScript(restored), script);
     },
   );
 }

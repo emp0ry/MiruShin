@@ -24,6 +24,35 @@ class SoraAddonImportResult {
   bool get hasFailures => failed > 0;
 }
 
+class SoraLocalAddonExport {
+  const SoraLocalAddonExport({
+    required this.manifestFileName,
+    required this.manifestCode,
+    required this.scriptFileName,
+    required this.scriptCode,
+  });
+
+  final String manifestFileName;
+  final String manifestCode;
+  final String scriptFileName;
+  final String scriptCode;
+}
+
+class SoraAddonExport {
+  const SoraAddonExport({
+    required this.remoteJson,
+    required this.remoteAddonCount,
+    required this.localAddons,
+  });
+
+  final String remoteJson;
+  final int remoteAddonCount;
+  final List<SoraLocalAddonExport> localAddons;
+
+  bool get shouldIncludeRemoteJson =>
+      remoteAddonCount > 0 || localAddons.isEmpty;
+}
+
 class _SoraAddonImportCandidate {
   const _SoraAddonImportCandidate({
     required this.manifestUrl,
@@ -380,7 +409,7 @@ class SoraAddonStore {
     return file.readAsString();
   }
 
-  Future<String> exportInstalledJson() async {
+  Future<SoraAddonExport> exportInstalled() async {
     final List<SoraInstalledAddon> installed = await loadInstalled();
     final List<SoraInstalledAddon> ordered = <SoraInstalledAddon>[...installed]
       ..sort(
@@ -391,33 +420,66 @@ class SoraAddonStore {
       for (int index = 0; index < ordered.length; index++)
         ordered[index].copyWith(order: index),
     ];
-    return const JsonEncoder.withIndent('  ').convert(<String, Object?>{
-      'version': 1,
-      'format': 'mirushin.sora.addons.v1',
-      'exportedAt': DateTime.now().toUtc().toIso8601String(),
-      'addons': normalized
-          .map((SoraInstalledAddon addon) => addon.toJson())
-          .toList(growable: false),
-      // AnimeShin-compatible payload. AnimeShin ignores extra MiruShin keys.
-      'remoteModules': normalized
-          .map(
-            (SoraInstalledAddon addon) => <String, Object?>{
-              'id': addon.id,
-              'jsonUrl': addon.manifestUrl,
-              'enabled': addon.enabled,
-              'updatedAt': addon.updatedAt.toUtc().toIso8601String(),
-              'order': addon.order,
-            },
-          )
-          .toList(growable: false),
-      'disabledModuleIds': normalized
-          .where((SoraInstalledAddon addon) => !addon.enabled)
-          .map((SoraInstalledAddon addon) => addon.id)
-          .toList(growable: false),
-      'order': normalized
-          .map((SoraInstalledAddon addon) => addon.id)
-          .toList(growable: false),
-    });
+    final List<SoraInstalledAddon> remote = normalized
+        .where((SoraInstalledAddon addon) => !addon.isLocal)
+        .toList(growable: false);
+    final List<SoraLocalAddonExport> local = <SoraLocalAddonExport>[];
+    final Set<String> usedFileStems = <String>{};
+    for (final SoraInstalledAddon addon in normalized) {
+      if (!addon.isLocal) continue;
+      final String stem = _uniqueExportFileStem(addon, usedFileStems);
+      final File manifestFile = File(addon.manifestPath);
+      final File scriptFile = File(addon.scriptPath);
+      if (!await manifestFile.exists() || !await scriptFile.exists()) {
+        throw SoraAddonException(
+          'The local files for ${addon.manifest.sourceName} are missing.',
+        );
+      }
+      local.add(
+        SoraLocalAddonExport(
+          manifestFileName: '$stem.json',
+          manifestCode: await manifestFile.readAsString(),
+          scriptFileName: '$stem.js',
+          scriptCode: await scriptFile.readAsString(),
+        ),
+      );
+    }
+    final String remoteJson = const JsonEncoder.withIndent('  ').convert(
+      <String, Object?>{
+        'version': 1,
+        'format': 'mirushin.sora.addons.v1',
+        'exportedAt': DateTime.now().toUtc().toIso8601String(),
+        'addons': remote.map(_portableExportJson).toList(growable: false),
+        // AnimeShin-compatible payload. AnimeShin ignores extra MiruShin keys.
+        'remoteModules': remote
+            .map(
+              (SoraInstalledAddon addon) => <String, Object?>{
+                'id': addon.id,
+                'jsonUrl': addon.manifestUrl,
+                'enabled': addon.enabled,
+                'updatedAt': addon.updatedAt.toUtc().toIso8601String(),
+                'order': addon.order,
+              },
+            )
+            .toList(growable: false),
+        'disabledModuleIds': remote
+            .where((SoraInstalledAddon addon) => !addon.enabled)
+            .map((SoraInstalledAddon addon) => addon.id)
+            .toList(growable: false),
+        'order': remote
+            .map((SoraInstalledAddon addon) => addon.id)
+            .toList(growable: false),
+      },
+    );
+    return SoraAddonExport(
+      remoteJson: remoteJson,
+      remoteAddonCount: remote.length,
+      localAddons: List<SoraLocalAddonExport>.unmodifiable(local),
+    );
+  }
+
+  Future<String> exportInstalledJson() async {
+    return (await exportInstalled()).remoteJson;
   }
 
   Future<SoraAddonImportResult> importInstalledJson(String raw) async {
@@ -816,6 +878,36 @@ class SoraAddonStore {
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
     return cleaned.isEmpty ? 'Sora Addon' : cleaned;
+  }
+
+  Map<String, Object?> _portableExportJson(SoraInstalledAddon addon) {
+    final Map<String, Object?> json = Map<String, Object?>.from(addon.toJson());
+    json.remove('manifestPath');
+    json.remove('scriptPath');
+    return json;
+  }
+
+  String _uniqueExportFileStem(
+    SoraInstalledAddon addon,
+    Set<String> usedFileStems,
+  ) {
+    String stem = addon.manifest.sourceName
+        .trim()
+        .replaceAll(RegExp(r'[<>:"/\\|?*\u0000-\u001f]'), '_')
+        .replaceAll(RegExp(r'\s+'), '_')
+        .replaceAll(RegExp(r'_+'), '_')
+        .replaceAll(RegExp(r'[. ]+$'), '');
+    if (stem.isEmpty || stem == '.' || stem == '..') {
+      stem = addon.id;
+    }
+    if (stem.length > 80) stem = stem.substring(0, 80);
+    final String initial = stem;
+    var suffix = 2;
+    while (!usedFileStems.add(stem.toLowerCase())) {
+      stem = '${initial}_$suffix';
+      suffix++;
+    }
+    return stem;
   }
 
   String _decodeUtf8(List<int> bytes, {required String label}) {

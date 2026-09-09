@@ -611,17 +611,54 @@ const XTypeGroup _addonsJsonTypeGroup = XTypeGroup(
   uniformTypeIdentifiers: <String>['public.json'],
 );
 
+class _AddonExportFile {
+  const _AddonExportFile({
+    required this.name,
+    required this.bytes,
+    required this.mimeType,
+  });
+
+  final String name;
+  final Uint8List bytes;
+  final String mimeType;
+}
+
 Future<void> _exportAddons(BuildContext context, WidgetRef ref) async {
   final Rect shareOrigin = _computeShareOrigin(context);
   try {
-    final String raw = await ref
+    final export = await ref
         .read(soraAddonsProvider.notifier)
-        .exportInstalledJson();
+        .exportInstalled();
     if (!context.mounted) return;
-    final String filename = 'mirushin_addons_${_fileStamp()}.json';
-    final String? savedPath = await _saveAddonJson(
-      Uint8List.fromList(utf8.encode(raw)),
-      filename,
+    final String stamp = _fileStamp();
+    final String exportName = 'mirushin_addons_$stamp';
+    final List<_AddonExportFile> files = <_AddonExportFile>[
+      if (export.shouldIncludeRemoteJson)
+        _AddonExportFile(
+          name: '$exportName.json',
+          bytes: Uint8List.fromList(utf8.encode(export.remoteJson)),
+          mimeType: 'application/json',
+        ),
+      for (final local in export.localAddons) ...<_AddonExportFile>[
+        _AddonExportFile(
+          name:
+              '${p.basenameWithoutExtension(local.manifestFileName)}_'
+              '$stamp.json',
+          bytes: Uint8List.fromList(utf8.encode(local.manifestCode)),
+          mimeType: 'application/json',
+        ),
+        _AddonExportFile(
+          name:
+              '${p.basenameWithoutExtension(local.scriptFileName)}_'
+              '$stamp.js',
+          bytes: Uint8List.fromList(utf8.encode(local.scriptCode)),
+          mimeType: 'text/javascript',
+        ),
+      ],
+    ];
+    final String? savedPath = await _saveAddonFiles(
+      files,
+      exportName,
       shareOrigin,
     );
     if (!context.mounted) return;
@@ -736,6 +773,10 @@ Future<File?> _newestTvAddonExport() async {
   final List<File> candidates = <File>[
     await for (final FileSystemEntity entity in Directory(dirPath).list())
       if (entity is File &&
+          p
+              .basename(entity.path)
+              .toLowerCase()
+              .startsWith('mirushin_addons_') &&
           p.basename(entity.path).toLowerCase().endsWith('.json'))
         entity,
   ];
@@ -799,6 +840,74 @@ Future<String?> _saveAddonJson(
   }
   await File(location.path).writeAsBytes(bytes, flush: true);
   return location.path;
+}
+
+Future<String?> _saveAddonFiles(
+  List<_AddonExportFile> files,
+  String exportName,
+  Rect shareOrigin,
+) async {
+  if (files.length == 1 && files.single.mimeType == 'application/json') {
+    final _AddonExportFile file = files.single;
+    return _saveAddonJson(file.bytes, file.name, shareOrigin);
+  }
+
+  if (_useTvFileFallback) {
+    final String? directoryPath = await _tvFallbackDirPath();
+    if (directoryPath == null) return null;
+    for (final _AddonExportFile file in files) {
+      await File(
+        p.join(directoryPath, file.name),
+      ).writeAsBytes(file.bytes, flush: true);
+    }
+    return directoryPath;
+  }
+
+  if (kIsWeb) {
+    await SharePlus.instance.share(
+      ShareParams(
+        files: <XFile>[
+          for (final _AddonExportFile file in files)
+            XFile.fromData(
+              file.bytes,
+              name: file.name,
+              mimeType: file.mimeType,
+            ),
+        ],
+        sharePositionOrigin: shareOrigin,
+      ),
+    );
+    return '';
+  }
+
+  if (Platform.isAndroid || Platform.isIOS) {
+    final dynamic temporary = await getTemporaryDirectory();
+    final Directory directory = Directory(
+      p.join(temporary.path as String, exportName),
+    );
+    await directory.create(recursive: true);
+    final List<XFile> sharedFiles = <XFile>[];
+    for (final _AddonExportFile file in files) {
+      final String path = p.join(directory.path, file.name);
+      await File(path).writeAsBytes(file.bytes, flush: true);
+      sharedFiles.add(XFile(path, mimeType: file.mimeType));
+    }
+    await SharePlus.instance.share(
+      ShareParams(files: sharedFiles, sharePositionOrigin: shareOrigin),
+    );
+    return '';
+  }
+
+  final String? selectedDirectory = await getDirectoryPath();
+  if (selectedDirectory == null) return null;
+  final Directory directory = Directory(p.join(selectedDirectory, exportName));
+  await directory.create(recursive: true);
+  for (final _AddonExportFile file in files) {
+    await File(
+      p.join(directory.path, file.name),
+    ).writeAsBytes(file.bytes, flush: true);
+  }
+  return directory.path;
 }
 
 Rect _computeShareOrigin(BuildContext context) {

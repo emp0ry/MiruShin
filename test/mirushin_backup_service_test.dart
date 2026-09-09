@@ -4,7 +4,9 @@ import 'dart:io';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mirushin/core/security/app_secure_storage.dart';
+import 'package:mirushin/features/addons/data/sora_addon_store.dart';
 import 'package:mirushin/features/settings/application/mirushin_backup_service.dart';
+import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -356,6 +358,128 @@ void main() {
       secure.values[AppSecureStorage.anilistAccessTokenKey],
       'current-token',
     );
+  });
+
+  test('full backup rebases addon registry paths on another device', () async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final SharedPreferences preferences = await SharedPreferences.getInstance();
+    final _FakeSecureStorage secure = _FakeSecureStorage(<String, String>{});
+    final Directory sourceSupport = await Directory.systemTemp.createTemp(
+      'mirushin_backup_addon_source_',
+    );
+    final Directory targetSupport = await Directory.systemTemp.createTemp(
+      'mirushin_backup_addon_target_',
+    );
+    addTearDown(() async {
+      if (await sourceSupport.exists()) {
+        await sourceSupport.delete(recursive: true);
+      }
+      if (await targetSupport.exists()) {
+        await targetSupport.delete(recursive: true);
+      }
+    });
+
+    const String addonId = 'yummyanime-12345678';
+    final Directory sourceAddon = Directory(
+      '${sourceSupport.path}${Platform.pathSeparator}sora_addons'
+      '${Platform.pathSeparator}$addonId',
+    );
+    await sourceAddon.create(recursive: true);
+    const String manifest = '{"sourceName":"YummyAnime"}';
+    const String script = 'export const offline = true;';
+    await File(
+      '${sourceAddon.path}${Platform.pathSeparator}manifest.json',
+    ).writeAsString(manifest);
+    await File(
+      '${sourceAddon.path}${Platform.pathSeparator}module.js',
+    ).writeAsString(script);
+    await File(
+      '${sourceSupport.path}${Platform.pathSeparator}sora_addons'
+      '${Platform.pathSeparator}registry.json',
+    ).writeAsString(
+      jsonEncode(<String, Object?>{
+        'version': 1,
+        'addons': <Object?>[
+          <String, Object?>{
+            'id': addonId,
+            'manifestUrl': 'mirushin-local-addon://clipboard/12345678',
+            'manifest': <String, Object?>{
+              'sourceName': 'YummyAnime',
+              'scriptUrl': 'https://example.invalid/yummyanime.js',
+            },
+            'manifestPath': p.join(sourceAddon.path, 'manifest.json'),
+            'scriptPath': p.join(sourceAddon.path, 'module.js'),
+            'enabled': true,
+            'order': 1,
+            'installedAt': '2026-09-09T00:00:00.000Z',
+            'updatedAt': '2026-09-09T00:00:00.000Z',
+            'lastCheckedAt': '2026-09-09T00:00:00.000Z',
+            'lastError': null,
+          },
+        ],
+      }),
+    );
+
+    final MiruShinBackupService sourceService = MiruShinBackupService(
+      preferences: preferences,
+      secureStorage: secure,
+      supportDirectoryProvider: () async => sourceSupport,
+    );
+    final String raw = await sourceService.createBackupJson();
+    final Map<String, dynamic> document = Map<String, dynamic>.from(
+      jsonDecode(raw) as Map,
+    );
+    final Map<String, dynamic> exportedFiles = Map<String, dynamic>.from(
+      (document['files'] as Map)['soraAddons'] as Map,
+    );
+    final Map<String, dynamic> portableRegistry = Map<String, dynamic>.from(
+      jsonDecode(exportedFiles['registry.json'] as String) as Map,
+    );
+    final Map<String, dynamic> portableAddon = Map<String, dynamic>.from(
+      (portableRegistry['addons'] as List<dynamic>).single as Map,
+    );
+    expect(portableAddon['manifestPath'], '$addonId/manifest.json');
+    expect(portableAddon['scriptPath'], '$addonId/module.js');
+    expect(raw, isNot(contains(sourceSupport.path)));
+
+    final MiruShinBackupService targetService = MiruShinBackupService(
+      preferences: preferences,
+      secureStorage: secure,
+      supportDirectoryProvider: () async => targetSupport,
+    );
+    await targetService.importBackupJson(raw);
+
+    final String targetRoot = p.join(targetSupport.path, 'sora_addons');
+    final File restoredRegistryFile = File(p.join(targetRoot, 'registry.json'));
+    final Map<String, dynamic> restoredRegistry = Map<String, dynamic>.from(
+      jsonDecode(await restoredRegistryFile.readAsString()) as Map,
+    );
+    final Map<String, dynamic> restoredAddon = Map<String, dynamic>.from(
+      (restoredRegistry['addons'] as List<dynamic>).single as Map,
+    );
+    expect(
+      restoredAddon['manifestPath'],
+      p.join(targetRoot, addonId, 'manifest.json'),
+    );
+    expect(
+      restoredAddon['scriptPath'],
+      p.join(targetRoot, addonId, 'module.js'),
+    );
+    expect(
+      await File(p.join(targetRoot, addonId, 'manifest.json')).readAsString(),
+      manifest,
+    );
+    expect(
+      await File(p.join(targetRoot, addonId, 'module.js')).readAsString(),
+      script,
+    );
+    final SoraAddonStore restoredStore = SoraAddonStore(
+      supportDirectoryProvider: () async => targetSupport,
+    );
+    final restoredInstalled = (await restoredStore.loadInstalled()).single;
+    expect(restoredInstalled.isLocal, isTrue);
+    expect(restoredInstalled.manifest.sourceName, 'YummyAnime');
+    expect(await restoredStore.readScript(restoredInstalled), script);
   });
 
   test('unsafe addon paths are rejected before import', () async {
