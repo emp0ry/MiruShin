@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.8.3",
+          "date": "2026-09-09",
+          "localizedDescription": "- Watch With Friends now prefers a compatible downloaded episode before falling back to online streaming.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.8.3/MiruShin-ios-v2.8.3.ipa",
+          "size": 29673345,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.8.2",
           "date": "2026-09-09",
           "localizedDescription": "- Improved add-on import, export, and backup reliability across devices.\n- Fixed add-on restoration so exported configurations retain required module data and settings.",
@@ -615,11 +623,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.8.2",
+      "version": "2.8.3",
       "versionDate": "2026-09-09",
-      "versionDescription": "- Improved add-on import, export, and backup reliability across devices.\n- Fixed add-on restoration so exported configurations retain required module data and settings.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.8.2/MiruShin-ios-v2.8.2.ipa",
-      "size": 29674233,
+      "versionDescription": "- Watch With Friends now prefers a compatible downloaded episode before falling back to online streaming.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.8.3/MiruShin-ios-v2.8.3.ipa",
+      "size": 29673345,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
