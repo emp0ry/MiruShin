@@ -213,6 +213,28 @@ void main() {
       expect(match?.isLegacyFallback, isTrue);
     });
 
+    test('matches single-source addon when transient episode href differs', () {
+      final WatchPartyDownloadMatch? match = selectWatchPartyDownload(
+        descriptor: _descriptor(
+          episodeHref:
+              'aniliberty:%7B%22url720%22%3A%22https%3A%2F%2Fhost-cdn%2Fepisode.m3u8%3FcountryIso%3DDE%22%7D',
+          voiceoverId: null,
+        ),
+        downloads: <DownloadedEpisode>[
+          _download(
+            id: 'aniliberty-local',
+            href:
+                'aniliberty:%7B%22url720%22%3A%22https%3A%2F%2Fguest-cdn%2Fepisode.m3u8%3FcountryIso%3DAM%22%7D',
+            preference: const DownloadStreamPreference(serverId: 'server_0'),
+          ),
+        ],
+        isPlayable: (_) => true,
+      );
+
+      expect(match?.episode.id, 'aniliberty-local');
+      expect(match?.isLegacyFallback, isFalse);
+    });
+
     test('skips missing files and mismatched voiceovers', () {
       final WatchPartyDownloadMatch? match = selectWatchPartyDownload(
         descriptor: _descriptor(),
@@ -439,8 +461,9 @@ SourceDescriptor _descriptor({
     'mal': '1',
   },
   String serverId = 'server_0',
-  String voiceoverId = 'AniLibria',
+  String? voiceoverId = 'AniLibria',
   String? qualityId,
+  String episodeHref = 'https://example.test/episode/1',
 }) {
   return SourceDescriptor(
     mediaId: mediaId,
@@ -451,7 +474,7 @@ SourceDescriptor _descriptor({
     mediaType: MediaType.anime,
     externalIds: externalIds,
     soraAddonId: 'sora-addon',
-    soraEpisodeHref: 'https://example.test/episode/1',
+    soraEpisodeHref: episodeHref,
     seasonNumber: 1,
     episodeNumber: 1,
     serverId: serverId,

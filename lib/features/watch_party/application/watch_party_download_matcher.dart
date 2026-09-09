@@ -20,9 +20,6 @@ WatchPartyDownloadMatch? selectWatchPartyDownload({
 }) {
   final List<DownloadedEpisode> exact = <DownloadedEpisode>[];
   final List<DownloadedEpisode> legacy = <DownloadedEpisode>[];
-  final String descriptorHref = normalizeDownloadedEpisodeHref(
-    descriptor.soraEpisodeHref,
-  );
 
   for (final DownloadedEpisode episode in downloads) {
     if (!episode.isComplete || !isPlayable(episode)) continue;
@@ -37,13 +34,15 @@ WatchPartyDownloadMatch? selectWatchPartyDownload({
       episode.streamPreference,
     );
     if (precise) {
-      if (normalizeDownloadedEpisodeHref(episode.episodeHref) ==
-              descriptorHref &&
-          downloadPreferenceMatchesStream(
-            episode.streamPreference,
-            serverId: descriptor.serverId,
-            voiceoverId: descriptor.voiceoverId,
-          )) {
+      // Some addons embed device-specific or short-lived stream URLs in the
+      // episode href. The media/addon/episode plus persisted server/voiceover
+      // identity is authoritative; requiring identical hrefs would reject the
+      // same downloaded stream on another watch-party device.
+      if (downloadPreferenceMatchesStream(
+        episode.streamPreference,
+        serverId: descriptor.serverId,
+        voiceoverId: descriptor.voiceoverId,
+      )) {
         exact.add(episode);
       }
     } else {
