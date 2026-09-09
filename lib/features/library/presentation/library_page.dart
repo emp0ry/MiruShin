@@ -201,7 +201,7 @@ class _LibraryPageState extends ConsumerState<LibraryPage>
     final bool mangaConnected = settings.hasAniListSession;
     return Column(
       children: <Widget>[
-        const CatalogOfflineBanner(),
+        const CatalogOfflineBanner(horizontalInset: AppSpacing.lg),
         Padding(
           padding: const EdgeInsets.fromLTRB(
             AppSpacing.lg,

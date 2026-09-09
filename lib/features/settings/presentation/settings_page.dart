@@ -56,6 +56,7 @@ import '../application/settings_state.dart';
 import '../application/update_checker_provider.dart';
 import 'mirushin_backup_file.dart';
 import 'widgets/settings_widgets.dart';
+import 'widgets/support_mirushin_card.dart';
 
 class SettingsPage extends ConsumerWidget {
   const SettingsPage({super.key});
@@ -75,6 +76,8 @@ class SettingsPage extends ConsumerWidget {
           const _UpdateSection(),
           if (showAniListSettings) ...<Widget>[
             const _AccountSection(),
+            const SizedBox(height: AppSpacing.lg),
+            const SupportMiruShinCard(),
             const SizedBox(height: AppSpacing.lg),
           ],
           if (showAniListSettings && settings.hasAniListSession) ...<Widget>[

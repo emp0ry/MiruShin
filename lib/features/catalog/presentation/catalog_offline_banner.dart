@@ -11,7 +11,11 @@ import '../application/catalog_status.dart';
 final Uri _aniListDiscordUri = Uri.parse('https://discord.com/invite/anilist');
 
 class CatalogOfflineBanner extends ConsumerWidget {
-  const CatalogOfflineBanner({super.key});
+  const CatalogOfflineBanner({this.horizontalInset = 0, super.key});
+
+  /// Board and Discovery already inherit page padding from [AdaptivePage].
+  /// Standalone placements such as Library can opt into the same side inset.
+  final double horizontalInset;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -26,7 +30,12 @@ class CatalogOfflineBanner extends ConsumerWidget {
     final ColorScheme colorScheme = Theme.of(context).colorScheme;
     final AppThemeExtension palette = AppThemeExtension.of(context);
     return Padding(
-      padding: const EdgeInsets.only(bottom: AppSpacing.lg),
+      key: const ValueKey<String>('catalog-offline-banner-padding'),
+      padding: EdgeInsets.only(
+        left: horizontalInset,
+        right: horizontalInset,
+        bottom: AppSpacing.lg,
+      ),
       child: DecoratedBox(
         decoration: BoxDecoration(
           color: colorScheme.errorContainer.withValues(alpha: 0.64),
