@@ -88,9 +88,20 @@ safe even if a previous mutation response was lost.
 On refresh, the local state is available first. Providers are tried in order,
 starting with the configured primary (AniList by default); failures update the
 persisted provider health state and the next connected adapter is attempted.
-Pending local fields win conflicts. Other fields use the newest provider
-timestamp, with AniList winning timestamp ties. All raw provider snapshots are
-kept regardless of the canonical winner.
+Pending local fields win conflicts. When a primary-provider snapshot exists it
+remains canonical even if a fallback response is newer; a fallback may fill a
+missing title but cannot passively move an AniList Completed entry back to
+Watching. Provider timestamps only choose between snapshots with the same
+authority, or between fallback providers when no primary snapshot exists. All
+raw provider snapshots are kept regardless of the canonical winner.
+
+Playback progress never regresses a locally known Completed entry and preserves
+Repeating status. The entry editor journals only fields the user actually
+changed, so editing score or notes cannot rewrite status or progress. During an
+outage those local patches are applied immediately and remain queued per target;
+delivery always attempts the configured primary first, after which MAL and
+Shikimori acknowledge the same local patch independently. A failed primary
+attempt never turns either fallback into an authority over another provider.
 
 When AniList recovers, its queued mutations are replayed before refresh. A
 successful fetch can also add a missing identity mapping, after which the

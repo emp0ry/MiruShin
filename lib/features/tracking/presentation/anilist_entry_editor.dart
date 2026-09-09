@@ -17,6 +17,7 @@ import '../application/tracker_library_provider.dart';
 import '../application/tracker_sync_coordinator.dart';
 import '../data/anilist_api_client.dart';
 import '../domain/tracker_models.dart';
+import '../domain/tracking_sync_models.dart';
 import 'anilist_favorite_button.dart';
 
 // Draft model
@@ -380,6 +381,15 @@ Future<AniListEntrySaveResult> saveAniListEntryEdit({
 }) async {
   final int? mediaId = entryAniListId(entry);
   final bool isManga = _isMangaEntry(entry);
+  final bool isNewEntry = entry.id <= 0;
+  final Set<UserMediaField> changedFields = <UserMediaField>{
+    if (isNewEntry || draft.status != entry.status) UserMediaField.status,
+    if (isNewEntry || draft.progress != entry.progress) UserMediaField.progress,
+    if (isNewEntry || (draft.score ?? 0) != (entry.score ?? 0))
+      UserMediaField.score,
+    if (isNewEntry || draft.notes != entry.notes) UserMediaField.notes,
+    if (isNewEntry || draft.repeat != entry.repeat) UserMediaField.repeat,
+  };
 
   void applyLocalEdit() {
     if (isManga) {
@@ -417,6 +427,7 @@ Future<AniListEntrySaveResult> saveAniListEntryEdit({
           score: draft.score ?? 0,
           notes: draft.notes,
           repeat: draft.repeat,
+          fields: changedFields,
           targets: isManga
               ? const <TrackerSource>{TrackerSource.anilist}
               : null,

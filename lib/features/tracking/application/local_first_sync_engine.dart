@@ -284,9 +284,14 @@ class LocalFirstSyncEngine {
         journal[index] = entry;
       }
 
-      for (final TrackerSource target in <TrackerSource>{
-        ...entry.pendingTargets,
-      }) {
+      final List<TrackerSource> orderedTargets = <TrackerSource>[
+        if (entry.pendingTargets.contains(primary)) primary,
+        ...TrackerSource.values.where(
+          (TrackerSource target) =>
+              target != primary && entry.pendingTargets.contains(target),
+        ),
+      ];
+      for (final TrackerSource target in orderedTargets) {
         final TrackerProviderAdapter? adapter = _adapters[target];
         if (adapter == null) continue;
         try {

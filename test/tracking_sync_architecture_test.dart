@@ -299,51 +299,124 @@ void main() {
   });
 
   group('outage, recovery and conflict resolution', () {
-    test('falls back from AniList and records provider health', () async {
-      final _MemoryTrackingSyncStore store = _MemoryTrackingSyncStore()
-        ..states = <UserMediaState>[
-          _state(
-            source: TrackerSource.anilist,
-            progress: 3,
-            updatedAt: DateTime.utc(2026, 9, 1),
-          ),
-        ];
-      final _FakeAdapter aniList = _FakeAdapter(TrackerSource.anilist)
-        ..failFetch = true;
-      final _FakeAdapter mal = _FakeAdapter(TrackerSource.mal)
-        ..remote = <UserMediaState>[
-          _state(
-            source: TrackerSource.mal,
-            progress: 4,
-            updatedAt: DateTime.utc(2026, 9, 2),
-          ),
-        ];
-      final LocalFirstSyncEngine engine = LocalFirstSyncEngine(
-        store: store,
-        adapters: <TrackerSource, TrackerProviderAdapter>{
-          TrackerSource.anilist: aniList,
-          TrackerSource.mal: mal,
-        },
-        now: () => DateTime.utc(2026, 9, 8),
+    test(
+      'fallback stays readable without overriding cached AniList state',
+      () async {
+        final _MemoryTrackingSyncStore store = _MemoryTrackingSyncStore()
+          ..states = <UserMediaState>[
+            _state(
+              source: TrackerSource.anilist,
+              progress: 3,
+              updatedAt: DateTime.utc(2026, 9, 1),
+            ),
+          ];
+        final _FakeAdapter aniList = _FakeAdapter(TrackerSource.anilist)
+          ..failFetch = true;
+        final _FakeAdapter mal = _FakeAdapter(TrackerSource.mal)
+          ..remote = <UserMediaState>[
+            _state(
+              source: TrackerSource.mal,
+              progress: 4,
+              updatedAt: DateTime.utc(2026, 9, 2),
+            ),
+          ];
+        final LocalFirstSyncEngine engine = LocalFirstSyncEngine(
+          store: store,
+          adapters: <TrackerSource, TrackerProviderAdapter>{
+            TrackerSource.anilist: aniList,
+            TrackerSource.mal: mal,
+          },
+          now: () => DateTime.utc(2026, 9, 8),
+        );
+
+        final LocalFirstLibraryResult result = await engine.refreshAnimeList(
+          providerOrder: const <TrackerSource>[
+            TrackerSource.anilist,
+            TrackerSource.mal,
+          ],
+        );
+
+        expect(result.remoteSource, TrackerSource.mal);
+        expect(result.states.single.progress, 3);
+        expect(result.states.single.source, TrackerSource.anilist);
+        expect(
+          result.states.single.providerStates.keys,
+          containsAll(<TrackerSource>[
+            TrackerSource.anilist,
+            TrackerSource.mal,
+          ]),
+        );
+        expect(
+          store.health[TrackerSource.anilist]?.availability,
+          TrackerProviderAvailability.unavailable,
+        );
+        expect(
+          store.health[TrackerSource.mal]?.availability,
+          TrackerProviderAvailability.healthy,
+        );
+      },
+    );
+
+    test('newer fallback cannot regress a completed primary entry', () {
+      final UserMediaState completedAniList = _state(
+        source: TrackerSource.anilist,
+        status: AniListListStatus.completed,
+        progress: 24,
+        updatedAt: DateTime.utc(2026, 8, 1),
+      );
+      final UserMediaState newerMal = _state(
+        source: TrackerSource.mal,
+        status: AniListListStatus.current,
+        progress: 6,
+        updatedAt: DateTime.utc(2026, 9, 1),
       );
 
-      final LocalFirstLibraryResult result = await engine.refreshAnimeList(
-        providerOrder: const <TrackerSource>[
-          TrackerSource.anilist,
-          TrackerSource.mal,
-        ],
+      final UserMediaState merged = const UserMediaConflictResolver().merge(
+        existing: completedAniList,
+        incoming: newerMal,
+        primary: TrackerSource.anilist,
       );
 
-      expect(result.remoteSource, TrackerSource.mal);
-      expect(result.states.single.progress, 4);
-      expect(
-        store.health[TrackerSource.anilist]?.availability,
-        TrackerProviderAvailability.unavailable,
+      expect(merged.status, AniListListStatus.completed);
+      expect(merged.progress, 24);
+      expect(merged.source, TrackerSource.anilist);
+      expect(merged.providerStates[TrackerSource.mal]?.rawStatus, 'watching');
+    });
+
+    test('pending local fields still win over recovered primary data', () {
+      final UserMediaState fallback = _state(
+        source: TrackerSource.mal,
+        status: AniListListStatus.current,
+        progress: 4,
+        score: 5,
+        updatedAt: DateTime.utc(2026, 9, 2),
       );
-      expect(
-        store.health[TrackerSource.mal]?.availability,
-        TrackerProviderAvailability.healthy,
+      final UserMediaState recoveredAniList = _state(
+        source: TrackerSource.anilist,
+        status: AniListListStatus.completed,
+        progress: 24,
+        score: 6,
+        updatedAt: DateTime.utc(2026, 9, 1),
       );
+
+      final UserMediaState merged = const UserMediaConflictResolver().merge(
+        existing: fallback,
+        incoming: recoveredAniList,
+        primary: TrackerSource.anilist,
+        pendingLocal: UserMediaPatch(
+          status: AniListListStatus.paused,
+          progress: 10,
+          fields: const <UserMediaField>{
+            UserMediaField.status,
+            UserMediaField.progress,
+          },
+        ),
+      );
+
+      expect(merged.status, AniListListStatus.paused);
+      expect(merged.progress, 10);
+      expect(merged.score, 6);
+      expect(merged.source, TrackerSource.anilist);
     });
 
     test('replays queued AniList mutation after recovery', () async {
@@ -392,6 +465,52 @@ void main() {
         store.health[TrackerSource.anilist]?.availability,
         TrackerProviderAvailability.healthy,
       );
+    });
+
+    test('mutation delivery attempts the configured primary first', () async {
+      final List<TrackerSource> deliveryOrder = <TrackerSource>[];
+      final _MemoryTrackingSyncStore store = _MemoryTrackingSyncStore();
+      final LocalFirstSyncEngine engine = LocalFirstSyncEngine(
+        store: store,
+        adapters: <TrackerSource, TrackerProviderAdapter>{
+          TrackerSource.mal: _FakeAdapter(
+            TrackerSource.mal,
+            applicationOrder: deliveryOrder,
+          ),
+          TrackerSource.shikimori: _FakeAdapter(
+            TrackerSource.shikimori,
+            applicationOrder: deliveryOrder,
+          ),
+          TrackerSource.anilist: _FakeAdapter(
+            TrackerSource.anilist,
+            applicationOrder: deliveryOrder,
+          ),
+        },
+        primary: TrackerSource.anilist,
+        now: () => DateTime.utc(2026, 9, 8),
+      );
+
+      await engine.recordMutation(
+        identity: const MediaIdentity(
+          localId: 'stable:anime',
+          anilistId: 10,
+          malId: 20,
+          shikimoriId: 30,
+        ),
+        patch: UserMediaPatch(progress: 5),
+        targets: const <TrackerSource>{
+          TrackerSource.mal,
+          TrackerSource.shikimori,
+          TrackerSource.anilist,
+        },
+      );
+
+      expect(deliveryOrder, <TrackerSource>[
+        TrackerSource.anilist,
+        TrackerSource.mal,
+        TrackerSource.shikimori,
+      ]);
+      expect(store.journal, isEmpty);
     });
 
     test(
@@ -444,7 +563,7 @@ void main() {
     );
 
     test(
-      'pending local fields win while untouched remote fields can advance',
+      'pending local fields win while fallback stays provider-specific',
       () async {
         final _MemoryTrackingSyncStore store = _MemoryTrackingSyncStore()
           ..states = <UserMediaState>[
@@ -489,7 +608,7 @@ void main() {
           providerOrder: const <TrackerSource>[TrackerSource.mal],
         );
 
-        expect(result.states.single.progress, 6);
+        expect(result.states.single.progress, 3);
         expect(result.states.single.score, 7.5);
         expect(
           result.states.single.providerStates.keys,
@@ -578,10 +697,11 @@ class _MemoryTrackingSyncStore implements TrackingSyncStore {
 }
 
 class _FakeAdapter implements TrackerProviderAdapter {
-  _FakeAdapter(this.source);
+  _FakeAdapter(this.source, {this.applicationOrder});
 
   @override
   final TrackerSource source;
+  final List<TrackerSource>? applicationOrder;
   bool failFetch = false;
   bool failMutation = false;
   List<UserMediaState> remote = <UserMediaState>[];
@@ -596,6 +716,7 @@ class _FakeAdapter implements TrackerProviderAdapter {
   @override
   Future<void> applyMutation(SyncJournalEntry mutation) async {
     if (failMutation) throw StateError('${source.name} unavailable');
+    applicationOrder?.add(source);
     applied.add(mutation);
   }
 }
@@ -603,6 +724,7 @@ class _FakeAdapter implements TrackerProviderAdapter {
 UserMediaState _state({
   required TrackerSource source,
   required int progress,
+  AniListListStatus status = AniListListStatus.current,
   double? score,
   required DateTime updatedAt,
 }) {
@@ -612,10 +734,13 @@ UserMediaState _state({
     malId: 20,
     shikimoriId: 30,
   );
-  final String rawStatus = switch (source) {
-    TrackerSource.anilist => 'CURRENT',
-    TrackerSource.mal => 'watching',
-    TrackerSource.shikimori => 'watching',
+  final String rawStatus = switch ((source, status)) {
+    (TrackerSource.anilist, AniListListStatus.completed) => 'COMPLETED',
+    (TrackerSource.anilist, _) => 'CURRENT',
+    (TrackerSource.mal, AniListListStatus.completed) => 'completed',
+    (TrackerSource.mal, _) => 'watching',
+    (TrackerSource.shikimori, AniListListStatus.completed) => 'completed',
+    (TrackerSource.shikimori, _) => 'watching',
   };
   return UserMediaState(
     identity: identity,
@@ -638,7 +763,7 @@ UserMediaState _state({
       },
       statusLabel: '',
     ),
-    status: AniListListStatus.current,
+    status: status,
     progress: progress,
     score: score,
     createdAt: updatedAt.subtract(const Duration(days: 30)),

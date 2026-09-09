@@ -703,11 +703,14 @@ class TrackerProviderHealth {
   };
 }
 
-/// Field-level local-first conflict policy:
+/// Local-first conflict policy:
 /// 1. pending local fields always win;
-/// 2. otherwise the newest provider timestamp wins;
-/// 3. ties prefer AniList, then the configured primary, then the existing
-///    value. Raw provider snapshots are always unioned.
+/// 2. the configured primary provider is canonical whenever its snapshot is
+///    available;
+/// 3. timestamps are only used within the same authority, or to choose among
+///    fallback providers when no primary snapshot exists;
+/// 4. ties prefer AniList, then the existing value. Raw provider snapshots are
+///    always unioned so provider-specific data is never discarded.
 class UserMediaConflictResolver {
   const UserMediaConflictResolver();
 
@@ -760,12 +763,15 @@ class UserMediaConflictResolver {
     UserMediaState incoming,
     TrackerSource primary,
   ) {
+    if (incoming.source != existing.source) {
+      if (incoming.source == primary) return true;
+      if (existing.source == primary) return false;
+    }
     final int compared = incoming.updatedAt.compareTo(existing.updatedAt);
     if (compared != 0) return compared > 0;
     if (incoming.source == existing.source) return false;
     if (incoming.source == TrackerSource.anilist) return true;
     if (existing.source == TrackerSource.anilist) return false;
-    if (incoming.source == primary) return true;
     return false;
   }
 }

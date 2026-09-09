@@ -71,15 +71,23 @@ class TrackerSyncCoordinator {
     }
 
     final List<UserMediaState> cached = await _store.loadStates();
+    UserMediaState? matched;
     for (final UserMediaState state in cached) {
-      if (state.identity.matches(identity) && state.progress >= episode) {
-        return const SyncDispatchResult(pendingTargets: <TrackerSource>{});
-      }
+      if (!state.identity.matches(identity)) continue;
+      matched = state;
+      break;
+    }
+    if (matched != null &&
+        (matched.status == AniListListStatus.completed ||
+            matched.progress >= episode)) {
+      return const SyncDispatchResult(pendingTargets: <TrackerSource>{});
     }
 
     final AniListListStatus status =
         (total != null && total > 0 && episode >= total)
         ? AniListListStatus.completed
+        : matched?.status == AniListListStatus.repeating
+        ? AniListListStatus.repeating
         : AniListListStatus.current;
     return pushEntryEdit(
       externalIds: externalIds,
@@ -102,6 +110,7 @@ class TrackerSyncCoordinator {
     double? score,
     String? notes,
     int? repeat,
+    Set<UserMediaField>? fields,
     Set<TrackerSource>? targets,
     Map<TrackerSource, int> providerEntryIds = const <TrackerSource, int>{},
   }) => _serial<SyncDispatchResult>(() async {
@@ -126,6 +135,7 @@ class TrackerSyncCoordinator {
         score: score,
         notes: notes,
         repeat: repeat,
+        fields: fields,
       ),
       targets: resolvedTargets,
       mediaItem: mediaItem,
