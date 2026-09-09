@@ -24,47 +24,20 @@ class SoraAddonImportResult {
   bool get hasFailures => failed > 0;
 }
 
-class SoraLocalAddonExport {
-  const SoraLocalAddonExport({
-    required this.manifestFileName,
-    required this.manifestCode,
-    required this.scriptFileName,
-    required this.scriptCode,
-  });
-
-  final String manifestFileName;
-  final String manifestCode;
-  final String scriptFileName;
-  final String scriptCode;
-}
-
-class SoraAddonExport {
-  const SoraAddonExport({
-    required this.remoteJson,
-    required this.remoteAddonCount,
-    required this.localAddons,
-  });
-
-  final String remoteJson;
-  final int remoteAddonCount;
-  final List<SoraLocalAddonExport> localAddons;
-
-  bool get shouldIncludeRemoteJson =>
-      remoteAddonCount > 0 || localAddons.isEmpty;
-}
-
 class _SoraAddonImportCandidate {
   const _SoraAddonImportCandidate({
     required this.manifestUrl,
     required this.enabled,
     required this.order,
     this.id,
+    this.localFiles,
   });
 
   final String manifestUrl;
   final bool enabled;
   final int order;
   final String? id;
+  final SoraLocalAddonFiles? localFiles;
 }
 
 class SoraAddonStore {
@@ -409,7 +382,7 @@ class SoraAddonStore {
     return file.readAsString();
   }
 
-  Future<SoraAddonExport> exportInstalled() async {
+  Future<String> exportInstalledJson() async {
     final List<SoraInstalledAddon> installed = await loadInstalled();
     final List<SoraInstalledAddon> ordered = <SoraInstalledAddon>[...installed]
       ..sort(
@@ -423,63 +396,57 @@ class SoraAddonStore {
     final List<SoraInstalledAddon> remote = normalized
         .where((SoraInstalledAddon addon) => !addon.isLocal)
         .toList(growable: false);
-    final List<SoraLocalAddonExport> local = <SoraLocalAddonExport>[];
+    final List<Map<String, Object?>> exportedAddons = <Map<String, Object?>>[];
     final Set<String> usedFileStems = <String>{};
     for (final SoraInstalledAddon addon in normalized) {
-      if (!addon.isLocal) continue;
-      final String stem = _uniqueExportFileStem(addon, usedFileStems);
-      final File manifestFile = File(addon.manifestPath);
-      final File scriptFile = File(addon.scriptPath);
-      if (!await manifestFile.exists() || !await scriptFile.exists()) {
-        throw SoraAddonException(
-          'The local files for ${addon.manifest.sourceName} are missing.',
-        );
+      final Map<String, Object?> exported = _portableExportJson(addon);
+      if (addon.isLocal) {
+        final String stem = _uniqueExportFileStem(addon, usedFileStems);
+        final File manifestFile = File(addon.manifestPath);
+        final File scriptFile = File(addon.scriptPath);
+        if (!await manifestFile.exists() || !await scriptFile.exists()) {
+          throw SoraAddonException(
+            'The local files for ${addon.manifest.sourceName} are missing.',
+          );
+        }
+        exported['localFiles'] = <String, Object?>{
+          'manifest': <String, Object?>{
+            'name': '$stem.json',
+            'content': await manifestFile.readAsString(),
+          },
+          'script': <String, Object?>{
+            'name': '$stem.js',
+            'content': await scriptFile.readAsString(),
+          },
+        };
       }
-      local.add(
-        SoraLocalAddonExport(
-          manifestFileName: '$stem.json',
-          manifestCode: await manifestFile.readAsString(),
-          scriptFileName: '$stem.js',
-          scriptCode: await scriptFile.readAsString(),
-        ),
-      );
+      exportedAddons.add(exported);
     }
-    final String remoteJson = const JsonEncoder.withIndent('  ').convert(
-      <String, Object?>{
-        'version': 1,
-        'format': 'mirushin.sora.addons.v1',
-        'exportedAt': DateTime.now().toUtc().toIso8601String(),
-        'addons': remote.map(_portableExportJson).toList(growable: false),
-        // AnimeShin-compatible payload. AnimeShin ignores extra MiruShin keys.
-        'remoteModules': remote
-            .map(
-              (SoraInstalledAddon addon) => <String, Object?>{
-                'id': addon.id,
-                'jsonUrl': addon.manifestUrl,
-                'enabled': addon.enabled,
-                'updatedAt': addon.updatedAt.toUtc().toIso8601String(),
-                'order': addon.order,
-              },
-            )
-            .toList(growable: false),
-        'disabledModuleIds': remote
-            .where((SoraInstalledAddon addon) => !addon.enabled)
-            .map((SoraInstalledAddon addon) => addon.id)
-            .toList(growable: false),
-        'order': remote
-            .map((SoraInstalledAddon addon) => addon.id)
-            .toList(growable: false),
-      },
-    );
-    return SoraAddonExport(
-      remoteJson: remoteJson,
-      remoteAddonCount: remote.length,
-      localAddons: List<SoraLocalAddonExport>.unmodifiable(local),
-    );
-  }
-
-  Future<String> exportInstalledJson() async {
-    return (await exportInstalled()).remoteJson;
+    return const JsonEncoder.withIndent('  ').convert(<String, Object?>{
+      'version': 1,
+      'format': 'mirushin.sora.addons.v1',
+      'exportedAt': DateTime.now().toUtc().toIso8601String(),
+      'addons': exportedAddons,
+      // AnimeShin-compatible payload. AnimeShin ignores extra MiruShin keys.
+      'remoteModules': remote
+          .map(
+            (SoraInstalledAddon addon) => <String, Object?>{
+              'id': addon.id,
+              'jsonUrl': addon.manifestUrl,
+              'enabled': addon.enabled,
+              'updatedAt': addon.updatedAt.toUtc().toIso8601String(),
+              'order': addon.order,
+            },
+          )
+          .toList(growable: false),
+      'disabledModuleIds': normalized
+          .where((SoraInstalledAddon addon) => !addon.enabled)
+          .map((SoraInstalledAddon addon) => addon.id)
+          .toList(growable: false),
+      'order': normalized
+          .map((SoraInstalledAddon addon) => addon.id)
+          .toList(growable: false),
+    });
   }
 
   Future<SoraAddonImportResult> importInstalledJson(String raw) async {
@@ -493,9 +460,18 @@ class SoraAddonStore {
     final List<String> failures = <String>[];
     for (final _SoraAddonImportCandidate candidate in candidates) {
       try {
-        final SoraAddonPreview preview = await previewFromUrl(
-          candidate.manifestUrl,
-        );
+        final SoraAddonPreview preview;
+        if (candidate.localFiles case final SoraLocalAddonFiles localFiles) {
+          preview = await previewFromLocalFiles(localFiles);
+        } else {
+          if (Uri.tryParse(candidate.manifestUrl)?.scheme ==
+              'mirushin-local-addon') {
+            throw const SoraAddonException(
+              'This local addon export does not contain its manifest and script.',
+            );
+          }
+          preview = await previewFromUrl(candidate.manifestUrl);
+        }
         final SoraInstalledAddon addon = await installFromPreview(preview);
         await setEnabled(addon.id, candidate.enabled);
         installedCount++;
@@ -693,6 +669,9 @@ class SoraAddonStore {
     ]);
     if (url.isEmpty) return null;
     final String id = _firstString(map, const <String>['id', 'sourceId']);
+    final SoraLocalAddonFiles? localFiles = _localFilesFromExport(
+      map['localFiles'],
+    );
     final bool enabled = _boolValue(
       map['enabled'],
       fallback: id.isEmpty || !disabledIds.contains(id),
@@ -703,7 +682,49 @@ class SoraAddonStore {
       enabled: enabled,
       order: order,
       id: id.isEmpty ? null : id,
+      localFiles: localFiles,
     );
+  }
+
+  SoraLocalAddonFiles? _localFilesFromExport(Object? value) {
+    if (value == null) return null;
+    if (value is! Map) {
+      throw const SoraAddonException(
+        'Exported local addon files must be an object.',
+      );
+    }
+    final Map<String, dynamic> files = value.map(
+      (Object? key, Object? mapValue) =>
+          MapEntry<String, dynamic>(key.toString(), mapValue),
+    );
+    SoraAddonClipboardFile readFile(String key) {
+      final Object? rawFile = files[key];
+      if (rawFile is! Map) {
+        throw SoraAddonException('Exported local addon is missing $key.');
+      }
+      final Map<String, dynamic> file = rawFile.map(
+        (Object? fileKey, Object? fileValue) =>
+            MapEntry<String, dynamic>(fileKey.toString(), fileValue),
+      );
+      final Object? rawName = file['name'];
+      final Object? rawContent = file['content'];
+      if (rawName is! String ||
+          rawName.trim().isEmpty ||
+          rawContent is! String) {
+        throw SoraAddonException(
+          'Exported local addon $key must contain a file name and text.',
+        );
+      }
+      return SoraAddonClipboardFile(
+        name: rawName.trim(),
+        bytes: Uint8List.fromList(utf8.encode(rawContent)),
+      );
+    }
+
+    return SoraLocalAddonFiles.fromFiles(<SoraAddonClipboardFile>[
+      readFile('manifest'),
+      readFile('script'),
+    ]);
   }
 
   String _firstString(Map<String, dynamic> map, List<String> keys) {

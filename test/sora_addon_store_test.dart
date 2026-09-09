@@ -36,16 +36,15 @@ void main() {
       final SoraInstalledAddon installed = await store.installFromPreview(
         preview,
       );
-      final SoraAddonExport remoteExport = await store.exportInstalled();
+      final String remoteExport = await store.exportInstalledJson();
       final Map<String, dynamic> remoteDocument = Map<String, dynamic>.from(
-        jsonDecode(remoteExport.remoteJson) as Map,
+        jsonDecode(remoteExport) as Map,
       );
       final Map<String, dynamic> exportedAddon = Map<String, dynamic>.from(
         (remoteDocument['addons'] as List<dynamic>).single as Map,
       );
-      expect(remoteExport.remoteAddonCount, 1);
-      expect(remoteExport.localAddons, isEmpty);
       expect(exportedAddon['manifestUrl'], 'https://example.com/addon.json');
+      expect(exportedAddon.containsKey('localFiles'), isFalse);
       expect(exportedAddon.containsKey('manifestPath'), isFalse);
       expect(exportedAddon.containsKey('scriptPath'), isFalse);
       expect(
@@ -136,41 +135,51 @@ async function extractStreamUrl() { return "{}"; }
       expect(updated, same(installed));
       expect(adapter.requestedUrls, isEmpty);
 
-      final SoraAddonExport localExport = await store.exportInstalled();
-      expect(localExport.remoteAddonCount, 0);
-      expect(localExport.shouldIncludeRemoteJson, isFalse);
-      expect(localExport.localAddons, hasLength(1));
-      final SoraLocalAddonExport exported = localExport.localAddons.single;
-      expect(exported.manifestFileName, 'YummyAnime.json');
-      expect(exported.scriptFileName, 'YummyAnime.js');
-      expect(exported.manifestCode, _yummyAnimeManifest);
-      expect(exported.scriptCode, script);
+      await store.setEnabled(installed.id, false);
+      final String localExport = await store.exportInstalledJson();
+      final Map<String, dynamic> localDocument = Map<String, dynamic>.from(
+        jsonDecode(localExport) as Map,
+      );
+      final Map<String, dynamic> exportedAddon = Map<String, dynamic>.from(
+        (localDocument['addons'] as List<dynamic>).single as Map,
+      );
+      final Map<String, dynamic> exportedFiles = Map<String, dynamic>.from(
+        exportedAddon['localFiles'] as Map,
+      );
+      final Map<String, dynamic> exportedManifest = Map<String, dynamic>.from(
+        exportedFiles['manifest'] as Map,
+      );
+      final Map<String, dynamic> exportedScript = Map<String, dynamic>.from(
+        exportedFiles['script'] as Map,
+      );
+      expect(exportedAddon['enabled'], isFalse);
+      expect(exportedAddon.containsKey('manifestPath'), isFalse);
+      expect(exportedAddon.containsKey('scriptPath'), isFalse);
+      expect(exportedManifest['name'], 'YummyAnime.json');
+      expect(exportedManifest['content'], _yummyAnimeManifest);
+      expect(exportedScript['name'], 'YummyAnime.js');
+      expect(exportedScript['content'], script);
+      expect(localDocument['remoteModules'], isEmpty);
 
       final Directory restoredTemp = await Directory.systemTemp.createTemp(
         'sora_local_export_restore_',
       );
       addTearDown(() => restoredTemp.delete(recursive: true));
+      final _FakeAdapter restoredAdapter = _FakeAdapter(<String, String>{});
       final SoraAddonStore restoredStore = SoraAddonStore(
-        dio: Dio()..httpClientAdapter = _FakeAdapter(<String, String>{}),
+        dio: Dio()..httpClientAdapter = restoredAdapter,
         supportDirectoryProvider: () async => restoredTemp,
       );
-      final SoraAddonPreview restoredPreview = await restoredStore
-          .previewFromLocalFiles(
-            SoraLocalAddonFiles.fromFiles(<SoraAddonClipboardFile>[
-              SoraAddonClipboardFile(
-                name: exported.manifestFileName,
-                bytes: Uint8List.fromList(utf8.encode(exported.manifestCode)),
-              ),
-              SoraAddonClipboardFile(
-                name: exported.scriptFileName,
-                bytes: Uint8List.fromList(utf8.encode(exported.scriptCode)),
-              ),
-            ]),
-          );
-      final SoraInstalledAddon restored = await restoredStore
-          .installFromPreview(restoredPreview);
+      final SoraAddonImportResult importResult = await restoredStore
+          .importInstalledJson(localExport);
+      expect(importResult.installed, 1);
+      expect(importResult.failed, 0);
+      final SoraInstalledAddon restored =
+          (await restoredStore.loadInstalled()).single;
       expect(restored.isLocal, isTrue);
+      expect(restored.enabled, isFalse);
       expect(await restoredStore.readScript(restored), script);
+      expect(restoredAdapter.requestedUrls, isEmpty);
     },
   );
 }
