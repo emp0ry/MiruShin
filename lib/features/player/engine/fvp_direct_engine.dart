@@ -258,8 +258,20 @@ class FvpDirectEngine extends PlayerEngine {
     final mdk.MediaStatus status = _player.mediaStatus;
     final mdk.MediaInfo info = _player.mediaInfo;
     final Size size = _videoSize(info);
-    final double aspectRatio = size.width > 0 && size.height > 0
-        ? size.width / size.height
+    final mdk.VideoStreamInfo? video = _firstVideo(info);
+    final double reportedAspectRatio = video == null
+        ? videoDisplayAspectRatio(
+            codedWidth: size.width.round(),
+            codedHeight: size.height.round(),
+          )
+        : videoDisplayAspectRatio(
+            codedWidth: video.codec.width,
+            codedHeight: video.codec.height,
+            pixelAspectRatio: video.codec.par,
+            rotationDegrees: video.rotation,
+          );
+    final double aspectRatio = reportedAspectRatio > 0
+        ? reportedAspectRatio
         : 16 / 9;
 
     final bool isPlaying =
@@ -369,13 +381,17 @@ class FvpDirectEngine extends PlayerEngine {
   }
 
   Size _videoSize(mdk.MediaInfo info) {
-    final List<mdk.VideoStreamInfo>? videos = info.video;
-    if (videos == null || videos.isEmpty) return Size.zero;
-    final mdk.VideoStreamInfo first = videos.first;
+    final mdk.VideoStreamInfo? first = _firstVideo(info);
+    if (first == null) return Size.zero;
     final int width = first.codec.width;
     final int height = first.codec.height;
     if (width <= 0 || height <= 0) return Size.zero;
     return Size(width.toDouble(), height.toDouble());
+  }
+
+  mdk.VideoStreamInfo? _firstVideo(mdk.MediaInfo info) {
+    final List<mdk.VideoStreamInfo>? videos = info.video;
+    return videos == null || videos.isEmpty ? null : videos.first;
   }
 
   int _safePositive(int value) => value < 0 ? 0 : value;

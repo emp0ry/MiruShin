@@ -41,6 +41,23 @@ class PlayerBufferedRange {
   final Duration end;
 }
 
+double videoDisplayAspectRatio({
+  required int codedWidth,
+  required int codedHeight,
+  double pixelAspectRatio = 1,
+  int rotationDegrees = 0,
+}) {
+  if (codedWidth <= 0 || codedHeight <= 0) return 0;
+
+  final double safePixelAspectRatio =
+      pixelAspectRatio.isFinite && pixelAspectRatio > 0 ? pixelAspectRatio : 1;
+  double ratio = codedWidth * safePixelAspectRatio / codedHeight;
+  if (rotationDegrees.abs() % 180 == 90) {
+    ratio = 1 / ratio;
+  }
+  return ratio.isFinite && ratio > 0 ? ratio : 0;
+}
+
 class PlayerEngineState {
   const PlayerEngineState({
     this.position = Duration.zero,

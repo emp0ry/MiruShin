@@ -1233,11 +1233,26 @@ class FvpPlayerEngine extends PlayerEngine {
     final mdk.MediaStatus status = player.mediaStatus;
     final mdk.MediaInfo info = player.mediaInfo;
     final Size videoSize = _videoSize(info);
-    final double reportedAspectRatio =
-        videoSize.width > 0 && videoSize.height > 0
-        ? videoSize.width / videoSize.height
-        : 0;
-    final double aspectRatio = _effectiveAspectRatio(reportedAspectRatio);
+    final mdk.VideoStreamInfo? video = _firstVideo(info);
+    final double reportedAspectRatio = video == null
+        ? videoDisplayAspectRatio(
+            codedWidth: videoSize.width.round(),
+            codedHeight: videoSize.height.round(),
+          )
+        : videoDisplayAspectRatio(
+            codedWidth: video.codec.width,
+            codedHeight: video.codec.height,
+            pixelAspectRatio: video.codec.par,
+            rotationDegrees: video.rotation,
+          );
+    final bool hasExplicitDisplayTransform =
+        video != null &&
+        ((video.codec.par.isFinite && (video.codec.par - 1).abs() > 0.001) ||
+            video.rotation.abs() % 180 == 90);
+    final double aspectRatio = _effectiveAspectRatio(
+      reportedAspectRatio,
+      trustReported: hasExplicitDisplayTransform,
+    );
     final Duration position = Duration(
       milliseconds: player.position.clamp(0, 1 << 62).toInt(),
     );
@@ -1393,7 +1408,10 @@ class FvpPlayerEngine extends PlayerEngine {
     );
   }
 
-  double _effectiveAspectRatio(double reportedAspectRatio) {
+  double _effectiveAspectRatio(
+    double reportedAspectRatio, {
+    bool trustReported = false,
+  }) {
     final double fallback =
         _usableAspectRatio(_state.value.aspectRatio) ??
         _usableAspectRatio(_initialAspectRatio) ??
@@ -1402,7 +1420,7 @@ class FvpPlayerEngine extends PlayerEngine {
     if (reported == null) return fallback;
 
     final double? seeded = _usableAspectRatio(_initialAspectRatio);
-    if (seeded != null) {
+    if (!trustReported && seeded != null) {
       final double diff = (reported - seeded).abs();
       // Some low-quality HLS variants report coded size like 640x480 even
       // when the visible video is still 16:9. During quality switch, prefer
@@ -1428,13 +1446,18 @@ class FvpPlayerEngine extends PlayerEngine {
   }
 
   Size _videoSize(mdk.MediaInfo info) {
-    final List<mdk.VideoStreamInfo>? videos = info.video;
-    if (videos == null || videos.isEmpty) return _state.value.videoSize;
-    final mdk.VideoCodecParameters codec = videos.first.codec;
+    final mdk.VideoStreamInfo? video = _firstVideo(info);
+    if (video == null) return _state.value.videoSize;
+    final mdk.VideoCodecParameters codec = video.codec;
     final int width = codec.width;
     final int height = codec.height;
     if (width <= 0 || height <= 0) return _state.value.videoSize;
     return Size(width.toDouble(), height.toDouble());
+  }
+
+  mdk.VideoStreamInfo? _firstVideo(mdk.MediaInfo info) {
+    final List<mdk.VideoStreamInfo>? videos = info.video;
+    return videos == null || videos.isEmpty ? null : videos.first;
   }
 
   List<PlayerBufferedRange> _bufferedRanges(mdk.Player player) {
