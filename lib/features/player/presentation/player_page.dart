@@ -181,6 +181,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
   final FocusNode _tvChromeSeedFocus = FocusNode(
     debugLabel: 'MiruShinTvChromeSeed',
   );
+  final GestureOverlayController _gestureOverlayController =
+      GestureOverlayController();
   bool _stoppedPlayback = false;
   bool _exitingPlayer = false;
   bool _allowRoutePop = false;
@@ -1267,11 +1269,11 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.arrowLeft) {
-      unawaited(notifier.seekBy(-settings.seekInterval));
+      _seekWithArrowFeedback(notifier, -settings.seekInterval);
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.arrowRight) {
-      unawaited(notifier.seekBy(settings.seekInterval));
+      _seekWithArrowFeedback(notifier, settings.seekInterval);
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.arrowUp) {
@@ -1342,6 +1344,11 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     }
 
     return KeyEventResult.ignored;
+  }
+
+  void _seekWithArrowFeedback(PlaybackController notifier, Duration delta) {
+    _gestureOverlayController.showSeekFeedback(delta);
+    unawaited(notifier.seekBy(delta));
   }
 
   // Enters Picture-in-Picture using whichever backend the platform supports:
@@ -1547,13 +1554,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
           ),
           _SeekIntent: CallbackAction<_SeekIntent>(
             onInvoke: (_SeekIntent intent) {
-              ref
-                  .read(playbackControllerProvider.notifier)
-                  .seekBy(
-                    intent.backward
-                        ? -settings.seekInterval
-                        : settings.seekInterval,
-                  );
+              _seekWithArrowFeedback(
+                ref.read(playbackControllerProvider.notifier),
+                intent.backward
+                    ? -settings.seekInterval
+                    : settings.seekInterval,
+              );
               return null;
             },
           ),
@@ -1740,6 +1746,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
                           }
                         },
                         child: GestureOverlay(
+                          controller: _gestureOverlayController,
                           onTap: _toggleControls,
                           onActivity: _showControls,
                           seekInterval: settings.seekInterval,

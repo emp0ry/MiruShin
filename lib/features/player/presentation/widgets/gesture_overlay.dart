@@ -5,6 +5,22 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../application/playback_controller.dart';
 
+/// Lets non-pointer controls reuse the gesture overlay's accumulated seek
+/// feedback without duplicating its timer or presentation state.
+class GestureOverlayController {
+  _GestureOverlayState? _state;
+
+  void showSeekFeedback(Duration delta) {
+    _state?._showSeekText(delta, backward: delta.isNegative);
+  }
+
+  void _attach(_GestureOverlayState state) => _state = state;
+
+  void _detach(_GestureOverlayState state) {
+    if (identical(_state, state)) _state = null;
+  }
+}
+
 class GestureOverlay extends ConsumerStatefulWidget {
   const GestureOverlay({
     required this.child,
@@ -17,6 +33,7 @@ class GestureOverlay extends ConsumerStatefulWidget {
     required this.onToggleFullscreen,
     required this.onTogglePlay,
     required this.onZoomChanged,
+    this.controller,
     this.enableGestures = true,
     super.key,
   });
@@ -31,6 +48,7 @@ class GestureOverlay extends ConsumerStatefulWidget {
   final VoidCallback onToggleFullscreen;
   final VoidCallback onTogglePlay;
   final ValueChanged<bool> onZoomChanged;
+  final GestureOverlayController? controller;
 
   /// When false (e.g. Windows mini-player PiP) all tap/drag/double-tap/seek/
   /// gestures are disabled so the surface can be used purely to drag and resize
@@ -69,7 +87,23 @@ class _GestureOverlayState extends ConsumerState<GestureOverlay> {
   final Map<int, Offset> _activePinchPointers = <int, Offset>{};
 
   @override
+  void initState() {
+    super.initState();
+    widget.controller?._attach(this);
+  }
+
+  @override
+  void didUpdateWidget(covariant GestureOverlay oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.controller, widget.controller)) {
+      oldWidget.controller?._detach(this);
+      widget.controller?._attach(this);
+    }
+  }
+
+  @override
   void dispose() {
+    widget.controller?._detach(this);
     _chipTimer?.cancel();
     _singleTapTimer?.cancel();
     _pinchSuppressTimer?.cancel();
@@ -127,8 +161,8 @@ class _GestureOverlayState extends ConsumerState<GestureOverlay> {
       _chip = null;
       _seekText = '$sign${seconds}s';
       _seekAlignment = backward
-          ? const Alignment(-0.72, 0)
-          : const Alignment(0.72, 0);
+          ? const Alignment(-0.88, 0)
+          : const Alignment(0.88, 0);
     });
     _chipTimer = Timer(const Duration(milliseconds: 900), () {
       _seekChipAccum = Duration.zero;

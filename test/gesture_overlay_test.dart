@@ -14,12 +14,14 @@ void main() {
   Future<GestureDetector> pumpOverlay(
     WidgetTester tester, {
     required bool horizontalSwipeSeekEnabled,
+    GestureOverlayController? controller,
   }) async {
     await tester.pumpWidget(
       ProviderScope(
         child: MaterialApp(
           home: Scaffold(
             body: GestureOverlay(
+              controller: controller,
               seekInterval: const Duration(seconds: 10),
               isMobile: true,
               isZoomed: false,
@@ -87,5 +89,34 @@ void main() {
     expect(detector.onVerticalDragEnd, isNull);
     expect(detector.onHorizontalDragUpdate, isNotNull);
     expect(detector.onTapUp, isNotNull);
+  });
+
+  testWidgets('external arrow feedback accumulates and resets', (
+    WidgetTester tester,
+  ) async {
+    final GestureOverlayController controller = GestureOverlayController();
+    await pumpOverlay(
+      tester,
+      horizontalSwipeSeekEnabled: false,
+      controller: controller,
+    );
+
+    controller.showSeekFeedback(const Duration(seconds: 5));
+    await tester.pump();
+    expect(find.text('+5s'), findsOneWidget);
+    expect(tester.getCenter(find.text('+5s')).dx, greaterThan(700));
+
+    controller.showSeekFeedback(const Duration(seconds: 5));
+    await tester.pump();
+    expect(find.text('+10s'), findsOneWidget);
+    expect(find.text('+5s'), findsNothing);
+
+    await tester.pump(const Duration(milliseconds: 901));
+    expect(find.text('+10s'), findsNothing);
+
+    controller.showSeekFeedback(const Duration(seconds: -5));
+    await tester.pump();
+    expect(find.text('-5s'), findsOneWidget);
+    expect(tester.getCenter(find.text('-5s')).dx, lessThan(100));
   });
 }
