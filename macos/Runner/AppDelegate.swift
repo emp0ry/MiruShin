@@ -173,7 +173,7 @@ private final class MiruShinThumbnailSession {
   }
 }
 
-@_cdecl("mirushin_seek_thumbnail_session_create")
+@_cdecl("mirushin_avfoundation_seek_thumbnail_session_create")
 func mirushinSeekThumbnailSessionCreate() -> UnsafeMutableRawPointer? {
   Unmanaged.passRetained(MiruShinThumbnailSession()).toOpaque()
 }
@@ -186,17 +186,17 @@ private func mirushinThumbnailSession(
     .takeUnretainedValue()
 }
 
-@_cdecl("mirushin_seek_thumbnail_session_reset_cancel")
+@_cdecl("mirushin_avfoundation_seek_thumbnail_session_reset_cancel")
 func mirushinSeekThumbnailSessionResetCancel(_ pointer: UnsafeMutableRawPointer?) {
   mirushinThumbnailSession(pointer)?.resetCancellation()
 }
 
-@_cdecl("mirushin_seek_thumbnail_session_cancel")
+@_cdecl("mirushin_avfoundation_seek_thumbnail_session_cancel")
 func mirushinSeekThumbnailSessionCancel(_ pointer: UnsafeMutableRawPointer?) {
   mirushinThumbnailSession(pointer)?.cancel()
 }
 
-@_cdecl("mirushin_seek_thumbnail_session_open")
+@_cdecl("mirushin_avfoundation_seek_thumbnail_session_open")
 func mirushinSeekThumbnailSessionOpen(
   _ pointer: UnsafeMutableRawPointer?,
   _ input: UnsafePointer<CChar>?,
@@ -228,7 +228,7 @@ func mirushinSeekThumbnailSessionOpen(
   return 0
 }
 
-@_cdecl("mirushin_seek_thumbnail_session_decode")
+@_cdecl("mirushin_avfoundation_seek_thumbnail_session_decode")
 func mirushinSeekThumbnailSessionDecode(
   _ pointer: UnsafeMutableRawPointer?,
   _ targetMs: Int64,
@@ -318,7 +318,7 @@ func mirushinSeekThumbnailSessionDecode(
   }
 }
 
-@_cdecl("mirushin_seek_thumbnail_session_destroy")
+@_cdecl("mirushin_avfoundation_seek_thumbnail_session_destroy")
 func mirushinSeekThumbnailSessionDestroy(_ pointer: UnsafeMutableRawPointer?) {
   guard let pointer = pointer else { return }
   let session = Unmanaged<MiruShinThumbnailSession>.fromOpaque(pointer)

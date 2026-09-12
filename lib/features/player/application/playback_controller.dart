@@ -313,6 +313,14 @@ class PlaybackController extends Notifier<PlaybackState> {
       SeekThumbnailRequestTracker();
   final SeekThumbnailService _seekThumbnailService = SeekThumbnailService(
     extractorFactory: createSeekThumbnailExtractor,
+    // Opening an online source through MDK can narrowly exceed the shared
+    // 1.3-second decoder budget on Apple platforms.
+    extractionTimeout:
+        !kIsWeb &&
+            (defaultTargetPlatform == TargetPlatform.iOS ||
+                defaultTargetPlatform == TargetPlatform.macOS)
+        ? const Duration(milliseconds: 1600)
+        : const Duration(milliseconds: 1300),
     // A typical episode needs roughly 240 entries at five-to-six-second
     // coverage. Keep enough room for long movies without making the cache
     // unbounded for unusually long streams.
@@ -2618,7 +2626,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       seekPreviewThumbnail: visibleThumbnail,
       clearSeekPreviewThumbnail: !imageSurface,
       seekPreviewLoading: progressiveTimeline && visibleThumbnail == null,
-      seekPreviewImageSurface: imageSurface,
+      seekPreviewImageSurface: visibleThumbnail != null,
     );
     if (cached != null) {
       _seekPreviewTimer?.cancel();
@@ -2732,7 +2740,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     final int request = _seekThumbnailRequests.begin(plan.sessionKey, bucket);
     state = state.copyWith(
       seekPreviewLoading: true,
-      seekPreviewImageSurface: true,
+      seekPreviewImageSurface: state.seekPreviewThumbnail != null,
     );
     if (kDebugMode) {
       debugPrint(
