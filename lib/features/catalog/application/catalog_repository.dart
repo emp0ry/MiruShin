@@ -196,6 +196,7 @@ class AniListCatalogRepository implements CatalogRepository {
     this.hasAccessToken = false,
     this.onPrimaryFailure,
     this.onPrimarySuccess,
+    this.onFallback,
     this.onOffline,
     this.onOnline,
   });
@@ -210,6 +211,7 @@ class AniListCatalogRepository implements CatalogRepository {
   final bool hasAccessToken;
   final void Function(Object error)? onPrimaryFailure;
   final void Function()? onPrimarySuccess;
+  final void Function(Object error, String sourceName)? onFallback;
   final CatalogOfflineCallback? onOffline;
   final CatalogOnlineCallback? onOnline;
 
@@ -408,10 +410,12 @@ class AniListCatalogRepository implements CatalogRepository {
   }) async {
     try {
       return await _primaryRead(primary);
-    } catch (_) {
+    } catch (error) {
       final MalApiClient? mal = enabled ? malFallback : null;
       if (mal == null) rethrow;
-      return fallback(mal);
+      final T result = await fallback(mal);
+      onFallback?.call(error, 'MyAnimeList');
+      return result;
     }
   }
 

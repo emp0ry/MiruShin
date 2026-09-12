@@ -199,46 +199,57 @@ class _LibraryPageState extends ConsumerState<LibraryPage>
         settings.hasMalSession ||
         settings.hasShikimoriSession;
     final bool mangaConnected = settings.hasAniListSession;
-    return Column(
-      children: <Widget>[
-        const CatalogOfflineBanner(horizontalInset: AppSpacing.lg),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(
-            AppSpacing.lg,
-            AppSpacing.md,
-            AppSpacing.lg,
-            AppSpacing.sm,
-          ),
-          child: TabBar(
-            controller: _mainTab,
-            tabs: <Widget>[
-              Tab(text: context.t('Anime')),
-              Tab(text: context.t('Manga')),
-            ],
-          ),
-        ),
-        Expanded(
-          child: TabBarView(
-            controller: _mainTab,
-            children: <Widget>[
-              _AniListDataTab(
-                connected: animeConnected,
-                mediaType: 'ANIME',
-                defaultPage: settings.anilistLibraryDefaultPage,
-                emptyMessage:
-                    'Add anime to your AniList account to see them here.',
-              ),
-              _AniListDataTab(
-                connected: mangaConnected,
-                mediaType: 'MANGA',
-                defaultPage: settings.anilistLibraryDefaultPage,
-                emptyMessage:
-                    'Add manga to your AniList account to see them here.',
+    return Padding(
+      padding: const EdgeInsets.only(top: AppSpacing.lg),
+      child: NestedScrollView(
+        key: const ValueKey<String>('library-page-scroll-view'),
+        headerSliverBuilder: (BuildContext context, bool innerBoxIsScrolled) =>
+            const <Widget>[
+              SliverToBoxAdapter(
+                child: CatalogOfflineBanner(horizontalInset: AppSpacing.lg),
               ),
             ],
-          ),
+        body: Column(
+          children: <Widget>[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpacing.lg,
+                0,
+                AppSpacing.lg,
+                AppSpacing.sm,
+              ),
+              child: TabBar(
+                controller: _mainTab,
+                tabs: <Widget>[
+                  Tab(text: context.t('Anime')),
+                  Tab(text: context.t('Manga')),
+                ],
+              ),
+            ),
+            Expanded(
+              child: TabBarView(
+                controller: _mainTab,
+                children: <Widget>[
+                  _AniListDataTab(
+                    connected: animeConnected,
+                    mediaType: 'ANIME',
+                    defaultPage: settings.anilistLibraryDefaultPage,
+                    emptyMessage:
+                        'Add anime to your AniList account to see them here.',
+                  ),
+                  _AniListDataTab(
+                    connected: mangaConnected,
+                    mediaType: 'MANGA',
+                    defaultPage: settings.anilistLibraryDefaultPage,
+                    emptyMessage:
+                        'Add manga to your AniList account to see them here.',
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
-      ],
+      ),
     );
   }
 }

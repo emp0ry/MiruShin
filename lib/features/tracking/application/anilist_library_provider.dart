@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/cache/metadata_cache_store.dart';
 import '../../../shared/models/anilist_models.dart';
 import '../../../shared/models/media_item.dart';
+import '../../catalog/application/catalog_mode.dart';
+import '../../catalog/application/catalog_status.dart';
 import '../../metadata/application/metadata_cache_provider.dart';
 import '../../metadata/data/shikimori_client.dart';
 import '../../notifications/airing_notification_scheduler.dart';
@@ -939,6 +941,7 @@ Future<List<AniListAnimeListFolder>> _fetchCollection(
     List<AniListAnimeListFolder> fallback = cached == null
         ? <AniListAnimeListFolder>[]
         : _decode(cached);
+    TrackerSource? fallbackSource;
     if (mediaType == 'ANIME') {
       if (fallback.isNotEmpty) {
         fallback = _filterFoldersByStatus(
@@ -955,7 +958,19 @@ Future<List<AniListAnimeListFolder>> _fetchCollection(
       );
       if (secondary.folders.isNotEmpty) {
         fallback = _filterFoldersByStatus(secondary.folders, statuses);
+        fallbackSource = secondary.remoteSource;
       }
+    }
+    if (statuses == null) {
+      markCatalogOffline(
+        ref,
+        mode: CatalogMode.anilist,
+        sourceName: 'AniList',
+        operation: 'library',
+        usingCache: fallback.isNotEmpty && fallbackSource == null,
+        error: fetchError,
+        fallbackSourceName: fallbackSource?.label,
+      );
     }
     _setAniListLibraryLoadStatus(
       ref,
@@ -973,6 +988,9 @@ Future<List<AniListAnimeListFolder>> _fetchCollection(
     statuses: statuses,
     phase: AniListLibraryLoadPhase.success,
   );
+  if (statuses == null) {
+    markCatalogOnline(ref, CatalogMode.anilist);
+  }
   if (mediaType == 'ANIME' && statuses == null) {
     unawaited(
       AiringNotificationScheduler.syncAnimeList(

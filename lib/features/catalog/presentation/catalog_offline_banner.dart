@@ -47,8 +47,23 @@ class CatalogOfflineBanner extends ConsumerWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
+              IconButton(
+                key: const ValueKey<String>('catalog-offline-banner-dismiss'),
+                onPressed: () => ref
+                    .read(catalogOfflineNoticeProvider.notifier)
+                    .dismiss(notice),
+                icon: const Icon(Icons.close_rounded, size: 18),
+                tooltip: 'Dismiss',
+                color: colorScheme.onErrorContainer,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints.tightFor(
+                  width: 24,
+                  height: 24,
+                ),
+              ),
+              const SizedBox(width: AppSpacing.sm),
               Icon(
-                notice.usingCache
+                notice.usingCache || notice.fallbackSourceName != null
                     ? Icons.cloud_sync_rounded
                     : Icons.cloud_off_rounded,
                 color: colorScheme.onErrorContainer,

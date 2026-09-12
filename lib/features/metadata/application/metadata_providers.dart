@@ -156,9 +156,20 @@ final catalogRepositoryProvider = Provider.family<CatalogRepository?, CatalogMod
               .read(trackerSyncCoordinatorProvider)
               .recordProviderSuccess(TrackerSource.anilist),
         );
+        markCatalogOnline(ref, CatalogMode.anilist);
+      },
+      onFallback: (Object error, String sourceName) {
+        markCatalogOffline(
+          ref,
+          mode: CatalogMode.anilist,
+          sourceName: 'AniList',
+          operation: 'catalog',
+          usingCache: false,
+          error: error,
+          fallbackSourceName: sourceName,
+        );
       },
       onOffline: offlineCallback(CatalogMode.anilist, 'AniList'),
-      onOnline: onlineCallback(CatalogMode.anilist),
     ),
   };
 });

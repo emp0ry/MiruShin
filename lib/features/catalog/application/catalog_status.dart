@@ -10,6 +10,7 @@ class CatalogOfflineNotice {
     required this.usingCache,
     required this.occurredAt,
     this.detail,
+    this.fallbackSourceName,
   });
 
   final CatalogMode mode;
@@ -18,6 +19,7 @@ class CatalogOfflineNotice {
   final bool usingCache;
   final DateTime occurredAt;
   final String? detail;
+  final String? fallbackSourceName;
 
   bool get isAniList => sourceName == 'AniList';
 
@@ -27,6 +29,9 @@ class CatalogOfflineNotice {
 
   String get message {
     if (isAniList) {
+      if (fallbackSourceName != null) {
+        return 'MiruShin is temporarily using $fallbackSourceName while AniList is unavailable.';
+      }
       if (usingCache) {
         return 'MiruShin is using your saved anime data while AniList is down. You can keep browsing cached pages and try again later.';
       }
@@ -45,17 +50,27 @@ final catalogOfflineNoticeProvider =
     );
 
 class CatalogOfflineNoticeController extends Notifier<CatalogOfflineNotice?> {
+  final Set<CatalogMode> _dismissedUntilOnline = <CatalogMode>{};
+
   @override
   CatalogOfflineNotice? build() => null;
 
   void clearIfMode(CatalogMode mode) {
+    _dismissedUntilOnline.remove(mode);
     if (state?.mode == mode) {
       state = null;
     }
   }
 
   void show(CatalogOfflineNotice notice) {
+    if (_dismissedUntilOnline.contains(notice.mode)) return;
     state = notice;
+  }
+
+  void dismiss(CatalogOfflineNotice notice) {
+    if (!identical(state, notice)) return;
+    _dismissedUntilOnline.add(notice.mode);
+    state = null;
   }
 }
 
@@ -70,6 +85,7 @@ void markCatalogOffline(
   required String operation,
   required bool usingCache,
   Object? error,
+  String? fallbackSourceName,
 }) {
   ref
       .read(catalogOfflineNoticeProvider.notifier)
@@ -81,6 +97,7 @@ void markCatalogOffline(
           usingCache: usingCache,
           occurredAt: DateTime.now(),
           detail: _friendlyError(error),
+          fallbackSourceName: fallbackSourceName,
         ),
       );
 }

@@ -56,4 +56,49 @@ void main() {
     expect(find.text('AniList is temporarily unavailable'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('AniList fallback banner names MAL and can be dismissed', (
+    WidgetTester tester,
+  ) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'catalog.mode': 'anilist',
+    });
+    final ProviderContainer container = ProviderContainer();
+    addTearDown(container.dispose);
+    container
+        .read(catalogOfflineNoticeProvider.notifier)
+        .show(
+          CatalogOfflineNotice(
+            mode: CatalogMode.anilist,
+            sourceName: 'AniList',
+            operation: 'library',
+            usingCache: false,
+            occurredAt: DateTime(2026),
+            fallbackSourceName: 'MyAnimeList',
+          ),
+        );
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(home: Scaffold(body: CatalogOfflineBanner())),
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      find.text(
+        'MiruShin is temporarily using MyAnimeList while AniList is unavailable.',
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(
+      find.byKey(const ValueKey<String>('catalog-offline-banner-dismiss')),
+    );
+    await tester.pump();
+
+    expect(find.text('AniList is temporarily unavailable'), findsNothing);
+    expect(container.read(catalogOfflineNoticeProvider), isNull);
+    expect(tester.takeException(), isNull);
+  });
 }
