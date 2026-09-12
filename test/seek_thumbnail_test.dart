@@ -92,6 +92,32 @@ void main() {
   });
 
   group('progressive seek thumbnail scheduling', () {
+    test('bounds a failing offline background sweep only', () {
+      expect(
+        shouldStopProgressiveSeekThumbnailRefinement(
+          isOffline: true,
+          consecutiveMisses:
+              maxConsecutiveOfflineProgressiveSeekThumbnailMisses - 1,
+        ),
+        isFalse,
+      );
+      expect(
+        shouldStopProgressiveSeekThumbnailRefinement(
+          isOffline: true,
+          consecutiveMisses:
+              maxConsecutiveOfflineProgressiveSeekThumbnailMisses,
+        ),
+        isTrue,
+      );
+      expect(
+        shouldStopProgressiveSeekThumbnailRefinement(
+          isOffline: false,
+          consecutiveMisses: 100,
+        ),
+        isFalse,
+      );
+    });
+
     test('covers the timeline in percentage and midpoint passes', () {
       final List<Duration> positions = progressiveSeekThumbnailPositions(
         const Duration(seconds: 100),

@@ -1069,6 +1069,50 @@ void main() {
       expect(state.autoNextVisible, isFalse);
     });
 
+    test('user pause wins while premature EOF recovery is seeking', () async {
+      final ProviderContainer c = container();
+      final PlaybackController controller = c.read(
+        playbackControllerProvider.notifier,
+      );
+      final MediaPlaybackItem item = _testPlaybackItem('pause-during-eof');
+      final Completer<void> seekGate = Completer<void>();
+      final _FakePlayerEngine engine = _FakePlayerEngine(
+        const PlayerEngineState(
+          isInitialized: true,
+          isPlaying: true,
+          position: Duration(seconds: 1300),
+          duration: Duration(seconds: 1434),
+        ),
+        onSeek: (_) => seekGate.future,
+        stateAfterSeek: (PlayerEngineState current, Duration position) =>
+            current.copyWith(position: position, isCompleted: false),
+      );
+      controller.debugSetPlaybackState(
+        PlaybackState(
+          item: item,
+          engine: engine,
+          server: item.servers.first,
+          desiredPlaying: true,
+        ),
+      );
+      controller.debugEvaluatePlaybackProgress(engine);
+      controller.debugEvaluatePlaybackProgress(engine);
+      engine.setState(engine.value.copyWith(isCompleted: true));
+      controller.debugEvaluatePlaybackProgress(engine);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(engine.seekCalls, 1);
+      await controller.pause();
+      expect(c.read(playbackControllerProvider).desiredPlaying, isFalse);
+
+      seekGate.complete();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      expect(engine.playCalls, 0);
+      expect(engine.value.isPlaying, isFalse);
+      expect(c.read(playbackControllerProvider).desiredPlaying, isFalse);
+    });
+
     test('false EOF recovery can later confirm exactly the real end', () async {
       final ProviderContainer c = container();
       final PlaybackController controller = c.read(

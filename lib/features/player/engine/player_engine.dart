@@ -132,6 +132,13 @@ abstract class PlayerEngine implements Listenable {
   /// reinforcement from the playback controller.
   bool get managesInitialPosition => false;
 
+  /// Whether the engine stages a requested speed until native startup is safe.
+  ///
+  /// The controller configures these engines before [open] and must not
+  /// reapply the rate during startup, as doing so can stall native HLS/TS
+  /// decoding before its first timestamps are ready.
+  bool get managesStartupPlaybackSpeed => false;
+
   /// Whether the backend has finished applying [open]'s `startAt` value.
   ///
   /// A backend may briefly expose frames from the beginning while its native

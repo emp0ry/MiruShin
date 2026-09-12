@@ -26,7 +26,6 @@ const int _startupRetryLimit = 0;
 const Duration _firstFramePollInterval = Duration(milliseconds: 250);
 const int _firstFramePollAttempts = 120;
 const Duration _invalidStatusGrace = Duration(seconds: 3);
-const Duration _nativeCompletionRearmDelay = Duration(milliseconds: 700);
 const List<Duration> _speedStartupReapplyDelays = <Duration>[
   Duration(milliseconds: 300),
   Duration(milliseconds: 900),
@@ -58,18 +57,43 @@ bool shouldExposeFvpNativeCompletion({
   required bool nativeSeekActive,
   required bool nativeSeekPending,
   required bool completionSuppressed,
-  required bool completionRearmReady,
+  required bool freshNativeEndAfterSeek,
   required bool nativeSeekAccepted,
 }) {
   if (!nativeEnded || !initialized || nativeSeekActive || nativeSeekPending) {
     return false;
   }
   if (!completionSuppressed) return true;
-  // Native seek acceptance is captured from the seek result itself. Do not
-  // require the later playback position to remain near that result: at higher
-  // speeds it can legitimately advance beyond the tolerance before the short
-  // re-arm delay elapses, leaving a latched MDK END suppressed forever.
-  return completionRearmReady && nativeSeekAccepted;
+  // A native END that stays asserted through a successful seek is stale. Only
+  // expose a new false -> true END transition after the seek; otherwise the
+  // controller enters a pause/seek/play loop while playback is still moving.
+  return freshNativeEndAfterSeek && nativeSeekAccepted;
+}
+
+@visibleForTesting
+bool shouldApplyFvpStartupPlaybackSpeed({
+  required bool initialized,
+  required bool initialPositionSettled,
+  required bool nativePlaying,
+  required int previousPositionMs,
+  required int currentPositionMs,
+}) {
+  return initialized &&
+      initialPositionSettled &&
+      nativePlaying &&
+      currentPositionMs > previousPositionMs;
+}
+
+@visibleForTesting
+bool isPlausibleFvpNativeCompletion({
+  required bool nativeEnded,
+  required Duration position,
+  required Duration authoritativeLocalDuration,
+  Duration tolerance = const Duration(seconds: 8),
+}) {
+  if (!nativeEnded) return false;
+  if (authoritativeLocalDuration <= Duration.zero) return true;
+  return position + tolerance >= authoritativeLocalDuration;
 }
 
 /// Pure FVP/MDK implementation of MiruShin's PlayerEngine.
@@ -104,6 +128,7 @@ class FvpPlayerEngine extends PlayerEngine {
   String? _lastError;
   double _volume = 1;
   double _playbackSpeed = 1;
+  double _appliedPlaybackSpeed = 1;
   PlayerSource? _currentSource;
   String? _nativePlaybackUrl;
   Map<String, String> _nativePlaybackHeaders = const <String, String>{};
@@ -124,12 +149,11 @@ class FvpPlayerEngine extends PlayerEngine {
   _NativeSeekRequest? _activeNativeSeek;
   _NativeSeekRequest? _pendingNativeSeek;
   int? _nativeSeekLoopGeneration;
-  Timer? _completionRearmTimer;
   int? _completionSuppressedOpenGeneration;
   int? _completionSuppressedSeekEpoch;
   int? _completionAcceptedSeekEpoch;
   int? _completionAcceptedTargetMs;
-  bool _completionRearmReady = false;
+  bool _freshNativeEndAfterSeek = false;
   static int? _cachedMdkRuntimeVersion;
 
   @override
@@ -143,6 +167,9 @@ class FvpPlayerEngine extends PlayerEngine {
 
   @override
   bool get managesInitialPosition => true;
+
+  @override
+  bool get managesStartupPlaybackSpeed => true;
 
   @override
   bool get initialPositionSettled => _initialPositionSettled;
@@ -201,7 +228,10 @@ class FvpPlayerEngine extends PlayerEngine {
     final mdk.Player player = mdk.Player();
     _player = player;
     _volume = _state.value.volume;
-    _playbackSpeed = _state.value.playbackSpeed;
+    // Keep a speed staged by setPlaybackSpeed() before open. Copying the old
+    // public state here discarded that target and left native playback at 1x
+    // while the controls still displayed the saved speed.
+    _appliedPlaybackSpeed = 1;
     _currentSource = source;
     _currentStartAt = startAt ?? Duration.zero;
     final int startupSeekEpoch = ++_seekEpoch;
@@ -238,6 +268,7 @@ class FvpPlayerEngine extends PlayerEngine {
       // during startup if playback begins at 1.25x or higher before first
       // frames/timestamps are ready. The saved speed is applied after startup.
       player.playbackRate = 1.0;
+      _appliedPlaybackSpeed = 1.0;
 
       final bool isInlineDash = LocalHlsProxy.isInlineDashUrl(source.url);
       final String inlineDashManifest = isInlineDash
@@ -353,7 +384,14 @@ class FvpPlayerEngine extends PlayerEngine {
         );
       }
       if (targetPlaybackSpeed != 1.0) {
-        unawaited(_applySpeedAfterStartup(player, targetPlaybackSpeed));
+        unawaited(
+          _applySpeedAfterStartup(
+            player,
+            targetPlaybackSpeed,
+            openGeneration,
+            _speedApplyGeneration,
+          ),
+        );
       }
 
       _syncState();
@@ -609,13 +647,11 @@ class FvpPlayerEngine extends PlayerEngine {
     if (player != _player || openGeneration != _openGeneration || !_hasMedia) {
       return;
     }
-    _completionRearmTimer?.cancel();
-    _completionRearmTimer = null;
     _completionSuppressedOpenGeneration = openGeneration;
     _completionSuppressedSeekEpoch = seekEpoch;
     _completionAcceptedSeekEpoch = null;
     _completionAcceptedTargetMs = null;
-    _completionRearmReady = false;
+    _freshNativeEndAfterSeek = false;
   }
 
   void _acceptNativeSeekForCompletion(
@@ -633,31 +669,15 @@ class FvpPlayerEngine extends PlayerEngine {
     }
     _completionAcceptedSeekEpoch = seekEpoch;
     _completionAcceptedTargetMs = resultMs;
-    _completionRearmReady = false;
-    _completionRearmTimer?.cancel();
-    _completionRearmTimer = Timer(_nativeCompletionRearmDelay, () {
-      if (_disposed ||
-          player != _player ||
-          openGeneration != _openGeneration ||
-          seekEpoch != _seekEpoch ||
-          _completionSuppressedOpenGeneration != openGeneration ||
-          _completionSuppressedSeekEpoch != seekEpoch ||
-          _completionAcceptedSeekEpoch != seekEpoch) {
-        return;
-      }
-      _completionRearmReady = true;
-      _syncState();
-    });
+    _freshNativeEndAfterSeek = false;
   }
 
   void _clearNativeCompletionSuppression() {
-    _completionRearmTimer?.cancel();
-    _completionRearmTimer = null;
     _completionSuppressedOpenGeneration = null;
     _completionSuppressedSeekEpoch = null;
     _completionAcceptedSeekEpoch = null;
     _completionAcceptedTargetMs = null;
-    _completionRearmReady = false;
+    _freshNativeEndAfterSeek = false;
   }
 
   bool _isCurrentNativeSeek(_NativeSeekRequest? request, mdk.Player player) {
@@ -834,28 +854,47 @@ class FvpPlayerEngine extends PlayerEngine {
     }
   }
 
-  Future<void> _applySpeedAfterStartup(mdk.Player player, double speed) async {
+  Future<void> _applySpeedAfterStartup(
+    mdk.Player player,
+    double speed,
+    int openGeneration,
+    int speedGeneration,
+  ) async {
     // Keep native startup at 1.0x, then apply the saved speed after the stream
-    // has real media state. This fixes HLS streams that start at 1x but stall
-    // when opened directly at 1.25x or higher.
-    for (int attempt = 0; attempt < 60; attempt += 1) {
+    // has completed its resume seek and its clock is genuinely moving. Merely
+    // having duration metadata is too early: MDK can ignore/reset a rate set
+    // concurrently with the initial HLS seek.
+    int previousPositionMs = player.position;
+    for (int attempt = 0; attempt < 120; attempt += 1) {
       await Future<void>.delayed(const Duration(milliseconds: 250));
 
       final mdk.Player? active = _player;
-      if (active == null || active != player || !_hasMedia) return;
-
-      final bool ready = _hasStartupContent(active);
-
-      if (ready) {
-        break;
+      if (active == null ||
+          active != player ||
+          openGeneration != _openGeneration ||
+          speedGeneration != _speedApplyGeneration ||
+          !_hasMedia) {
+        return;
       }
+
+      final int currentPositionMs = active.position;
+      final mdk.PlaybackState nativeState = active.state;
+      final bool nativePlaying =
+          nativeState == mdk.PlaybackState.playing ||
+          nativeState == mdk.PlaybackState.running;
+      if (shouldApplyFvpStartupPlaybackSpeed(
+        initialized: _state.value.isInitialized,
+        initialPositionSettled: _initialPositionSettled,
+        nativePlaying: nativePlaying,
+        previousPositionMs: previousPositionMs,
+        currentPositionMs: currentPositionMs,
+      )) {
+        _applyPlaybackSpeed(active, speed);
+        _syncState();
+        return;
+      }
+      previousPositionMs = currentPositionMs;
     }
-
-    final mdk.Player? active = _player;
-    if (active == null || active != player || !_hasMedia) return;
-
-    _applyPlaybackSpeed(active, speed);
-    _syncState();
   }
 
   @override
@@ -881,11 +920,11 @@ class FvpPlayerEngine extends PlayerEngine {
   }
 
   void _applyPlaybackSpeed(mdk.Player player, double speed) {
-    final PlayerSource? source = _currentSource;
-    if (source != null) {
-      _configureNetworkAndBuffering(player, source, playbackSpeed: speed);
-    }
+    // Buffer ranges are configured before open. Reconfiguring MDK's live
+    // demuxer here can make HLS emit false END transitions after a rate change,
+    // producing a repeating pause/seek/play recovery loop.
     player.playbackRate = speed;
+    _appliedPlaybackSpeed = speed;
   }
 
   Future<void> _reapplyPlaybackSpeedDuringStartup(
@@ -912,8 +951,8 @@ class FvpPlayerEngine extends PlayerEngine {
       }
 
       // MDK can accept a rate before HLS startup, then continue native playback
-      // at 1x once frames arrive. Reassert the latest requested speed during
-      // that settling window so auto-next/new-player opens do not drift from UI.
+      // at 1x once frames arrive. Reassert only the rate during that settling
+      // window; the demux buffer must remain unchanged while media is open.
       _applyPlaybackSpeed(active, _playbackSpeed);
       _syncState();
     }
@@ -1152,7 +1191,7 @@ class FvpPlayerEngine extends PlayerEngine {
           _completionAcceptedSeekEpoch == _seekEpoch &&
           !_isCurrentNativeSeek(_activeNativeSeek, player) &&
           !_isCurrentNativeSeek(_pendingNativeSeek, player)) {
-        _completionRearmReady = true;
+        _freshNativeEndAfterSeek = true;
       }
       _syncState();
     });
@@ -1249,6 +1288,11 @@ class FvpPlayerEngine extends PlayerEngine {
         status.test(mdk.MediaStatus.loading) ||
         status.test(mdk.MediaStatus.stalled);
     final bool nativeEnded = status.test(mdk.MediaStatus.end);
+    final bool plausibleNativeCompletion = isPlausibleFvpNativeCompletion(
+      nativeEnded: nativeEnded,
+      position: position,
+      authoritativeLocalDuration: _knownSourceDuration,
+    );
     final bool startupRequirementSatisfied = _requireVideoSurfaceDuringStartup
         ? hasVideoSize
         : hasContent;
@@ -1310,12 +1354,16 @@ class FvpPlayerEngine extends PlayerEngine {
       completionSuppressed = false;
     }
     final bool exposeNativeCompletion = shouldExposeFvpNativeCompletion(
-      nativeEnded: nativeEnded,
+      // MDK can pulse END after reading ahead to the end of a local HLS
+      // playlist while presentation is still hundreds of seconds behind. The
+      // playlist duration is authoritative, so exposing that pulse makes the
+      // controller pause/seek/play an otherwise advancing stream repeatedly.
+      nativeEnded: plausibleNativeCompletion,
       initialized: initialized,
       nativeSeekActive: nativeSeekActive,
       nativeSeekPending: nativeSeekPending,
       completionSuppressed: completionSuppressed,
-      completionRearmReady: _completionRearmReady,
+      freshNativeEndAfterSeek: _freshNativeEndAfterSeek,
       nativeSeekAccepted: acceptedForCurrentSeek,
     );
     if (exposeNativeCompletion && completionSuppressed) {
@@ -1327,7 +1375,7 @@ class FvpPlayerEngine extends PlayerEngine {
         position: position,
         duration: duration,
         volume: _volume,
-        playbackSpeed: _playbackSpeed,
+        playbackSpeed: _appliedPlaybackSpeed,
         aspectRatio: aspectRatio,
         videoSize: videoSize,
         buffered: bufferedRanges,

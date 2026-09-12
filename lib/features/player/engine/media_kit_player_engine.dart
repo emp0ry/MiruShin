@@ -159,6 +159,9 @@ class MediaKitPlayerEngine extends PlayerEngine {
   bool get managesInitialPosition => true;
 
   @override
+  bool get managesStartupPlaybackSpeed => true;
+
+  @override
   bool get initialPositionSettled => _initialPositionSettled;
 
   @override
@@ -194,7 +197,8 @@ class MediaKitPlayerEngine extends PlayerEngine {
     _currentSource = source;
 
     _volume = _state.value.volume;
-    _playbackSpeed = _state.value.playbackSpeed;
+    // Keep a speed staged by setPlaybackSpeed() before open. Restoring it from
+    // the old public state here discarded the requested startup rate.
     _lastError = null;
     _lastVideoSize = Size.zero;
     _lastBufferedRanges = const <PlayerBufferedRange>[];

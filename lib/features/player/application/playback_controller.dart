@@ -1169,8 +1169,14 @@ class PlaybackController extends Notifier<PlaybackState> {
       youtubeEmbed: youtubeEmbed,
       trailerBackLabel: trailerBackLabel,
     );
+    final double targetPlaybackSpeed = _effectivePlaybackSpeed(settings);
 
     try {
+      if (engine.managesStartupPlaybackSpeed) {
+        // FVP and MediaKit intentionally open native HLS/TS at 1x, then apply
+        // the saved rate once their decoder has usable startup media.
+        await engine.setPlaybackSpeed(targetPlaybackSpeed);
+      }
       await engine
           .open(
             PlayerSource(
@@ -1190,8 +1196,9 @@ class PlaybackController extends Notifier<PlaybackState> {
         await engine.dispose();
         return;
       }
-      final double targetPlaybackSpeed = _effectivePlaybackSpeed(settings);
-      await engine.setPlaybackSpeed(targetPlaybackSpeed);
+      if (!engine.managesStartupPlaybackSpeed) {
+        await engine.setPlaybackSpeed(targetPlaybackSpeed);
+      }
       await engine.setVolume(
         effectivePlayerOutputVolume(
           configuredVolume: settings.volume,
@@ -1219,7 +1226,9 @@ class PlaybackController extends Notifier<PlaybackState> {
       _updateMediaSession();
       _startProgressSaver();
       _watchPlaybackProgress(engine, generation);
-      _reinforcePlaybackSpeed(engine, generation);
+      if (!engine.managesStartupPlaybackSpeed) {
+        _reinforcePlaybackSpeed(engine, generation);
+      }
       if (!engine.managesInitialPosition) {
         _reinforceInitialSeek(engine, position, generation, _manualSeekEpoch);
       }
@@ -1386,10 +1395,12 @@ class PlaybackController extends Notifier<PlaybackState> {
     required Duration duration,
     required int generation,
   }) async {
+    int consecutiveMisses = 0;
     for (final Duration target in progressiveSeekThumbnailPositions(duration)) {
       if (!_isProgressiveSeekPreviewCurrent(generation, engine, plan)) return;
       if (_seekThumbnailService.cachedFor(plan, target, duration: duration) !=
           null) {
+        consecutiveMisses = 0;
         continue;
       }
       _progressiveSeekPreviewActiveRequest = generation;
@@ -1411,7 +1422,23 @@ class PlaybackController extends Notifier<PlaybackState> {
       }
       if (!_isProgressiveSeekPreviewCurrent(generation, engine, plan)) return;
       if (thumbnail != null) {
+        consecutiveMisses = 0;
         _refreshVisibleProgressiveSeekPreview(plan, duration);
+      } else {
+        consecutiveMisses += 1;
+        if (shouldStopProgressiveSeekThumbnailRefinement(
+          isOffline: plan.isOffline,
+          consecutiveMisses: consecutiveMisses,
+        )) {
+          if (kDebugMode) {
+            debugPrint(
+              'SeekPreview: stopping offline background refinement after '
+              '$consecutiveMisses consecutive misses; interactive requests '
+              'remain available.',
+            );
+          }
+          return;
+        }
       }
       await Future<void>.delayed(_progressiveSeekPreviewYield);
     }
@@ -3757,14 +3784,17 @@ class PlaybackController extends Notifier<PlaybackState> {
   ) {
     return generation == _playbackGeneration &&
         manualSeekEpoch == _manualSeekEpoch &&
-        identical(state.engine, engine);
+        identical(state.engine, engine) &&
+        state.desiredPlaying;
   }
 
   Future<void> _recoverPrematureBackendEof(
     PlayerEngine engine,
     PlaybackEndEvaluation evaluation,
   ) async {
-    if (_prematureEofRecoveryActive || !identical(state.engine, engine)) {
+    if (_prematureEofRecoveryActive ||
+        !identical(state.engine, engine) ||
+        !state.desiredPlaying) {
       return;
     }
     _prematureEofRecoveryActive = true;

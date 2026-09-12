@@ -1,13 +1,22 @@
+import 'dart:io';
+
 import 'package:fvp/fvp.dart' as fvp;
 
 /// Register FVP once with MiruShin-friendly native defaults.
 ///
 /// Keep the global defaults moderate. FvpPlayerEngine applies stronger
-/// per-source/per-speed cache settings after opening each stream.
+/// per-source/per-speed cache settings before opening each stream.
 void configureMiruShinFvp() {
   fvp.registerWith(
-    options: const <String, Object>{
+    options: <String, Object>{
       'fastSeek': false,
+      if (Platform.isMacOS)
+        'global': const <String, Object>{
+          // Recent libmdk can drop video frames that are already too late to
+          // present. Without this, accelerated playback can fall progressively
+          // behind audio and look like repeated freezing even for local HLS.
+          'avsync.video.decoder_drop': 1,
+        },
       'player': <String, String>{
         'buffer': '3000+180000',
         'demux.buffer.protocols': 'file,http,https',

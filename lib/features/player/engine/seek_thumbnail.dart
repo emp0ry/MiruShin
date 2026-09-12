@@ -82,6 +82,16 @@ bool shouldProgressivelyGenerateSeekThumbnails({
       plan.candidates.isNotEmpty;
 }
 
+const int maxConsecutiveOfflineProgressiveSeekThumbnailMisses = 3;
+
+bool shouldStopProgressiveSeekThumbnailRefinement({
+  required bool isOffline,
+  required int consecutiveMisses,
+}) {
+  return isOffline &&
+      consecutiveMisses >= maxConsecutiveOfflineProgressiveSeekThumbnailMisses;
+}
+
 class SeekThumbnail {
   const SeekThumbnail({
     required this.bytes,
