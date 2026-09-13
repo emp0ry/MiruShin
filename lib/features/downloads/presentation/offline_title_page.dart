@@ -401,9 +401,7 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
     DownloadedEpisode episode,
   ) {
     final DownloadStreamPreference preference = episode.streamPreference;
-    final String voiceover = preference.voiceoverLabel.trim().isNotEmpty
-        ? preference.voiceoverLabel.trim()
-        : preference.voiceoverId.trim();
+    final String voiceover = downloadedEpisodeVoiceoverLabel(episode);
     final String server = preference.serverTitle.trim().isNotEmpty
         ? preference.serverTitle.trim()
         : preference.serverId.trim();
@@ -823,8 +821,12 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
           isContinue,
         );
         if (playbackStatus.isNotEmpty) parts.add(playbackStatus);
-        if (ep.qualityLabel.isNotEmpty) parts.add(ep.qualityLabel);
-        if (ep.totalBytes > 0) parts.add(_formatBytes(ep.totalBytes));
+        final String quality = downloadedEpisodeQualityLabel(ep);
+        if (quality.isNotEmpty) parts.add(quality);
+        final String voiceover = downloadedEpisodeVoiceoverLabel(ep);
+        if (voiceover.isNotEmpty) parts.add(voiceover);
+        final int sizeBytes = downloadedEpisodeSizeBytes(ep);
+        if (sizeBytes > 0) parts.add(_formatBytes(sizeBytes));
         return parts.isEmpty ? context.t('Downloaded') : parts.join(' · ');
       case DownloadStatus.downloading:
         if (ep.kind != DownloadKind.mp4 && ep.totalSegments > 0) {

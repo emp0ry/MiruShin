@@ -4,6 +4,35 @@ import '../../../shared/models/media_item.dart';
 import '../../metadata/domain/anime_episode_metadata.dart';
 import '../domain/download_models.dart';
 
+String downloadedEpisodeQualityLabel(DownloadedEpisode episode) {
+  final String downloadedQuality = episode.qualityLabel.trim();
+  if (downloadedQuality.isNotEmpty) return downloadedQuality;
+  return episode.streamPreference.qualityLabel.trim();
+}
+
+String downloadedEpisodeVoiceoverLabel(DownloadedEpisode episode) {
+  final DownloadStreamPreference preference = episode.streamPreference;
+  final String label = preference.voiceoverLabel.trim();
+  if (label.isNotEmpty) return label;
+  final String id = preference.voiceoverId.trim();
+  if (id.isNotEmpty) return id;
+  // Some modules model each dub as a separate server instead of exposing an
+  // explicit voiceover track. In that case the server is the best audio label
+  // available for the downloaded stream.
+  final String server = preference.serverTitle.trim();
+  return server.isNotEmpty ? server : preference.serverId.trim();
+}
+
+/// Best persisted estimate of the completed download's media size.
+///
+/// Progressive downloads normally know [DownloadedEpisode.totalBytes], while
+/// segmented HLS/DASH downloads only know how many bytes they actually wrote.
+/// Using the larger value covers both without changing in-progress semantics.
+int downloadedEpisodeSizeBytes(DownloadedEpisode episode) {
+  if (episode.totalBytes > episode.receivedBytes) return episode.totalBytes;
+  return episode.receivedBytes;
+}
+
 String downloadedEpisodeDisplayTitle(DownloadedEpisode episode) {
   final String title = bestPlayerEpisodeTitle(
     moduleTitle: episode.episodeTitle,
