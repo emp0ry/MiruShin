@@ -2434,7 +2434,7 @@ class _AiringSoonStrip extends StatelessWidget {
         itemBuilder: (BuildContext context, int index) {
           final AniListAnimeListEntry entry = entries[index];
           final media = entry.mediaItem;
-          final String? label = _nextAiringLabel(
+          final String? label = libraryNextAiringLabel(
             nextEpisode: entry.nextEpisode,
             airingAt: entry.airingAt,
           );
@@ -2683,7 +2683,7 @@ class _CollectionTileState extends ConsumerState<_CollectionTile> {
     }
     final int? nextEp = widget.entry.nextEpisode;
     final DateTime? airingAt = widget.entry.airingAt;
-    final String? airingLabel = _nextAiringLabel(
+    final String? airingLabel = libraryNextAiringLabel(
       nextEpisode: nextEp,
       airingAt: airingAt,
     );
@@ -3290,20 +3290,29 @@ int? _malIdForMediaItem(MediaItem item) {
   return malId != null && malId > 0 ? malId : null;
 }
 
-String? _nextAiringLabel({
+@visibleForTesting
+String? libraryNextAiringLabel({
   required int? nextEpisode,
   required DateTime? airingAt,
+  DateTime? now,
 }) {
-  if (nextEpisode == null || airingAt == null) return null;
-  final Duration diff = airingAt.difference(DateTime.now());
+  if (nextEpisode == null || nextEpisode <= 0 || airingAt == null) return null;
+  final Duration diff = airingAt.difference(now ?? DateTime.now());
+  // MAL has no next-airing schedule. During an AniList outage the merged MAL
+  // fallback can therefore retain the last AniList timestamp after that
+  // episode has already aired. Treat it as expired instead of rendering the
+  // nonsensical, permanently-stuck `Ep N in soon` badge.
+  if (diff <= Duration.zero) return null;
   final String when = diff.inDays > 0
       ? '${diff.inDays}d'
       : diff.inHours > 0
       ? '${diff.inHours}h'
       : diff.inMinutes > 0
       ? '${diff.inMinutes}m'
-      : 'soon';
-  return 'Ep $nextEpisode in $when';
+      : '';
+  return when.isEmpty
+      ? 'Ep $nextEpisode airing soon'
+      : 'Ep $nextEpisode in $when';
 }
 
 class _AiringBadge extends StatelessWidget {
@@ -3364,7 +3373,7 @@ class _GridCell extends ConsumerWidget {
     final int? total = media.episodeCount;
     final int progress = entry.progress;
     final String fmt = ref.watch(aniListEffectiveScoreFormatProvider);
-    final String? airingLabel = _nextAiringLabel(
+    final String? airingLabel = libraryNextAiringLabel(
       nextEpisode: entry.nextEpisode,
       airingAt: entry.airingAt,
     );
