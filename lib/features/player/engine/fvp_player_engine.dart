@@ -78,10 +78,16 @@ bool shouldApplyFvpStartupPlaybackSpeed({
   required int previousPositionMs,
   required int currentPositionMs,
 }) {
-  return initialized &&
-      initialPositionSettled &&
-      nativePlaying &&
-      currentPositionMs > previousPositionMs;
+  if (!initialized) return false;
+  // A moving clock proves that MDK has decoded usable timestamps, which is the
+  // important guard against the HLS startup freeze. The resume seek can still
+  // be pending at this point (and in practice may take many seconds), so it
+  // must not keep the persisted speed stuck at 1x for the whole session.
+  if (nativePlaying) return currentPositionMs > previousPositionMs;
+  // A deliberately paused engine has no moving clock. Once its startup seek is
+  // settled, metadata/first-frame initialization is sufficient to stage the
+  // rate safely without resuming playback.
+  return initialPositionSettled;
 }
 
 @visibleForTesting
@@ -211,6 +217,7 @@ class FvpPlayerEngine extends PlayerEngine {
     }
 
     await _disposePlayerOnly();
+    if (_disposed) return;
     try {
       _ensureTextureRuntimeCompatible();
     } on Object catch (error) {
@@ -287,6 +294,7 @@ class FvpPlayerEngine extends PlayerEngine {
       _knownSourceDuration = isLocalHls
           ? await readLocalHlsDuration(remoteUri)
           : Duration.zero;
+      if (!_isActivePlayer(player, openGeneration)) return;
       final bool useProxy =
           !source.disableProxy && (isNetwork || isInlineDash || isLocalHls);
       // A downloaded DASH presentation is stored as local HLS metadata around
@@ -303,7 +311,12 @@ class FvpPlayerEngine extends PlayerEngine {
       String playbackUrl = remoteUri.toString();
       if (useProxy && isInlineDash) {
         await _proxy.stop();
+        if (!_isActivePlayer(player, openGeneration)) return;
         await _proxy.start();
+        if (!_isActivePlayer(player, openGeneration)) {
+          await _proxy.stop();
+          return;
+        }
         playbackUrl = Platform.isWindows
             ? _proxy.inlineDashHlsUrl(
                 inlineDashManifest,
@@ -317,7 +330,12 @@ class FvpPlayerEngine extends PlayerEngine {
         );
       } else if (useProxy) {
         await _proxy.stop();
+        if (!_isActivePlayer(player, openGeneration)) return;
         await _proxy.start();
+        if (!_isActivePlayer(player, openGeneration)) {
+          await _proxy.stop();
+          return;
+        }
         playbackUrl = isHls
             ? _proxy.playlistUrl(remoteUri, headers: source.headers)
             : isDash
@@ -347,6 +365,7 @@ class FvpPlayerEngine extends PlayerEngine {
       }
       _nativePlaybackUrl = isLocalHls && useProxy ? playbackUrl : null;
       _nativePlaybackHeaders = const <String, String>{};
+      if (!_isActivePlayer(player, openGeneration)) return;
       _applyDirectMdkHeaders(
         player,
         isInlineDash ? Uri.parse(playbackUrl) : remoteUri,
@@ -396,6 +415,7 @@ class FvpPlayerEngine extends PlayerEngine {
 
       _syncState();
     } on Object catch (error) {
+      if (!_isActivePlayer(player, openGeneration)) return;
       _setState(
         _state.value.copyWith(
           hasError: true,
@@ -861,10 +881,12 @@ class FvpPlayerEngine extends PlayerEngine {
     int speedGeneration,
   ) async {
     // Keep native startup at 1.0x, then apply the saved speed after the stream
-    // has completed its resume seek and its clock is genuinely moving. Merely
-    // having duration metadata is too early: MDK can ignore/reset a rate set
-    // concurrently with the initial HLS seek.
+    // has a genuinely moving clock. Waiting for the resume seek as well can
+    // strand playback at 1x when MDK keeps that seek pending despite already
+    // presenting media. If the seek finishes later, reassert the rate once so
+    // a native seek-side reset cannot silently win.
     int previousPositionMs = player.position;
+    bool appliedBeforeInitialPositionSettled = false;
     for (int attempt = 0; attempt < 120; attempt += 1) {
       await Future<void>.delayed(const Duration(milliseconds: 250));
 
@@ -874,6 +896,18 @@ class FvpPlayerEngine extends PlayerEngine {
           openGeneration != _openGeneration ||
           speedGeneration != _speedApplyGeneration ||
           !_hasMedia) {
+        return;
+      }
+
+      if (appliedBeforeInitialPositionSettled && _initialPositionSettled) {
+        _applyPlaybackSpeed(active, speed);
+        _syncState();
+        if (kDebugMode) {
+          debugPrint(
+            'FVP startup playback speed confirmed after initial seek: '
+            '${speed}x.',
+          );
+        }
         return;
       }
 
@@ -891,7 +925,15 @@ class FvpPlayerEngine extends PlayerEngine {
       )) {
         _applyPlaybackSpeed(active, speed);
         _syncState();
-        return;
+        if (kDebugMode) {
+          debugPrint(
+            'FVP startup playback speed applied: ${speed}x '
+            '(position=${currentPositionMs}ms, '
+            'initialSeekSettled=$_initialPositionSettled).',
+          );
+        }
+        if (_initialPositionSettled) return;
+        appliedBeforeInitialPositionSettled = true;
       }
       previousPositionMs = currentPositionMs;
     }
@@ -1548,14 +1590,10 @@ class FvpPlayerEngine extends PlayerEngine {
     _invalidSince = null;
     _reportedInvalid = false;
     _requireVideoSurfaceDuringStartup = false;
-    await _eventSubscription?.cancel();
-    await _stateSubscription?.cancel();
-    await _mediaStatusSubscription?.cancel();
-    _eventSubscription = null;
-    _stateSubscription = null;
-    _mediaStatusSubscription = null;
-    await _proxy.stop();
 
+    // Detach and stop the native player before awaiting subscription/proxy
+    // cleanup. Those awaits may involve I/O and must never extend audible
+    // playback after the owning route has closed.
     final mdk.Player? player = _player;
     _player = null;
     if (player != null) {
@@ -1564,7 +1602,17 @@ class FvpPlayerEngine extends PlayerEngine {
       } on Object catch (error) {
         debugPrint('FVP stop during dispose ignored: $error');
       }
+    }
 
+    await _eventSubscription?.cancel();
+    await _stateSubscription?.cancel();
+    await _mediaStatusSubscription?.cancel();
+    _eventSubscription = null;
+    _stateSubscription = null;
+    _mediaStatusSubscription = null;
+    await _proxy.stop();
+
+    if (player != null) {
       if (player.textureId.value == null && player.media.isNotEmpty) {
         try {
           player.media = '';

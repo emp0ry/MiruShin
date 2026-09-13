@@ -3,7 +3,7 @@ import 'package:mirushin/features/player/engine/fvp_player_engine.dart';
 
 void main() {
   group('FVP staged startup speed', () {
-    test('waits for initialization, settled seek, and moving native clock', () {
+    test('uses a moving native clock without waiting for a slow resume seek', () {
       bool shouldApply({
         bool initialized = true,
         bool settled = true,
@@ -20,9 +20,23 @@ void main() {
 
       expect(shouldApply(), isTrue);
       expect(shouldApply(initialized: false), isFalse);
-      expect(shouldApply(settled: false), isFalse);
-      expect(shouldApply(playing: false), isFalse);
+      expect(shouldApply(settled: false), isTrue);
       expect(shouldApply(current: 1000), isFalse);
+    });
+
+    test('applies to an initialized paused engine only after resume settles', () {
+      bool shouldApply({bool initialized = true, bool settled = true}) =>
+          shouldApplyFvpStartupPlaybackSpeed(
+            initialized: initialized,
+            initialPositionSettled: settled,
+            nativePlaying: false,
+            previousPositionMs: 1000,
+            currentPositionMs: 1000,
+          );
+
+      expect(shouldApply(), isTrue);
+      expect(shouldApply(settled: false), isFalse);
+      expect(shouldApply(initialized: false), isFalse);
     });
   });
 

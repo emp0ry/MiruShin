@@ -295,6 +295,140 @@ void main() {
       expect(c.read(playbackControllerProvider).engine, same(newEngine));
     });
 
+    test(
+      'stop terminates the owned engine immediately and exactly once',
+      () async {
+        final ProviderContainer c = container();
+        final PlaybackController controller = c.read(
+          playbackControllerProvider.notifier,
+        );
+        final _LifecyclePlayerEngine engine = _LifecyclePlayerEngine(
+          initialState: const PlayerEngineState(
+            isInitialized: true,
+            isPlaying: true,
+          ),
+        );
+        addTearDown(engine.disposeNotifier);
+        controller.debugSetPlaybackState(
+          PlaybackState(engine: engine, desiredPlaying: true),
+        );
+
+        final Future<void> firstStop = controller.stop();
+        final Future<void> duplicateStop = controller.stop();
+
+        expect(engine.disposeCalls, 1);
+        expect(engine.value.isPlaying, isFalse);
+        expect(c.read(playbackControllerProvider).engine, isNull);
+        await Future.wait(<Future<void>>[firstStop, duplicateStop]);
+        expect(engine.disposeCalls, 1);
+      },
+    );
+
+    test(
+      'stop owns and disposes an engine while open is still pending',
+      () async {
+        SharedPreferences.setMockInitialValues(<String, Object>{
+          'mirushin.player.settings':
+              '{"playbackSpeed":1.75,"seekPreviewsEnabled":false}',
+        });
+        final Completer<void> openGate = Completer<void>();
+        final _LifecyclePlayerEngine engine = _LifecyclePlayerEngine(
+          openGate: openGate,
+        );
+        addTearDown(engine.disposeNotifier);
+        final ProviderContainer c = ProviderContainer(
+          overrides: [
+            playerEngineBuilderProvider.overrideWithValue(
+              ({
+                double? initialAspectRatio,
+                required PlayerBackend backend,
+                required bool youtubeEmbed,
+                required String trailerBackLabel,
+              }) => engine,
+            ),
+          ],
+        );
+        addTearDown(c.dispose);
+        final PlaybackController controller = c.read(
+          playbackControllerProvider.notifier,
+        );
+
+        final Future<void> load = controller.load(_testPlaybackItem('opening'));
+        await engine.openStarted.future;
+        final Future<void> stop = controller.stop();
+
+        expect(engine.disposeCalls, 1);
+        expect(c.read(playbackControllerProvider).engine, isNull);
+        openGate.complete();
+        await Future.wait(<Future<void>>[load, stop]);
+
+        expect(engine.disposeCalls, 1);
+        expect(engine.playCalls, 0);
+        expect(c.read(playbackControllerProvider).item, isNull);
+      },
+    );
+
+    test(
+      'saved speed is staged for every engine while UI reports only applied speed',
+      () async {
+        SharedPreferences.setMockInitialValues(<String, Object>{
+          'mirushin.player.settings':
+              '{"playbackSpeed":1.75,"seekPreviewsEnabled":false}',
+        });
+        final _LifecyclePlayerEngine first = _LifecyclePlayerEngine();
+        final _LifecyclePlayerEngine recovered = _LifecyclePlayerEngine();
+        addTearDown(first.disposeNotifier);
+        addTearDown(recovered.disposeNotifier);
+        final List<_LifecyclePlayerEngine> engines = <_LifecyclePlayerEngine>[
+          first,
+          recovered,
+        ];
+        final ProviderContainer c = ProviderContainer(
+          overrides: [
+            playerEngineBuilderProvider.overrideWithValue(
+              ({
+                double? initialAspectRatio,
+                required PlayerBackend backend,
+                required bool youtubeEmbed,
+                required String trailerBackLabel,
+              }) => engines.removeAt(0),
+            ),
+          ],
+        );
+        addTearDown(c.dispose);
+        final PlaybackController controller = c.read(
+          playbackControllerProvider.notifier,
+        );
+        final MediaPlaybackItem item = _testPlaybackItem('speed-recovery');
+
+        await controller.load(item);
+        final PlayerSettings settings = c
+            .read(playerSettingsProvider)
+            .requireValue;
+        expect(first.requestedSpeeds, <double>[1.75]);
+        expect(controller.currentPlaybackSpeed, 1.0);
+        expect(
+          displayedPlaybackSpeed(c.read(playbackControllerProvider), settings),
+          1.0,
+        );
+
+        first.acceptRequestedSpeed();
+        expect(controller.currentPlaybackSpeed, 1.75);
+        expect(
+          displayedPlaybackSpeed(c.read(playbackControllerProvider), settings),
+          1.75,
+        );
+
+        await controller.retry();
+        expect(first.disposeCalls, 1);
+        expect(recovered.requestedSpeeds, <double>[1.75]);
+        expect(controller.currentPlaybackSpeed, 1.0);
+        recovered.acceptRequestedSpeed();
+        expect(controller.currentPlaybackSpeed, 1.75);
+        await controller.stop();
+      },
+    );
+
     test('stop saves high-water position when engine snaps to zero', () async {
       final ProviderContainer c = container();
       final PlaybackController controller = c.read(
@@ -1703,6 +1837,88 @@ class _FakePlayerEngine extends PlayerEngine {
     disposeCalls += 1;
     _state.dispose();
   }
+}
+
+class _LifecyclePlayerEngine extends PlayerEngine {
+  _LifecyclePlayerEngine({
+    this.openGate,
+    PlayerEngineState initialState = const PlayerEngineState(),
+  }) : _state = ValueNotifier<PlayerEngineState>(initialState);
+
+  final Completer<void>? openGate;
+  final Completer<void> openStarted = Completer<void>();
+  final ValueNotifier<PlayerEngineState> _state;
+  final List<double> requestedSpeeds = <double>[];
+  int playCalls = 0;
+  int disposeCalls = 0;
+  bool disposed = false;
+
+  @override
+  bool get managesStartupPlaybackSpeed => true;
+
+  @override
+  ValueListenable<PlayerEngineState> get state => _state;
+
+  @override
+  void addListener(VoidCallback listener) => _state.addListener(listener);
+
+  @override
+  void removeListener(VoidCallback listener) => _state.removeListener(listener);
+
+  @override
+  Widget buildVideoSurface(BuildContext context) => const SizedBox.shrink();
+
+  @override
+  Future<void> open(
+    PlayerSource source, {
+    Duration? startAt,
+    bool autoplay = false,
+  }) async {
+    if (!openStarted.isCompleted) openStarted.complete();
+    await openGate?.future;
+    if (disposed) return;
+    _state.value = _state.value.copyWith(isInitialized: true);
+  }
+
+  @override
+  Future<void> play() async {
+    if (disposed) return;
+    playCalls += 1;
+    _state.value = _state.value.copyWith(isPlaying: true);
+  }
+
+  @override
+  Future<void> pause() async {
+    if (disposed) return;
+    _state.value = _state.value.copyWith(isPlaying: false);
+  }
+
+  @override
+  Future<void> seekTo(Duration position) async {}
+
+  @override
+  Future<void> setPlaybackSpeed(double speed) async {
+    if (disposed) return;
+    requestedSpeeds.add(speed);
+  }
+
+  void acceptRequestedSpeed() {
+    if (disposed || requestedSpeeds.isEmpty) return;
+    _state.value = _state.value.copyWith(playbackSpeed: requestedSpeeds.last);
+  }
+
+  @override
+  Future<void> setVolume(double volume) async {}
+
+  @override
+  Future<void> dispose() async {
+    if (disposed) return;
+    disposed = true;
+    disposeCalls += 1;
+    _state.value = _state.value.copyWith(isPlaying: false);
+  }
+
+  void disposeNotifier() => _state.dispose();
 }
 
 class _FakePlaybackSyncSink implements PlaybackSyncSink {

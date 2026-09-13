@@ -113,6 +113,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
   String? _lastError;
   double _volume = 1;
   double _playbackSpeed = 1;
+  double _appliedPlaybackSpeed = 1;
   PlayerSource? _currentSource;
   String? _nativePlaybackUrl;
   Map<String, String> _nativePlaybackHeaders = const <String, String>{};
@@ -266,13 +267,16 @@ class MediaKitPlayerEngine extends PlayerEngine {
       _repeatedProxyErrorCount = 0;
 
       await player.setVolume((_volume * 100).clamp(0.0, 100.0).toDouble());
+      if (!_isActivePlayer(player, openGeneration)) return;
       // Always start the native backend at 1.0x. Some HLS/TS streams
       // stall during startup if the demuxer/decoder is forced to begin at
       // 1.25x or higher before the first frames & timestamps are ready.
-      await player.setRate(1.0);
+      await _setNativePlaybackSpeed(player, 1.0);
+      if (!_isActivePlayer(player, openGeneration)) return;
 
       // Configure MPV buffer and network properties before opening.
       await _applyMpvProperties(player, source, _playbackSpeed);
+      if (!_isActivePlayer(player, openGeneration)) return;
 
       final bool isInlineDash = LocalHlsProxy.isInlineDashUrl(source.url);
       final String inlineDashManifest = isInlineDash
@@ -300,6 +304,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
       _knownSourceDuration = isLocalHls
           ? await readLocalHlsDuration(remoteUri)
           : Duration.zero;
+      if (!_isActivePlayer(player, openGeneration)) return;
       final bool useProxy =
           !source.disableProxy && (isNetwork || isInlineDash || isLocalHls);
       if ((source.disableProxy && isNetwork) ||
@@ -311,7 +316,12 @@ class MediaKitPlayerEngine extends PlayerEngine {
       if (useProxy && isInlineDash) {
         try {
           await _proxy.stop();
+          if (!_isActivePlayer(player, openGeneration)) return;
           await _proxy.start();
+          if (!_isActivePlayer(player, openGeneration)) {
+            await _proxy.stop();
+            return;
+          }
           playbackUrl = _proxy.inlineDashUrl(
             inlineDashManifest,
             headers: headers,
@@ -326,7 +336,12 @@ class MediaKitPlayerEngine extends PlayerEngine {
         try {
           // Restart proxy on each open so stale CDN headers are not reused.
           await _proxy.stop();
+          if (!_isActivePlayer(player, openGeneration)) return;
           await _proxy.start();
+          if (!_isActivePlayer(player, openGeneration)) {
+            await _proxy.stop();
+            return;
+          }
           playbackUrl = isHls
               ? _proxy.playlistUrl(remoteUri, headers: headers)
               : isDash
@@ -356,10 +371,12 @@ class MediaKitPlayerEngine extends PlayerEngine {
       _nativePlaybackUrl = playbackUrl;
       _nativePlaybackHeaders = headers;
 
+      if (!_isActivePlayer(player, openGeneration)) return;
       await player.open(
         mk.Media(playbackUrl, httpHeaders: headers),
         play: autoplay,
       );
+      if (!_isActivePlayer(player, openGeneration)) return;
 
       unawaited(
         _finishStartupAfterOpen(
@@ -375,6 +392,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
       }
       _syncState();
     } on Object catch (error) {
+      if (!_isActivePlayer(player, openGeneration)) return;
       _lastError = error.toString();
       _setState(
         _state.value.copyWith(
@@ -569,7 +587,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
       final double requestedSpeed = _currentTargetPlaybackSpeed;
       if (requestedSpeed != 1.0) {
         try {
-          await player.setRate(requestedSpeed);
+          await _setNativePlaybackSpeed(player, requestedSpeed);
         } on Object catch (e) {
           debugPrint('MediaKit speed apply (no-settle) failed: $e');
         }
@@ -602,7 +620,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
     final double requestedSpeed = _currentTargetPlaybackSpeed;
     if (requestedSpeed != 1.0) {
       try {
-        await player.setRate(requestedSpeed);
+        await _setNativePlaybackSpeed(player, requestedSpeed);
       } on Object catch (error) {
         debugPrint('MediaKit delayed speed apply failed: $error');
       }
@@ -738,7 +756,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
       if (!_isActivePlayer(player, generation) || _disposed) return;
       _nativePlaybackUrl = directUrl;
       _nativePlaybackHeaders = headers;
-      await player.setRate(1.0);
+      await _setNativePlaybackSpeed(player, 1.0);
       if (!_isActivePlayer(player, generation) || _disposed) return;
       await player.open(
         mk.Media(directUrl, httpHeaders: headers),
@@ -1034,7 +1052,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
     _currentTargetPlaybackSpeed = _playbackSpeed;
     final mk.Player? player = _player;
     if (player != null) {
-      await player.setRate(_playbackSpeed);
+      await _setNativePlaybackSpeed(player, _playbackSpeed);
       // Reapply buffer config scaled for the new speed, mirroring FVP's
       // _configureNetworkAndBuffering call in setPlaybackSpeed.
       final PlayerSource? source = _currentSource;
@@ -1042,6 +1060,16 @@ class MediaKitPlayerEngine extends PlayerEngine {
         unawaited(_applyMpvProperties(player, source, _playbackSpeed));
       }
     }
+    _syncState();
+  }
+
+  Future<void> _setNativePlaybackSpeed(mk.Player player, double speed) async {
+    await player.setRate(speed);
+    if (_disposed || !identical(_player, player) || !_hasMedia) return;
+    // Publish only a rate whose native setter completed for the active player.
+    // `_playbackSpeed` remains the selected target across startup/recovery,
+    // while this value follows the currently effective engine rate.
+    _appliedPlaybackSpeed = speed;
     _syncState();
   }
 
@@ -1151,7 +1179,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
         position: position,
         duration: duration,
         volume: _volume,
-        playbackSpeed: _playbackSpeed,
+        playbackSpeed: _appliedPlaybackSpeed,
         aspectRatio: aspectRatio,
         videoSize: _lastVideoSize,
         buffered: buffered.isNotEmpty ? buffered : _lastBufferedRanges,
@@ -1281,6 +1309,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
     _seekEpoch += 1;
     _initialPositionSettled = true;
     _currentTargetPlaybackSpeed = 1;
+    _appliedPlaybackSpeed = 1;
     _currentAutoplay = true;
     _usingProxy = false;
     _directFallbackTried = false;
@@ -1294,14 +1323,24 @@ class MediaKitPlayerEngine extends PlayerEngine {
     _lastReliableDuration = Duration.zero;
     _knownSourceDuration = Duration.zero;
 
+    // Detach and stop native playback before awaiting listener cleanup. This
+    // makes close immediate even when a stream subscription is slow to cancel.
+    final mk.Player? player = _player;
+    _player = null;
+    _videoController = null;
+    if (player != null) {
+      try {
+        await player.stop();
+      } on Object catch (error) {
+        debugPrint('MediaKit stop during dispose ignored: $error');
+      }
+    }
+
     for (final StreamSubscription<dynamic> subscription in _subscriptions) {
       await subscription.cancel();
     }
     _subscriptions.clear();
 
-    final mk.Player? player = _player;
-    _player = null;
-    _videoController = null;
     if (player != null) {
       await player.dispose();
     }

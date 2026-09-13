@@ -57,12 +57,34 @@ abstract interface class PlaybackSyncSink {
 final playbackControllerProvider =
     NotifierProvider<PlaybackController, PlaybackState>(PlaybackController.new);
 
+typedef PlayerEngineBuilder =
+    PlayerEngine Function({
+      double? initialAspectRatio,
+      required PlayerBackend backend,
+      required bool youtubeEmbed,
+      required String trailerBackLabel,
+    });
+
+final playerEngineBuilderProvider = Provider<PlayerEngineBuilder>(
+  (_) => createPlayerEngine,
+);
+
 Future<void> _ignorePlaybackTeardownErrors(Future<void> future) async {
   try {
     await future;
   } on Object {
     // Native/player resources can already be gone while the app is exiting.
   }
+}
+
+double displayedPlaybackSpeed(PlaybackState playback, PlayerSettings settings) {
+  final PlayerEngine? engine = playback.engine;
+  if (engine != null) {
+    return engine.state.value.playbackSpeed.clamp(0.25, 3.0).toDouble();
+  }
+  // While a native engine is still being created, no non-default rate has
+  // been accepted yet. Do not present the persisted target as already active.
+  return playback.loading ? 1.0 : settings.playbackSpeed;
 }
 
 class PlaybackState {
@@ -308,6 +330,9 @@ class PlaybackController extends Notifier<PlaybackState> {
   DateTime? _offlineStallObservedAt;
   Duration _lastStablePausePosition = Duration.zero;
   PlayerEngine? _engineForDispose;
+  final Expando<Future<void>> _engineDisposeFutures = Expando<Future<void>>(
+    'playbackEngineDispose',
+  );
   Future<void>? _finalProgressSaveBarrier;
   final SeekThumbnailRequestTracker _seekThumbnailRequests =
       SeekThumbnailRequestTracker();
@@ -429,7 +454,21 @@ class PlaybackController extends Notifier<PlaybackState> {
         state.temporarySpeedActive) {
       return remoteTemporarySpeed;
     }
+    final PlayerEngine? engine = state.engine;
+    if (engine != null) {
+      return engine.state.value.playbackSpeed.clamp(0.25, 3.0).toDouble();
+    }
     return _effectivePlaybackSpeed(settings);
+  }
+
+  Future<void> _disposeEngineOnce(PlayerEngine engine) {
+    final Future<void>? existing = _engineDisposeFutures[engine];
+    if (existing != null) return existing;
+    final Future<void> disposal = _ignorePlaybackTeardownErrors(
+      engine.dispose(),
+    );
+    _engineDisposeFutures[engine] = disposal;
+    return disposal;
   }
 
   void _broadcastPlayState() {
@@ -598,8 +637,9 @@ class PlaybackController extends Notifier<PlaybackState> {
       unawaited(_ignorePlaybackTeardownErrors(DiscordRpcService.dispose()));
       unawaited(_ignorePlaybackTeardownErrors(_seekThumbnailService.dispose()));
       final PlayerEngine? engine = _engineForDispose;
+      _engineForDispose = null;
       if (engine != null) {
-        unawaited(_ignorePlaybackTeardownErrors(engine.dispose()));
+        unawaited(_disposeEngineOnce(engine));
       }
     });
     return const PlaybackState();
@@ -867,6 +907,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       );
     }
     if (item.servers.isEmpty) {
+      final PlayerEngine? previous = _engineForDispose ?? state.engine;
       _engineForDispose = null;
       state = PlaybackState(
         item: item,
@@ -875,6 +916,7 @@ class PlaybackController extends Notifier<PlaybackState> {
           message: 'No playable server was provided.',
         ),
       );
+      if (previous != null) await _disposeEngineOnce(previous);
       return;
     }
     final MediaServer server = item.servers.first;
@@ -1071,7 +1113,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     _resumeGuardUntil = position > const Duration(seconds: 3)
         ? DateTime.now().add(_resumeSeekRetryTimeout)
         : null;
-    final PlayerEngine? previous = state.engine;
+    final PlayerEngine? previous = _engineForDispose ?? state.engine;
     if (identical(_engineForDispose, previous)) {
       _engineForDispose = null;
     }
@@ -1102,7 +1144,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     // Both MediaKit and FVP own native textures whose asynchronous teardown can
     // otherwise overlap the next backend and terminate the process.
     if (previous != null) {
-      await _ignorePlaybackTeardownErrors(previous.dispose());
+      await _disposeEngineOnce(previous);
       if (generation != _playbackGeneration) return;
     }
     if (subtitle == null) unawaited(_autoSelectSubtitle(server));
@@ -1119,6 +1161,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     final PlayerSettings settings = await ref.read(
       playerSettingsProvider.future,
     );
+    if (generation != _playbackGeneration) return;
     final bool youtubeEmbed = _isYoutubeTrailerServer(server);
     final List<PlaybackAttempt> attempts = youtubeEmbed
         ? const <PlaybackAttempt>[]
@@ -1171,12 +1214,16 @@ class PlaybackController extends Notifier<PlaybackState> {
     final String trailerBackLabel = youtubeEmbed
         ? await _localizedText('Back')
         : 'Back';
-    final PlayerEngine engine = createPlayerEngine(
+    if (generation != _playbackGeneration) return;
+    final PlayerEngine engine = ref.read(playerEngineBuilderProvider)(
       initialAspectRatio: _safeAspectRatio(preserveAspectRatio),
       backend: engineBackend,
       youtubeEmbed: youtubeEmbed,
       trailerBackLabel: trailerBackLabel,
     );
+    // Own the engine from creation, not only after open(). Closing or replacing
+    // a player during async initialization must still find and terminate it.
+    _engineForDispose = engine;
     final double targetPlaybackSpeed = _effectivePlaybackSpeed(settings);
 
     try {
@@ -1184,6 +1231,10 @@ class PlaybackController extends Notifier<PlaybackState> {
         // FVP and MediaKit intentionally open native HLS/TS at 1x, then apply
         // the saved rate once their decoder has usable startup media.
         await engine.setPlaybackSpeed(targetPlaybackSpeed);
+        if (generation != _playbackGeneration) {
+          await _disposeEngineOnce(engine);
+          return;
+        }
       }
       await engine
           .open(
@@ -1201,11 +1252,15 @@ class PlaybackController extends Notifier<PlaybackState> {
           )
           .timeout(_engineOpenTimeout);
       if (generation != _playbackGeneration) {
-        await engine.dispose();
+        await _disposeEngineOnce(engine);
         return;
       }
       if (!engine.managesStartupPlaybackSpeed) {
         await engine.setPlaybackSpeed(targetPlaybackSpeed);
+      }
+      if (generation != _playbackGeneration) {
+        await _disposeEngineOnce(engine);
+        return;
       }
       await engine.setVolume(
         effectivePlayerOutputVolume(
@@ -1213,12 +1268,15 @@ class PlaybackController extends Notifier<PlaybackState> {
           systemVolumeOnly: _usesSystemVolumeOnly,
         ),
       );
+      if (generation != _playbackGeneration) {
+        await _disposeEngineOnce(engine);
+        return;
+      }
       final bool effectiveAutoplay =
           autoplay && (!respectDesiredPlaying || state.desiredPlaying);
       if (effectiveAutoplay) await engine.play();
       if (generation != _playbackGeneration) {
-        await engine.pause();
-        await engine.dispose();
+        await _disposeEngineOnce(engine);
         return;
       }
       _engineForDispose = engine;
@@ -1254,6 +1312,10 @@ class PlaybackController extends Notifier<PlaybackState> {
         );
       }
     } on Object catch (error) {
+      if (generation != _playbackGeneration) {
+        await _disposeEngineOnce(engine);
+        return;
+      }
       final Duration fallbackPosition = _fallbackPositionFor(
         engine,
         requestedPosition: position,
@@ -1264,7 +1326,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       final double? fallbackAspectRatio = _safeAspectRatio(
         engine.state.value.aspectRatio,
       );
-      await engine.dispose();
+      await _disposeEngineOnce(engine);
       if (generation != _playbackGeneration) return;
       if (youtubeEmbed) {
         debugPrint('YouTube trailer WebView open failed: $error');
@@ -1848,7 +1910,7 @@ class PlaybackController extends Notifier<PlaybackState> {
             canRetry: true,
           ),
         );
-        unawaited(_ignorePlaybackTeardownErrors(engine.dispose()));
+        unawaited(_disposeEngineOnce(engine));
       }
     };
     engine.addListener(listener);
@@ -2036,7 +2098,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     unawaited(MediaSessionService.clearNowPlaying());
     unawaited(_ignorePlaybackTeardownErrors(DiscordRpcService.clearActivity()));
     final MediaPlaybackItem? item = state.item;
-    final PlayerEngine? engine = state.engine;
+    final PlayerEngine? engine = _engineForDispose ?? state.engine;
     Future<void>? finalProgressSave;
     if (item != null && engine != null && !item.ignoreProgress) {
       late final Future<void> barrier;
@@ -2069,6 +2131,13 @@ class PlaybackController extends Notifier<PlaybackState> {
     _resetManualSeekEofWindow();
     _engineForDispose = null;
     state = const PlaybackState();
+
+    // Engine disposal starts before preview cleanup or progress persistence.
+    // Both can perform I/O; neither may keep native playback audible after the
+    // route is gone.
+    final Future<void>? engineDisposal = engine == null
+        ? null
+        : _disposeEngineOnce(engine);
     try {
       await _seekThumbnailService.reset();
       _seekThumbnailPlan = null;
@@ -2077,24 +2146,10 @@ class PlaybackController extends Notifier<PlaybackState> {
       // Preview teardown must not prevent the main player from being released.
     }
 
-    if (engine == null) return;
-
+    if (engineDisposal != null) await engineDisposal;
     await finalProgressSave;
     _resumeGuardPosition = Duration.zero;
     _resumeGuardUntil = null;
-    await Future<void>.delayed(const Duration(milliseconds: 50));
-    try {
-      if (engine.state.value.isInitialized) {
-        await engine.pause();
-      }
-    } catch (_) {
-      // The native player may already be torn down by the platform route pop.
-    }
-    try {
-      await engine.dispose();
-    } catch (_) {
-      // Some native backends reject late disposal during app/window teardown.
-    }
   }
 
   StreamQuality _initialQuality(MediaServer server, {String? explicitId}) {

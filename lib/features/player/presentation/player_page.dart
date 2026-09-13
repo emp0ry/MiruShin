@@ -973,16 +973,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
             voiceoverLabel: playbackState.voiceover?.label,
           )
         : null;
-    final bool offlinePlayback = widget.item.servers.any(
-      (MediaServer server) => server.id == 'offline',
-    );
-    if (offlinePlayback) {
-      // Offline auto-delete must wait until preview decoder sessions and local
-      // file handles are closed. Online navigation keeps the release ordering.
-      await _stopPlayback();
-    } else {
-      unawaited(_stopPlayback());
-    }
+    // Do not pop the route until the active engine session has been stopped.
+    // This applies equally to online streams: letting route disposal race the
+    // native player leaves audio/resources alive and can crash app shutdown.
+    await _stopPlayback();
     if (!mounted) return;
 
     debugPrint(
@@ -1843,7 +1837,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
                                   ),
                                 if (state.temporarySpeedActive)
                                   _TemporarySpeedBadge(
-                                    speed: settings.playbackSpeed + 1,
+                                    speed:
+                                        state.engine?.value.playbackSpeed ??
+                                        settings.playbackSpeed + 1,
                                     controlsVisible:
                                         state.controlsVisible && !state.locked,
                                   ),
@@ -2706,8 +2702,17 @@ class _PlayerChrome extends ConsumerWidget {
                                     final bool compactZoom = width < 460;
                                     final bool compactSpeed = width < 390;
                                     final bool compactQuality = width < 340;
-                                    final String speedLabel =
-                                        '${settings.playbackSpeed.toStringAsFixed(settings.playbackSpeed == settings.playbackSpeed.roundToDouble() ? 0 : 2)}x';
+                                    Widget speedButton(double speed) {
+                                      final String label =
+                                          '${speed.toStringAsFixed(speed == speed.roundToDouble() ? 0 : 2)}x';
+                                      return _ChromeButton(
+                                        icon: Icons.speed_rounded,
+                                        label: label,
+                                        showLabel: !compactSpeed,
+                                        onTap: () =>
+                                            _showSpeedMenu(context, ref),
+                                      );
+                                    }
 
                                     return Align(
                                       alignment: Alignment.centerRight,
@@ -2766,13 +2771,28 @@ class _PlayerChrome extends ConsumerWidget {
                                                     !settings.verticalStretch,
                                                   ),
                                             ),
-                                            _ChromeButton(
-                                              icon: Icons.speed_rounded,
-                                              label: speedLabel,
-                                              showLabel: !compactSpeed,
-                                              onTap: () =>
-                                                  _showSpeedMenu(context, ref),
-                                            ),
+                                            if (controller == null)
+                                              speedButton(
+                                                displayedPlaybackSpeed(
+                                                  state,
+                                                  settings,
+                                                ),
+                                              )
+                                            else
+                                              ValueListenableBuilder<
+                                                PlayerEngineState
+                                              >(
+                                                valueListenable:
+                                                    controller.state,
+                                                builder:
+                                                    (
+                                                      BuildContext context,
+                                                      PlayerEngineState value,
+                                                      Widget? child,
+                                                    ) => speedButton(
+                                                      value.playbackSpeed,
+                                                    ),
+                                              ),
                                             _ChromeButton(
                                               icon: Icons.high_quality_rounded,
                                               label: context.t('Quality'),
@@ -4489,19 +4509,41 @@ Future<void> _showSubtitleMenu(BuildContext context, WidgetRef ref) async {
 
 Future<void> _showSpeedMenu(BuildContext context, WidgetRef ref) async {
   final NavigatorState navigator = Navigator.of(context);
-  final double active =
-      ref.read(playerSettingsProvider).value?.playbackSpeed ?? 1;
+  final PlaybackState playback = ref.read(playbackControllerProvider);
+  final PlayerSettings settings =
+      ref.read(playerSettingsProvider).value ?? const PlayerSettings();
+  final double active = displayedPlaybackSpeed(playback, settings);
+  final PlayerEngine? engine = playback.engine;
   await _showMenuSheet(context, 'Speed', <Widget>[
     for (final double speed in playerPlaybackSpeedOptions)
-      ListTile(
-        selected: active == speed,
-        leading: const Icon(Icons.speed_rounded),
-        title: Text(speed == 1 ? context.t('Default') : '${speed}x'),
-        onTap: () {
-          navigator.pop();
-          ref.read(playbackControllerProvider.notifier).setSpeed(speed);
-        },
-      ),
+      if (engine == null)
+        ListTile(
+          selected: active == speed,
+          leading: const Icon(Icons.speed_rounded),
+          title: Text(speed == 1 ? context.t('Default') : '${speed}x'),
+          onTap: () {
+            navigator.pop();
+            ref.read(playbackControllerProvider.notifier).setSpeed(speed);
+          },
+        )
+      else
+        ValueListenableBuilder<PlayerEngineState>(
+          valueListenable: engine.state,
+          builder:
+              (
+                BuildContext context,
+                PlayerEngineState value,
+                Widget? child,
+              ) => ListTile(
+                selected: value.playbackSpeed == speed,
+                leading: const Icon(Icons.speed_rounded),
+                title: Text(speed == 1 ? context.t('Default') : '${speed}x'),
+                onTap: () {
+                  navigator.pop();
+                  ref.read(playbackControllerProvider.notifier).setSpeed(speed);
+                },
+              ),
+        ),
   ]);
 }
 
