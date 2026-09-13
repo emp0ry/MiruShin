@@ -128,6 +128,46 @@ class TimelineInteractionTracker {
   }
 }
 
+@visibleForTesting
+enum ArrowSeekKeyPhase { down, repeat, up }
+
+/// Separates a short arrow-key tap from the operating system's key-repeat
+/// sequence. A tap seeks once on release; a hold seeks only for repeats, so it
+/// does not get an extra eager seek before the accumulated hold feedback.
+@visibleForTesting
+class ArrowSeekKeyTracker {
+  int? _pressedDirection;
+  bool _hasRepeated = false;
+
+  int? handle(int direction, ArrowSeekKeyPhase phase) {
+    assert(direction == -1 || direction == 1);
+
+    switch (phase) {
+      case ArrowSeekKeyPhase.down:
+        _pressedDirection = direction;
+        _hasRepeated = false;
+        return null;
+      case ArrowSeekKeyPhase.repeat:
+        if (_pressedDirection != direction) {
+          _pressedDirection = direction;
+          _hasRepeated = false;
+        }
+        _hasRepeated = true;
+        return direction;
+      case ArrowSeekKeyPhase.up:
+        if (_pressedDirection != direction) return null;
+        final int? result = _hasRepeated ? null : direction;
+        reset();
+        return result;
+    }
+  }
+
+  void reset() {
+    _pressedDirection = null;
+    _hasRepeated = false;
+  }
+}
+
 class PlayerPage extends ConsumerStatefulWidget {
   const PlayerPage({
     required this.item,
@@ -183,6 +223,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
   );
   final GestureOverlayController _gestureOverlayController =
       GestureOverlayController();
+  final ArrowSeekKeyTracker _arrowSeekKeyTracker = ArrowSeekKeyTracker();
   bool _stoppedPlayback = false;
   bool _exitingPlayer = false;
   bool _allowRoutePop = false;
@@ -497,6 +538,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     _hideTimer?.cancel();
     _autoNextTimer?.cancel();
     _timelineInteractions.detach();
+    _arrowSeekKeyTracker.reset();
     if (identical(_windowChannelHandlerOwner, _windowChannelOwner)) {
       _windowChannelHandlerOwner = null;
       _windowChannel.setMethodCallHandler(null);
@@ -1253,6 +1295,23 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     if (key == LogicalKeyboardKey.space) {
       return _handleSpaceKeyEvent(event, notifier);
     }
+    if (key == LogicalKeyboardKey.arrowLeft ||
+        key == LogicalKeyboardKey.arrowRight) {
+      final int direction = key == LogicalKeyboardKey.arrowLeft ? -1 : 1;
+      final ArrowSeekKeyPhase phase = event is KeyDownEvent
+          ? ArrowSeekKeyPhase.down
+          : event is KeyRepeatEvent
+          ? ArrowSeekKeyPhase.repeat
+          : ArrowSeekKeyPhase.up;
+      final int? seekDirection = _arrowSeekKeyTracker.handle(direction, phase);
+      if (seekDirection != null) {
+        _seekWithArrowFeedback(
+          notifier,
+          seekDirection < 0 ? -settings.seekInterval : settings.seekInterval,
+        );
+      }
+      return KeyEventResult.handled;
+    }
     if (event is KeyUpEvent) {
       return KeyEventResult.ignored;
     }
@@ -1260,14 +1319,6 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     if (key == LogicalKeyboardKey.mediaPlayPause) {
       if (event is! KeyDownEvent) return KeyEventResult.handled;
       unawaited(notifier.togglePlay());
-      return KeyEventResult.handled;
-    }
-    if (key == LogicalKeyboardKey.arrowLeft) {
-      _seekWithArrowFeedback(notifier, -settings.seekInterval);
-      return KeyEventResult.handled;
-    }
-    if (key == LogicalKeyboardKey.arrowRight) {
-      _seekWithArrowFeedback(notifier, settings.seekInterval);
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.arrowUp) {
