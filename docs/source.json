@@ -31,6 +31,22 @@
       ],
       "versions": [
         {
+          "version": "2.8.6",
+          "date": "2026-09-13",
+          "localizedDescription": "- Fixed player sessions not terminating correctly and restored proper playback speed handling.\n- Fixed expired airing schedules still appearing in the Library.\n- Improved seeking controls by separating arrow tap and hold behavior.\n- Added voiceover and size labels for downloaded episodes.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.8.6/MiruShin-ios-v2.8.6.ipa",
+          "size": 29677867,
+          "minOSVersion": "13.0"
+        },
+        {
+          "version": "2.8.5",
+          "date": "2026-09-12",
+          "localizedDescription": "- Fixed streams freezing during startup and playback unexpectedly resuming after being paused.\n- Fixed playback-speed changes causing stalls or showing a speed that was not actually applied.\n- Restored seek-preview thumbnails on macOS and iOS, including downloaded streams.\n- Added accumulated seek-distance feedback when repeatedly using the left and right arrow keys.\n- Improved the Library AniList outage notice with scrolling, MyAnimeList fallback status, dismissal, and correct spacing.\n- Fixed downloaded and anamorphic videos playing with the wrong aspect ratio.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.8.5/MiruShin-ios-v2.8.5.ipa",
+          "size": 29662727,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.8.4",
           "date": "2026-09-09",
           "localizedDescription": "- Fixed Watch With Friends falling back to online playback for single-source add-ons when the same episode is already downloaded.",
@@ -631,11 +647,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.8.4",
-      "versionDate": "2026-09-09",
-      "versionDescription": "- Fixed Watch With Friends falling back to online playback for single-source add-ons when the same episode is already downloaded.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.8.4/MiruShin-ios-v2.8.4.ipa",
-      "size": 29673229,
+      "version": "2.8.6",
+      "versionDate": "2026-09-13",
+      "versionDescription": "- Fixed player sessions not terminating correctly and restored proper playback speed handling.\n- Fixed expired airing schedules still appearing in the Library.\n- Improved seeking controls by separating arrow tap and hold behavior.\n- Added voiceover and size labels for downloaded episodes.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.8.6/MiruShin-ios-v2.8.6.ipa",
+      "size": 29677867,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
