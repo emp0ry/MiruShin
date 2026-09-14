@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.8.7",
+          "date": "2026-09-14",
+          "localizedDescription": "- Improved Watch Order with theme-colored current-title highlighting, personal score, and favorite status.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.8.7/MiruShin-ios-v2.8.7.ipa",
+          "size": 29588925,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.8.6",
           "date": "2026-09-13",
           "localizedDescription": "- Fixed player sessions not terminating correctly and restored proper playback speed handling.\n- Fixed expired airing schedules still appearing in the Library.\n- Improved seeking controls by separating arrow tap and hold behavior.\n- Added voiceover and size labels for downloaded episodes.",
@@ -647,11 +655,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.8.6",
-      "versionDate": "2026-09-13",
-      "versionDescription": "- Fixed player sessions not terminating correctly and restored proper playback speed handling.\n- Fixed expired airing schedules still appearing in the Library.\n- Improved seeking controls by separating arrow tap and hold behavior.\n- Added voiceover and size labels for downloaded episodes.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.8.6/MiruShin-ios-v2.8.6.ipa",
-      "size": 29677867,
+      "version": "2.8.7",
+      "versionDate": "2026-09-14",
+      "versionDescription": "- Improved Watch Order with theme-colored current-title highlighting, personal score, and favorite status.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.8.7/MiruShin-ios-v2.8.7.ipa",
+      "size": 29588925,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
