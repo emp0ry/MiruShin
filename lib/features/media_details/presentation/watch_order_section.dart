@@ -13,7 +13,11 @@ import '../../../core/widgets/glass_card.dart';
 import '../../../core/widgets/section_header.dart';
 import '../../../shared/models/anilist_models.dart';
 import '../../../shared/models/media_item.dart';
+import '../../profile/application/anilist_user_settings_provider.dart';
+import '../../tracking/application/anilist_favorite_provider.dart';
 import '../../tracking/application/anilist_library_provider.dart';
+import '../../tracking/domain/tracking_sync_models.dart';
+import '../../tracking/presentation/anilist_entry_editor.dart';
 import '../application/watch_order_provider.dart';
 import '../domain/watch_order.dart';
 
@@ -95,6 +99,7 @@ class _WatchOrderSectionState extends ConsumerState<WatchOrderSection> {
           }
         }
         final palette = AppThemeExtension.of(context);
+        final scoreFormat = ref.watch(aniListEffectiveScoreFormatProvider);
         return _panel(context, [
           Wrap(
             spacing: AppSpacing.sm,
@@ -150,6 +155,7 @@ class _WatchOrderSectionState extends ConsumerState<WatchOrderSection> {
               progress:
                   progress['anilist:${entries[i].media.item.externalIds['anilist'] ?? ''}'] ??
                   progress['mal:${entries[i].media.malId}'],
+              scoreFormat: scoreFormat,
             ),
           ],
           if (entries.length > _visibleCount) ...[
@@ -178,24 +184,39 @@ class _WatchOrderSectionState extends ConsumerState<WatchOrderSection> {
   );
 }
 
-class _WatchOrderTile extends StatelessWidget {
+class _WatchOrderTile extends ConsumerWidget {
   const _WatchOrderTile({
     required this.entry,
     required this.number,
     required this.current,
+    required this.scoreFormat,
     this.progress,
   });
   final WatchOrderEntry entry;
   final int number;
   final bool current;
+  final String scoreFormat;
   final AniListAnimeListEntry? progress;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final media = entry.media;
     final item = media.item;
     final palette = AppThemeExtension.of(context);
+    final colorScheme = Theme.of(context).colorScheme;
     final total = item.episodeCount;
+    final progressItem = progress?.mediaItem;
+    final favoriteOverrides = ref.watch(anilistFavoriteProvider);
+    final favorite = progressItem != null
+        ? localFavoriteFor(
+                favoriteOverrides,
+                MediaIdentity.fromExternalIds(
+                  progressItem.externalIds,
+                  mediaId: progressItem.id,
+                ),
+              ) ??
+              aniListItemIsFavourite(progressItem)
+        : false;
     final metadata = <String>[
       context.t(entry.isMainline ? 'Main story' : 'Extra'),
       if (media.format.isNotEmpty) media.format.replaceAll('_', ' '),
@@ -207,75 +228,169 @@ class _WatchOrderTile extends StatelessWidget {
       color: palette.surfaceSoftColor,
       child: const Center(child: Icon(Icons.movie_outlined, size: 24)),
     );
-    return InkWell(
-      key: ValueKey('watch-order-${media.id}'),
-      borderRadius: AppRadius.all(AppRadius.sm),
-      onTap: current
-          ? null
-          : () =>
-                context.push(AppRoutes.mediaDetailsPath(item.id), extra: item),
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.sm),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            SizedBox(
-              width: 28,
-              child: Text('$number', textAlign: TextAlign.center),
-            ),
-            const SizedBox(width: AppSpacing.sm),
-            ClipRRect(
-              borderRadius: AppRadius.all(AppRadius.sm),
-              child: SizedBox(
-                width: 48,
-                height: 68,
-                child: item.posterUrl.isEmpty
-                    ? placeholder()
-                    : CachedNetworkImage(
-                        imageUrl: item.posterUrl,
-                        fit: BoxFit.cover,
-                        cacheManager: miruShinArtworkCacheManager,
-                        memCacheWidth: 144,
-                        placeholder: (context, url) => placeholder(),
-                        errorWidget: (context, url, error) => placeholder(),
-                      ),
+    return Container(
+      key: ValueKey('watch-order-shell-${media.id}'),
+      decoration: BoxDecoration(
+        color: current ? colorScheme.primary.withValues(alpha: 0.08) : null,
+        border: current
+            ? Border.all(color: colorScheme.primary, width: 2)
+            : null,
+        borderRadius: AppRadius.all(AppRadius.sm),
+      ),
+      child: InkWell(
+        key: ValueKey('watch-order-${media.id}'),
+        borderRadius: AppRadius.all(AppRadius.sm),
+        onTap: current
+            ? null
+            : () => context.push(
+                AppRoutes.mediaDetailsPath(item.id),
+                extra: item,
               ),
-            ),
-            const SizedBox(width: AppSpacing.md),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    item.title,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.titleSmall,
-                  ),
-                  const SizedBox(height: AppSpacing.xs),
-                  Text(
-                    metadata.join(' · '),
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: palette.textSecondaryColor,
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.sm),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              SizedBox(
+                width: 28,
+                child: Text('$number', textAlign: TextAlign.center),
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              ClipRRect(
+                borderRadius: AppRadius.all(AppRadius.sm),
+                child: SizedBox(
+                  width: 48,
+                  height: 68,
+                  child: item.posterUrl.isEmpty
+                      ? placeholder()
+                      : CachedNetworkImage(
+                          imageUrl: item.posterUrl,
+                          fit: BoxFit.cover,
+                          cacheManager: miruShinArtworkCacheManager,
+                          memCacheWidth: 144,
+                          placeholder: (context, url) => placeholder(),
+                          errorWidget: (context, url, error) => placeholder(),
+                        ),
+                ),
+              ),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleSmall,
                     ),
-                  ),
-                  if (progress != null) ...[
                     const SizedBox(height: AppSpacing.xs),
                     Text(
-                      '${context.t(progress!.status.label)} · ${progress!.progress}${total == null ? '' : ' / $total'}',
-                      key: ValueKey('watch-order-progress-${media.id}'),
+                      metadata.join(' · '),
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Theme.of(context).colorScheme.primary,
-                        fontWeight: FontWeight.bold,
+                        color: palette.textSecondaryColor,
                       ),
                     ),
+                    if (progress != null) ...[
+                      const SizedBox(height: AppSpacing.xs),
+                      Wrap(
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        spacing: AppSpacing.sm,
+                        runSpacing: AppSpacing.xs,
+                        children: [
+                          Text(
+                            '${context.t(progress!.status.label)} · ${progress!.progress}${total == null ? '' : ' / $total'}',
+                            key: ValueKey('watch-order-progress-${media.id}'),
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
+                                  color: colorScheme.primary,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                          ),
+                          if (progress!.score != null && progress!.score! > 0)
+                            _WatchOrderMetric(
+                              child: _WatchOrderScore(
+                                score: progress!.score!,
+                                format: scoreFormat,
+                              ),
+                            ),
+                          if (favorite)
+                            _WatchOrderMetric(
+                              child: Icon(
+                                Icons.favorite_rounded,
+                                key: ValueKey(
+                                  'watch-order-favorite-${media.id}',
+                                ),
+                                size: 17,
+                                color: colorScheme.primary,
+                              ),
+                            ),
+                        ],
+                      ),
+                    ],
                   ],
-                ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
+    );
+  }
+}
+
+class _WatchOrderMetric extends StatelessWidget {
+  const _WatchOrderMetric({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          '·',
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: Theme.of(context).colorScheme.primary,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(width: AppSpacing.xs),
+        child,
+      ],
+    );
+  }
+}
+
+class _WatchOrderScore extends StatelessWidget {
+  const _WatchOrderScore({required this.score, required this.format});
+
+  final double score;
+  final String format;
+
+  @override
+  Widget build(BuildContext context) {
+    final bool smiley = isSmileyAniListFormat(format);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(
+          smiley ? aniListSmileyScoreIcon(score) : Icons.star_rounded,
+          size: 16,
+          color: smiley ? Theme.of(context).colorScheme.primary : Colors.amber,
+        ),
+        if (!smiley) ...[
+          const SizedBox(width: 2),
+          Text(
+            formatAniListScore(score, format),
+            key: const ValueKey('watch-order-score'),
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(fontWeight: FontWeight.bold),
+          ),
+        ],
+      ],
     );
   }
 }

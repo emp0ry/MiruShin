@@ -7,6 +7,8 @@ import 'package:mirushin/features/media_details/application/watch_order_provider
 import 'package:mirushin/features/media_details/domain/watch_order.dart';
 import 'package:mirushin/features/media_details/domain/watch_order_resolver.dart';
 import 'package:mirushin/features/media_details/presentation/watch_order_section.dart';
+import 'package:mirushin/features/profile/application/anilist_user_settings_provider.dart';
+import 'package:mirushin/features/tracking/application/anilist_favorite_provider.dart';
 import 'package:mirushin/features/tracking/application/anilist_library_provider.dart';
 import 'package:mirushin/shared/models/anilist_models.dart';
 import 'package:mirushin/shared/models/media_item.dart';
@@ -17,7 +19,13 @@ class TestLibrary extends AniListLibraryNotifier {
   @override
   Future<List<AniListAnimeListFolder>> build() async => [];
 
-  void setProgress(int progress, AniListListStatus status) {
+  void setProgress(
+    int progress,
+    AniListListStatus status, {
+    double? score,
+    bool favorite = false,
+  }) {
+    final MediaItem item = watchMedia(1).item;
     state = AsyncData([
       AniListAnimeListFolder(
         name: 'Watching',
@@ -27,12 +35,23 @@ class TestLibrary extends AniListLibraryNotifier {
             id: 1,
             status: status,
             progress: progress,
-            mediaItem: watchMedia(1).item,
+            score: score,
+            mediaItem: item.copyWith(
+              externalIds: <String, String>{
+                ...item.externalIds,
+                'anilist_is_favourite': '$favorite',
+              },
+            ),
           ),
         ],
       ),
     ]);
   }
+}
+
+class TestFavoriteController extends AniListFavoriteController {
+  @override
+  Map<String, bool> build() => const <String, bool>{};
 }
 
 WatchOrder sampleOrder() => const WatchOrderResolver().resolve([
@@ -88,6 +107,10 @@ void main() {
             }),
             anilistAnimeListProvider.overrideWith(() => library),
             anilistAnimePreviewListProvider.overrideWith((ref) async => []),
+            anilistFavoriteProvider.overrideWith(TestFavoriteController.new),
+            aniListEffectiveScoreFormatProvider.overrideWithValue(
+              'POINT_10_DECIMAL',
+            ),
           ],
           child: MaterialApp(
             localizationsDelegates: const [AppLocalizations.delegate],
@@ -103,12 +126,55 @@ void main() {
       expect(find.text('Watch Order'), findsOneWidget);
       expect(find.textContaining('Current title'), findsOneWidget);
       expect(find.text('Anime 2'), findsOneWidget);
+      final Finder currentShell = find.byKey(
+        const ValueKey<String>('watch-order-shell-1'),
+      );
+      final BoxDecoration decoration =
+          tester.widget<Container>(currentShell).decoration! as BoxDecoration;
+      final Border border = decoration.border! as Border;
+      expect(
+        border.top.color,
+        Theme.of(tester.element(currentShell)).colorScheme.primary,
+      );
+      expect(border.top.width, 2);
       library.setProgress(7, AniListListStatus.current);
       await tester.pumpAndSettle();
       expect(find.text('Watching · 7 / 12'), findsOneWidget);
-      library.setProgress(12, AniListListStatus.completed);
+      library.setProgress(
+        12,
+        AniListListStatus.completed,
+        score: 8.5,
+        favorite: true,
+      );
       await tester.pumpAndSettle();
       expect(find.text('Completed · 12 / 12'), findsOneWidget);
+      expect(find.text('8.5'), findsOneWidget);
+      Icon favoriteIcon = tester.widget<Icon>(
+        find.byKey(const ValueKey<String>('watch-order-favorite-1')),
+      );
+      expect(favoriteIcon.icon, Icons.favorite_rounded);
+      expect(
+        favoriteIcon.color,
+        Theme.of(tester.element(currentShell)).colorScheme.primary,
+      );
+      expect(find.text('·'), findsNWidgets(2));
+      for (final Text separator in tester.widgetList<Text>(find.text('·'))) {
+        expect(
+          separator.style?.color,
+          Theme.of(tester.element(currentShell)).colorScheme.primary,
+        );
+      }
+      library.setProgress(12, AniListListStatus.completed);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey<String>('watch-order-favorite-1')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey<String>('watch-order-score')),
+        findsNothing,
+      );
+      expect(find.text('·'), findsNothing);
       expect(fetches, 1);
       await tester.tap(find.text('Main story only'));
       await tester.pumpAndSettle();
@@ -145,6 +211,7 @@ void main() {
           watchOrderProvider(101).overrideWith((ref) async => sampleOrder()),
           anilistAnimeListProvider.overrideWith(TestLibrary.new),
           anilistAnimePreviewListProvider.overrideWith((ref) async => []),
+          anilistFavoriteProvider.overrideWith(TestFavoriteController.new),
         ],
         child: MaterialApp.router(
           routerConfig: router,
@@ -176,6 +243,7 @@ void main() {
           anilistAnimePreviewListProvider.overrideWith(
             (ref) async => const <AniListAnimeListFolder>[],
           ),
+          anilistFavoriteProvider.overrideWith(TestFavoriteController.new),
         ],
         child: MaterialApp(
           localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
@@ -212,6 +280,7 @@ void main() {
           }),
           anilistAnimeListProvider.overrideWith(TestLibrary.new),
           anilistAnimePreviewListProvider.overrideWith((ref) async => []),
+          anilistFavoriteProvider.overrideWith(TestFavoriteController.new),
         ],
         child: MaterialApp(
           localizationsDelegates: const [AppLocalizations.delegate],
@@ -272,6 +341,7 @@ void main() {
           watchOrderProvider(101).overrideWith((ref) async => order),
           anilistAnimeListProvider.overrideWith(TestLibrary.new),
           anilistAnimePreviewListProvider.overrideWith((ref) async => []),
+          anilistFavoriteProvider.overrideWith(TestFavoriteController.new),
         ],
         child: MaterialApp(
           localizationsDelegates: const [AppLocalizations.delegate],
