@@ -231,6 +231,7 @@ class TrackerSyncCoordinator {
   Future<List<AniListAnimeListFolder>> ingestAnimeLibrary({
     required TrackerSource source,
     required List<AniListAnimeListFolder> folders,
+    required bool liveSnapshot,
   }) => _serial<List<AniListAnimeListFolder>>(() async {
     final LocalFirstSyncEngine engine = LocalFirstSyncEngine(
       store: _store,
@@ -239,6 +240,8 @@ class TrackerSyncCoordinator {
     );
     final List<UserMediaState> merged = await engine.ingestRemoteStates(
       userMediaStatesFromFolders(folders, source: source),
+      incomingAiringIsAuthoritative:
+          liveSnapshot && source == TrackerSource.anilist,
     );
     await engine.recordSuccess(source);
     _invalidateHealth();

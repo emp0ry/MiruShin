@@ -927,6 +927,7 @@ Future<List<AniListAnimeListFolder>> _fetchCollection(
       final List<AniListAnimeListFolder> merged = await sync.ingestAnimeLibrary(
         source: TrackerSource.anilist,
         folders: fetchedFolders,
+        liveSnapshot: true,
       );
       fetchedFolders = _filterFoldersByStatus(merged, statuses);
     }
@@ -948,6 +949,7 @@ Future<List<AniListAnimeListFolder>> _fetchCollection(
           await sync.ingestAnimeLibrary(
             source: TrackerSource.anilist,
             folders: fallback,
+            liveSnapshot: false,
           ),
           statuses,
         );

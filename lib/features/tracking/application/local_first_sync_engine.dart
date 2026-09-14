@@ -334,7 +334,12 @@ class LocalFirstSyncEngine {
         if (adapter == null) continue;
         try {
           final List<UserMediaState> remote = await adapter.fetchAnimeList();
-          local = _mergeRemote(local, remote, journal);
+          local = _mergeRemote(
+            local,
+            remote,
+            journal,
+            incomingAiringIsAuthoritative: source == TrackerSource.anilist,
+          );
           await _store.saveStates(local);
           await _recordSuccessLocked(source);
           return LocalFirstLibraryResult(
@@ -356,11 +361,19 @@ class LocalFirstSyncEngine {
     return result;
   }
 
-  Future<List<UserMediaState>> ingestRemoteStates(List<UserMediaState> remote) {
+  Future<List<UserMediaState>> ingestRemoteStates(
+    List<UserMediaState> remote, {
+    bool incomingAiringIsAuthoritative = false,
+  }) {
     return _serial<List<UserMediaState>>(() async {
       final List<UserMediaState> local = await _store.loadStates();
       final List<SyncJournalEntry> journal = await _store.loadJournal();
-      final List<UserMediaState> merged = _mergeRemote(local, remote, journal);
+      final List<UserMediaState> merged = _mergeRemote(
+        local,
+        remote,
+        journal,
+        incomingAiringIsAuthoritative: incomingAiringIsAuthoritative,
+      );
       await _store.saveStates(merged);
       return merged;
     });
@@ -380,8 +393,9 @@ class LocalFirstSyncEngine {
   List<UserMediaState> _mergeRemote(
     List<UserMediaState> local,
     List<UserMediaState> remote,
-    List<SyncJournalEntry> journal,
-  ) {
+    List<SyncJournalEntry> journal, {
+    bool incomingAiringIsAuthoritative = false,
+  }) {
     final List<UserMediaState> result = <UserMediaState>[...local];
     for (final UserMediaState incoming in remote) {
       final int index = result.indexWhere(
@@ -406,6 +420,9 @@ class LocalFirstSyncEngine {
         incoming: incoming,
         primary: primary,
         pendingLocal: pending,
+        incomingAiringIsAuthoritative:
+            incomingAiringIsAuthoritative &&
+            incoming.source == TrackerSource.anilist,
       );
     }
     return result;

@@ -383,6 +383,131 @@ void main() {
       expect(merged.providerStates[TrackerSource.mal]?.rawStatus, 'watching');
     });
 
+    test(
+      'fresh AniList schedule advances when the list timestamp is unchanged',
+      () {
+        final DateTime oldAiring = DateTime.utc(2026, 9, 14, 12);
+        final DateTime freshAiring = DateTime.utc(2026, 9, 21, 12);
+        final UserMediaState cached = _state(
+          source: TrackerSource.mal,
+          progress: 10,
+          updatedAt: DateTime.utc(2026, 9, 1),
+          nextEpisode: 11,
+          airingAt: oldAiring,
+        );
+        final UserMediaState freshAniList = _state(
+          source: TrackerSource.anilist,
+          progress: 10,
+          updatedAt: DateTime.utc(2026, 9, 1),
+          nextEpisode: 12,
+          airingAt: freshAiring,
+        );
+
+        final UserMediaState merged = const UserMediaConflictResolver().merge(
+          existing: cached,
+          incoming: freshAniList,
+          primary: TrackerSource.mal,
+          incomingAiringIsAuthoritative: true,
+        );
+
+        expect(merged.source, TrackerSource.mal);
+        expect(merged.nextEpisode, 12);
+        expect(merged.airingAt, freshAiring);
+        expect(merged.mediaItem.externalIds[anilistNextAiringEpisodeKey], '12');
+        expect(
+          merged.mediaItem.externalIds[anilistNextAiringAtKey],
+          '${freshAiring.millisecondsSinceEpoch ~/ 1000}',
+        );
+      },
+    );
+
+    test('fresh AniList snapshot clears a finished airing schedule', () {
+      final UserMediaState cached = _state(
+        source: TrackerSource.mal,
+        progress: 11,
+        updatedAt: DateTime.utc(2026, 9, 1),
+        nextEpisode: 12,
+        airingAt: DateTime.utc(2026, 9, 21, 12),
+      );
+      final UserMediaState freshAniList = _state(
+        source: TrackerSource.anilist,
+        progress: 12,
+        status: AniListListStatus.completed,
+        updatedAt: DateTime.utc(2026, 9, 1),
+      );
+
+      final UserMediaState merged = const UserMediaConflictResolver().merge(
+        existing: cached,
+        incoming: freshAniList,
+        primary: TrackerSource.mal,
+        incomingAiringIsAuthoritative: true,
+      );
+
+      expect(merged.nextEpisode, isNull);
+      expect(merged.airingAt, isNull);
+      expect(
+        merged.mediaItem.externalIds,
+        isNot(contains(anilistNextAiringEpisodeKey)),
+      );
+      expect(
+        merged.mediaItem.externalIds,
+        isNot(contains(anilistNextAiringAtKey)),
+      );
+    });
+
+    test('MAL fallback preserves the cached AniList schedule as one pair', () {
+      final DateTime cachedAiring = DateTime.utc(2026, 9, 21, 12);
+      final UserMediaState cached = _state(
+        source: TrackerSource.mal,
+        progress: 10,
+        updatedAt: DateTime.utc(2026, 9, 1),
+        nextEpisode: 12,
+        airingAt: cachedAiring,
+      );
+      final UserMediaState freshMal = _state(
+        source: TrackerSource.mal,
+        progress: 11,
+        updatedAt: DateTime.utc(2026, 9, 14),
+      );
+
+      final UserMediaState merged = const UserMediaConflictResolver().merge(
+        existing: cached,
+        incoming: freshMal,
+        primary: TrackerSource.mal,
+      );
+
+      expect(merged.progress, 11);
+      expect(merged.nextEpisode, 12);
+      expect(merged.airingAt, cachedAiring);
+    });
+
+    test('cached AniList fallback cannot regress a newer schedule', () {
+      final DateTime newerAiring = DateTime.utc(2026, 9, 21, 12);
+      final UserMediaState current = _state(
+        source: TrackerSource.mal,
+        progress: 10,
+        updatedAt: DateTime.utc(2026, 9, 1),
+        nextEpisode: 12,
+        airingAt: newerAiring,
+      );
+      final UserMediaState cachedAniList = _state(
+        source: TrackerSource.anilist,
+        progress: 10,
+        updatedAt: DateTime.utc(2026, 9, 1),
+        nextEpisode: 11,
+        airingAt: DateTime.utc(2026, 9, 14, 12),
+      );
+
+      final UserMediaState merged = const UserMediaConflictResolver().merge(
+        existing: current,
+        incoming: cachedAniList,
+        primary: TrackerSource.mal,
+      );
+
+      expect(merged.nextEpisode, 12);
+      expect(merged.airingAt, newerAiring);
+    });
+
     test('pending local fields still win over recovered primary data', () {
       final UserMediaState fallback = _state(
         source: TrackerSource.mal,
@@ -727,6 +852,8 @@ UserMediaState _state({
   AniListListStatus status = AniListListStatus.current,
   double? score,
   required DateTime updatedAt,
+  int? nextEpisode,
+  DateTime? airingAt,
 }) {
   const MediaIdentity identity = MediaIdentity(
     localId: 'stable:anime',
@@ -756,16 +883,21 @@ UserMediaState _state({
       rating: 0,
       genres: const <String>[],
       sourceProvider: source.label,
-      externalIds: const <String, String>{
+      externalIds: <String, String>{
         'anilist': '10',
         'mal': '20',
         'shikimori': '30',
+        if (nextEpisode != null) anilistNextAiringEpisodeKey: '$nextEpisode',
+        if (airingAt != null)
+          anilistNextAiringAtKey: '${airingAt.millisecondsSinceEpoch ~/ 1000}',
       },
       statusLabel: '',
     ),
     status: status,
     progress: progress,
     score: score,
+    nextEpisode: nextEpisode,
+    airingAt: airingAt,
     createdAt: updatedAt.subtract(const Duration(days: 30)),
     updatedAt: updatedAt,
     source: source,

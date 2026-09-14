@@ -719,16 +719,25 @@ class UserMediaConflictResolver {
     required UserMediaState incoming,
     required TrackerSource primary,
     UserMediaPatch? pendingLocal,
+    bool incomingAiringIsAuthoritative = false,
   }) {
     final MediaIdentity identity = existing.identity.merge(incoming.identity);
     final bool incomingWins = _incomingWins(existing, incoming, primary);
     final UserMediaState winner = incomingWins ? incoming : existing;
     final UserMediaState fallback = incomingWins ? existing : incoming;
-    final MediaItem media = _mergeMedia(
-      existing.mediaItem,
-      incoming.mediaItem,
-      preferIncoming: incomingWins,
-      identity: identity,
+    final _AiringSchedule airing = _mergeAiringSchedule(
+      existing,
+      incoming,
+      incomingIsAuthoritative: incomingAiringIsAuthoritative,
+    );
+    final MediaItem media = _withAiringMetadata(
+      _mergeMedia(
+        existing.mediaItem,
+        incoming.mediaItem,
+        preferIncoming: incomingWins,
+        identity: identity,
+      ),
+      airing,
     );
     UserMediaState result = UserMediaState(
       identity: identity,
@@ -742,8 +751,8 @@ class UserMediaConflictResolver {
       updatedAt: winner.updatedAt,
       startedAt: winner.startedAt ?? fallback.startedAt,
       completedAt: winner.completedAt ?? fallback.completedAt,
-      nextEpisode: winner.nextEpisode ?? fallback.nextEpisode,
-      airingAt: winner.airingAt ?? fallback.airingAt,
+      nextEpisode: airing.nextEpisode,
+      airingAt: airing.airingAt,
       avgScore: winner.avgScore ?? fallback.avgScore,
       format: winner.format ?? fallback.format,
       source: winner.source,
@@ -774,6 +783,76 @@ class UserMediaConflictResolver {
     if (existing.source == TrackerSource.anilist) return false;
     return false;
   }
+}
+
+class _AiringSchedule {
+  const _AiringSchedule({this.nextEpisode, this.airingAt});
+
+  factory _AiringSchedule.fromState(UserMediaState state) =>
+      _AiringSchedule(nextEpisode: state.nextEpisode, airingAt: state.airingAt);
+
+  final int? nextEpisode;
+  final DateTime? airingAt;
+
+  bool get hasData => nextEpisode != null || airingAt != null;
+  bool get isComplete => nextEpisode != null && airingAt != null;
+}
+
+_AiringSchedule _mergeAiringSchedule(
+  UserMediaState existing,
+  UserMediaState incoming, {
+  required bool incomingIsAuthoritative,
+}) {
+  final _AiringSchedule current = _AiringSchedule.fromState(existing);
+  final _AiringSchedule fresh = _AiringSchedule.fromState(incoming);
+
+  // Media-list timestamps describe the user's list edit, not the constantly
+  // changing next-airing metadata. A live AniList refresh must therefore
+  // replace (and sometimes clear) the cached pair even when `updatedAt` did
+  // not change. Cached AniList fallbacks deliberately do not set this flag,
+  // so an older cache cannot overwrite a newer schedule from another scope.
+  if (incomingIsAuthoritative) return fresh;
+
+  // MAL and Shikimori do not currently expose next-airing data. Preserve a
+  // cached AniList schedule while they are serving as an outage fallback.
+  if (!fresh.hasData) return current;
+  if (!current.hasData) return fresh;
+
+  // Keep the fields from one snapshot instead of combining an episode number
+  // from one provider with a timestamp from another. Prefer the more complete
+  // or later schedule if another provider gains this metadata in the future.
+  if (fresh.isComplete != current.isComplete) {
+    return fresh.isComplete ? fresh : current;
+  }
+  final DateTime? currentAt = current.airingAt;
+  final DateTime? freshAt = fresh.airingAt;
+  if (currentAt != null && freshAt != null && freshAt.isAfter(currentAt)) {
+    return fresh;
+  }
+  final int? currentEpisode = current.nextEpisode;
+  final int? freshEpisode = fresh.nextEpisode;
+  if (currentEpisode != null &&
+      freshEpisode != null &&
+      freshEpisode > currentEpisode) {
+    return fresh;
+  }
+  return current;
+}
+
+MediaItem _withAiringMetadata(MediaItem media, _AiringSchedule airing) {
+  final Map<String, String> externalIds = <String, String>{...media.externalIds}
+    ..remove(anilistNextAiringEpisodeKey)
+    ..remove(anilistNextAiringAtKey);
+  final int? nextEpisode = airing.nextEpisode;
+  final DateTime? airingAt = airing.airingAt;
+  if (nextEpisode != null) {
+    externalIds[anilistNextAiringEpisodeKey] = '$nextEpisode';
+  }
+  if (airingAt != null) {
+    externalIds[anilistNextAiringAtKey] =
+        '${airingAt.millisecondsSinceEpoch ~/ 1000}';
+  }
+  return media.copyWith(externalIds: externalIds);
 }
 
 List<UserMediaState> userMediaStatesFromFolders(
