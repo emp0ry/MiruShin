@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.8.9",
+          "date": "2026-09-21",
+          "localizedDescription": "- Added instant local Library updates for add, edit, delete, progress, score, notes, and repeat actions\n- Added more reliable AniList, MAL, and Shikimori synchronization\n- Added offline change support with automatic synchronization after reconnecting\n- Fixed newly added anime not appearing until a manual refresh\n- Fixed completed anime remaining in Watching\n- Fixed incorrect episode progress, such as 13/12\n- Fixed changes being applied to the wrong anime after Library reordering\n- Removed unnecessary Library reloads and delayed UI updates\n- Improved favorite and score update consistency",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.8.9/MiruShin-ios-v2.8.9.ipa",
+          "size": 29680257,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.8.8",
           "date": "2026-09-14",
           "localizedDescription": "- Fixed missing next-episode countdowns when AniList libraries are merged with MAL fallback data.",
@@ -663,11 +671,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.8.8",
-      "versionDate": "2026-09-14",
-      "versionDescription": "- Fixed missing next-episode countdowns when AniList libraries are merged with MAL fallback data.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.8.8/MiruShin-ios-v2.8.8.ipa",
-      "size": 29588035,
+      "version": "2.8.9",
+      "versionDate": "2026-09-21",
+      "versionDescription": "- Added instant local Library updates for add, edit, delete, progress, score, notes, and repeat actions\n- Added more reliable AniList, MAL, and Shikimori synchronization\n- Added offline change support with automatic synchronization after reconnecting\n- Fixed newly added anime not appearing until a manual refresh\n- Fixed completed anime remaining in Watching\n- Fixed incorrect episode progress, such as 13/12\n- Fixed changes being applied to the wrong anime after Library reordering\n- Removed unnecessary Library reloads and delayed UI updates\n- Improved favorite and score update consistency",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.8.9/MiruShin-ios-v2.8.9.ipa",
+      "size": 29680257,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
