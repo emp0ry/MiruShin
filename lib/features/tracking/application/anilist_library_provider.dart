@@ -16,6 +16,8 @@ import '../../profile/domain/anilist_profile_models.dart';
 import '../../settings/application/settings_state.dart';
 import '../data/anilist_api_client.dart';
 import '../domain/tracker_models.dart';
+import '../domain/tracking_sync_models.dart';
+import 'tracker_library_provider.dart';
 import 'tracker_sync_coordinator.dart';
 
 enum AniListLibraryLoadPhase { idle, loading, success, failed }
@@ -543,20 +545,53 @@ Future<void> _awaitAniListLibraryLoadsForMediaType(
 
 class AniListLibraryNotifier
     extends AsyncNotifier<List<AniListAnimeListFolder>> {
+  final Map<int, AniListAnimeListEntry> _optimisticEntries =
+      <int, AniListAnimeListEntry>{};
+  final Set<int> _optimisticRemovals = <int>{};
+
   @override
-  Future<List<AniListAnimeListFolder>> build() =>
+  Future<List<AniListAnimeListFolder>> build() async {
+    final List<AniListAnimeListFolder> fetched = await loadLibrary();
+    return _applyOptimisticChanges(fetched);
+  }
+
+  Future<List<AniListAnimeListFolder>> loadLibrary() =>
       _fetchCollection(ref, mediaType: 'ANIME', flushQueue: false);
 
   void updateEntryProgress(
     int mediaId,
     int newProgress, {
     AniListListStatus? status,
+    MediaItem? mediaItem,
+    bool publishToTrackerLibrary = true,
   }) {
     final AniListAnimeListEntry? current = _entryForMediaId(mediaId);
-    if (current == null) return;
+    final MediaItem? resolvedMedia = current?.mediaItem ?? mediaItem;
+    if (resolvedMedia == null) return;
+    final int safeProgress = canonicalEpisodeProgress(
+      newProgress,
+      resolvedMedia.episodeCount,
+    );
+    final int? total = resolvedMedia.episodeCount;
+    final AniListListStatus nextStatus =
+        status ??
+        (current?.status == AniListListStatus.current &&
+                total != null &&
+                total > 0 &&
+                newProgress >= total
+            ? AniListListStatus.completed
+            : current?.status ?? AniListListStatus.current);
     replaceEntry(
       mediaId: mediaId,
-      entry: current.copyWith(progress: newProgress, status: status),
+      publishToTrackerLibrary: publishToTrackerLibrary,
+      entry:
+          current?.copyWith(progress: safeProgress, status: nextStatus) ??
+          AniListAnimeListEntry(
+            id: 0,
+            status: nextStatus,
+            progress: safeProgress,
+            mediaItem: resolvedMedia,
+          ),
     );
   }
 
@@ -571,12 +606,16 @@ class AniListLibraryNotifier
     final AniListAnimeListEntry? current = _entryForMediaId(mediaId);
     if (current == null) return;
 
+    final int safeProgress = canonicalEpisodeProgress(
+      progress,
+      current.mediaItem.episodeCount,
+    );
     replaceEntry(
       mediaId: mediaId,
       entry: AniListAnimeListEntry(
         id: current.id,
         status: status ?? current.status,
-        progress: progress,
+        progress: safeProgress,
         score: score,
         mediaItem: current.mediaItem,
         notes: notes,
@@ -596,47 +635,59 @@ class AniListLibraryNotifier
   void replaceEntry({
     required int mediaId,
     required AniListAnimeListEntry entry,
+    bool publishToTrackerLibrary = true,
   }) {
     final AniListAnimeListEntry? current = _entryForMediaId(mediaId);
+    final AniListAnimeListEntry safeEntry = entry.copyWith(
+      progress: canonicalEpisodeProgress(
+        entry.progress,
+        entry.mediaItem.episodeCount,
+      ),
+    );
     final AniListAnimeListEntry merged = current == null
-        ? entry
+        ? safeEntry
         : AniListAnimeListEntry(
-            id: entry.id,
-            status: entry.status,
-            progress: entry.progress,
-            score: entry.score,
+            id: safeEntry.id,
+            status: safeEntry.status,
+            progress: safeEntry.progress,
+            score: safeEntry.score,
             mediaItem: current.mediaItem,
-            notes: entry.notes,
-            repeat: entry.repeat,
-            createdAt: entry.createdAt ?? current.createdAt,
-            updatedAt: entry.updatedAt ?? current.updatedAt,
-            startedAt: entry.startedAt ?? current.startedAt,
-            completedAt: entry.completedAt ?? current.completedAt,
-            nextEpisode: entry.nextEpisode ?? current.nextEpisode,
-            airingAt: entry.airingAt ?? current.airingAt,
-            avgScore: entry.avgScore ?? current.avgScore,
-            format: entry.format ?? current.format,
+            notes: safeEntry.notes,
+            repeat: safeEntry.repeat,
+            createdAt: safeEntry.createdAt ?? current.createdAt,
+            updatedAt: safeEntry.updatedAt ?? current.updatedAt,
+            startedAt: safeEntry.startedAt ?? current.startedAt,
+            completedAt: safeEntry.completedAt ?? current.completedAt,
+            nextEpisode: safeEntry.nextEpisode ?? current.nextEpisode,
+            airingAt: safeEntry.airingAt ?? current.airingAt,
+            avgScore: safeEntry.avgScore ?? current.avgScore,
+            format: safeEntry.format ?? current.format,
           );
+    _optimisticRemovals.remove(mediaId);
+    _optimisticEntries[mediaId] = merged;
+    if (publishToTrackerLibrary) {
+      ref
+          .read(trackerLibraryOptimisticMutationsProvider.notifier)
+          .upsert(merged);
+    }
     _upsertEntry(mediaId, merged);
   }
 
-  void removeEntry(int mediaId) {
+  void removeEntry(
+    int mediaId, {
+    MediaItem? mediaItem,
+    bool publishToTrackerLibrary = true,
+  }) {
+    _optimisticEntries.remove(mediaId);
+    _optimisticRemovals.add(mediaId);
+    if (publishToTrackerLibrary) {
+      ref
+          .read(trackerLibraryOptimisticMutationsProvider.notifier)
+          .removeByAniListId(mediaId, mediaItem: mediaItem);
+    }
     final List<AniListAnimeListFolder>? folders = state.asData?.value;
     if (folders == null) return;
-    state = AsyncValue.data(<AniListAnimeListFolder>[
-      for (final AniListAnimeListFolder folder in folders)
-        if (folder.entries.any(
-          (AniListAnimeListEntry entry) => !_entryMatchesId(entry, mediaId),
-        ))
-          AniListAnimeListFolder(
-            name: folder.name,
-            status: folder.status,
-            entries: <AniListAnimeListEntry>[
-              for (final AniListAnimeListEntry entry in folder.entries)
-                if (!_entryMatchesId(entry, mediaId)) entry,
-            ],
-          ),
-    ]);
+    state = AsyncValue.data(_removeEntryFromFolders(folders, mediaId));
   }
 
   AniListAnimeListEntry? _entryForMediaId(int mediaId) {
@@ -651,9 +702,18 @@ class AniListLibraryNotifier
   }
 
   void _upsertEntry(int mediaId, AniListAnimeListEntry entry) {
-    final List<AniListAnimeListFolder>? folders = state.asData?.value;
-    if (folders == null) return;
+    final List<AniListAnimeListFolder> folders =
+        state.asData?.value ??
+        ref.read(anilistAnimePreviewListProvider).asData?.value ??
+        const <AniListAnimeListFolder>[];
+    state = AsyncValue.data(_upsertEntryInFolders(folders, mediaId, entry));
+  }
 
+  List<AniListAnimeListFolder> _upsertEntryInFolders(
+    List<AniListAnimeListFolder> folders,
+    int mediaId,
+    AniListAnimeListEntry entry,
+  ) {
     bool foundTargetFolder = false;
     final List<AniListAnimeListFolder> next = <AniListAnimeListFolder>[];
     for (final AniListAnimeListFolder folder in folders) {
@@ -686,7 +746,76 @@ class AniListLibraryNotifier
       );
     }
 
-    state = AsyncValue.data(next);
+    return next;
+  }
+
+  List<AniListAnimeListFolder> _removeEntryFromFolders(
+    List<AniListAnimeListFolder> folders,
+    int mediaId,
+  ) {
+    return <AniListAnimeListFolder>[
+      for (final AniListAnimeListFolder folder in folders)
+        if (folder.entries.any(
+          (AniListAnimeListEntry entry) => !_entryMatchesId(entry, mediaId),
+        ))
+          AniListAnimeListFolder(
+            name: folder.name,
+            status: folder.status,
+            entries: <AniListAnimeListEntry>[
+              for (final AniListAnimeListEntry entry in folder.entries)
+                if (!_entryMatchesId(entry, mediaId)) entry,
+            ],
+          ),
+    ];
+  }
+
+  List<AniListAnimeListFolder> _applyOptimisticChanges(
+    List<AniListAnimeListFolder> folders,
+  ) {
+    List<AniListAnimeListFolder> next = folders;
+    for (final int mediaId in _optimisticRemovals.toList(growable: false)) {
+      if (_entryForMediaIdInFolders(next, mediaId) == null) {
+        _optimisticRemovals.remove(mediaId);
+      } else {
+        next = _removeEntryFromFolders(next, mediaId);
+      }
+    }
+    for (final MapEntry<int, AniListAnimeListEntry> optimistic
+        in _optimisticEntries.entries.toList(growable: false)) {
+      final AniListAnimeListEntry? fetched = _entryForMediaIdInFolders(
+        next,
+        optimistic.key,
+      );
+      if (fetched != null && _sameEditableState(fetched, optimistic.value)) {
+        _optimisticEntries.remove(optimistic.key);
+      } else {
+        next = _upsertEntryInFolders(next, optimistic.key, optimistic.value);
+      }
+    }
+    return next;
+  }
+
+  AniListAnimeListEntry? _entryForMediaIdInFolders(
+    List<AniListAnimeListFolder> folders,
+    int mediaId,
+  ) {
+    for (final AniListAnimeListFolder folder in folders) {
+      for (final AniListAnimeListEntry entry in folder.entries) {
+        if (_entryMatchesId(entry, mediaId)) return entry;
+      }
+    }
+    return null;
+  }
+
+  bool _sameEditableState(
+    AniListAnimeListEntry left,
+    AniListAnimeListEntry right,
+  ) {
+    return left.status == right.status &&
+        left.progress == right.progress &&
+        left.score == right.score &&
+        left.notes == right.notes &&
+        left.repeat == right.repeat;
   }
 }
 
@@ -928,6 +1057,7 @@ Future<List<AniListAnimeListFolder>> _fetchCollection(
         source: TrackerSource.anilist,
         folders: fetchedFolders,
         liveSnapshot: true,
+        completeSnapshot: statuses == null,
       );
       fetchedFolders = _filterFoldersByStatus(merged, statuses);
     }
@@ -950,6 +1080,7 @@ Future<List<AniListAnimeListFolder>> _fetchCollection(
             source: TrackerSource.anilist,
             folders: fallback,
             liveSnapshot: false,
+            completeSnapshot: false,
           ),
           statuses,
         );
@@ -994,9 +1125,12 @@ Future<List<AniListAnimeListFolder>> _fetchCollection(
     markCatalogOnline(ref, CatalogMode.anilist);
   }
   if (mediaType == 'ANIME' && statuses == null) {
+    ref
+        .read(trackerLibraryOptimisticMutationsProvider.notifier)
+        .reconcile(fetchedFolders!);
     unawaited(
       AiringNotificationScheduler.syncAnimeList(
-        fetchedFolders!,
+        fetchedFolders,
         enabled: airingNotificationsEnabled,
         scope: airingNotificationScope,
         titleLanguage: requestedTitleLanguage,

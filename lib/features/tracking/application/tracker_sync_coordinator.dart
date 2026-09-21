@@ -40,6 +40,49 @@ class TrackerLibrarySnapshot {
   final bool fromCache;
 }
 
+class TrackerEpisodeProgress {
+  const TrackerEpisodeProgress({required this.progress, required this.status});
+
+  final int progress;
+  final AniListListStatus status;
+}
+
+/// Converts an addon's watched episode into a tracker-safe update. Extra addon
+/// videos may be numbered beyond the AniList/MAL episode count, but tracker
+/// progress must remain within the canonical total.
+TrackerEpisodeProgress normalizeTrackerEpisodeProgress({
+  required int episode,
+  required int? total,
+  AniListListStatus? currentStatus,
+}) {
+  final int progress = canonicalEpisodeProgress(episode, total);
+  final bool reachedKnownEnd = total != null && total > 0 && episode >= total;
+  final AniListListStatus status = currentStatus == AniListListStatus.repeating
+      ? AniListListStatus.repeating
+      : reachedKnownEnd
+      ? AniListListStatus.completed
+      : AniListListStatus.current;
+  return TrackerEpisodeProgress(progress: progress, status: status);
+}
+
+bool trackerEpisodeUpdateNeeded({
+  required UserMediaState? current,
+  required TrackerEpisodeProgress update,
+  required int? total,
+}) {
+  if (current == null) return true;
+  final bool repairsOverflow =
+      total != null && total > 0 && current.progress > total;
+  final bool completesCurrent =
+      update.status == AniListListStatus.completed &&
+      current.status != AniListListStatus.completed;
+  final bool advancesProgress = update.progress > current.progress;
+  if (current.status == AniListListStatus.completed && !repairsOverflow) {
+    return false;
+  }
+  return repairsOverflow || completesCurrent || advancesProgress;
+}
+
 /// Application facade over the provider-neutral local-first engine. It decides
 /// which authenticated adapters are available, while the engine owns local
 /// state, identity reconciliation, conflict policy and journal replay.
@@ -77,25 +120,26 @@ class TrackerSyncCoordinator {
       matched = state;
       break;
     }
-    if (matched != null &&
-        (matched.status == AniListListStatus.completed ||
-            matched.progress >= episode)) {
+    final int? canonicalTotal = mediaItem?.episodeCount ?? total;
+    final TrackerEpisodeProgress update = normalizeTrackerEpisodeProgress(
+      episode: episode,
+      total: canonicalTotal,
+      currentStatus: matched?.status,
+    );
+    if (!trackerEpisodeUpdateNeeded(
+      current: matched,
+      update: update,
+      total: canonicalTotal,
+    )) {
       return const SyncDispatchResult(pendingTargets: <TrackerSource>{});
     }
-
-    final AniListListStatus status =
-        (total != null && total > 0 && episode >= total)
-        ? AniListListStatus.completed
-        : matched?.status == AniListListStatus.repeating
-        ? AniListListStatus.repeating
-        : AniListListStatus.current;
     return pushEntryEdit(
       externalIds: externalIds,
       mediaId: mediaId,
       mediaTitle: mediaTitle,
       mediaItem: mediaItem,
-      status: status,
-      progress: episode,
+      status: update.status,
+      progress: update.progress,
       targets: targets,
     );
   }
@@ -126,12 +170,16 @@ class TrackerSyncCoordinator {
     if (resolvedTargets.isEmpty) {
       return const SyncDispatchResult(pendingTargets: <TrackerSource>{});
     }
+    final int? canonicalTotal = mediaItem?.episodeCount;
+    final int? safeProgress = progress == null
+        ? null
+        : canonicalEpisodeProgress(progress, canonicalTotal);
     final LocalFirstSyncEngine engine = await _engine();
     final SyncDispatchResult result = await engine.recordMutation(
       identity: identity,
       patch: UserMediaPatch(
         status: status,
-        progress: progress,
+        progress: safeProgress,
         score: score,
         notes: notes,
         repeat: repeat,
@@ -219,6 +267,7 @@ class TrackerSyncCoordinator {
             .toList();
     final LocalFirstLibraryResult result = await engine.refreshAnimeList(
       providerOrder: order,
+      cacheSource: preferred,
     );
     _invalidateHealth();
     return TrackerLibrarySnapshot(
@@ -232,6 +281,7 @@ class TrackerSyncCoordinator {
     required TrackerSource source,
     required List<AniListAnimeListFolder> folders,
     required bool liveSnapshot,
+    required bool completeSnapshot,
   }) => _serial<List<AniListAnimeListFolder>>(() async {
     final LocalFirstSyncEngine engine = LocalFirstSyncEngine(
       store: _store,
@@ -240,6 +290,9 @@ class TrackerSyncCoordinator {
     );
     final List<UserMediaState> merged = await engine.ingestRemoteStates(
       userMediaStatesFromFolders(folders, source: source),
+      snapshotSource: source,
+      confirmRemoteMutations: liveSnapshot && completeSnapshot,
+      incomingProviderIsAuthoritative: liveSnapshot,
       incomingAiringIsAuthoritative:
           liveSnapshot && source == TrackerSource.anilist,
     );

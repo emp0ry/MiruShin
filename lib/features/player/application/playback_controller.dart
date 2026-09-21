@@ -8,7 +8,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/deep_links/mirushin_deep_link.dart';
 import '../../../app/localization/app_localizations.dart';
 import '../../../core/platform/tv_platform.dart';
-import '../../../shared/models/anilist_models.dart';
 import '../../../shared/models/media_item.dart';
 import '../../addons/data/anime_titles_service.dart';
 import '../../library/application/local_library_provider.dart';
@@ -4211,32 +4210,52 @@ class PlaybackController extends Notifier<PlaybackState> {
         item.id;
     final String key = '$identity:$episodeNumber';
     if (!_syncedTrackerProgress.add(key)) return;
-    await ref
-        .read(trackerSyncCoordinatorProvider)
-        .pushEpisodeProgress(
-          externalIds: item.externalIds,
-          mediaId: item.id,
-          mediaTitle: item.title,
-          mediaItem: _trackingMediaItem(item),
-          episode: episodeNumber,
-          total: item.episodeCount,
+    final MediaItem trackingItem = _trackingMediaItem(item);
+    final TrackerEpisodeProgress update = normalizeTrackerEpisodeProgress(
+      episode: episodeNumber,
+      total: trackingItem.episodeCount,
+    );
+    ref
+        .read(trackerLibraryOptimisticMutationsProvider.notifier)
+        .updateProgress(
+          mediaItem: trackingItem,
+          progress: update.progress,
+          status: update.status,
         );
     final int? anilistId = int.tryParse(item.externalIds['anilist'] ?? '');
     if (anilistId != null && anilistId > 0) {
-      final AniListListStatus status =
-          item.episodeCount != null &&
-              item.episodeCount! > 0 &&
-              episodeNumber >= item.episodeCount!
-          ? AniListListStatus.completed
-          : AniListListStatus.current;
       ref
           .read(anilistAnimeListProvider.notifier)
-          .updateEntryProgress(anilistId, episodeNumber, status: status);
-      invalidateAniListAnimePreviewLibraryProvider(ref.invalidate);
-    } else {
-      invalidateAniListAnimeLibraryProviders(ref.invalidate);
+          .updateEntryProgress(
+            anilistId,
+            update.progress,
+            status: update.status,
+            mediaItem: trackingItem,
+            publishToTrackerLibrary: false,
+          );
     }
-    ref.invalidate(trackerAnimeListProvider);
+    try {
+      await ref
+          .read(trackerSyncCoordinatorProvider)
+          .pushEpisodeProgress(
+            externalIds: item.externalIds,
+            mediaId: item.id,
+            mediaTitle: item.title,
+            mediaItem: trackingItem,
+            episode: episodeNumber,
+            total: trackingItem.episodeCount,
+          );
+      ref.invalidate(trackerLocalAnimeLibraryProvider);
+    } on Object catch (error) {
+      // A journal/storage failure is different from an offline provider (which
+      // is safely queued by the coordinator). Allow the next save tick/end
+      // signal to retry instead of permanently suppressing this episode.
+      _syncedTrackerProgress.remove(key);
+      debugPrint(
+        'TrackerSync: progress retry scheduled (${error.runtimeType})',
+      );
+      return;
+    }
   }
 }
 

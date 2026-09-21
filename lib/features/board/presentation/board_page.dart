@@ -33,6 +33,7 @@ import '../../metadata/application/metadata_providers.dart';
 import '../../profile/application/anilist_user_settings_provider.dart';
 import '../../settings/application/settings_state.dart';
 import '../../tracking/application/anilist_library_provider.dart';
+import '../../tracking/application/tracker_library_provider.dart';
 import '../../tracking/presentation/anilist_entry_editor.dart';
 
 const double _kBoardWidePosterWidth = 166;
@@ -78,14 +79,34 @@ class _BoardPageState extends ConsumerState<BoardPage> {
       _heroSeed,
       preferRecentMovies: mode == CatalogMode.tmdb,
     );
-    final List<AniListAnimeListFolder> anilistFolders =
+    final AsyncValue<List<AniListAnimeListFolder>> anilistFoldersAsync =
+        mode == CatalogMode.anilist
+        ? ref.watch(anilistAnimeListProvider)
+        : const AsyncData<List<AniListAnimeListFolder>>(
+            <AniListAnimeListFolder>[],
+          );
+    final TrackerLocalAnimeLibrary? localAnimeLibrary =
         mode == CatalogMode.anilist
         ? ref
-              .watch(anilistAnimeListProvider)
+              .watch(trackerLocalAnimeLibraryProvider)
               .maybeWhen(
-                data: (List<AniListAnimeListFolder> f) => f,
-                orElse: () => const <AniListAnimeListFolder>[],
+                skipLoadingOnReload: true,
+                data: (TrackerLocalAnimeLibrary value) => value,
+                orElse: () => null,
               )
+        : null;
+    final List<AniListAnimeListFolder> anilistFolders =
+        mode == CatalogMode.anilist
+        ? effectiveTrackerAnimeLibrary(
+            providerFolders: anilistFoldersAsync.maybeWhen(
+              skipLoadingOnReload: true,
+              data: (List<AniListAnimeListFolder> value) => value,
+              orElse: () => const <AniListAnimeListFolder>[],
+            ),
+            local: localAnimeLibrary,
+            optimistic: ref.watch(trackerLibraryOptimisticMutationsProvider),
+            useLocalFallback: !anilistFoldersAsync.hasValue,
+          )
         : const <AniListAnimeListFolder>[];
     final List<AniListAnimeListEntry> watchingEntries =
         (anilistFolders
@@ -350,7 +371,7 @@ Future<void> _openAniListEntryEditor(
     context,
     ref: ref,
     entry: editableEntry,
-    status: entry?.status,
+    status: editableEntry.status,
     progress: editableEntry.progress,
     score: editableEntry.score,
     notes: editableEntry.notes,
@@ -360,12 +381,11 @@ Future<void> _openAniListEntryEditor(
   );
   if (draft == null || !context.mounted) return;
   if (draft.remove && entry != null) {
-    await deleteAniListEntry(context: context, ref: ref, entry: entry);
+    await deleteAniListEntry(context: context, entry: entry);
     return;
   }
   await saveAniListEntryEdit(
     context: context,
-    ref: ref,
     entry: editableEntry,
     draft: draft,
   );

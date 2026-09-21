@@ -36,6 +36,8 @@ import '../../player/domain/player_models.dart';
 import '../../profile/application/anilist_user_settings_provider.dart';
 import '../../settings/application/settings_state.dart';
 import '../../tracking/application/anilist_library_provider.dart';
+import '../../tracking/application/tracker_library_provider.dart';
+import '../../tracking/domain/tracker_models.dart';
 import '../../tracking/domain/tracking_sync_models.dart';
 import '../../tracking/presentation/anilist_entry_editor.dart';
 import '../../tracking/presentation/anilist_favorite_button.dart';
@@ -226,30 +228,77 @@ AniListAnimeListEntry? _findAniListEntry(WidgetRef ref, MediaItem item) {
   if (!identity.hasProviderId) return null;
 
   final bool isManga = _isAniListManga(item);
-  final List<AniListAnimeListFolder> fullFolders = ref
-      .watch(isManga ? anilistMangaListProvider : anilistAnimeListProvider)
-      .maybeWhen(
-        skipLoadingOnReload: true,
-        data: (List<AniListAnimeListFolder> folders) => folders,
-        orElse: () => const <AniListAnimeListFolder>[],
-      );
+  final bool useTrackerSource =
+      !isManga &&
+      ref.watch(
+            settingsProvider.select(
+              (SettingsState settings) =>
+                  settings.effectivePrimaryTrackerSource,
+            ),
+          ) !=
+          TrackerSource.anilist;
+  final AsyncValue<List<AniListAnimeListFolder>> fullAsync = ref.watch(
+    isManga
+        ? anilistMangaListProvider
+        : useTrackerSource
+        ? trackerAnimeListProvider
+        : anilistAnimeListProvider,
+  );
+  List<AniListAnimeListFolder> fullFolders = fullAsync.maybeWhen(
+    skipLoadingOnReload: true,
+    data: (List<AniListAnimeListFolder> folders) => folders,
+    orElse: () => const <AniListAnimeListFolder>[],
+  );
+  final TrackerLocalAnimeLibrary? local = isManga
+      ? null
+      : ref
+            .watch(trackerLocalAnimeLibraryProvider)
+            .maybeWhen(
+              skipLoadingOnReload: true,
+              data: (TrackerLocalAnimeLibrary value) => value,
+              orElse: () => null,
+            );
+  final List<TrackerLibraryOptimisticMutation> optimistic = isManga
+      ? const <TrackerLibraryOptimisticMutation>[]
+      : ref.watch(trackerLibraryOptimisticMutationsProvider);
+  if (!isManga) {
+    fullFolders = effectiveTrackerAnimeLibrary(
+      providerFolders: fullFolders,
+      local: local,
+      optimistic: optimistic,
+      useLocalFallback: !fullAsync.hasValue,
+    );
+  }
   final AniListAnimeListEntry? fullEntry = _findAniListEntryInFolders(
     identity,
     fullFolders,
   );
   if (fullEntry != null) return fullEntry;
 
-  final List<AniListAnimeListFolder> previewFolders = ref
-      .watch(
-        isManga
-            ? anilistMangaPreviewListProvider
-            : anilistAnimePreviewListProvider,
-      )
-      .maybeWhen(
-        skipLoadingOnReload: true,
-        data: (List<AniListAnimeListFolder> folders) => folders,
-        orElse: () => const <AniListAnimeListFolder>[],
-      );
+  final AsyncValue<List<AniListAnimeListFolder>> previewAsync = ref.watch(
+    isManga
+        ? anilistMangaPreviewListProvider
+        : useTrackerSource
+        ? trackerAnimeListProvider
+        : anilistAnimePreviewListProvider,
+  );
+  List<AniListAnimeListFolder> previewFolders = previewAsync.maybeWhen(
+    skipLoadingOnReload: true,
+    data: (List<AniListAnimeListFolder> folders) => folders,
+    orElse: () => const <AniListAnimeListFolder>[],
+  );
+  if (!isManga) {
+    previewFolders = effectiveTrackerAnimeLibrary(
+      providerFolders: previewFolders,
+      local: local,
+      optimistic: optimistic,
+      useLocalFallback: !previewAsync.hasValue,
+      statuses: const <AniListListStatus>{
+        AniListListStatus.current,
+        AniListListStatus.repeating,
+      },
+    );
+  }
   return _findAniListEntryInFolders(identity, previewFolders);
 }
 
@@ -1758,7 +1807,7 @@ Future<void> _editAniListEntry(
     context,
     ref: ref,
     entry: editableEntry,
-    status: entry?.status,
+    status: editableEntry.status,
     progress: editableEntry.progress,
     score: editableEntry.score,
     notes: editableEntry.notes,
@@ -1768,12 +1817,11 @@ Future<void> _editAniListEntry(
   );
   if (draft == null || !context.mounted) return;
   if (draft.remove && entry != null) {
-    await deleteAniListEntry(context: context, ref: ref, entry: entry);
+    await deleteAniListEntry(context: context, entry: entry);
     return;
   }
   await saveAniListEntryEdit(
     context: context,
-    ref: ref,
     entry: editableEntry,
     draft: draft,
   );
@@ -2265,19 +2313,54 @@ class _SeasonsPanel extends ConsumerWidget {
         .map((LibraryItem i) => i.mediaItem.id)
         .toList(growable: false);
 
-    final List<AniListAnimeListFolder> anilistFolders = ref
-        .watch(anilistAnimeListProvider)
-        .maybeWhen(
-          skipLoadingOnReload: true,
-          data: (List<AniListAnimeListFolder> d) => d,
-          orElse: () => const <AniListAnimeListFolder>[],
+    final bool useTrackerSource =
+        settings.effectivePrimaryTrackerSource != TrackerSource.anilist;
+    final AsyncValue<List<AniListAnimeListFolder>> anilistFoldersAsync = ref
+        .watch(
+          useTrackerSource
+              ? trackerAnimeListProvider
+              : anilistAnimeListProvider,
         );
-    final List<AniListAnimeListFolder> anilistPreviewFolders = ref
-        .watch(anilistAnimePreviewListProvider)
+    final AsyncValue<List<AniListAnimeListFolder>> anilistPreviewFoldersAsync =
+        ref.watch(
+          useTrackerSource
+              ? trackerAnimeListProvider
+              : anilistAnimePreviewListProvider,
+        );
+    final TrackerLocalAnimeLibrary? localAnimeLibrary = ref
+        .watch(trackerLocalAnimeLibraryProvider)
         .maybeWhen(
           skipLoadingOnReload: true,
-          data: (List<AniListAnimeListFolder> d) => d,
-          orElse: () => const <AniListAnimeListFolder>[],
+          data: (TrackerLocalAnimeLibrary value) => value,
+          orElse: () => null,
+        );
+    final List<TrackerLibraryOptimisticMutation> optimisticMutations = ref
+        .watch(trackerLibraryOptimisticMutationsProvider);
+    final List<AniListAnimeListFolder> anilistFolders =
+        effectiveTrackerAnimeLibrary(
+          providerFolders: anilistFoldersAsync.maybeWhen(
+            skipLoadingOnReload: true,
+            data: (List<AniListAnimeListFolder> value) => value,
+            orElse: () => const <AniListAnimeListFolder>[],
+          ),
+          local: localAnimeLibrary,
+          optimistic: optimisticMutations,
+          useLocalFallback: !anilistFoldersAsync.hasValue,
+        );
+    final List<AniListAnimeListFolder> anilistPreviewFolders =
+        effectiveTrackerAnimeLibrary(
+          providerFolders: anilistPreviewFoldersAsync.maybeWhen(
+            skipLoadingOnReload: true,
+            data: (List<AniListAnimeListFolder> value) => value,
+            orElse: () => const <AniListAnimeListFolder>[],
+          ),
+          local: localAnimeLibrary,
+          optimistic: optimisticMutations,
+          useLocalFallback: !anilistPreviewFoldersAsync.hasValue,
+          statuses: const <AniListListStatus>{
+            AniListListStatus.current,
+            AniListListStatus.repeating,
+          },
         );
 
     final bool showRussian =
@@ -2352,7 +2435,7 @@ class _SeasonsPanel extends ConsumerWidget {
                 context,
                 ref: ref,
                 entry: entry,
-                status: anilistEntry?.status,
+                status: entry.status,
                 progress: entry.progress,
                 score: entry.score,
                 notes: entry.notes,
@@ -2362,16 +2445,11 @@ class _SeasonsPanel extends ConsumerWidget {
               );
               if (draft == null || !context.mounted) return;
               if (draft.remove && anilistEntry != null) {
-                await deleteAniListEntry(
-                  context: context,
-                  ref: ref,
-                  entry: anilistEntry,
-                );
+                await deleteAniListEntry(context: context, entry: anilistEntry);
                 return;
               }
               await saveAniListEntryEdit(
                 context: context,
-                ref: ref,
                 entry: entry,
                 draft: draft,
               );

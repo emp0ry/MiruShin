@@ -13,6 +13,7 @@ import '../../../app/theme/app_theme_extension.dart';
 import '../../../core/widgets/tv_text_field_focus.dart';
 import '../../../shared/models/anilist_models.dart';
 import '../application/anilist_library_provider.dart';
+import '../application/local_first_sync_engine.dart';
 import '../application/tracker_library_provider.dart';
 import '../application/tracker_sync_coordinator.dart';
 import '../data/anilist_api_client.dart';
@@ -374,82 +375,139 @@ Future<AniListEntryEditDraft?> showAniListEntryEditor(
 
 Future<AniListEntrySaveResult> saveAniListEntryEdit({
   required BuildContext context,
-  required WidgetRef ref,
   required AniListAnimeListEntry entry,
   required AniListEntryEditDraft draft,
   bool showSuccessSnack = true,
 }) async {
+  // WidgetRef is tied to the calling widget's BuildContext and becomes unsafe
+  // as soon as that page is popped. The sync operation deliberately outlives
+  // the page, so capture the app-level container and coordinator before the
+  // first await and never touch [ref] afterward.
+  final ProviderContainer container = ProviderScope.containerOf(
+    context,
+    listen: false,
+  );
+  final TrackerSyncCoordinator sync = container.read(
+    trackerSyncCoordinatorProvider,
+  );
   final int? mediaId = entryAniListId(entry);
   final bool isManga = _isMangaEntry(entry);
   final bool isNewEntry = entry.id <= 0;
+  // A list entry cannot have no status. For a new item the editor's seed
+  // status is the local default; for an existing item choosing "Not chosen"
+  // means keep its current status rather than sending an ambiguous null.
+  final AniListListStatus effectiveStatus = draft.status ?? entry.status;
+  final int optimisticUpdatedAt =
+      DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000;
   final Set<UserMediaField> changedFields = <UserMediaField>{
-    if (isNewEntry || draft.status != entry.status) UserMediaField.status,
+    if (isNewEntry || effectiveStatus != entry.status) UserMediaField.status,
     if (isNewEntry || draft.progress != entry.progress) UserMediaField.progress,
     if (isNewEntry || (draft.score ?? 0) != (entry.score ?? 0))
       UserMediaField.score,
     if (isNewEntry || draft.notes != entry.notes) UserMediaField.notes,
     if (isNewEntry || draft.repeat != entry.repeat) UserMediaField.repeat,
   };
+  if (!isNewEntry && changedFields.isEmpty) {
+    if (showSuccessSnack && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.t('AniList entry saved'))),
+      );
+    }
+    return AniListEntrySaveResult.saved;
+  }
+  final AniListAnimeListEntry optimisticEntry = AniListAnimeListEntry(
+    id: entry.id,
+    status: effectiveStatus,
+    progress: draft.progress,
+    score: draft.score,
+    mediaItem: entry.mediaItem,
+    notes: draft.notes,
+    repeat: draft.repeat,
+    createdAt: entry.createdAt,
+    updatedAt: optimisticUpdatedAt,
+    startedAt: entry.startedAt,
+    completedAt: entry.completedAt,
+    nextEpisode: entry.nextEpisode,
+    airingAt: entry.airingAt,
+    avgScore: entry.avgScore,
+    format: entry.format,
+  );
 
   void applyLocalEdit() {
     if (isManga) {
-      invalidateAniListMangaLibraryProviders(ref.invalidate);
+      invalidateAniListMangaLibraryProviders(container.invalidate);
       return;
     }
+    // This is the canonical immediate UI mutation. It is provider-neutral, so
+    // MAL/Shikimori-only entries update without waiting for an AniList id or a
+    // network list refresh.
+    container
+        .read(trackerLibraryOptimisticMutationsProvider.notifier)
+        .upsert(optimisticEntry);
     if (mediaId != null) {
-      ref
+      container
           .read(anilistAnimeListProvider.notifier)
-          .updateEntry(
+          .replaceEntry(
             mediaId: mediaId,
-            progress: draft.progress,
-            status: draft.status,
-            score: draft.score,
-            notes: draft.notes,
-            repeat: draft.repeat,
+            entry: optimisticEntry,
+            publishToTrackerLibrary: false,
           );
-      invalidateAniListAnimePreviewLibraryProvider(ref.invalidate);
-    } else {
-      invalidateAniListAnimeLibraryProviders(ref.invalidate);
     }
-    ref.invalidate(trackerAnimeListProvider);
   }
 
-  try {
-    final result = await ref
-        .read(trackerSyncCoordinatorProvider)
-        .pushEntryEdit(
-          externalIds: entry.mediaItem.externalIds,
-          mediaId: entry.mediaItem.id,
-          mediaTitle: entry.mediaItem.title,
-          mediaItem: entry.mediaItem,
-          status: draft.status,
-          progress: draft.progress,
-          score: draft.score ?? 0,
-          notes: draft.notes,
-          repeat: draft.repeat,
-          fields: changedFields,
-          targets: isManga
-              ? const <TrackerSource>{TrackerSource.anilist}
-              : null,
-          providerEntryIds: <TrackerSource, int>{
-            if (mediaId != null) TrackerSource.anilist: entry.id,
-          },
-        );
-    applyLocalEdit();
-    final bool queued = result.pendingTargets.isNotEmpty;
-    if (showSuccessSnack && context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            context.t(queued ? 'AniList edit queued' : 'AniList entry saved'),
-          ),
-        ),
-      );
+  void rollBackLocalEdit() {
+    if (isManga) return;
+    final TrackerLibraryOptimisticController optimistic = container.read(
+      trackerLibraryOptimisticMutationsProvider.notifier,
+    );
+    if (isNewEntry) {
+      optimistic.discard(entry.mediaItem);
+    } else {
+      optimistic.upsert(entry);
     }
-    return queued
-        ? AniListEntrySaveResult.queued
-        : AniListEntrySaveResult.saved;
+    if (mediaId != null) {
+      final AniListLibraryNotifier notifier = container.read(
+        anilistAnimeListProvider.notifier,
+      );
+      if (isNewEntry) {
+        notifier.removeEntry(
+          mediaId,
+          mediaItem: entry.mediaItem,
+          publishToTrackerLibrary: false,
+        );
+      } else {
+        notifier.replaceEntry(
+          mediaId: mediaId,
+          entry: entry,
+          publishToTrackerLibrary: false,
+        );
+      }
+    }
+  }
+
+  // The library is local-first: move/status/score changes are visible in the
+  // same frame, while the durable journal delivers them to connected trackers.
+  applyLocalEdit();
+  late final SyncDispatchResult result;
+  try {
+    result = await sync.pushEntryEdit(
+      externalIds: entry.mediaItem.externalIds,
+      mediaId: entry.mediaItem.id,
+      mediaTitle: entry.mediaItem.title,
+      mediaItem: entry.mediaItem,
+      status: effectiveStatus,
+      progress: draft.progress,
+      score: draft.score ?? 0,
+      notes: draft.notes,
+      repeat: draft.repeat,
+      fields: changedFields,
+      targets: isManga ? const <TrackerSource>{TrackerSource.anilist} : null,
+      providerEntryIds: <TrackerSource, int>{
+        if (mediaId != null) TrackerSource.anilist: entry.id,
+      },
+    );
   } catch (error) {
+    rollBackLocalEdit();
     if (context.mounted) {
       ScaffoldMessenger.of(
         context,
@@ -457,60 +515,105 @@ Future<AniListEntrySaveResult> saveAniListEntryEdit({
     }
     return AniListEntrySaveResult.failed;
   }
+
+  container.invalidate(trackerLocalAnimeLibraryProvider);
+  final bool queued = result.pendingTargets.isNotEmpty;
+  if (showSuccessSnack && context.mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          context.t(queued ? 'AniList edit queued' : 'AniList entry saved'),
+        ),
+      ),
+    );
+  }
+  return queued ? AniListEntrySaveResult.queued : AniListEntrySaveResult.saved;
 }
 
 Future<void> deleteAniListEntry({
   required BuildContext context,
-  required WidgetRef ref,
   required AniListAnimeListEntry entry,
 }) async {
+  final ProviderContainer container = ProviderScope.containerOf(
+    context,
+    listen: false,
+  );
+  final TrackerSyncCoordinator sync = container.read(
+    trackerSyncCoordinatorProvider,
+  );
   final int? mediaId = entryAniListId(entry);
   final bool isManga = _isMangaEntry(entry);
 
-  try {
-    final result = await ref
-        .read(trackerSyncCoordinatorProvider)
-        .deleteEntry(
-          externalIds: entry.mediaItem.externalIds,
-          mediaId: entry.mediaItem.id,
-          mediaTitle: entry.mediaItem.title,
-          targets: isManga
-              ? const <TrackerSource>{TrackerSource.anilist}
-              : null,
-          providerEntryIds: <TrackerSource, int>{
-            if (mediaId != null) TrackerSource.anilist: entry.id,
-          },
-        );
+  void applyLocalDelete() {
     if (isManga) {
-      invalidateAniListMangaLibraryProviders(ref.invalidate);
-    } else {
-      if (mediaId != null) {
-        ref.read(anilistAnimeListProvider.notifier).removeEntry(mediaId);
-        invalidateAniListAnimePreviewLibraryProvider(ref.invalidate);
-      } else {
-        invalidateAniListAnimeLibraryProviders(ref.invalidate);
-      }
-      ref.invalidate(trackerAnimeListProvider);
+      invalidateAniListMangaLibraryProviders(container.invalidate);
+      return;
     }
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            context.t(
-              result.pendingTargets.isEmpty
-                  ? 'Removed from AniList'
-                  : 'AniList removal queued',
-            ),
-          ),
-        ),
-      );
+    container
+        .read(trackerLibraryOptimisticMutationsProvider.notifier)
+        .remove(entry.mediaItem);
+    if (mediaId != null) {
+      container
+          .read(anilistAnimeListProvider.notifier)
+          .removeEntry(
+            mediaId,
+            mediaItem: entry.mediaItem,
+            publishToTrackerLibrary: false,
+          );
     }
+  }
+
+  void rollBackLocalDelete() {
+    if (isManga) return;
+    container
+        .read(trackerLibraryOptimisticMutationsProvider.notifier)
+        .upsert(entry);
+    if (mediaId != null) {
+      container
+          .read(anilistAnimeListProvider.notifier)
+          .replaceEntry(
+            mediaId: mediaId,
+            entry: entry,
+            publishToTrackerLibrary: false,
+          );
+    }
+  }
+
+  applyLocalDelete();
+  late final SyncDispatchResult result;
+  try {
+    result = await sync.deleteEntry(
+      externalIds: entry.mediaItem.externalIds,
+      mediaId: entry.mediaItem.id,
+      mediaTitle: entry.mediaItem.title,
+      targets: isManga ? const <TrackerSource>{TrackerSource.anilist} : null,
+      providerEntryIds: <TrackerSource, int>{
+        if (mediaId != null) TrackerSource.anilist: entry.id,
+      },
+    );
   } catch (error) {
+    rollBackLocalDelete();
     if (context.mounted) {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(aniListEditFailureMessage(error))));
     }
+    return;
+  }
+
+  container.invalidate(trackerLocalAnimeLibraryProvider);
+  if (context.mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          context.t(
+            result.pendingTargets.isEmpty
+                ? 'Removed from AniList'
+                : 'AniList removal queued',
+          ),
+        ),
+      ),
+    );
   }
 }
 

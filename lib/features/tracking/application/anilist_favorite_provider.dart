@@ -6,7 +6,6 @@ import '../../../shared/models/media_item.dart';
 import '../../settings/application/settings_state.dart';
 import '../data/anilist_api_client.dart';
 import '../domain/tracking_sync_models.dart';
-import 'anilist_library_provider.dart';
 import 'tracker_sync_coordinator.dart';
 
 final anilistFavoriteProvider =
@@ -67,12 +66,9 @@ class AniListFavoriteController extends Notifier<Map<String, bool>> {
       // Keep the local desired value while an offline AniList delivery is
       // pending. The adapter checks server state before toggling, so replay is
       // idempotent even if the first response was lost.
-      final bool isManga = isAniListMangaItem(item);
-      if (isManga) {
-        invalidateAniListMangaLibraryProviders(ref.invalidate);
-      } else {
-        invalidateAniListAnimeLibraryProviders(ref.invalidate);
-      }
+      // Favorite is independent from list membership. Re-fetching every
+      // Library folder here discarded a perfectly valid local screen and made
+      // a heart toggle look delayed until the network list returned.
       final int? mediaId = aniListMediaIdOf(item);
       if (mediaId != null) {
         ref.invalidate(anilistMediaFavoriteStatusProvider(mediaId));

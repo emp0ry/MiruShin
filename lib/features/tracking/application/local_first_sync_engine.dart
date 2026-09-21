@@ -296,14 +296,16 @@ class LocalFirstSyncEngine {
         if (adapter == null) continue;
         try {
           await adapter.applyMutation(entry);
-          entry = entry.deliveredTo(target);
+          entry = entry.deliveredTo(
+            target,
+            awaitRemoteConfirmation:
+                entry.patch.delete || entry.patch.touchesLibraryState,
+          );
           journal[index] = entry;
           await _recordSuccessLocked(target);
           await _store.saveJournal(
             journal
-                .where(
-                  (SyncJournalEntry value) => value.pendingTargets.isNotEmpty,
-                )
+                .where((SyncJournalEntry value) => !value.isSettled)
                 .toList(),
           );
         } on UnresolvedProviderIdentityException {
@@ -317,33 +319,37 @@ class LocalFirstSyncEngine {
       }
     }
     journal = journal
-        .where((SyncJournalEntry entry) => entry.pendingTargets.isNotEmpty)
+        .where((SyncJournalEntry entry) => !entry.isSettled)
         .toList();
     await _store.saveJournal(journal);
   }
 
   Future<LocalFirstLibraryResult> refreshAnimeList({
     required List<TrackerSource> providerOrder,
+    TrackerSource? cacheSource,
   }) async {
     await flush();
     final LocalFirstLibraryResult result = await _serial(() async {
       List<UserMediaState> local = await _store.loadStates();
-      final List<SyncJournalEntry> journal = await _store.loadJournal();
+      List<SyncJournalEntry> journal = await _store.loadJournal();
       for (final TrackerSource source in providerOrder) {
         final TrackerProviderAdapter? adapter = _adapters[source];
         if (adapter == null) continue;
         try {
           final List<UserMediaState> remote = await adapter.fetchAnimeList();
+          journal = _confirmRemoteSnapshot(journal, remote, source);
+          await _store.saveJournal(journal);
           local = _mergeRemote(
             local,
             remote,
             journal,
+            incomingProviderIsAuthoritative: true,
             incomingAiringIsAuthoritative: source == TrackerSource.anilist,
           );
           await _store.saveStates(local);
           await _recordSuccessLocked(source);
           return LocalFirstLibraryResult(
-            states: local,
+            states: _statesForProviderSnapshot(local, remote, journal, source),
             remoteSource: source,
             fromCache: false,
           );
@@ -353,7 +359,14 @@ class LocalFirstSyncEngine {
           await _recordFailureLocked(source, error);
         }
       }
-      return LocalFirstLibraryResult(states: local, fromCache: true);
+      final TrackerSource? selectedCacheSource =
+          cacheSource ?? (providerOrder.isEmpty ? null : providerOrder.first);
+      return LocalFirstLibraryResult(
+        states: selectedCacheSource == null
+            ? const <UserMediaState>[]
+            : _statesForCachedProvider(local, journal, selectedCacheSource),
+        fromCache: true,
+      );
     });
     // A successful refresh can discover an id that was missing while the
     // mutation was recorded. Replay once more after persisting that mapping.
@@ -363,19 +376,34 @@ class LocalFirstSyncEngine {
 
   Future<List<UserMediaState>> ingestRemoteStates(
     List<UserMediaState> remote, {
+    TrackerSource? snapshotSource,
+    bool confirmRemoteMutations = true,
+    bool incomingProviderIsAuthoritative = false,
     bool incomingAiringIsAuthoritative = false,
   }) {
     return _serial<List<UserMediaState>>(() async {
       final List<UserMediaState> local = await _store.loadStates();
-      final List<SyncJournalEntry> journal = await _store.loadJournal();
+      List<SyncJournalEntry> journal = await _store.loadJournal();
+      // A status-filtered preview is not an authoritative provider snapshot.
+      // It may contain a just-created Watching entry while the already-loaded
+      // full Library is still stale. Settling the journal from that preview
+      // removes the local overlay too early and makes the entry disappear
+      // until the user manually reloads the full list.
+      if (snapshotSource != null && confirmRemoteMutations) {
+        journal = _confirmRemoteSnapshot(journal, remote, snapshotSource);
+        await _store.saveJournal(journal);
+      }
       final List<UserMediaState> merged = _mergeRemote(
         local,
         remote,
         journal,
+        incomingProviderIsAuthoritative: incomingProviderIsAuthoritative,
         incomingAiringIsAuthoritative: incomingAiringIsAuthoritative,
       );
       await _store.saveStates(merged);
-      return merged;
+      return snapshotSource == null
+          ? merged
+          : _statesForProviderSnapshot(merged, remote, journal, snapshotSource);
     });
   }
 
@@ -394,6 +422,7 @@ class LocalFirstSyncEngine {
     List<UserMediaState> local,
     List<UserMediaState> remote,
     List<SyncJournalEntry> journal, {
+    bool incomingProviderIsAuthoritative = false,
     bool incomingAiringIsAuthoritative = false,
   }) {
     final List<UserMediaState> result = <UserMediaState>[...local];
@@ -401,13 +430,20 @@ class LocalFirstSyncEngine {
       final int index = result.indexWhere(
         (UserMediaState state) => state.identity.matches(incoming.identity),
       );
-      final UserMediaPatch? pending = _pendingPatch(journal, incoming.identity);
+      final SyncJournalEntry? mutation = _pendingMutation(
+        journal,
+        incoming.identity,
+        incoming.source,
+      );
+      final UserMediaPatch? pending = mutation?.patch;
       if (index < 0) {
         if (pending?.delete == true) {
           continue;
         }
         result.add(
-          pending == null ? incoming : incoming.apply(pending, _now().toUtc()),
+          pending == null
+              ? incoming
+              : incoming.apply(pending, mutation!.updatedAt),
         );
         continue;
       }
@@ -420,6 +456,8 @@ class LocalFirstSyncEngine {
         incoming: incoming,
         primary: primary,
         pendingLocal: pending,
+        pendingLocalUpdatedAt: mutation?.updatedAt,
+        incomingProviderIsAuthoritative: incomingProviderIsAuthoritative,
         incomingAiringIsAuthoritative:
             incomingAiringIsAuthoritative &&
             incoming.source == TrackerSource.anilist,
@@ -428,12 +466,128 @@ class LocalFirstSyncEngine {
     return result;
   }
 
-  UserMediaPatch? _pendingPatch(
+  /// A provider page is a view of that provider's list, not the union of every
+  /// connected account. The canonical store intentionally keeps identities and
+  /// raw snapshots from all trackers, but returning that entire store here made
+  /// MAL/Shikimori-only titles appear as seemingly random AniList additions.
+  List<UserMediaState> _statesForProviderSnapshot(
+    List<UserMediaState> merged,
+    List<UserMediaState> remote,
+    List<SyncJournalEntry> journal,
+    TrackerSource source,
+  ) {
+    bool belongsToSnapshot(UserMediaState state) {
+      if (remote.any(
+        (UserMediaState item) => item.identity.matches(state.identity),
+      )) {
+        return true;
+      }
+      for (final SyncJournalEntry mutation in journal) {
+        if (!mutation.identity.matches(state.identity) ||
+            !mutation.tracks(source)) {
+          continue;
+        }
+        return !mutation.patch.delete;
+      }
+      return false;
+    }
+
+    return merged.where(belongsToSnapshot).toList(growable: false);
+  }
+
+  List<UserMediaState> _statesForCachedProvider(
+    List<UserMediaState> states,
+    List<SyncJournalEntry> journal,
+    TrackerSource source,
+  ) {
+    return states
+        .where((UserMediaState state) {
+          if (state.providerStates.containsKey(source)) return true;
+          return journal.any(
+            (SyncJournalEntry mutation) =>
+                mutation.identity.matches(state.identity) &&
+                mutation.tracks(source) &&
+                !mutation.patch.delete,
+          );
+        })
+        .toList(growable: false);
+  }
+
+  /// Successful creates and deletes remain in the durable journal until the
+  /// provider's list endpoint confirms them. Mutation endpoints and list
+  /// endpoints are not always read-after-write consistent; dropping the entry
+  /// immediately made a newly added anime disappear until manual refresh.
+  List<SyncJournalEntry> _confirmRemoteSnapshot(
+    List<SyncJournalEntry> journal,
+    List<UserMediaState> remote,
+    TrackerSource source,
+  ) {
+    return journal
+        .map((SyncJournalEntry mutation) {
+          if (!mutation.awaitingRemoteTargets.contains(source)) {
+            return mutation;
+          }
+          UserMediaState? matching;
+          for (final UserMediaState state in remote) {
+            if (state.identity.matches(mutation.identity)) {
+              matching = state;
+              break;
+            }
+          }
+          final bool confirmed = mutation.patch.delete
+              ? matching == null
+              : matching != null &&
+                    _providerSnapshotConfirms(mutation.patch, matching, source);
+          return confirmed ? mutation.confirmedBy(source) : mutation;
+        })
+        .where((SyncJournalEntry mutation) => !mutation.isSettled)
+        .toList(growable: false);
+  }
+
+  bool _providerSnapshotConfirms(
+    UserMediaPatch patch,
+    UserMediaState remote,
+    TrackerSource source,
+  ) {
+    if (patch.touches(UserMediaField.status) &&
+        patch.status != null &&
+        remote.status != patch.status) {
+      return false;
+    }
+    if (patch.touches(UserMediaField.progress) &&
+        patch.progress != null &&
+        remote.progress != patch.progress) {
+      return false;
+    }
+    if (patch.touches(UserMediaField.score)) {
+      final double remoteScore = normalizeCanonicalScore(remote.score) ?? 0;
+      final double desiredScore = normalizeCanonicalScore(patch.score) ?? 0;
+      if ((remoteScore - desiredScore).abs() > 0.001) return false;
+    }
+    // MAL and Shikimori adapters do not expose notes/repeat. Those fields are
+    // still canonical locally, but only AniList can confirm their delivery.
+    if (source == TrackerSource.anilist) {
+      if (patch.touches(UserMediaField.notes) &&
+          remote.notes != (patch.notes ?? '')) {
+        return false;
+      }
+      if (patch.touches(UserMediaField.repeat) &&
+          remote.repeat != (patch.repeat ?? 0)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  SyncJournalEntry? _pendingMutation(
     List<SyncJournalEntry> journal,
     MediaIdentity identity,
+    TrackerSource source,
   ) {
     for (final SyncJournalEntry entry in journal.reversed) {
-      if (entry.identity.matches(identity)) return entry.patch;
+      if (entry.identity.matches(identity) && entry.tracks(source)) {
+        return entry;
+      }
     }
     return null;
   }

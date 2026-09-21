@@ -88,20 +88,13 @@ class _AniListFavoriteButtonState extends ConsumerState<AniListFavoriteButton> {
                 if (mounted) setState(() => _busy = false);
               }
             },
-      icon: _busy
-          ? SizedBox.square(
-              dimension: 18,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: iconColor,
-              ),
-            )
-          : Icon(
-              favourite
-                  ? Icons.favorite_rounded
-                  : Icons.favorite_border_rounded,
-              color: iconColor,
-            ),
+      // The local desired state is applied before network delivery. Keep that
+      // heart visible while the durable journal syncs instead of hiding the
+      // successful optimistic change behind a long network spinner.
+      icon: Icon(
+        favourite ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+        color: iconColor,
+      ),
     );
   }
 }

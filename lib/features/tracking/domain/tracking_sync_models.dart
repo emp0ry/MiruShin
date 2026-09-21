@@ -262,8 +262,11 @@ class UserMediaState {
         ? patch.status ?? status
         : status;
     final int nextProgress = patch.touches(UserMediaField.progress)
-        ? (patch.progress ?? progress).clamp(0, 0x7fffffff)
-        : progress;
+        ? canonicalEpisodeProgress(
+            patch.progress ?? progress,
+            mediaItem.episodeCount,
+          )
+        : canonicalEpisodeProgress(progress, mediaItem.episodeCount);
     final bool hasStarted =
         nextProgress > 0 ||
         nextStatus == AniListListStatus.current ||
@@ -526,6 +529,7 @@ class SyncJournalEntry {
     required this.identity,
     required this.patch,
     required this.pendingTargets,
+    this.awaitingRemoteTargets = const <TrackerSource>{},
     required this.createdAt,
     required this.updatedAt,
     this.mediaTitle,
@@ -552,6 +556,10 @@ class SyncJournalEntry {
       pendingTargets: ((json['pendingTargets'] as List?) ?? const [])
           .map((Object? value) => TrackerSource.fromName('$value'))
           .toSet(),
+      awaitingRemoteTargets:
+          ((json['awaitingRemoteTargets'] as List?) ?? const [])
+              .map((Object? value) => TrackerSource.fromName('$value'))
+              .toSet(),
       createdAt:
           DateTime.tryParse('${json['createdAt'] ?? ''}') ?? DateTime(1970),
       updatedAt:
@@ -564,6 +572,7 @@ class SyncJournalEntry {
   final MediaIdentity identity;
   final UserMediaPatch patch;
   final Set<TrackerSource> pendingTargets;
+  final Set<TrackerSource> awaitingRemoteTargets;
   final DateTime createdAt;
   final DateTime updatedAt;
   final String? mediaTitle;
@@ -577,6 +586,10 @@ class SyncJournalEntry {
         ...pendingTargets,
         ...newer.pendingTargets,
       },
+      awaitingRemoteTargets: <TrackerSource>{
+        ...awaitingRemoteTargets,
+        ...newer.awaitingRemoteTargets,
+      }..removeAll(newer.pendingTargets),
       createdAt: createdAt.isBefore(newer.createdAt)
           ? createdAt
           : newer.createdAt,
@@ -595,21 +608,47 @@ class SyncJournalEntry {
     identity: next,
     patch: patch,
     pendingTargets: pendingTargets,
+    awaitingRemoteTargets: awaitingRemoteTargets,
     createdAt: createdAt,
     updatedAt: updatedAt,
     mediaTitle: mediaTitle,
     providerEntryIds: providerEntryIds,
   );
 
-  SyncJournalEntry deliveredTo(TrackerSource provider) => SyncJournalEntry(
+  SyncJournalEntry deliveredTo(
+    TrackerSource provider, {
+    bool awaitRemoteConfirmation = false,
+  }) => SyncJournalEntry(
     identity: identity,
     patch: patch,
     pendingTargets: <TrackerSource>{...pendingTargets}..remove(provider),
+    awaitingRemoteTargets: <TrackerSource>{
+      ...awaitingRemoteTargets,
+      if (awaitRemoteConfirmation) provider,
+    },
     createdAt: createdAt,
     updatedAt: updatedAt,
     mediaTitle: mediaTitle,
     providerEntryIds: providerEntryIds,
   );
+
+  SyncJournalEntry confirmedBy(TrackerSource provider) => SyncJournalEntry(
+    identity: identity,
+    patch: patch,
+    pendingTargets: pendingTargets,
+    awaitingRemoteTargets: <TrackerSource>{...awaitingRemoteTargets}
+      ..remove(provider),
+    createdAt: createdAt,
+    updatedAt: updatedAt,
+    mediaTitle: mediaTitle,
+    providerEntryIds: providerEntryIds,
+  );
+
+  bool tracks(TrackerSource provider) =>
+      pendingTargets.contains(provider) ||
+      awaitingRemoteTargets.contains(provider);
+
+  bool get isSettled => pendingTargets.isEmpty && awaitingRemoteTargets.isEmpty;
 
   Map<String, dynamic> toJson() => <String, dynamic>{
     'identity': identity.toJson(),
@@ -617,6 +656,10 @@ class SyncJournalEntry {
     'pendingTargets': pendingTargets
         .map((TrackerSource source) => source.name)
         .toList(),
+    if (awaitingRemoteTargets.isNotEmpty)
+      'awaitingRemoteTargets': awaitingRemoteTargets
+          .map((TrackerSource source) => source.name)
+          .toList(),
     'createdAt': createdAt.toIso8601String(),
     'updatedAt': updatedAt.toIso8601String(),
     if (mediaTitle != null) 'mediaTitle': mediaTitle,
@@ -719,10 +762,17 @@ class UserMediaConflictResolver {
     required UserMediaState incoming,
     required TrackerSource primary,
     UserMediaPatch? pendingLocal,
+    DateTime? pendingLocalUpdatedAt,
+    bool incomingProviderIsAuthoritative = false,
     bool incomingAiringIsAuthoritative = false,
   }) {
     final MediaIdentity identity = existing.identity.merge(incoming.identity);
-    final bool incomingWins = _incomingWins(existing, incoming, primary);
+    final bool incomingWins = _incomingWins(
+      existing,
+      incoming,
+      primary,
+      incomingProviderIsAuthoritative: incomingProviderIsAuthoritative,
+    );
     final UserMediaState winner = incomingWins ? incoming : existing;
     final UserMediaState fallback = incomingWins ? existing : incoming;
     final _AiringSchedule airing = _mergeAiringSchedule(
@@ -762,7 +812,13 @@ class UserMediaConflictResolver {
       },
     );
     if (pendingLocal != null && !pendingLocal.delete) {
-      result = result.apply(pendingLocal, DateTime.now().toUtc());
+      // Replaying a durable optimistic mutation must be idempotent. Giving it
+      // a fresh wall-clock timestamp on every provider refresh used to make
+      // untouched entries jump to the top of an updated-newest Library.
+      result = result.apply(
+        pendingLocal,
+        pendingLocalUpdatedAt ?? existing.updatedAt,
+      );
     }
     return result;
   }
@@ -770,8 +826,17 @@ class UserMediaConflictResolver {
   bool _incomingWins(
     UserMediaState existing,
     UserMediaState incoming,
-    TrackerSource primary,
-  ) {
+    TrackerSource primary, {
+    required bool incomingProviderIsAuthoritative,
+  }) {
+    if (incomingProviderIsAuthoritative) {
+      // A live snapshot can repair a canonical state whose timestamp was
+      // previously polluted by an optimistic replay. A fallback provider must
+      // still never replace a primary provider's canonical fields.
+      if (incoming.source == primary) return true;
+      if (existing.source == incoming.source) return true;
+      if (existing.source == primary) return false;
+    }
     if (incoming.source != existing.source) {
       if (incoming.source == primary) return true;
       if (existing.source == primary) return false;
@@ -876,13 +941,25 @@ List<AniListAnimeListFolder> foldersFromUserMediaStates(
   for (final UserMediaState state in states) {
     final ProviderUserMediaState? sourceState =
         state.providerStates[state.source];
+    final int displayProgress = canonicalEpisodeProgress(
+      state.progress,
+      state.mediaItem.episodeCount,
+    );
+    final int? total = state.mediaItem.episodeCount;
+    final AniListListStatus displayStatus =
+        state.status == AniListListStatus.current &&
+            total != null &&
+            total > 0 &&
+            displayProgress >= total
+        ? AniListListStatus.completed
+        : state.status;
     grouped
-        .putIfAbsent(state.status, () => <AniListAnimeListEntry>[])
+        .putIfAbsent(displayStatus, () => <AniListAnimeListEntry>[])
         .add(
           AniListAnimeListEntry(
             id: sourceState?.entryId ?? state.identity.idFor(state.source) ?? 0,
-            status: state.status,
-            progress: state.progress,
+            status: displayStatus,
+            progress: displayProgress,
             score: state.score,
             mediaItem: state.mediaItem.copyWith(
               externalIds: state.identity.mergeExternalIds(
@@ -916,6 +993,16 @@ List<AniListAnimeListFolder> foldersFromUserMediaStates(
 double? normalizeCanonicalScore(double? score) {
   if (score == null) return null;
   return score.clamp(0, 10).toDouble();
+}
+
+/// AniList/MAL/Shikimori progress can never exceed a known canonical episode
+/// total. Addons may expose recaps, specials, or other extra numbered videos;
+/// those are still locally watchable but must not produce values like 13/12 in
+/// a tracker account.
+int canonicalEpisodeProgress(int progress, int? total) {
+  final int nonNegative = progress.clamp(0, 0x7fffffff).toInt();
+  if (total == null || total <= 0) return nonNegative;
+  return nonNegative.clamp(0, total).toInt();
 }
 
 int integerProviderScore(double score) => score.round().clamp(0, 10);

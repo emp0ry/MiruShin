@@ -16,6 +16,7 @@ import '../../../shared/models/media_item.dart';
 import '../../profile/application/anilist_user_settings_provider.dart';
 import '../../tracking/application/anilist_favorite_provider.dart';
 import '../../tracking/application/anilist_library_provider.dart';
+import '../../tracking/application/tracker_library_provider.dart';
 import '../../tracking/domain/tracking_sync_models.dart';
 import '../../tracking/presentation/anilist_entry_editor.dart';
 import '../application/watch_order_provider.dart';
@@ -74,17 +75,49 @@ class _WatchOrderSectionState extends ConsumerState<WatchOrderSection> {
             .where((entry) => !_mainOnly || entry.isMainline)
             .toList();
         final progress = <String, AniListAnimeListEntry>{};
-        for (final provider in [
+        final AsyncValue<List<AniListAnimeListFolder>> previewAsync = ref.watch(
           anilistAnimePreviewListProvider,
+        );
+        final AsyncValue<List<AniListAnimeListFolder>> fullAsync = ref.watch(
           anilistAnimeListProvider,
-        ]) {
-          final folders = ref
-              .watch(provider)
-              .maybeWhen(
-                skipLoadingOnReload: true,
-                data: (folders) => folders,
-                orElse: () => const <AniListAnimeListFolder>[],
-              );
+        );
+        final TrackerLocalAnimeLibrary? local = ref
+            .watch(trackerLocalAnimeLibraryProvider)
+            .maybeWhen(
+              skipLoadingOnReload: true,
+              data: (TrackerLocalAnimeLibrary value) => value,
+              orElse: () => null,
+            );
+        final List<TrackerLibraryOptimisticMutation> optimistic = ref.watch(
+          trackerLibraryOptimisticMutationsProvider,
+        );
+        for (final List<AniListAnimeListFolder> folders
+            in <List<AniListAnimeListFolder>>[
+              effectiveTrackerAnimeLibrary(
+                providerFolders: previewAsync.maybeWhen(
+                  skipLoadingOnReload: true,
+                  data: (List<AniListAnimeListFolder> value) => value,
+                  orElse: () => const <AniListAnimeListFolder>[],
+                ),
+                local: local,
+                optimistic: optimistic,
+                useLocalFallback: !previewAsync.hasValue,
+                statuses: const <AniListListStatus>{
+                  AniListListStatus.current,
+                  AniListListStatus.repeating,
+                },
+              ),
+              effectiveTrackerAnimeLibrary(
+                providerFolders: fullAsync.maybeWhen(
+                  skipLoadingOnReload: true,
+                  data: (List<AniListAnimeListFolder> value) => value,
+                  orElse: () => const <AniListAnimeListFolder>[],
+                ),
+                local: local,
+                optimistic: optimistic,
+                useLocalFallback: !fullAsync.hasValue,
+              ),
+            ]) {
           for (final folder in folders) {
             for (final entry in folder.entries) {
               final int? aniListId = int.tryParse(

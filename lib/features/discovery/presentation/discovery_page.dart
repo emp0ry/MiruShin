@@ -29,6 +29,7 @@ import '../../profile/application/anilist_profile_provider.dart';
 import '../../profile/application/anilist_user_settings_provider.dart';
 import '../../settings/application/settings_state.dart';
 import '../../tracking/application/anilist_library_provider.dart';
+import '../../tracking/application/tracker_library_provider.dart';
 import '../../tracking/data/anilist_api_client.dart';
 import '../../tracking/presentation/anilist_entry_editor.dart';
 
@@ -698,25 +699,33 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
         : const AsyncValue<List<AniListAnimeListFolder>>.data(
             <AniListAnimeListFolder>[],
           );
+    List<AniListAnimeListFolder> badgeFolders = badgeFoldersAsync.maybeWhen(
+      skipLoadingOnReload: true,
+      data: (List<AniListAnimeListFolder> folders) => folders,
+      orElse: () => const <AniListAnimeListFolder>[],
+    );
+    if (mode == CatalogMode.anilist &&
+        _selectedAniListKind == _AniListDiscoveryKind.anime) {
+      final TrackerLocalAnimeLibrary? local = ref
+          .watch(trackerLocalAnimeLibraryProvider)
+          .maybeWhen(
+            skipLoadingOnReload: true,
+            data: (TrackerLocalAnimeLibrary value) => value,
+            orElse: () => null,
+          );
+      badgeFolders = effectiveTrackerAnimeLibrary(
+        providerFolders: badgeFolders,
+        local: local,
+        optimistic: ref.watch(trackerLibraryOptimisticMutationsProvider),
+        useLocalFallback: !badgeFoldersAsync.hasValue,
+      );
+    }
     final Map<String, String> statusBadges = mode == CatalogMode.anilist
-        ? _anilistStatusBadges(
-            badgeFoldersAsync.maybeWhen(
-              skipLoadingOnReload: true,
-              data: (List<AniListAnimeListFolder> folders) => folders,
-              orElse: () => const <AniListAnimeListFolder>[],
-            ),
-            context,
-          )
+        ? _anilistStatusBadges(badgeFolders, context)
         : const <String, String>{};
     final Map<String, AniListAnimeListEntry> anilistEntryMap =
         mode == CatalogMode.anilist
-        ? _anilistEntryMap(
-            badgeFoldersAsync.maybeWhen(
-              skipLoadingOnReload: true,
-              data: (List<AniListAnimeListFolder> folders) => folders,
-              orElse: () => const <AniListAnimeListFolder>[],
-            ),
-          )
+        ? _anilistEntryMap(badgeFolders)
         : const <String, AniListAnimeListEntry>{};
     final bool hasAdvancedFilters = mode == CatalogMode.anilist
         ? _advancedFilter.hasAnyFilter
@@ -1003,7 +1012,7 @@ Future<void> _openAniListEntryEditor(
     context,
     ref: ref,
     entry: editableEntry,
-    status: entry?.status,
+    status: editableEntry.status,
     progress: editableEntry.progress,
     score: editableEntry.score,
     notes: editableEntry.notes,
@@ -1013,12 +1022,11 @@ Future<void> _openAniListEntryEditor(
   );
   if (draft == null || !context.mounted) return;
   if (draft.remove && entry != null) {
-    await deleteAniListEntry(context: context, ref: ref, entry: entry);
+    await deleteAniListEntry(context: context, entry: entry);
     return;
   }
   await saveAniListEntryEdit(
     context: context,
-    ref: ref,
     entry: editableEntry,
     draft: draft,
   );

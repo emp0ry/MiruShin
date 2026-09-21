@@ -31,6 +31,7 @@ import '../../settings/application/settings_state.dart';
 import '../../tracking/application/anilist_library_provider.dart';
 import '../../tracking/application/tracker_library_provider.dart';
 import '../../tracking/domain/tracker_models.dart';
+import '../../tracking/domain/tracking_sync_models.dart';
 import '../../tracking/presentation/anilist_entry_editor.dart';
 import '../../tracking/presentation/anilist_login_flow.dart';
 import '../application/local_library_provider.dart';
@@ -51,6 +52,11 @@ const List<AniListListStatus> _kStatusOrder = <AniListListStatus>[
   AniListListStatus.dropped,
   AniListListStatus.repeating,
 ];
+
+const Set<AniListListStatus> _kPreviewStatuses = <AniListListStatus>{
+  AniListListStatus.current,
+  AniListListStatus.repeating,
+};
 
 List<AniListAnimeListFolder> _orderedFolders(List<AniListAnimeListFolder> src) {
   final Map<AniListListStatus, AniListAnimeListFolder> byStatus =
@@ -199,56 +205,55 @@ class _LibraryPageState extends ConsumerState<LibraryPage>
         settings.hasMalSession ||
         settings.hasShikimoriSession;
     final bool mangaConnected = settings.hasAniListSession;
+    // Do not wrap the tab views in a NestedScrollView. Its shared inner
+    // controller is attached to every kept-alive folder view; desktop's
+    // interactive Scrollbar requires exactly one ScrollPosition per
+    // controller and otherwise throws as soon as any folder is scrolled.
+    // The library header is static, so independent folder scroll views are the
+    // correct ownership model here and retain native desktop scrollbars.
     return Padding(
       padding: const EdgeInsets.only(top: AppSpacing.lg),
-      child: NestedScrollView(
+      child: Column(
         key: const ValueKey<String>('library-page-scroll-view'),
-        headerSliverBuilder: (BuildContext context, bool innerBoxIsScrolled) =>
-            const <Widget>[
-              SliverToBoxAdapter(
-                child: CatalogOfflineBanner(horizontalInset: AppSpacing.lg),
-              ),
-            ],
-        body: Column(
-          children: <Widget>[
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                AppSpacing.lg,
-                0,
-                AppSpacing.lg,
-                AppSpacing.sm,
-              ),
-              child: TabBar(
-                controller: _mainTab,
-                tabs: <Widget>[
-                  Tab(text: context.t('Anime')),
-                  Tab(text: context.t('Manga')),
-                ],
-              ),
+        children: <Widget>[
+          const CatalogOfflineBanner(horizontalInset: AppSpacing.lg),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.lg,
+              0,
+              AppSpacing.lg,
+              AppSpacing.sm,
             ),
-            Expanded(
-              child: TabBarView(
-                controller: _mainTab,
-                children: <Widget>[
-                  _AniListDataTab(
-                    connected: animeConnected,
-                    mediaType: 'ANIME',
-                    defaultPage: settings.anilistLibraryDefaultPage,
-                    emptyMessage:
-                        'Add anime to your AniList account to see them here.',
-                  ),
-                  _AniListDataTab(
-                    connected: mangaConnected,
-                    mediaType: 'MANGA',
-                    defaultPage: settings.anilistLibraryDefaultPage,
-                    emptyMessage:
-                        'Add manga to your AniList account to see them here.',
-                  ),
-                ],
-              ),
+            child: TabBar(
+              controller: _mainTab,
+              tabs: <Widget>[
+                Tab(text: context.t('Anime')),
+                Tab(text: context.t('Manga')),
+              ],
             ),
-          ],
-        ),
+          ),
+          Expanded(
+            child: TabBarView(
+              controller: _mainTab,
+              children: <Widget>[
+                _AniListDataTab(
+                  connected: animeConnected,
+                  mediaType: 'ANIME',
+                  defaultPage: settings.anilistLibraryDefaultPage,
+                  emptyMessage:
+                      'Add anime to your AniList account to see them here.',
+                ),
+                _AniListDataTab(
+                  connected: mangaConnected,
+                  mediaType: 'MANGA',
+                  defaultPage: settings.anilistLibraryDefaultPage,
+                  emptyMessage:
+                      'Add manga to your AniList account to see them here.',
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -376,13 +381,6 @@ class _AniListDataTabState extends ConsumerState<_AniListDataTab>
         : useTrackerSource
         ? ref.watch(trackerAnimeListProvider)
         : ref.watch(anilistAnimePreviewListProvider);
-    final List<AniListAnimeListFolder> previewSourceFolders =
-        previewLists.maybeWhen(
-          skipLoadingOnReload: true,
-          data: (List<AniListAnimeListFolder> value) => value,
-          orElse: () => const <AniListAnimeListFolder>[],
-        ) ??
-        const <AniListAnimeListFolder>[];
     final List<AniListAnimeListFolder> previewFolders = previewLists.maybeWhen(
       skipLoadingOnReload: true,
       data: (List<AniListAnimeListFolder> value) => _orderedFolders(value),
@@ -396,13 +394,6 @@ class _AniListDataTabState extends ConsumerState<_AniListDataTab>
         : useTrackerSource
         ? ref.watch(trackerAnimeListProvider)
         : ref.watch(anilistAnimeListProvider);
-    final List<AniListAnimeListFolder> fullSourceFolders =
-        fullLists.maybeWhen(
-          skipLoadingOnReload: true,
-          data: (List<AniListAnimeListFolder> value) => value,
-          orElse: () => const <AniListAnimeListFolder>[],
-        ) ??
-        const <AniListAnimeListFolder>[];
     final List<AniListAnimeListFolder> fullFolders =
         fullLists.maybeWhen(
           skipLoadingOnReload: true,
@@ -428,20 +419,53 @@ class _AniListDataTabState extends ConsumerState<_AniListDataTab>
           )
         : null;
 
-    final List<AniListAnimeListFolder> previewDisplayFolders =
+    final List<AniListAnimeListFolder> basePreviewDisplayFolders =
         previewRussianLists?.maybeWhen(
           skipLoadingOnReload: true,
           data: (List<AniListAnimeListFolder> value) => _orderedFolders(value),
           orElse: () => previewFolders,
         ) ??
         previewFolders;
-    final List<AniListAnimeListFolder> fullDisplayFolders =
+    final List<AniListAnimeListFolder> baseFullDisplayFolders =
         fullRussianLists?.maybeWhen(
           skipLoadingOnReload: true,
           data: (List<AniListAnimeListFolder> value) => _orderedFolders(value),
           orElse: () => fullFolders,
         ) ??
         fullFolders;
+    final TrackerLocalAnimeLibrary? localAnimeLibrary =
+        widget.mediaType == 'MANGA'
+        ? null
+        : ref
+              .watch(trackerLocalAnimeLibraryProvider)
+              .maybeWhen(
+                skipLoadingOnReload: true,
+                data: (TrackerLocalAnimeLibrary value) => value,
+                orElse: () => null,
+              );
+    final List<TrackerLibraryOptimisticMutation> optimisticMutations =
+        widget.mediaType == 'MANGA'
+        ? const <TrackerLibraryOptimisticMutation>[]
+        : ref.watch(trackerLibraryOptimisticMutationsProvider);
+    final List<AniListAnimeListFolder> previewDisplayFolders = _orderedFolders(
+      effectiveTrackerAnimeLibrary(
+        providerFolders: basePreviewDisplayFolders,
+        local: localAnimeLibrary,
+        optimistic: optimisticMutations,
+        useLocalFallback: !previewLists.hasValue,
+        statuses: _kPreviewStatuses,
+      ),
+    );
+    final List<AniListAnimeListFolder> fullDisplayFolders = _orderedFolders(
+      effectiveTrackerAnimeLibrary(
+        providerFolders: baseFullDisplayFolders,
+        local: localAnimeLibrary,
+        optimistic: optimisticMutations,
+        useLocalFallback:
+            !fullLists.hasValue ||
+            (!useTrackerSource && fullLoadStatus.isFailed),
+      ),
+    );
 
     final bool fullResolved = fullLists.hasValue || fullLists.hasError;
     final bool fullSucceeded =
@@ -489,8 +513,8 @@ class _AniListDataTabState extends ConsumerState<_AniListDataTab>
         fullResolved &&
         !fullLists.isLoading &&
         !fullLoadStatus.isFailed &&
-        !_hasAnyEntries(previewSourceFolders) &&
-        !_hasAnyEntries(fullSourceFolders);
+        !_hasAnyEntries(previewDisplayFolders) &&
+        !_hasAnyEntries(fullDisplayFolders);
 
     _AniListStatusBannerState? banner;
     if (waitingForFirstFullResult) {
@@ -808,19 +832,28 @@ class _AniListViewState extends ConsumerState<_AniListView>
   int get _extraTabCount => _showDownloads ? 1 : 0;
 
   List<AniListAnimeListFolder> get _viewFolders {
-    final Map<int, AniListAnimeListEntry> byEntryId =
-        <int, AniListAnimeListEntry>{};
+    final List<AniListAnimeListEntry> uniqueEntries = <AniListAnimeListEntry>[];
     for (final AniListAnimeListFolder folder in widget.folders) {
       for (final AniListAnimeListEntry entry in folder.entries) {
-        byEntryId[entry.id] = entry;
+        final MediaIdentity identity = MediaIdentity.fromExternalIds(
+          entry.mediaItem.externalIds,
+          mediaId: entry.mediaItem.id,
+        );
+        final int existingIndex = uniqueEntries.indexWhere(
+          (AniListAnimeListEntry existing) => MediaIdentity.fromExternalIds(
+            existing.mediaItem.externalIds,
+            mediaId: existing.mediaItem.id,
+          ).matches(identity),
+        );
+        if (existingIndex < 0) {
+          uniqueEntries.add(entry);
+        } else {
+          uniqueEntries[existingIndex] = entry;
+        }
       }
     }
     return <AniListAnimeListFolder>[
-      AniListAnimeListFolder(
-        name: 'All',
-        status: null,
-        entries: byEntryId.values.toList(growable: false),
-      ),
+      AniListAnimeListFolder(name: 'All', status: null, entries: uniqueEntries),
       ...widget.folders,
     ];
   }
@@ -2258,6 +2291,16 @@ class _FolderViewState extends ConsumerState<_FolderView>
   }
 
   Widget _buildList(List<AniListAnimeListEntry> entries) {
+    final List<ValueKey<String>> keys = entries
+        .map(
+          (AniListAnimeListEntry entry) => ValueKey<String>(
+            'library-list:${_libraryEntryIdentityKey(entry)}',
+          ),
+        )
+        .toList(growable: false);
+    final Map<Key, int> indices = <Key, int>{
+      for (int i = 0; i < keys.length; i++) keys[i]: i,
+    };
     return SliverPadding(
       padding: const EdgeInsets.fromLTRB(
         AppSpacing.lg,
@@ -2267,17 +2310,37 @@ class _FolderViewState extends ConsumerState<_FolderView>
       ),
       sliver: SliverList(
         delegate: SliverChildBuilderDelegate(
-          (_, i) => Padding(
-            padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-            child: _CollectionTile(entry: entries[i]),
-          ),
+          (_, i) {
+            final AniListAnimeListEntry entry = entries[i];
+            return Padding(
+              key: keys[i],
+              padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+              child: _CollectionTile(
+                key: ValueKey<String>(
+                  'library-tile:${_libraryEntryIdentityKey(entry)}',
+                ),
+                entry: entry,
+              ),
+            );
+          },
           childCount: entries.length,
+          findChildIndexCallback: (Key key) => indices[key],
         ),
       ),
     );
   }
 
   Widget _buildGrid(List<AniListAnimeListEntry> entries) {
+    final List<ValueKey<String>> keys = entries
+        .map(
+          (AniListAnimeListEntry entry) => ValueKey<String>(
+            'library-grid:${_libraryEntryIdentityKey(entry)}',
+          ),
+        )
+        .toList(growable: false);
+    final Map<Key, int> indices = <Key, int>{
+      for (int i = 0; i < keys.length; i++) keys[i]: i,
+    };
     return SliverPadding(
       padding: const EdgeInsets.fromLTRB(
         AppSpacing.lg,
@@ -2293,8 +2356,9 @@ class _FolderViewState extends ConsumerState<_FolderView>
           mainAxisSpacing: AppSpacing.sm,
         ),
         delegate: SliverChildBuilderDelegate(
-          (_, i) => _GridCell(entry: entries[i]),
+          (_, i) => _GridCell(key: keys[i], entry: entries[i]),
           childCount: entries.length,
+          findChildIndexCallback: (Key key) => indices[key],
         ),
       ),
     );
@@ -2505,8 +2569,19 @@ class _AiringSoonStrip extends StatelessWidget {
 
 // Collection tile (156px, exact AnimeShin layout)
 
+String _libraryEntryIdentityKey(AniListAnimeListEntry entry) {
+  final Map<String, String> ids = entry.mediaItem.externalIds;
+  for (final String provider in const <String>['anilist', 'mal', 'shikimori']) {
+    final int? id = int.tryParse(ids[provider] ?? '');
+    if (id != null && id > 0) return '$provider:$id';
+  }
+  final String mediaId = entry.mediaItem.id.trim();
+  if (mediaId.isNotEmpty) return 'media:$mediaId';
+  return 'entry:${entry.id}';
+}
+
 class _CollectionTile extends ConsumerStatefulWidget {
-  const _CollectionTile({required this.entry});
+  const _CollectionTile({super.key, required this.entry});
   final AniListAnimeListEntry entry;
 
   @override
@@ -2524,6 +2599,10 @@ class _CollectionTileState extends ConsumerState<_CollectionTile> {
   @override
   void initState() {
     super.initState();
+    _resetFromEntry();
+  }
+
+  void _resetFromEntry() {
     _progress = widget.entry.progress;
     _status = widget.entry.status;
     _score = widget.entry.score;
@@ -2534,6 +2613,14 @@ class _CollectionTileState extends ConsumerState<_CollectionTile> {
   @override
   void didUpdateWidget(_CollectionTile old) {
     super.didUpdateWidget(old);
+    if (_libraryEntryIdentityKey(old.entry) !=
+        _libraryEntryIdentityKey(widget.entry)) {
+      // Defensive reset in case an ancestor ever rebuilds without preserving
+      // the sliver key. A tile must never carry another anime's draft state.
+      _syncing = false;
+      _resetFromEntry();
+      return;
+    }
     if (!_syncing &&
         (old.entry.progress != widget.entry.progress ||
             old.entry.status != widget.entry.status ||
@@ -2556,6 +2643,8 @@ class _CollectionTileState extends ConsumerState<_CollectionTile> {
     if (delta > 0 && !_canInc) return;
     if (delta < 0 && !_canDec) return;
 
+    final AniListAnimeListEntry operationEntry = widget.entry;
+    final String operationIdentity = _libraryEntryIdentityKey(operationEntry);
     final int nextProgress = _progress + delta;
 
     // Reaching the final episode marks the entry completed only when the
@@ -2574,13 +2663,14 @@ class _CollectionTileState extends ConsumerState<_CollectionTile> {
 
     setState(() {
       _syncing = true;
+      _progress = nextProgress;
+      _status = nextStatus;
     });
 
     try {
       final AniListEntrySaveResult result = await saveAniListEntryEdit(
         context: context,
-        ref: ref,
-        entry: widget.entry,
+        entry: operationEntry,
         draft: AniListEntryEditDraft(
           status: nextStatus,
           progress: nextProgress,
@@ -2590,23 +2680,28 @@ class _CollectionTileState extends ConsumerState<_CollectionTile> {
         ),
         showSuccessSnack: false,
       );
-      if (mounted && result != AniListEntrySaveResult.failed) {
+      if (_stillRepresents(operationIdentity) &&
+          result == AniListEntrySaveResult.failed) {
         setState(() {
-          _progress = nextProgress;
-          _status = nextStatus;
+          _progress = operationEntry.progress;
+          _status = operationEntry.status;
         });
       }
     } finally {
-      if (mounted) setState(() => _syncing = false);
+      if (_stillRepresents(operationIdentity)) {
+        setState(() => _syncing = false);
+      }
     }
   }
 
   Future<void> _openEditSheet() async {
+    final AniListAnimeListEntry operationEntry = widget.entry;
+    final String operationIdentity = _libraryEntryIdentityKey(operationEntry);
     final String scoreFormat = ref.read(aniListEffectiveScoreFormatProvider);
     final AniListEntryEditDraft? draft = await showAniListEntryEditor(
       context,
       ref: ref,
-      entry: widget.entry,
+      entry: operationEntry,
       status: _status,
       progress: _progress,
       score: _score,
@@ -2614,43 +2709,57 @@ class _CollectionTileState extends ConsumerState<_CollectionTile> {
       repeat: _repeat,
       scoreFormat: scoreFormat,
     );
-    if (draft == null || !mounted) return;
+    if (draft == null ||
+        !mounted ||
+        _libraryEntryIdentityKey(widget.entry) != operationIdentity) {
+      return;
+    }
 
     if (draft.remove) {
       setState(() => _syncing = true);
       try {
-        await deleteAniListEntry(
-          context: context,
-          ref: ref,
-          entry: widget.entry,
-        );
+        await deleteAniListEntry(context: context, entry: operationEntry);
       } finally {
-        if (mounted) setState(() => _syncing = false);
+        if (_stillRepresents(operationIdentity)) {
+          setState(() => _syncing = false);
+        }
       }
       return;
     }
 
-    setState(() => _syncing = true);
+    setState(() {
+      _syncing = true;
+      _status = draft.status ?? _status;
+      _progress = draft.progress;
+      _score = draft.score;
+      _notes = draft.notes;
+      _repeat = draft.repeat;
+    });
     try {
       final AniListEntrySaveResult result = await saveAniListEntryEdit(
         context: context,
-        ref: ref,
-        entry: widget.entry,
+        entry: operationEntry,
         draft: draft,
       );
-      if (mounted && result != AniListEntrySaveResult.failed) {
+      if (_stillRepresents(operationIdentity) &&
+          result == AniListEntrySaveResult.failed) {
         setState(() {
-          _status = draft.status ?? _status;
-          _progress = draft.progress;
-          _score = draft.score;
-          _notes = draft.notes;
-          _repeat = draft.repeat;
+          _status = operationEntry.status;
+          _progress = operationEntry.progress;
+          _score = operationEntry.score;
+          _notes = operationEntry.notes;
+          _repeat = operationEntry.repeat;
         });
       }
     } finally {
-      if (mounted) setState(() => _syncing = false);
+      if (_stillRepresents(operationIdentity)) {
+        setState(() => _syncing = false);
+      }
     }
   }
+
+  bool _stillRepresents(String identity) =>
+      mounted && _libraryEntryIdentityKey(widget.entry) == identity;
 
   @override
   Widget build(BuildContext context) {
@@ -2701,7 +2810,12 @@ class _CollectionTileState extends ConsumerState<_CollectionTile> {
     final TextTheme tt = Theme.of(context).textTheme;
 
     return Dismissible(
-      key: ValueKey<int>(widget.entry.id),
+      key: ValueKey<String>(
+        MediaIdentity.fromExternalIds(
+          media.externalIds,
+          mediaId: media.id,
+        ).localId,
+      ),
       direction: DismissDirection.horizontal,
       dismissThresholds: const <DismissDirection, double>{
         DismissDirection.startToEnd: 0.25,
@@ -3364,7 +3478,7 @@ class _AiringBadge extends StatelessWidget {
 // Grid cell
 
 class _GridCell extends ConsumerWidget {
-  const _GridCell({required this.entry});
+  const _GridCell({super.key, required this.entry});
   final AniListAnimeListEntry entry;
 
   @override
@@ -3397,15 +3511,10 @@ class _GridCell extends ConsumerWidget {
       );
       if (draft == null || !context.mounted) return;
       if (draft.remove) {
-        await deleteAniListEntry(context: context, ref: ref, entry: entry);
+        await deleteAniListEntry(context: context, entry: entry);
         return;
       }
-      await saveAniListEntryEdit(
-        context: context,
-        ref: ref,
-        entry: entry,
-        draft: draft,
-      );
+      await saveAniListEntryEdit(context: context, entry: entry, draft: draft);
     }
 
     // TvFocusable instead of a bare GestureDetector: same pointer handling,
@@ -3493,7 +3602,6 @@ class _GridCell extends ConsumerWidget {
                 ),
               ),
             ),
-            // Score badge top-right
             if (entry.score != null && entry.score! > 0)
               Positioned(
                 top: AppSpacing.xs,
