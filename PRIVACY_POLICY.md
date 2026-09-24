@@ -1,6 +1,6 @@
 # Privacy Policy
 
-Effective date: June 29, 2026
+Effective date: September 24, 2026
 
 This Privacy Policy applies to **MiruShin**, published by **emp0ry**, and to the repository at **https://github.com/emp0ry/MiruShin**.
 
@@ -8,7 +8,7 @@ This Privacy Policy applies to **MiruShin**, published by **emp0ry**, and to the
 
 MiruShin does not operate its own user account system or hosted streaming service. The app primarily stores settings and tokens on your device, then connects to third-party services you choose to use, such as TMDB, AniList, MyAnimeList, Shikimori, and user-installed Sora modules.
 
-Default MyAnimeList and Shikimori login uses a small Cloudflare Worker at `auth.emp0ry.com` to keep shared OAuth app credentials out of the public app binary. Watch with Friends also uses that Worker for short-lived room pairing.
+Default MyAnimeList and Shikimori login uses a small Cloudflare Worker at `auth.emp0ry.com` to keep shared OAuth app credentials out of the public app binary. Watch with Friends also uses that Worker for short-lived room pairing. Optional Google Drive Sync stores app-private cross-device data in the signed-in user's Google Drive `appDataFolder`.
 
 ## Data Stored on Your Device
 
@@ -23,6 +23,28 @@ Depending on how you use the app, MiruShin may store the following locally on yo
 
 Sensitive tokens are intended to be stored using platform-secure storage where supported.
 
+## Optional Google Drive Sync
+
+If you explicitly connect Google Drive Sync, MiruShin uses the limited `drive.appdata` permission to store data in the private `appDataFolder` of the Google account you select. This data is not placed in the user's normal visible Drive files.
+
+Synced data can include:
+
+- Separate anime and manga Local Library workspaces for each AniList account, including operations, tombstones, provider bindings, tracker delivery state, and conflicts
+- Episode playback positions, completion state, watch cycles, and stream/source/server/voiceover/quality preferences
+- Online and offline addon configuration and content, addon ordering, and user-added addon catalog sources
+- Saved AniList account profiles and the MyAnimeList and Shikimori connections assigned to each profile
+- AniList, MyAnimeList, and Shikimori access/refresh tokens required to restore those connections on another device
+- User-provided tracker OAuth client identifiers and a user-provided Shikimori client secret when custom tracker credentials are enabled
+- User-provided API connection settings and credentials, including Fanart.tv, TMDB, TVDB, Sora Web proxy, and AniList client configuration
+- Persistent Watch with Friends connection preferences, including a self-hosted relay URL and trusted relay origins
+- Per-account Library and app preferences, including language, title display, notifications, automatic progress tracking, default Library page, and per-page view/sort/filter choices
+
+Google Drive OAuth access/refresh tokens remain on the device and are not uploaded into Drive. MiruShin's own shared OAuth client secrets remain in the Cloudflare Worker and are not included in the app or Drive data. Active Watch with Friends rooms, room IDs, invite/join tokens, participants, source cookies, downloaded media files, and temporary caches are not synced.
+
+Account and library records use separate account/workspace identifiers so switching AniList accounts does not overwrite another account's Local Library or MAL/Shikimori connections. Drive records use immutable checksummed segments and deletion tombstones rather than uploading the live SQLite file.
+
+Disconnecting Google Drive stops MiruShin from accessing the Drive account on that device. Data already written to `appDataFolder` may remain in the Google account until it is removed through the relevant Google account or app-data controls.
+
 ## Third-Party Services
 
 MiruShin can send requests to third-party services when you enable or use related features. These may include:
@@ -32,6 +54,7 @@ MiruShin can send requests to third-party services when you enable or use relate
 - MyAnimeList for login, profile data, tracker sync, and export/import workflows
 - Shikimori for login, profile data, tracker sync, title data, and metadata enrichment flows
 - Cloudflare Workers for default MyAnimeList and Shikimori OAuth authorization/token proxying, and for short-lived Watch with Friends room pairing
+- Google Drive for optional private cross-device synchronization in the user's `appDataFolder`
 - AniSkip for skip-marker data
 - Discord for Rich Presence features on supported desktop platforms
 - User-installed Sora modules and any services those modules contact
@@ -74,7 +97,7 @@ MiruShin does not sell your personal data. Data may still be transmitted directl
 
 ## Security
 
-No software can guarantee absolute security. You are responsible for securing your device, your exported files, and any credentials you enter into the app.
+No software can guarantee absolute security. You are responsible for securing your devices, Google account, exported files, and any credentials you enter into the app. Enabling Google Drive Sync means tracker session credentials are copied to private app data in the Google account you select so other authorized MiruShin devices can restore them.
 
 ## Changes to This Policy
 

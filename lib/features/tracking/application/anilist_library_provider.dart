@@ -461,85 +461,107 @@ void invalidateAniListLibraryProvidersForMediaType(
 }
 
 Future<void> refreshAniListLibraryForMediaType(
-  WidgetRef ref, {
+  ProviderContainer container, {
   required String mediaType,
 }) async {
-  invalidateAniListLibraryProvidersForMediaType(ref.invalidate, mediaType);
-  await _awaitAniListLibraryLoadsForMediaType(ref, mediaType: mediaType);
+  final SettingsState settings = container.read(settingsProvider);
+  if (!settings.hasAniListSession) {
+    final trackerProvider = mediaType == 'MANGA'
+        ? trackerMangaListProvider
+        : trackerAnimeListProvider;
+    final localProvider = mediaType == 'MANGA'
+        ? trackerLocalMangaLibraryProvider
+        : trackerLocalAnimeLibraryProvider;
+    container.invalidate(trackerProvider);
+    await container.read(trackerProvider.future);
+    container.invalidate(localProvider);
+    await container.read(localProvider.future);
+    return;
+  }
+  invalidateAniListLibraryProvidersForMediaType(
+    container.invalidate,
+    mediaType,
+  );
+  await _awaitAniListLibraryLoadsForMediaType(container, mediaType: mediaType);
+  final localProvider = mediaType == 'MANGA'
+      ? trackerLocalMangaLibraryProvider
+      : trackerLocalAnimeLibraryProvider;
+  container.invalidate(localProvider);
+  await container.read(localProvider.future);
 }
 
 Future<void> retryAniListFullListForMediaType(
-  WidgetRef ref, {
+  ProviderContainer container, {
   required String mediaType,
 }) async {
   if (mediaType == 'MANGA') {
-    ref.invalidate(anilistMangaListProvider);
+    container.invalidate(anilistMangaListProvider);
     final bool wantsRussian =
-        ref.read(aniListEffectiveTitleLanguageProvider) == 'RUSSIAN';
-    ref.invalidate(anilistMangaRussianListProvider);
-    ref.invalidate(anilistMangaPreviewRussianListProvider);
-    await ref.read(anilistMangaListProvider.future);
+        container.read(aniListEffectiveTitleLanguageProvider) == 'RUSSIAN';
+    container.invalidate(anilistMangaRussianListProvider);
+    container.invalidate(anilistMangaPreviewRussianListProvider);
+    await container.read(anilistMangaListProvider.future);
     if (wantsRussian) {
-      await ref.read(anilistMangaRussianListProvider.future);
+      await container.read(anilistMangaRussianListProvider.future);
     }
     return;
   }
 
-  ref.invalidate(anilistAnimeListProvider);
+  container.invalidate(anilistAnimeListProvider);
   final bool wantsRussian =
-      ref.read(aniListEffectiveTitleLanguageProvider) == 'RUSSIAN';
+      container.read(aniListEffectiveTitleLanguageProvider) == 'RUSSIAN';
   if (wantsRussian) {
-    ref.invalidate(anilistAnimeRussianListProvider);
+    container.invalidate(anilistAnimeRussianListProvider);
   } else {
-    ref.invalidate(anilistAnimeRussianListProvider);
-    ref.invalidate(anilistAnimePreviewRussianListProvider);
+    container.invalidate(anilistAnimeRussianListProvider);
+    container.invalidate(anilistAnimePreviewRussianListProvider);
   }
 
-  await ref.read(anilistAnimeListProvider.future);
+  await container.read(anilistAnimeListProvider.future);
   if (wantsRussian) {
-    await ref.read(anilistAnimeRussianListProvider.future);
+    await container.read(anilistAnimeRussianListProvider.future);
   }
 }
 
 Future<void> _awaitAniListLibraryLoadsForMediaType(
-  WidgetRef ref, {
+  ProviderContainer container, {
   required String mediaType,
 }) async {
   if (mediaType == 'MANGA') {
     final bool wantsRussianManga =
-        ref.read(aniListEffectiveTitleLanguageProvider) == 'RUSSIAN';
-    await ref.read(anilistMangaPreviewListProvider.future);
+        container.read(aniListEffectiveTitleLanguageProvider) == 'RUSSIAN';
+    await container.read(anilistMangaPreviewListProvider.future);
     if (wantsRussianManga) {
       await Future.wait<List<AniListAnimeListFolder>>(
         <Future<List<AniListAnimeListFolder>>>[
-          ref.read(anilistMangaPreviewRussianListProvider.future),
-          ref.read(anilistMangaListProvider.future),
+          container.read(anilistMangaPreviewRussianListProvider.future),
+          container.read(anilistMangaListProvider.future),
         ],
       );
-      await ref.read(anilistMangaRussianListProvider.future);
+      await container.read(anilistMangaRussianListProvider.future);
     } else {
-      ref.invalidate(anilistMangaPreviewRussianListProvider);
-      ref.invalidate(anilistMangaRussianListProvider);
-      await ref.read(anilistMangaListProvider.future);
+      container.invalidate(anilistMangaPreviewRussianListProvider);
+      container.invalidate(anilistMangaRussianListProvider);
+      await container.read(anilistMangaListProvider.future);
     }
     return;
   }
 
   final bool wantsRussian =
-      ref.read(aniListEffectiveTitleLanguageProvider) == 'RUSSIAN';
-  await ref.read(anilistAnimePreviewListProvider.future);
+      container.read(aniListEffectiveTitleLanguageProvider) == 'RUSSIAN';
+  await container.read(anilistAnimePreviewListProvider.future);
   if (wantsRussian) {
     await Future.wait<List<AniListAnimeListFolder>>(
       <Future<List<AniListAnimeListFolder>>>[
-        ref.read(anilistAnimePreviewRussianListProvider.future),
-        ref.read(anilistAnimeListProvider.future),
+        container.read(anilistAnimePreviewRussianListProvider.future),
+        container.read(anilistAnimeListProvider.future),
       ],
     );
-    await ref.read(anilistAnimeRussianListProvider.future);
+    await container.read(anilistAnimeRussianListProvider.future);
   } else {
-    ref.invalidate(anilistAnimePreviewRussianListProvider);
-    ref.invalidate(anilistAnimeRussianListProvider);
-    await ref.read(anilistAnimeListProvider.future);
+    container.invalidate(anilistAnimePreviewRussianListProvider);
+    container.invalidate(anilistAnimeRussianListProvider);
+    await container.read(anilistAnimeListProvider.future);
   }
 }
 
@@ -1052,14 +1074,27 @@ Future<List<AniListAnimeListFolder>> _fetchCollection(
           ?.map((AniListListStatus status) => status.graphQlValue)
           .toList(growable: false),
     );
-    if (mediaType == 'ANIME') {
-      final List<AniListAnimeListFolder> merged = await sync.ingestAnimeLibrary(
-        source: TrackerSource.anilist,
-        folders: fetchedFolders,
-        liveSnapshot: true,
-        completeSnapshot: statuses == null,
+    final List<AniListAnimeListFolder> merged = await sync.ingestAnimeLibrary(
+      source: TrackerSource.anilist,
+      folders: fetchedFolders,
+      liveSnapshot: true,
+      completeSnapshot: statuses == null,
+      mediaKind: mediaType == 'MANGA' ? 'manga' : 'anime',
+    );
+    fetchedFolders = _filterFoldersByStatus(merged, statuses);
+    if (statuses == null) {
+      final String mediaKind = mediaType == 'MANGA' ? 'manga' : 'anime';
+      final TrackerLibrarySnapshot allProviders = await sync
+          .refreshAllConnectedLibraries(
+            mediaKind: mediaKind,
+            excluded: const <TrackerSource>{TrackerSource.anilist},
+          );
+      fetchedFolders = allProviders.folders;
+      ref.invalidate(
+        mediaKind == 'manga'
+            ? trackerLocalMangaLibraryProvider
+            : trackerLocalAnimeLibraryProvider,
       );
-      fetchedFolders = _filterFoldersByStatus(merged, statuses);
     }
     await cache.write(cacheKey, _encode(fetchedFolders));
   } catch (error) {
@@ -1073,18 +1108,19 @@ Future<List<AniListAnimeListFolder>> _fetchCollection(
         ? <AniListAnimeListFolder>[]
         : _decode(cached);
     TrackerSource? fallbackSource;
+    if (fallback.isNotEmpty) {
+      fallback = _filterFoldersByStatus(
+        await sync.ingestAnimeLibrary(
+          source: TrackerSource.anilist,
+          folders: fallback,
+          liveSnapshot: false,
+          completeSnapshot: false,
+          mediaKind: mediaType == 'MANGA' ? 'manga' : 'anime',
+        ),
+        statuses,
+      );
+    }
     if (mediaType == 'ANIME') {
-      if (fallback.isNotEmpty) {
-        fallback = _filterFoldersByStatus(
-          await sync.ingestAnimeLibrary(
-            source: TrackerSource.anilist,
-            folders: fallback,
-            liveSnapshot: false,
-            completeSnapshot: false,
-          ),
-          statuses,
-        );
-      }
       final TrackerLibrarySnapshot secondary = await sync.refreshAnimeLibrary(
         preferred: TrackerSource.anilist,
         excluded: const <TrackerSource>{TrackerSource.anilist},

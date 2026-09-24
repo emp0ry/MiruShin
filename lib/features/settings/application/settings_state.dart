@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -15,6 +16,7 @@ import '../../tracking/data/mal_oauth_service.dart';
 import '../../tracking/data/oauth_token_bundle.dart';
 import '../../tracking/data/shikimori_oauth_service.dart';
 import '../../tracking/domain/tracker_models.dart';
+import '../data/workspace_preferences_store.dart';
 
 final settingsProvider = NotifierProvider<SettingsController, SettingsState>(
   SettingsController.new,
@@ -24,8 +26,9 @@ final settingsProvider = NotifierProvider<SettingsController, SettingsState>(
 /// used by the tracker login flow so MAL client-id selection (desktop vs mobile
 /// app) is consistent between login and token refresh.
 bool get _isMobilePlatform =>
-    defaultTargetPlatform == TargetPlatform.android ||
-    defaultTargetPlatform == TargetPlatform.iOS;
+    !kIsWeb &&
+    (defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS);
 
 enum AppThemeMode { system, dark, light, oled }
 
@@ -151,6 +154,7 @@ class SettingsState {
     this.anilistTitleLanguage = 'ROMAJI',
     this.anilistLibraryDefaultPage = AniListLibraryDefaultPage.all,
     this.anilistSavedAccounts = const <AniListSavedAccount>[],
+    this.canonicalLibraryOwnerAniListId,
     this.anilistScoreFormat = 'POINT_10_DECIMAL',
     this.soraWebProxyUrl = const String.fromEnvironment('MIRUSHIN_WEB_PROXY'),
     this.startupPage = AppStartupPage.board,
@@ -208,6 +212,7 @@ class SettingsState {
   final String anilistTitleLanguage;
   final AniListLibraryDefaultPage anilistLibraryDefaultPage;
   final List<AniListSavedAccount> anilistSavedAccounts;
+  final int? canonicalLibraryOwnerAniListId;
   final String anilistScoreFormat;
   final String soraWebProxyUrl;
   final AppStartupPage startupPage;
@@ -277,8 +282,9 @@ class SettingsState {
       (effectiveShikimoriClientId.isNotEmpty &&
           effectiveShikimoriClientSecret.isNotEmpty);
 
-  /// The primary tracker actually used for reading the library, falling back to
-  /// whichever single service is connected when the chosen one is signed out.
+  /// Deterministic presentation source for legacy UI paths. Local Library is
+  /// canonical and every connected tracker is reconciled independently, so
+  /// the old user-selected preferred tracker no longer affects sync.
   TrackerSource get effectivePrimaryTrackerSource {
     bool connected(TrackerSource source) {
       return switch (source) {
@@ -288,11 +294,10 @@ class SettingsState {
       };
     }
 
-    if (connected(primaryTrackerSource)) return primaryTrackerSource;
     for (final TrackerSource source in TrackerSource.values) {
       if (connected(source)) return source;
     }
-    return primaryTrackerSource;
+    return TrackerSource.anilist;
   }
 
   /// The token actually used for TMDB requests: the user's custom token when
@@ -379,6 +384,7 @@ class SettingsState {
     String? anilistTitleLanguage,
     AniListLibraryDefaultPage? anilistLibraryDefaultPage,
     List<AniListSavedAccount>? anilistSavedAccounts,
+    int? canonicalLibraryOwnerAniListId,
     String? anilistScoreFormat,
     String? soraWebProxyUrl,
     AppStartupPage? startupPage,
@@ -454,6 +460,8 @@ class SettingsState {
       anilistLibraryDefaultPage:
           anilistLibraryDefaultPage ?? this.anilistLibraryDefaultPage,
       anilistSavedAccounts: anilistSavedAccounts ?? this.anilistSavedAccounts,
+      canonicalLibraryOwnerAniListId:
+          canonicalLibraryOwnerAniListId ?? this.canonicalLibraryOwnerAniListId,
       anilistScoreFormat: anilistScoreFormat ?? this.anilistScoreFormat,
       soraWebProxyUrl: soraWebProxyUrl ?? this.soraWebProxyUrl,
       startupPage: startupPage ?? this.startupPage,
@@ -564,8 +572,11 @@ class SettingsState {
 
 class SettingsController extends Notifier<SettingsState> {
   final AppSecureStorage _secureStorage = const AppSecureStorage();
+  final Completer<void> _persistedReady = Completer<void>();
   SettingsPreferences? _preferences;
   bool _loadingPersisted = false;
+
+  Future<void> get ready => _persistedReady.future;
 
   @override
   SettingsState build() {
@@ -582,123 +593,230 @@ class SettingsController extends Notifier<SettingsState> {
     );
   }
 
-  Future<void> _loadPersisted() async {
-    final SettingsPreferences preferences = await _prefs();
-    final String? themeModeName = preferences.readThemeMode();
-    final String? appLanguage = preferences.readAppLanguage();
-    final String? metadataLanguage = preferences.readMetadataLanguage();
-    final int? accentColor = preferences.readAccentColor();
-    final String? tmdbToken = await _secureStorage.readTmdbReadAccessToken();
-    final String? fanartTvApiKey = await _secureStorage.readFanartTvApiKey();
-    final String? tvdbApiKey = await _secureStorage.readTvdbApiKey();
-    final String? tvdbSubscriberPin = await _secureStorage
-        .readTvdbSubscriberPin();
-    final String? aniListToken = await _secureStorage.readAniListAccessToken();
-    final DateTime? aniListExpiresAt = await _secureStorage
-        .readAniListExpiresAt();
-    final String? malToken = await _secureStorage.readMalAccessToken();
-    final String? malRefresh = await _secureStorage.readMalRefreshToken();
-    final DateTime? malExpiresAt = await _secureStorage.readMalExpiresAt();
-    final String? shikimoriToken = await _secureStorage
-        .readShikimoriAccessToken();
-    final String? shikimoriRefresh = await _secureStorage
-        .readShikimoriRefreshToken();
-    final DateTime? shikimoriExpiresAt = await _secureStorage
-        .readShikimoriExpiresAt();
-    String shikimoriCustomClientSecret =
-        (await _secureStorage.readShikimoriCustomClientSecret()) ?? '';
-    final String legacyShikimoriCustomClientSecret = preferences
-        .readShikimoriCustomClientSecret()
-        .trim();
-    if (shikimoriCustomClientSecret.isEmpty &&
-        legacyShikimoriCustomClientSecret.isNotEmpty) {
-      shikimoriCustomClientSecret = legacyShikimoriCustomClientSecret;
-      await _secureStorage.writeShikimoriCustomClientSecret(
-        legacyShikimoriCustomClientSecret,
-      );
-      await preferences.clearShikimoriCustomClientSecret();
+  Future<List<AniListSavedAccount>> _readSavedAniListAccounts(
+    SettingsPreferences preferences,
+  ) async {
+    final List<AniListSavedAccount> legacy = preferences
+        .readAniListSavedAccounts()
+        .map(AniListSavedAccount.fromJson)
+        .where((AniListSavedAccount account) => account.viewerId > 0)
+        .toList(growable: false);
+    final String secureRaw =
+        (await _secureStorage.readTrackerAccountWorkspaces()) ?? '';
+    List<AniListSavedAccount> secure = <AniListSavedAccount>[];
+    if (secureRaw.isNotEmpty) {
+      try {
+        final Object? decoded = jsonDecode(secureRaw);
+        if (decoded is List) {
+          secure = decoded
+              .whereType<Map>()
+              .map(
+                (Map<dynamic, dynamic> value) => AniListSavedAccount.fromJson(
+                  Map<String, dynamic>.from(value),
+                ),
+              )
+              .where((AniListSavedAccount account) => account.viewerId > 0)
+              .toList(growable: false);
+        }
+      } on Object {
+        // Fall back to the legacy copy below and rewrite a valid secure value.
+      }
     }
-    final Locale? appLocale = SettingsState._supportedLocaleFromLanguage(
-      appLanguage,
-    );
-    final Locale? metadataLocale = SettingsState._supportedLocaleFromLanguage(
-      metadataLanguage,
-    );
-    if (appLanguage != null && appLocale == null) {
-      final SharedPreferences raw = await SharedPreferences.getInstance();
-      await raw.remove(SettingsPreferences.appLanguageKey);
+    final List<AniListSavedAccount> result = secure.isNotEmpty
+        ? secure
+        : legacy;
+    if (legacy.isNotEmpty || (secureRaw.isNotEmpty && secure.isEmpty)) {
+      await _persistSavedAniListAccounts(result, preferences: preferences);
+      await preferences.clearAniListSavedAccounts();
     }
-    if (metadataLanguage != null && metadataLocale == null) {
-      await preferences.saveMetadataLanguage(null);
-    }
-    final String tmdbLanguage = SettingsState._tmdbLanguageForMetadataState(
-      metadataLocale: metadataLocale,
-      fallback: preferences.readTmdbLanguage(),
-    );
-    if (!ref.mounted) return;
+    return result;
+  }
 
-    state = state.copyWith(
-      themeMode: _themeModeFromName(themeModeName),
-      appLocale: appLocale,
-      accentColor: accentColor == null ? null : Color(accentColor),
-      compactMode: preferences.readCompactMode(),
-      compactCards: preferences.readCompactCards(),
-      discordRpcEnabled: preferences.readDiscordRpcEnabled(),
-      tmdbUseCustomKey: preferences.readTmdbUseCustomKey(),
-      tmdbReadAccessToken: tmdbToken ?? '',
-      fanartTvApiKey: fanartTvApiKey ?? '',
-      tmdbLanguage: tmdbLanguage,
-      metadataLocale: metadataLocale,
-      tmdbRegion: preferences.readTmdbRegion(),
-      tmdbShowAdultContent: preferences.readTmdbShowAdultContent(),
-      cacheLimitMb: preferences.readCacheLimitMb(),
-      cacheRetention: CacheRetention.fromName(preferences.readCacheRetention()),
-      anilistMobileClientId: preferences.readAniListMobileClientId(),
-      anilistDesktopClientId: preferences.readAniListDesktopClientId(),
-      anilistDesktopPort: preferences.readAniListDesktopPort(),
-      anilistAccessToken: aniListToken ?? '',
-      anilistExpiresAt: aniListExpiresAt,
-      anilistViewerId: preferences.readAniListViewerId(),
-      anilistViewerName: preferences.readAniListViewerName(),
-      anilistAvatarUrl: preferences.readAniListAvatarUrl(),
-      tvdbEnabled: preferences.readTvdbEnabled(),
-      tvdbApiKey: tvdbApiKey ?? '',
-      tvdbSubscriberPin: tvdbSubscriberPin ?? '',
-      anilistShowAdultContent: preferences.readAniListShowAdultContent(),
-      anilistTitleLanguage: preferences.readAniListTitleLanguage(),
-      anilistLibraryDefaultPage: AniListLibraryDefaultPage.fromName(
-        preferences.readAniListLibraryDefaultPage(),
+  Future<void> _persistSavedAniListAccounts(
+    List<AniListSavedAccount> accounts, {
+    SettingsPreferences? preferences,
+  }) async {
+    await _secureStorage.writeTrackerAccountWorkspaces(
+      jsonEncode(
+        accounts
+            .map((AniListSavedAccount account) => account.toJson())
+            .toList(growable: false),
       ),
-      anilistSavedAccounts: preferences
-          .readAniListSavedAccounts()
-          .map(AniListSavedAccount.fromJson)
-          .toList(growable: false),
-      anilistScoreFormat: preferences.readAniListScoreFormat(),
-      soraWebProxyUrl: preferences.readSoraWebProxyUrl(),
-      startupPage: AppStartupPage.fromName(preferences.readStartupPage()),
-      primaryTrackerSource: TrackerSource.fromName(
-        preferences.readPrimaryTrackerSource(),
-      ),
-      malAccessToken: malToken ?? '',
-      malRefreshToken: malRefresh ?? '',
-      malExpiresAt: malExpiresAt,
-      malViewerId: preferences.readMalViewerId(),
-      malViewerName: preferences.readMalViewerName(),
-      malAvatarUrl: preferences.readMalAvatarUrl(),
-      malUseCustomCredentials: preferences.readMalUseCustomCredentials(),
-      malCustomClientIdDesktop: preferences.readMalCustomClientIdDesktop(),
-      malCustomClientIdMobile: preferences.readMalCustomClientIdMobile(),
-      shikimoriAccessToken: shikimoriToken ?? '',
-      shikimoriRefreshToken: shikimoriRefresh ?? '',
-      shikimoriExpiresAt: shikimoriExpiresAt,
-      shikimoriViewerId: preferences.readShikimoriViewerId(),
-      shikimoriViewerName: preferences.readShikimoriViewerName(),
-      shikimoriAvatarUrl: preferences.readShikimoriAvatarUrl(),
-      shikimoriUseCustomCredentials: preferences
-          .readShikimoriUseCustomCredentials(),
-      shikimoriCustomClientId: preferences.readShikimoriCustomClientId(),
-      shikimoriCustomClientSecret: shikimoriCustomClientSecret,
     );
+    await (preferences ?? await _prefs()).clearAniListSavedAccounts();
+  }
+
+  Future<void> _loadPersisted() async {
+    try {
+      final SettingsPreferences preferences = await _prefs();
+      final String? themeModeName = preferences.readThemeMode();
+      String? appLanguage = preferences.readAppLanguage();
+      final String? metadataLanguage = preferences.readMetadataLanguage();
+      final int? accentColor = preferences.readAccentColor();
+      final String? tmdbToken = await _secureStorage.readTmdbReadAccessToken();
+      final String? fanartTvApiKey = await _secureStorage.readFanartTvApiKey();
+      final String? tvdbApiKey = await _secureStorage.readTvdbApiKey();
+      final String? tvdbSubscriberPin = await _secureStorage
+          .readTvdbSubscriberPin();
+      final String? aniListToken = await _secureStorage
+          .readAniListAccessToken();
+      final DateTime? aniListExpiresAt = await _secureStorage
+          .readAniListExpiresAt();
+      final int? aniListViewerId = preferences.readAniListViewerId();
+      int? canonicalLibraryOwnerAniListId = preferences
+          .readCanonicalLibraryOwnerAniListId();
+      if (canonicalLibraryOwnerAniListId == null && aniListViewerId != null) {
+        canonicalLibraryOwnerAniListId = aniListViewerId;
+        await preferences.saveCanonicalLibraryOwnerAniListId(aniListViewerId);
+      }
+      final String? malToken = await _secureStorage.readMalAccessToken();
+      final String? malRefresh = await _secureStorage.readMalRefreshToken();
+      final DateTime? malExpiresAt = await _secureStorage.readMalExpiresAt();
+      final String? shikimoriToken = await _secureStorage
+          .readShikimoriAccessToken();
+      final String? shikimoriRefresh = await _secureStorage
+          .readShikimoriRefreshToken();
+      final DateTime? shikimoriExpiresAt = await _secureStorage
+          .readShikimoriExpiresAt();
+      String shikimoriCustomClientSecret =
+          (await _secureStorage.readShikimoriCustomClientSecret()) ?? '';
+      final String legacyShikimoriCustomClientSecret = preferences
+          .readShikimoriCustomClientSecret()
+          .trim();
+      if (shikimoriCustomClientSecret.isEmpty &&
+          legacyShikimoriCustomClientSecret.isNotEmpty) {
+        shikimoriCustomClientSecret = legacyShikimoriCustomClientSecret;
+        await _secureStorage.writeShikimoriCustomClientSecret(
+          legacyShikimoriCustomClientSecret,
+        );
+        await preferences.clearShikimoriCustomClientSecret();
+      }
+      final Locale? legacyAppLocale =
+          SettingsState._supportedLocaleFromLanguage(appLanguage);
+      final Locale? metadataLocale = SettingsState._supportedLocaleFromLanguage(
+        metadataLanguage,
+      );
+      if (appLanguage != null && legacyAppLocale == null) {
+        final SharedPreferences raw = await SharedPreferences.getInstance();
+        await raw.remove(SettingsPreferences.appLanguageKey);
+      }
+      if (metadataLanguage != null && metadataLocale == null) {
+        await preferences.saveMetadataLanguage(null);
+      }
+      final String tmdbLanguage = SettingsState._tmdbLanguageForMetadataState(
+        metadataLocale: metadataLocale,
+        fallback: preferences.readTmdbLanguage(),
+      );
+      final List<AniListSavedAccount> savedAniListAccounts =
+          await _readSavedAniListAccounts(preferences);
+      final SharedPreferences rawPreferences =
+          await SharedPreferences.getInstance();
+      final WorkspacePreferencesStore workspaceStore =
+          WorkspacePreferencesStore(rawPreferences);
+      await workspaceStore.migrateLegacy(
+        viewerIds: <int>{
+          ...savedAniListAccounts.map(
+            (AniListSavedAccount account) => account.viewerId,
+          ),
+          ?aniListViewerId,
+        },
+      );
+      final String workspaceId = _workspaceIdFor(aniListViewerId);
+      appLanguage =
+          workspaceStore.read(workspaceId, SettingsPreferences.appLanguageKey)
+              as String? ??
+          appLanguage;
+      final Locale? appLocale = SettingsState._supportedLocaleFromLanguage(
+        appLanguage,
+      );
+      final bool workspaceDiscord =
+          workspaceStore.read(
+                workspaceId,
+                SettingsPreferences.discordRpcEnabledKey,
+              )
+              as bool? ??
+          preferences.readDiscordRpcEnabled();
+      final String workspaceTitleLanguage =
+          workspaceStore.read(
+                workspaceId,
+                SettingsPreferences.anilistTitleLanguageKey,
+              )
+              as String? ??
+          preferences.readAniListTitleLanguage();
+      final String? workspaceDefaultPage =
+          workspaceStore.read(
+                workspaceId,
+                SettingsPreferences.anilistLibraryDefaultPageKey,
+              )
+              as String? ??
+          preferences.readAniListLibraryDefaultPage();
+      if (!ref.mounted) return;
+
+      state = state.copyWith(
+        themeMode: _themeModeFromName(themeModeName),
+        appLocale: appLocale,
+        accentColor: accentColor == null ? null : Color(accentColor),
+        compactMode: preferences.readCompactMode(),
+        compactCards: preferences.readCompactCards(),
+        discordRpcEnabled: workspaceDiscord,
+        tmdbUseCustomKey: preferences.readTmdbUseCustomKey(),
+        tmdbReadAccessToken: tmdbToken ?? '',
+        fanartTvApiKey: fanartTvApiKey ?? '',
+        tmdbLanguage: tmdbLanguage,
+        metadataLocale: metadataLocale,
+        tmdbRegion: preferences.readTmdbRegion(),
+        tmdbShowAdultContent: preferences.readTmdbShowAdultContent(),
+        cacheLimitMb: preferences.readCacheLimitMb(),
+        cacheRetention: CacheRetention.fromName(
+          preferences.readCacheRetention(),
+        ),
+        anilistMobileClientId: preferences.readAniListMobileClientId(),
+        anilistDesktopClientId: preferences.readAniListDesktopClientId(),
+        anilistDesktopPort: preferences.readAniListDesktopPort(),
+        anilistAccessToken: aniListToken ?? '',
+        anilistExpiresAt: aniListExpiresAt,
+        anilistViewerId: aniListViewerId,
+        anilistViewerName: preferences.readAniListViewerName(),
+        anilistAvatarUrl: preferences.readAniListAvatarUrl(),
+        tvdbEnabled: preferences.readTvdbEnabled(),
+        tvdbApiKey: tvdbApiKey ?? '',
+        tvdbSubscriberPin: tvdbSubscriberPin ?? '',
+        anilistShowAdultContent: preferences.readAniListShowAdultContent(),
+        anilistTitleLanguage: workspaceTitleLanguage,
+        anilistLibraryDefaultPage: AniListLibraryDefaultPage.fromName(
+          workspaceDefaultPage,
+        ),
+        anilistSavedAccounts: savedAniListAccounts,
+        canonicalLibraryOwnerAniListId: canonicalLibraryOwnerAniListId,
+        anilistScoreFormat: preferences.readAniListScoreFormat(),
+        soraWebProxyUrl: preferences.readSoraWebProxyUrl(),
+        startupPage: AppStartupPage.fromName(preferences.readStartupPage()),
+        primaryTrackerSource: TrackerSource.fromName(
+          preferences.readPrimaryTrackerSource(),
+        ),
+        malAccessToken: malToken ?? '',
+        malRefreshToken: malRefresh ?? '',
+        malExpiresAt: malExpiresAt,
+        malViewerId: preferences.readMalViewerId(),
+        malViewerName: preferences.readMalViewerName(),
+        malAvatarUrl: preferences.readMalAvatarUrl(),
+        malUseCustomCredentials: preferences.readMalUseCustomCredentials(),
+        malCustomClientIdDesktop: preferences.readMalCustomClientIdDesktop(),
+        malCustomClientIdMobile: preferences.readMalCustomClientIdMobile(),
+        shikimoriAccessToken: shikimoriToken ?? '',
+        shikimoriRefreshToken: shikimoriRefresh ?? '',
+        shikimoriExpiresAt: shikimoriExpiresAt,
+        shikimoriViewerId: preferences.readShikimoriViewerId(),
+        shikimoriViewerName: preferences.readShikimoriViewerName(),
+        shikimoriAvatarUrl: preferences.readShikimoriAvatarUrl(),
+        shikimoriUseCustomCredentials: preferences
+            .readShikimoriUseCustomCredentials(),
+        shikimoriCustomClientId: preferences.readShikimoriCustomClientId(),
+        shikimoriCustomClientSecret: shikimoriCustomClientSecret,
+      );
+    } finally {
+      if (!_persistedReady.isCompleted) _persistedReady.complete();
+    }
   }
 
   void setThemeMode(AppThemeMode mode) {
@@ -725,6 +843,12 @@ class SettingsController extends Notifier<SettingsState> {
         ),
       );
     }
+    unawaited(
+      _saveWorkspaceValue(
+        SettingsPreferences.appLanguageKey,
+        locale?.languageCode,
+      ),
+    );
   }
 
   void setMetadataLocale(Locale? locale) {
@@ -771,6 +895,9 @@ class SettingsController extends Notifier<SettingsState> {
     state = state.copyWith(discordRpcEnabled: value);
     unawaited(
       _save((SettingsPreferences prefs) => prefs.saveDiscordRpcEnabled(value)),
+    );
+    unawaited(
+      _saveWorkspaceValue(SettingsPreferences.discordRpcEnabledKey, value),
     );
   }
 
@@ -898,6 +1025,9 @@ class SettingsController extends Notifier<SettingsState> {
         (SettingsPreferences prefs) => prefs.saveAniListTitleLanguage(value),
       ),
     );
+    unawaited(
+      _saveWorkspaceValue(SettingsPreferences.anilistTitleLanguageKey, value),
+    );
   }
 
   void setAniListLibraryDefaultPage(AniListLibraryDefaultPage value) {
@@ -908,12 +1038,21 @@ class SettingsController extends Notifier<SettingsState> {
             prefs.saveAniListLibraryDefaultPage(value.name),
       ),
     );
+    unawaited(
+      _saveWorkspaceValue(
+        SettingsPreferences.anilistLibraryDefaultPageKey,
+        value.name,
+      ),
+    );
   }
 
   void setAniListScoreFormat(String value) {
-    state = state.copyWith(anilistScoreFormat: value);
+    final String normalized = value == 'SMILEY' ? 'POINT_3' : value;
+    state = state.copyWith(anilistScoreFormat: normalized);
     unawaited(
-      _save((SettingsPreferences prefs) => prefs.saveAniListScoreFormat(value)),
+      _save(
+        (SettingsPreferences prefs) => prefs.saveAniListScoreFormat(normalized),
+      ),
     );
   }
 
@@ -940,10 +1079,7 @@ class SettingsController extends Notifier<SettingsState> {
     );
     existing.add(account);
     state = state.copyWith(anilistSavedAccounts: existing);
-    final SettingsPreferences preferences = await _prefs();
-    await preferences.saveAniListSavedAccounts(
-      existing.map((AniListSavedAccount a) => a.toJson()).toList(),
-    );
+    await _persistSavedAniListAccounts(existing);
   }
 
   Future<void> removeAniListAccount(int viewerId) async {
@@ -951,83 +1087,271 @@ class SettingsController extends Notifier<SettingsState> {
         .where((AniListSavedAccount a) => a.viewerId != viewerId)
         .toList(growable: false);
     state = state.copyWith(anilistSavedAccounts: updated);
-    final SettingsPreferences preferences = await _prefs();
-    await preferences.saveAniListSavedAccounts(
-      updated.map((AniListSavedAccount a) => a.toJson()).toList(),
-    );
+    await _persistSavedAniListAccounts(updated);
   }
 
   Future<void> switchAniListAccount(AniListSavedAccount account) async {
+    await _captureWorkspaceProfile();
     // Save current active account to the saved list before switching.
-    if (state.hasAniListSession && state.anilistViewerId != null) {
-      final AniListSavedAccount current = AniListSavedAccount(
-        viewerId: state.anilistViewerId!,
-        viewerName: state.anilistViewerName ?? 'AniList User',
-        avatarUrl: state.anilistAvatarUrl,
-        accessToken: state.anilistAccessToken,
-        expiresAt: state.anilistExpiresAt ?? DateTime.now(),
-      );
-      await saveAniListAccount(current);
+    if (state.anilistViewerId != null &&
+        state.anilistAccessToken.trim().isNotEmpty) {
+      await saveAniListAccount(_activeAniListAccount());
     }
     // Remove target account from saved list (it's becoming active).
     await removeAniListAccount(account.viewerId);
-    // Activate the selected account.
-    state = state.copyWith(
-      anilistAccessToken: account.accessToken,
-      anilistExpiresAt: account.expiresAt,
-      anilistViewerId: account.viewerId,
-      anilistViewerName: account.viewerName,
-      anilistAvatarUrl: account.avatarUrl,
-    );
-    await _secureStorage.writeAniListAccessToken(account.accessToken);
-    await _secureStorage.writeAniListExpiresAt(account.expiresAt);
-    final SettingsPreferences preferences = await _prefs();
-    await preferences.saveAniListViewer(
-      id: account.viewerId,
-      name: account.viewerName,
-      avatarUrl: account.avatarUrl,
-    );
+    await _activateAniListAccount(account);
   }
 
   Future<void> connectAniList({
     required AniListOAuthResult oauth,
     required AniListViewer viewer,
   }) async {
-    // If a different account is currently active, save it to the list.
-    if (state.hasAniListSession &&
-        state.anilistViewerId != null &&
-        state.anilistViewerId != viewer.id) {
-      final AniListSavedAccount current = AniListSavedAccount(
-        viewerId: state.anilistViewerId!,
-        viewerName: state.anilistViewerName ?? 'AniList User',
-        avatarUrl: state.anilistAvatarUrl,
-        accessToken: state.anilistAccessToken,
-        expiresAt: state.anilistExpiresAt ?? DateTime.now(),
-      );
-      await saveAniListAccount(current);
+    await _captureWorkspaceProfile();
+    AniListSavedAccount? restoredWorkspace;
+    if (state.anilistViewerId == viewer.id) {
+      restoredWorkspace = _activeAniListAccount();
+    } else {
+      for (final AniListSavedAccount account in state.anilistSavedAccounts) {
+        if (account.viewerId == viewer.id) {
+          restoredWorkspace = account;
+          break;
+        }
+      }
     }
-    state = state.copyWith(
-      anilistAccessToken: oauth.accessToken,
-      anilistExpiresAt: oauth.expiresAt,
-      anilistViewerId: viewer.id,
-      anilistViewerName: viewer.name,
-      anilistAvatarUrl: viewer.avatarUrl,
-    );
-    final SettingsPreferences preferences = await _prefs();
-    await _secureStorage.writeAniListAccessToken(oauth.accessToken);
-    await _secureStorage.writeAniListExpiresAt(oauth.expiresAt);
-    await preferences.saveAniListViewer(
-      id: viewer.id,
-      name: viewer.name,
-      avatarUrl: viewer.avatarUrl,
+    // If a different account is currently active, save it to the list.
+    if (state.anilistViewerId != null &&
+        state.anilistAccessToken.trim().isNotEmpty &&
+        state.anilistViewerId != viewer.id) {
+      await saveAniListAccount(_activeAniListAccount());
+    }
+    await removeAniListAccount(viewer.id);
+    await _activateAniListAccount(
+      AniListSavedAccount(
+        viewerId: viewer.id,
+        viewerName: viewer.name,
+        avatarUrl: viewer.avatarUrl,
+        accessToken: oauth.accessToken,
+        expiresAt: oauth.expiresAt,
+        malConnection:
+            restoredWorkspace?.malConnection ??
+            const TrackerConnectionSnapshot(),
+        shikimoriConnection:
+            restoredWorkspace?.shikimoriConnection ??
+            const TrackerConnectionSnapshot(),
+        primaryTrackerSource:
+            restoredWorkspace?.primaryTrackerSource ??
+            TrackerSource.anilist.name,
+      ),
     );
   }
 
   Future<void> disconnectAniList() async {
-    state = state.copyWith(clearAniListSession: true);
+    await _captureWorkspaceProfile();
+    state = state.copyWith(
+      clearAniListSession: true,
+      clearMalSession: true,
+      clearShikimoriSession: true,
+      primaryTrackerSource: TrackerSource.anilist,
+      malUseCustomCredentials: false,
+      malCustomClientIdDesktop: '',
+      malCustomClientIdMobile: '',
+      shikimoriUseCustomCredentials: false,
+      shikimoriCustomClientId: '',
+      shikimoriCustomClientSecret: '',
+    );
     final SettingsPreferences preferences = await _prefs();
     await _secureStorage.clearAniListSession();
+    await _secureStorage.clearMalSession();
+    await _secureStorage.clearShikimoriSession();
+    await _secureStorage.writeShikimoriCustomClientSecret('');
     await preferences.saveAniListViewer(id: null, name: null, avatarUrl: null);
+    await preferences.saveMalViewer(id: null, name: null, avatarUrl: null);
+    await preferences.saveShikimoriViewer(
+      id: null,
+      name: null,
+      avatarUrl: null,
+    );
+    await preferences.savePrimaryTrackerSource(TrackerSource.anilist.name);
+    await preferences.saveMalUseCustomCredentials(false);
+    await preferences.saveMalCustomClientIdDesktop('');
+    await preferences.saveMalCustomClientIdMobile('');
+    await preferences.saveShikimoriUseCustomCredentials(false);
+    await preferences.saveShikimoriCustomClientId('');
+    await _applyWorkspaceProfile('local');
+  }
+
+  List<AniListSavedAccount> driveAniListAccounts() {
+    final Map<int, AniListSavedAccount> accounts = <int, AniListSavedAccount>{
+      for (final AniListSavedAccount account in state.anilistSavedAccounts)
+        account.viewerId: account,
+    };
+    if (state.anilistViewerId != null &&
+        state.anilistAccessToken.trim().isNotEmpty) {
+      accounts[state.anilistViewerId!] = _activeAniListAccount();
+    }
+    return accounts.values.toList(growable: false)..sort(
+      (AniListSavedAccount a, AniListSavedAccount b) =>
+          a.viewerId.compareTo(b.viewerId),
+    );
+  }
+
+  Future<void> applyDriveAniListAccounts({
+    required List<AniListSavedAccount> accounts,
+    required int? preferredActiveViewerId,
+  }) async {
+    await ready;
+    final Map<int, AniListSavedAccount> byId = <int, AniListSavedAccount>{
+      for (final AniListSavedAccount account in accounts)
+        account.viewerId: account,
+    };
+    int? activeId = state.anilistViewerId;
+    AniListSavedAccount? active = activeId == null ? null : byId[activeId];
+    if (activeId != null && active == null && state.hasAniListSession) {
+      await disconnectAniList();
+      activeId = null;
+    }
+    if (active == null && !state.hasAniListSession) {
+      if (preferredActiveViewerId != null) {
+        active = byId[preferredActiveViewerId];
+      }
+      if (active == null || !active.isValid) {
+        for (final AniListSavedAccount candidate in byId.values) {
+          if (candidate.isValid) {
+            active = candidate;
+            break;
+          }
+        }
+      }
+      if (active != null && active.isValid) activeId = active.viewerId;
+    }
+    if (active != null && activeId == active.viewerId) {
+      await _activateAniListAccount(active);
+    }
+    final List<AniListSavedAccount> saved =
+        byId.values
+            .where(
+              (AniListSavedAccount account) => account.viewerId != activeId,
+            )
+            .toList(growable: false)
+          ..sort(
+            (AniListSavedAccount a, AniListSavedAccount b) =>
+                a.viewerId.compareTo(b.viewerId),
+          );
+    state = state.copyWith(anilistSavedAccounts: saved);
+    await _persistSavedAniListAccounts(saved);
+  }
+
+  AniListSavedAccount _activeAniListAccount() {
+    return AniListSavedAccount(
+      viewerId: state.anilistViewerId!,
+      viewerName: state.anilistViewerName ?? 'AniList User',
+      avatarUrl: state.anilistAvatarUrl,
+      accessToken: state.anilistAccessToken,
+      expiresAt: state.anilistExpiresAt ?? DateTime.now(),
+      malConnection: TrackerConnectionSnapshot(
+        accessToken: state.malAccessToken,
+        refreshToken: state.malRefreshToken,
+        expiresAt: state.malExpiresAt,
+        viewerId: state.malViewerId,
+        viewerName: state.malViewerName,
+        avatarUrl: state.malAvatarUrl,
+        useCustomCredentials: state.malUseCustomCredentials,
+        desktopClientId: state.malCustomClientIdDesktop,
+        mobileClientId: state.malCustomClientIdMobile,
+      ),
+      shikimoriConnection: TrackerConnectionSnapshot(
+        accessToken: state.shikimoriAccessToken,
+        refreshToken: state.shikimoriRefreshToken,
+        expiresAt: state.shikimoriExpiresAt,
+        viewerId: state.shikimoriViewerId,
+        viewerName: state.shikimoriViewerName,
+        avatarUrl: state.shikimoriAvatarUrl,
+        useCustomCredentials: state.shikimoriUseCustomCredentials,
+        clientId: state.shikimoriCustomClientId,
+        clientSecret: state.shikimoriCustomClientSecret,
+      ),
+      primaryTrackerSource: state.primaryTrackerSource.name,
+    );
+  }
+
+  Future<void> _activateAniListAccount(AniListSavedAccount account) async {
+    final TrackerConnectionSnapshot mal = account.malConnection;
+    final TrackerConnectionSnapshot shikimori = account.shikimoriConnection;
+    final TrackerSource primary = TrackerSource.fromName(
+      account.primaryTrackerSource,
+    );
+    final SettingsPreferences preferences = await _prefs();
+    final int ownerId =
+        state.canonicalLibraryOwnerAniListId ?? account.viewerId;
+    if (state.canonicalLibraryOwnerAniListId == null) {
+      await preferences.saveCanonicalLibraryOwnerAniListId(ownerId);
+    }
+    state = state.copyWith(
+      anilistAccessToken: account.accessToken,
+      anilistExpiresAt: account.expiresAt,
+      anilistViewerId: account.viewerId,
+      anilistViewerName: account.viewerName,
+      anilistAvatarUrl: account.avatarUrl,
+      malAccessToken: mal.accessToken,
+      malRefreshToken: mal.refreshToken,
+      malExpiresAt: mal.expiresAt,
+      malViewerId: mal.viewerId,
+      malViewerName: mal.viewerName,
+      malAvatarUrl: mal.avatarUrl,
+      clearMalSession: !mal.hasSession,
+      malUseCustomCredentials: mal.useCustomCredentials,
+      malCustomClientIdDesktop: mal.desktopClientId,
+      malCustomClientIdMobile: mal.mobileClientId,
+      shikimoriAccessToken: shikimori.accessToken,
+      shikimoriRefreshToken: shikimori.refreshToken,
+      shikimoriExpiresAt: shikimori.expiresAt,
+      shikimoriViewerId: shikimori.viewerId,
+      shikimoriViewerName: shikimori.viewerName,
+      shikimoriAvatarUrl: shikimori.avatarUrl,
+      clearShikimoriSession: !shikimori.hasSession,
+      shikimoriUseCustomCredentials: shikimori.useCustomCredentials,
+      shikimoriCustomClientId: shikimori.clientId,
+      shikimoriCustomClientSecret: shikimori.clientSecret,
+      primaryTrackerSource: primary,
+      canonicalLibraryOwnerAniListId: ownerId,
+    );
+
+    await _secureStorage.writeAniListAccessToken(account.accessToken);
+    await _secureStorage.writeAniListExpiresAt(account.expiresAt);
+    await preferences.saveAniListViewer(
+      id: account.viewerId,
+      name: account.viewerName,
+      avatarUrl: account.avatarUrl,
+    );
+    await _secureStorage.writeMalAccessToken(mal.accessToken);
+    await _secureStorage.writeMalRefreshToken(mal.refreshToken);
+    await _secureStorage.writeMalExpiresAt(mal.expiresAt);
+    await preferences.saveMalViewer(
+      id: mal.viewerId,
+      name: mal.viewerName,
+      avatarUrl: mal.avatarUrl,
+    );
+    await preferences.saveMalUseCustomCredentials(mal.useCustomCredentials);
+    await preferences.saveMalCustomClientIdDesktop(mal.desktopClientId);
+    await preferences.saveMalCustomClientIdMobile(mal.mobileClientId);
+    await _secureStorage.writeShikimoriAccessToken(shikimori.accessToken);
+    await _secureStorage.writeShikimoriRefreshToken(shikimori.refreshToken);
+    await _secureStorage.writeShikimoriExpiresAt(shikimori.expiresAt);
+    await preferences.saveShikimoriViewer(
+      id: shikimori.viewerId,
+      name: shikimori.viewerName,
+      avatarUrl: shikimori.avatarUrl,
+    );
+    await preferences.saveShikimoriUseCustomCredentials(
+      shikimori.useCustomCredentials,
+    );
+    await preferences.saveShikimoriCustomClientId(shikimori.clientId);
+    await _secureStorage.writeShikimoriCustomClientSecret(
+      shikimori.clientSecret,
+    );
+    await preferences.clearShikimoriCustomClientSecret();
+    await preferences.savePrimaryTrackerSource(primary.name);
+    await _applyWorkspaceProfile(_workspaceIdFor(account.viewerId));
   }
 
   // Tracker primary source + custom credentials
@@ -1257,6 +1581,100 @@ class SettingsController extends Notifier<SettingsState> {
     Future<void> Function(SettingsPreferences preferences) save,
   ) async {
     await save(await _prefs());
+  }
+
+  String _workspaceIdFor(int? viewerId) =>
+      viewerId == null ? 'local' : 'anilist:$viewerId';
+
+  Future<void> _saveWorkspaceValue(String key, Object? value) async {
+    final SharedPreferences raw = await SharedPreferences.getInstance();
+    await WorkspacePreferencesStore(
+      raw,
+    ).write(_workspaceIdFor(state.anilistViewerId), key, value);
+    if (ref.mounted) {
+      ref.read(drivePreferencesRevisionProvider.notifier).changed();
+    }
+  }
+
+  Future<void> _captureWorkspaceProfile() async {
+    final SharedPreferences raw = await SharedPreferences.getInstance();
+    await WorkspacePreferencesStore(raw).captureActiveProfile(
+      workspaceId: _workspaceIdFor(state.anilistViewerId),
+      appLanguage: state.appLocale?.languageCode,
+      discordRpcEnabled: state.discordRpcEnabled,
+      titleLanguage: state.anilistTitleLanguage,
+      defaultLibraryPage: state.anilistLibraryDefaultPage.name,
+    );
+  }
+
+  Future<void> _applyWorkspaceProfile(String workspaceId) async {
+    final SharedPreferences raw = await SharedPreferences.getInstance();
+    final WorkspacePreferencesStore store = WorkspacePreferencesStore(raw);
+    final String? language =
+        store.read(workspaceId, SettingsPreferences.appLanguageKey) as String?;
+    final bool discord =
+        store.read(workspaceId, SettingsPreferences.discordRpcEnabledKey)
+            as bool? ??
+        true;
+    final String titleLanguage =
+        store.read(workspaceId, SettingsPreferences.anilistTitleLanguageKey)
+            as String? ??
+        'ROMAJI';
+    final AniListLibraryDefaultPage defaultPage =
+        AniListLibraryDefaultPage.fromName(
+          store.read(
+                workspaceId,
+                SettingsPreferences.anilistLibraryDefaultPageKey,
+              )
+              as String?,
+        );
+    final Locale? locale = SettingsState._supportedLocaleFromLanguage(language);
+    state = state.copyWith(
+      appLocale: locale,
+      clearAppLocale: locale == null,
+      discordRpcEnabled: discord,
+      anilistTitleLanguage: titleLanguage,
+      anilistLibraryDefaultPage: defaultPage,
+    );
+    if (language == null) {
+      await raw.remove(SettingsPreferences.appLanguageKey);
+    } else {
+      await raw.setString(SettingsPreferences.appLanguageKey, language);
+    }
+    await raw.setBool(SettingsPreferences.discordRpcEnabledKey, discord);
+    await raw.setString(
+      SettingsPreferences.anilistTitleLanguageKey,
+      titleLanguage,
+    );
+    await raw.setString(
+      SettingsPreferences.anilistLibraryDefaultPageKey,
+      defaultPage.name,
+    );
+    if (ref.mounted) {
+      ref.read(drivePreferencesRevisionProvider.notifier).changed();
+    }
+  }
+
+  Future<void> reloadDrivePreferences() async {
+    await ready;
+    final SettingsPreferences preferences = await _prefs();
+    state = state.copyWith(
+      tmdbUseCustomKey: preferences.readTmdbUseCustomKey(),
+      tmdbReadAccessToken:
+          (await _secureStorage.readTmdbReadAccessToken()) ?? '',
+      fanartTvApiKey: (await _secureStorage.readFanartTvApiKey()) ?? '',
+      tmdbLanguage: preferences.readTmdbLanguage(),
+      tmdbRegion: preferences.readTmdbRegion(),
+      tmdbShowAdultContent: preferences.readTmdbShowAdultContent(),
+      tvdbEnabled: preferences.readTvdbEnabled(),
+      tvdbApiKey: (await _secureStorage.readTvdbApiKey()) ?? '',
+      tvdbSubscriberPin: (await _secureStorage.readTvdbSubscriberPin()) ?? '',
+      soraWebProxyUrl: preferences.readSoraWebProxyUrl(),
+      anilistMobileClientId: preferences.readAniListMobileClientId(),
+      anilistDesktopClientId: preferences.readAniListDesktopClientId(),
+      anilistDesktopPort: preferences.readAniListDesktopPort(),
+    );
+    await _applyWorkspaceProfile(_workspaceIdFor(state.anilistViewerId));
   }
 
   AppThemeMode _themeModeFromName(String? name) {

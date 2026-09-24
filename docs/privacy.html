@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="dark">
     <meta name="theme-color" content="#120b24">
-    <meta name="description" content="Privacy Policy for MiruShin, covering local settings, user tokens, third-party services, tracker sync, the OAuth proxy, Watch with Friends signaling, and user-installed Sora-compatible modules.">
+    <meta name="description" content="Privacy Policy for MiruShin, covering local settings, private Google Drive Sync, tracker credentials, third-party services, the OAuth proxy, Watch with Friends signaling, and user-installed Sora-compatible modules.">
     <meta name="author" content="emp0ry">
     <meta name="publisher" content="emp0ry">
     <meta name="copyright" content="MiruShin">
@@ -63,6 +63,7 @@
     <meta property="og:image:alt" content="MiruShin social preview showing the discovery board and popular anime rail.">
     <meta property="article:author" content="https://github.com/emp0ry">
     <meta property="article:published_time" content="2026-06-29">
+    <meta property="article:modified_time" content="2026-09-24">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Privacy Policy | MiruShin">
     <meta name="twitter:description" content="How MiruShin handles local settings, user tokens, third-party services, tracker sync, the OAuth proxy, Watch with Friends signaling, and user-installed Sora-compatible modules.">
@@ -124,6 +125,7 @@
             "@id": "https://mirushin.emp0ry.com/#creator"
           },
           "datePublished": "2026-06-29",
+          "dateModified": "2026-09-24",
           "isAccessibleForFree": true,
           "inLanguage": "en-US"
         },
@@ -179,7 +181,7 @@
           <span class="section-kicker">Policy</span>
           <h1>Privacy Policy</h1>
           <p>
-            Effective date: June 29, 2026. This policy applies to MiruShin, published by
+            Effective date: September 24, 2026. This policy applies to MiruShin, published by
             <code>emp0ry</code>, and the repository at
             <a href="https://github.com/emp0ry/MiruShin" target="_blank" rel="noreferrer">github.com/emp0ry/MiruShin</a>.
           </p>
@@ -199,7 +201,9 @@
             <p>
               Default MyAnimeList and Shikimori login uses a small Cloudflare Worker at
               <code>auth.emp0ry.com</code> to keep shared OAuth app credentials out of the public app binary.
-              Watch with Friends also uses that Worker for short-lived room pairing.
+              Watch with Friends also uses that Worker for short-lived room pairing. Optional Google
+              Drive Sync stores cross-device records in the selected Google account's private
+              <code>appDataFolder</code>.
             </p>
 
             <h2>Data Stored on Your Device</h2>
@@ -213,6 +217,40 @@
             </ul>
             <p>Sensitive tokens are intended to be stored using platform-secure storage where supported.</p>
 
+            <h2>Optional Google Drive Sync</h2>
+            <p>
+              If you explicitly connect Google Drive Sync, MiruShin uses the limited
+              <code>drive.appdata</code> permission. Synced records can include separate anime and manga
+              Local Library workspaces for every AniList account, operations and tombstones, provider
+              bindings, episode playback state, stream preferences, online and offline addons, addon
+              sources, and tracker delivery state.
+            </p>
+            <p>
+              Saved AniList profiles and each profile's MyAnimeList and Shikimori connections are also
+              synced. This includes AniList, MyAnimeList, and Shikimori access/refresh tokens required to
+              restore those sessions on another device, plus user-provided tracker client identifiers and
+              a user-provided Shikimori client secret when custom credentials are enabled.
+            </p>
+            <p>
+              Synced app preferences can also include Fanart.tv, TMDB, TVDB, Sora Web proxy and AniList
+              client configuration; persistent Watch with Friends relay settings and trusted origins; and
+              per-account language, title, notification, auto-progress, default Library page, view, sort,
+              and filter choices.
+            </p>
+            <p>
+              Google Drive OAuth tokens stay on the device. MiruShin-operated OAuth client secrets stay in
+              the Cloudflare Worker and are not written to the app or Drive. Source cookies, downloaded
+              media, temporary caches, active rooms, room IDs, invite/join tokens, participants, and other
+              temporary Watch Party state are not synced. Account-specific namespaces prevent one AniList
+              account from overwriting another account's library or connections; immutable checksummed
+              segments are synced instead of the live SQLite file.
+            </p>
+            <p>
+              Disconnecting Drive stops access on that device. Data already stored in
+              <code>appDataFolder</code> may remain until removed through the relevant Google account or
+              app-data controls.
+            </p>
+
             <h2>Third-Party Services</h2>
             <p>MiruShin can send requests to third-party services when you enable or use related features. These may include:</p>
             <ul>
@@ -221,6 +259,7 @@
               <li>MyAnimeList for login, profile data, tracker sync, and export/import workflows</li>
               <li>Shikimori for login, profile data, tracker sync, title data, and metadata enrichment flows</li>
               <li>Cloudflare Workers for default MyAnimeList and Shikimori OAuth authorization/token proxying, and for short-lived Watch with Friends room pairing</li>
+              <li>Google Drive for optional private cross-device synchronization in the user's <code>appDataFolder</code></li>
               <li>AniSkip for skip-marker data</li>
               <li>Discord for Rich Presence features on supported desktop platforms</li>
               <li>User-installed Sora modules and any services those modules contact</li>
@@ -285,8 +324,10 @@
 
             <h2>Security</h2>
             <p>
-              No software can guarantee absolute security. You are responsible for securing your device,
-              your exported files, and any credentials you enter into the app.
+              No software can guarantee absolute security. You are responsible for securing your devices,
+              Google account, exported files, and credentials. Enabling Drive Sync copies tracker session
+              credentials to private app data in the Google account you select so other authorized
+              MiruShin devices can restore them.
             </p>
 
             <h2>Changes to This Policy</h2>

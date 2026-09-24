@@ -13,9 +13,10 @@ import '../../addons/data/anime_titles_service.dart';
 import '../../library/application/local_library_provider.dart';
 import '../../profile/application/anilist_user_settings_provider.dart';
 import '../../settings/application/settings_state.dart';
-import '../../tracking/application/anilist_library_provider.dart';
 import '../../tracking/application/tracker_library_provider.dart';
 import '../../tracking/application/tracker_sync_coordinator.dart';
+import '../../tracking/data/tracking_sync_store.dart';
+import '../../tracking/domain/tracker_models.dart';
 import '../../watch/application/stream_selection_preferences.dart';
 import '../../watch/domain/normalized_models.dart';
 import '../data/discord_rpc_service.dart';
@@ -2516,7 +2517,9 @@ class PlaybackController extends Notifier<PlaybackState> {
       state = state.copyWith(confirmedEnded: true);
     }
 
-    for (final String mediaId in _progressMediaIds(item)) {
+    final List<String> progressIds = _progressMediaIds(item);
+    for (int index = 0; index < progressIds.length; index += 1) {
+      final String mediaId = progressIds[index];
       await ref
           .read(localLibraryProvider.notifier)
           .saveEpisodeProgress(
@@ -2526,6 +2529,8 @@ class PlaybackController extends Notifier<PlaybackState> {
             positionSeconds: savePosition,
             durationSeconds: durationSeconds > 0 ? durationSeconds : null,
             completed: saveCompleted,
+            mediaItem: index == 0 ? _trackingMediaItem(item) : null,
+            persistCanonical: index == 0,
           );
     }
 
@@ -2548,9 +2553,13 @@ class PlaybackController extends Notifier<PlaybackState> {
       final bool syncEnabled =
           (ref.read(playerSettingsProvider).value ?? const PlayerSettings())
               .autoAnilistSync;
-      if (syncEnabled) {
-        unawaited(_trySyncTrackers(item, item.episodeNumber.round()));
-      }
+      unawaited(
+        _trySyncTrackers(
+          item,
+          item.episodeNumber.round(),
+          syncToProviders: syncEnabled,
+        ),
+      );
     }
   }
 
@@ -3344,8 +3353,12 @@ class PlaybackController extends Notifier<PlaybackState> {
             mediaType: item.mediaType,
             mediaId: item.id,
             preference: StreamSelectionPreference(
+              addonId: item.externalIds['sora_addon_id'] ?? '',
+              sourceId: item.externalIds['sora_source_id'] ?? '',
               serverId: server.id,
               serverTitle: server.name,
+              voiceoverId: state.voiceover?.id ?? '',
+              voiceoverTitle: state.voiceover?.label ?? '',
               qualityId: quality?.id ?? '',
               qualityLabel: quality?.label ?? '',
             ),
@@ -4157,8 +4170,29 @@ class PlaybackController extends Notifier<PlaybackState> {
     final bool resetToStart = engineCompleted;
     final int savePosition = resetToStart ? 0 : position.inSeconds;
     final int? savedDurationSeconds = durationSeconds;
+    final bool syncEnabled =
+        (ref.read(playerSettingsProvider).value ?? const PlayerSettings())
+            .autoAnilistSync;
 
-    for (final String mediaId in _progressMediaIds(item)) {
+    final bool atomicCheckpointCommitted = watched
+        ? await _trySyncTrackers(
+            item,
+            item.episodeNumber.round(),
+            syncToProviders: syncEnabled,
+            checkpoint: TrackingEpisodeCheckpoint(
+              mediaId: item.id,
+              season: item.seasonNumber,
+              episode: item.episodeNumber,
+              positionSeconds: savePosition,
+              durationSeconds: savedDurationSeconds,
+              completed: true,
+            ),
+          )
+        : false;
+
+    final List<String> progressIds = _progressMediaIds(item);
+    for (int index = 0; index < progressIds.length; index += 1) {
+      final String mediaId = progressIds[index];
       if (!ref.mounted) return;
       await ref
           .read(localLibraryProvider.notifier)
@@ -4169,6 +4203,8 @@ class PlaybackController extends Notifier<PlaybackState> {
             positionSeconds: savePosition,
             durationSeconds: savedDurationSeconds,
             completed: watched,
+            mediaItem: index == 0 ? _trackingMediaItem(item) : null,
+            persistCanonical: index == 0 && !atomicCheckpointCommitted,
           );
     }
 
@@ -4187,53 +4223,27 @@ class PlaybackController extends Notifier<PlaybackState> {
                       : null),
           ),
     );
-
-    if (!ref.mounted) return;
-    final bool syncEnabled =
-        (ref.read(playerSettingsProvider).value ?? const PlayerSettings())
-            .autoAnilistSync;
-    if (syncEnabled && watched) {
-      // Record once in the provider-neutral journal, then let each connected
-      // target acknowledge its own delivery independently.
-      unawaited(_trySyncTrackers(item, item.episodeNumber.round()));
-    }
   }
 
-  Future<void> _trySyncTrackers(
+  Future<bool> _trySyncTrackers(
     MediaPlaybackItem item,
-    int episodeNumber,
-  ) async {
+    int episodeNumber, {
+    required bool syncToProviders,
+    TrackingEpisodeCheckpoint? checkpoint,
+  }) async {
     final String identity =
         item.externalIds['anilist'] ??
         item.externalIds['mal'] ??
         item.externalIds['shikimori'] ??
         item.id;
     final String key = '$identity:$episodeNumber';
-    if (!_syncedTrackerProgress.add(key)) return;
+    if (!_syncedTrackerProgress.add(key)) return false;
     final MediaItem trackingItem = _trackingMediaItem(item);
     final TrackerEpisodeProgress update = normalizeTrackerEpisodeProgress(
       episode: episodeNumber,
       total: trackingItem.episodeCount,
+      mediaStatus: trackingItem.statusLabel,
     );
-    ref
-        .read(trackerLibraryOptimisticMutationsProvider.notifier)
-        .updateProgress(
-          mediaItem: trackingItem,
-          progress: update.progress,
-          status: update.status,
-        );
-    final int? anilistId = int.tryParse(item.externalIds['anilist'] ?? '');
-    if (anilistId != null && anilistId > 0) {
-      ref
-          .read(anilistAnimeListProvider.notifier)
-          .updateEntryProgress(
-            anilistId,
-            update.progress,
-            status: update.status,
-            mediaItem: trackingItem,
-            publishToTrackerLibrary: false,
-          );
-    }
     try {
       await ref
           .read(trackerSyncCoordinatorProvider)
@@ -4244,8 +4254,19 @@ class PlaybackController extends Notifier<PlaybackState> {
             mediaItem: trackingItem,
             episode: episodeNumber,
             total: trackingItem.episodeCount,
+            targets: syncToProviders ? null : const <TrackerSource>{},
+            episodeCheckpoint: checkpoint,
+          );
+      if (!ref.mounted) return true;
+      ref
+          .read(trackerLibraryOptimisticMutationsProvider.notifier)
+          .updateProgress(
+            mediaItem: trackingItem,
+            progress: update.progress,
+            status: update.status,
           );
       ref.invalidate(trackerLocalAnimeLibraryProvider);
+      return true;
     } on Object catch (error) {
       // A journal/storage failure is different from an offline provider (which
       // is safely queued by the coordinator). Allow the next save tick/end
@@ -4254,7 +4275,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       debugPrint(
         'TrackerSync: progress retry scheduled (${error.runtimeType})',
       );
-      return;
+      return false;
     }
   }
 }
@@ -4277,6 +4298,6 @@ MediaItem _trackingMediaItem(MediaPlaybackItem item) {
         if (!entry.key.startsWith('sora_')) entry.key: entry.value,
     },
     episodeCount: item.episodeCount,
-    statusLabel: '',
+    statusLabel: item.mediaStatusLabel,
   );
 }

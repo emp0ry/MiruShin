@@ -1,0 +1,691 @@
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:flutter/widgets.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../../../core/constants/app_constants.dart';
+import '../../../core/platform/tv_platform.dart';
+import '../../../core/security/app_secure_storage.dart';
+import '../../addons/application/addon_sources_provider.dart';
+import '../../addons/application/sora_addons_provider.dart';
+import '../../addons/data/addon_drive_sync_service.dart';
+import '../../player/application/player_settings.dart';
+import '../../profile/application/anilist_user_settings_provider.dart';
+import '../../settings/application/settings_state.dart';
+import '../../settings/data/account_drive_sync_service.dart';
+import '../../settings/data/preference_drive_sync_service.dart';
+import '../../settings/data/workspace_preferences_store.dart';
+import '../../tracking/application/anilist_library_provider.dart';
+import '../../tracking/application/tracker_library_provider.dart';
+import '../../tracking/application/tracker_sync_coordinator.dart';
+import '../../tracking/domain/tracker_models.dart';
+import '../../watch_party/application/watch_party_connection_settings.dart';
+import '../data/google_drive_account_client.dart';
+import '../data/google_drive_cloud_replica.dart';
+import '../data/google_drive_native_auth.dart';
+import '../data/google_drive_oauth_service.dart';
+import '../domain/cloud_replica_models.dart';
+import 'canonical_library_repository.dart';
+
+class GoogleDriveSyncState {
+  const GoogleDriveSyncState({
+    required this.configured,
+    required this.connected,
+    this.syncing = false,
+    this.lastSyncAt,
+    this.lastError,
+    this.appliedSegments = 0,
+    this.account,
+  });
+
+  final bool configured;
+  final bool connected;
+  final bool syncing;
+  final DateTime? lastSyncAt;
+  final String? lastError;
+  final int appliedSegments;
+  final GoogleDriveAccountProfile? account;
+
+  GoogleDriveSyncState copyWith({
+    bool? configured,
+    bool? connected,
+    bool? syncing,
+    DateTime? lastSyncAt,
+    String? lastError,
+    bool clearError = false,
+    int? appliedSegments,
+    GoogleDriveAccountProfile? account,
+    bool clearAccount = false,
+  }) => GoogleDriveSyncState(
+    configured: configured ?? this.configured,
+    connected: connected ?? this.connected,
+    syncing: syncing ?? this.syncing,
+    lastSyncAt: lastSyncAt ?? this.lastSyncAt,
+    lastError: clearError ? null : lastError ?? this.lastError,
+    appliedSegments: appliedSegments ?? this.appliedSegments,
+    account: clearAccount ? null : account ?? this.account,
+  );
+}
+
+final googleDriveSyncControllerProvider =
+    AsyncNotifierProvider<GoogleDriveSyncController, GoogleDriveSyncState>(
+      GoogleDriveSyncController.new,
+    );
+
+final googleDriveSyncLifecycleProvider = Provider<void>((Ref ref) {
+  Timer? localPushDebounce;
+  Timer? fullSyncDebounce;
+
+  void scheduleLocalPush() {
+    if (fullSyncDebounce?.isActive ?? false) return;
+    localPushDebounce?.cancel();
+    localPushDebounce = Timer(const Duration(seconds: 8), () {
+      unawaited(
+        ref
+            .read(googleDriveSyncControllerProvider.notifier)
+            .syncNow(background: true, localChangesOnly: true),
+      );
+    });
+  }
+
+  void scheduleFullSync() {
+    localPushDebounce?.cancel();
+    localPushDebounce = null;
+    fullSyncDebounce?.cancel();
+    fullSyncDebounce = Timer(const Duration(seconds: 8), () {
+      unawaited(
+        ref
+            .read(googleDriveSyncControllerProvider.notifier)
+            .syncNow(background: true),
+      );
+    });
+  }
+
+  ref.listen<AsyncValue<GoogleDriveSyncState>>(
+    googleDriveSyncControllerProvider,
+    (
+      AsyncValue<GoogleDriveSyncState>? previous,
+      AsyncValue<GoogleDriveSyncState> next,
+    ) {
+      final bool becameConnected =
+          next.value?.connected == true && previous?.value?.connected != true;
+      if (becameConnected) {
+        unawaited(
+          ref
+              .read(googleDriveSyncControllerProvider.notifier)
+              .syncNow(background: true),
+        );
+      }
+    },
+    fireImmediately: true,
+  );
+  ref.listen<String>(settingsProvider.select(_driveAccountFingerprint), (
+    String? previous,
+    String next,
+  ) {
+    if (previous == null || previous == next) return;
+    scheduleFullSync();
+  });
+  ref.listen<String>(settingsProvider.select(_drivePreferenceFingerprint), (
+    String? previous,
+    String next,
+  ) {
+    if (previous == null || previous == next) return;
+    scheduleFullSync();
+  });
+  ref.listen<int>(drivePreferencesRevisionProvider, (int? previous, int next) {
+    if (previous == null || previous == next) return;
+    scheduleFullSync();
+  });
+  ref.listen<String>(soraAddonsProvider.select(_driveAddonFingerprint), (
+    String? previous,
+    String next,
+  ) {
+    if (previous == null || previous == next) return;
+    scheduleFullSync();
+  });
+  ref.listen<String>(
+    addonSourcesProvider.select(_driveAddonSourceFingerprint),
+    (String? previous, String next) {
+      if (previous == null || previous == next) return;
+      scheduleFullSync();
+    },
+  );
+  ref.listen<AsyncValue<int>>(pendingDriveDeliveryCountProvider, (
+    AsyncValue<int>? previous,
+    AsyncValue<int> next,
+  ) {
+    final int pending = next.value ?? 0;
+    if (pending <= 0) {
+      localPushDebounce?.cancel();
+      localPushDebounce = null;
+      return;
+    }
+    scheduleLocalPush();
+  }, fireImmediately: true);
+  final Timer timer = Timer.periodic(const Duration(minutes: 15), (_) {
+    unawaited(
+      ref
+          .read(googleDriveSyncControllerProvider.notifier)
+          .syncNow(background: true),
+    );
+  });
+  final AppLifecycleListener lifecycle = AppLifecycleListener(
+    onResume: () {
+      unawaited(
+        ref
+            .read(googleDriveSyncControllerProvider.notifier)
+            .syncNow(background: true),
+      );
+    },
+  );
+  ref.onDispose(() {
+    localPushDebounce?.cancel();
+    fullSyncDebounce?.cancel();
+    timer.cancel();
+    lifecycle.dispose();
+  });
+});
+
+String _driveAccountFingerprint(SettingsState settings) {
+  final List<Map<String, dynamic>> saved =
+      settings.anilistSavedAccounts
+          .map((account) => account.toJson())
+          .toList(growable: false)
+        ..sort(
+          (Map<String, dynamic> a, Map<String, dynamic> b) =>
+              ((a['viewerId'] as num?)?.toInt() ?? 0).compareTo(
+                (b['viewerId'] as num?)?.toInt() ?? 0,
+              ),
+        );
+  return jsonEncode(<String, dynamic>{
+    'saved': saved,
+    'active': <String, dynamic>{
+      'viewerId': settings.anilistViewerId,
+      'viewerName': settings.anilistViewerName,
+      'avatarUrl': settings.anilistAvatarUrl,
+      'accessToken': settings.anilistAccessToken,
+      'expiresAt': settings.anilistExpiresAt?.toUtc().toIso8601String(),
+      'primaryTrackerSource': settings.primaryTrackerSource.name,
+      'mal': <String, dynamic>{
+        'accessToken': settings.malAccessToken,
+        'refreshToken': settings.malRefreshToken,
+        'expiresAt': settings.malExpiresAt?.toUtc().toIso8601String(),
+        'viewerId': settings.malViewerId,
+        'viewerName': settings.malViewerName,
+        'avatarUrl': settings.malAvatarUrl,
+        'useCustomCredentials': settings.malUseCustomCredentials,
+        'desktopClientId': settings.malCustomClientIdDesktop,
+        'mobileClientId': settings.malCustomClientIdMobile,
+      },
+      'shikimori': <String, dynamic>{
+        'accessToken': settings.shikimoriAccessToken,
+        'refreshToken': settings.shikimoriRefreshToken,
+        'expiresAt': settings.shikimoriExpiresAt?.toUtc().toIso8601String(),
+        'viewerId': settings.shikimoriViewerId,
+        'viewerName': settings.shikimoriViewerName,
+        'avatarUrl': settings.shikimoriAvatarUrl,
+        'useCustomCredentials': settings.shikimoriUseCustomCredentials,
+        'clientId': settings.shikimoriCustomClientId,
+        'clientSecret': settings.shikimoriCustomClientSecret,
+      },
+    },
+  });
+}
+
+String _drivePreferenceFingerprint(SettingsState settings) =>
+    jsonEncode(<String, Object?>{
+      'tmdbUseCustomKey': settings.tmdbUseCustomKey,
+      'tmdbReadAccessToken': settings.tmdbReadAccessToken,
+      'fanartTvApiKey': settings.fanartTvApiKey,
+      'tmdbLanguage': settings.tmdbLanguage,
+      'tmdbRegion': settings.tmdbRegion,
+      'tmdbShowAdultContent': settings.tmdbShowAdultContent,
+      'tvdbEnabled': settings.tvdbEnabled,
+      'tvdbApiKey': settings.tvdbApiKey,
+      'tvdbSubscriberPin': settings.tvdbSubscriberPin,
+      'soraWebProxyUrl': settings.soraWebProxyUrl,
+      'anilistMobileClientId': settings.anilistMobileClientId,
+      'anilistDesktopClientId': settings.anilistDesktopClientId,
+      'anilistDesktopPort': settings.anilistDesktopPort,
+      'viewerId': settings.anilistViewerId,
+      'appLanguage': settings.appLocale?.languageCode,
+      'discordRpcEnabled': settings.discordRpcEnabled,
+      'titleLanguage': settings.anilistTitleLanguage,
+      'defaultLibraryPage': settings.anilistLibraryDefaultPage.name,
+    });
+
+String _driveAddonFingerprint(SoraAddonsState state) {
+  final List<Map<String, dynamic>> addons =
+      state.installed
+          .map((addon) {
+            final Map<String, dynamic> value = addon.toJson();
+            value.remove('installedAt');
+            value.remove('updatedAt');
+            value.remove('lastCheckedAt');
+            value.remove('lastError');
+            return value;
+          })
+          .toList(growable: false)
+        ..sort(
+          (Map<String, dynamic> a, Map<String, dynamic> b) =>
+              '${a['manifestUrl'] ?? a['id'] ?? ''}'.compareTo(
+                '${b['manifestUrl'] ?? b['id'] ?? ''}',
+              ),
+        );
+  return jsonEncode(addons);
+}
+
+String _driveAddonSourceFingerprint(AddonSourcesState state) {
+  final List<Map<String, dynamic>> sources =
+      state.sources.map((source) => source.toJson()).toList(growable: false)
+        ..sort(
+          (Map<String, dynamic> a, Map<String, dynamic> b) =>
+              '${a['url'] ?? ''}'.compareTo('${b['url'] ?? ''}'),
+        );
+  return jsonEncode(sources);
+}
+
+class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
+  final AppSecureStorage _storage = const AppSecureStorage();
+  Future<void>? _activeSync;
+  bool _syncAgainRequested = false;
+  bool _fullSyncAgainRequested = false;
+
+  @override
+  Future<GoogleDriveSyncState> build() async {
+    final bool configured = _googleDriveConfigured;
+    bool connected;
+    String? accessToken;
+    if (configured && GoogleDriveNativeAuthService.isSupported) {
+      try {
+        final String? nativeToken = await const GoogleDriveNativeAuthService()
+            .restoreAccessToken();
+        accessToken = nativeToken ?? await _storedAccessToken();
+        connected = accessToken != null && accessToken.isNotEmpty;
+        if (nativeToken != null && nativeToken.isNotEmpty) {
+          await _storeNativeAccessToken(nativeToken);
+        }
+      } on Object {
+        connected = false;
+      }
+    } else {
+      final String refreshToken =
+          (await _storage.readGoogleDriveRefreshToken()) ?? '';
+      connected = refreshToken.trim().isNotEmpty;
+      accessToken = await _storedAccessToken();
+    }
+    GoogleDriveAccountProfile? account = await _storedAccountProfile();
+    if (connected && accessToken != null && accessToken.isNotEmpty) {
+      account = await _fetchAndStoreAccountProfile(
+        accessToken,
+        fallback: account,
+      );
+    }
+    return GoogleDriveSyncState(
+      configured: configured,
+      connected: connected,
+      account: account,
+    );
+  }
+
+  Future<void> connect(GoogleDriveTokenBundle tokens) async {
+    await _storage.writeGoogleDriveAccessToken(tokens.accessToken);
+    await _storage.writeGoogleDriveRefreshToken(tokens.refreshToken);
+    await _storage.writeGoogleDriveExpiresAt(tokens.expiresAt);
+    final GoogleDriveAccountProfile? account =
+        await _fetchAndStoreAccountProfile(tokens.accessToken);
+    state = AsyncData(
+      (state.value ??
+              GoogleDriveSyncState(
+                configured: _googleDriveConfigured,
+                connected: true,
+              ))
+          .copyWith(connected: true, account: account, clearError: true),
+    );
+  }
+
+  Future<void> disconnect() async {
+    try {
+      await const GoogleDriveNativeAuthService().signOut();
+    } finally {
+      await _storage.clearGoogleDriveSession();
+    }
+    state = AsyncData(
+      GoogleDriveSyncState(
+        configured: _googleDriveConfigured,
+        connected: false,
+      ),
+    );
+  }
+
+  Future<void> syncNow({
+    bool background = false,
+    bool localChangesOnly = false,
+  }) {
+    final Future<void>? active = _activeSync;
+    if (active != null) {
+      _syncAgainRequested = true;
+      _fullSyncAgainRequested = _fullSyncAgainRequested || !localChangesOnly;
+      return active;
+    }
+    final Future<void> next = _sync(
+      background: background,
+      localChangesOnly: localChangesOnly,
+    );
+    _activeSync = next;
+    return next.whenComplete(() {
+      if (!identical(_activeSync, next)) return;
+      _activeSync = null;
+      if (_syncAgainRequested) {
+        final bool runFullSync = _fullSyncAgainRequested;
+        _syncAgainRequested = false;
+        _fullSyncAgainRequested = false;
+        unawaited(syncNow(background: true, localChangesOnly: !runFullSync));
+      }
+    });
+  }
+
+  Future<void> _sync({
+    required bool background,
+    required bool localChangesOnly,
+  }) async {
+    final GoogleDriveSyncState current =
+        state.value ??
+        GoogleDriveSyncState(
+          configured: _googleDriveConfigured,
+          connected: false,
+        );
+    if (!current.configured || !current.connected) return;
+    if (!background) {
+      state = AsyncData(current.copyWith(syncing: true, clearError: true));
+    }
+    GoogleDriveCloudReplica? activeCloud;
+    String? leaseDeviceId;
+    bool ownsDeliveryLease = false;
+    final List<String> replicaWarnings = <String>[];
+    try {
+      final String? token = await _validAccessToken();
+      if (token == null || token.isEmpty) {
+        state = AsyncData(
+          current.copyWith(
+            connected: false,
+            syncing: false,
+            lastError: 'Google Drive session expired. Connect again.',
+          ),
+        );
+        return;
+      }
+      if (localChangesOnly) {
+        final CanonicalLibraryRepository repository = ref.read(
+          canonicalLibraryRepositoryProvider,
+        );
+        final GoogleDriveCloudReplica libraryCloud = GoogleDriveCloudReplica(
+          accessToken: token,
+          replicaNamespace: repository.replicaNamespace,
+          includeLegacyLibrary: repository.importsLegacyData,
+        );
+        await _pushPendingLibrarySegments(repository, libraryCloud);
+        state = AsyncData(
+          (state.value ?? current).copyWith(
+            syncing: false,
+            connected: true,
+            lastSyncAt: DateTime.now().toUtc(),
+            clearError: true,
+          ),
+        );
+        return;
+      }
+      final GoogleDriveAccountProfile? account =
+          await _fetchAndStoreAccountProfile(
+            token,
+            fallback: state.value?.account ?? current.account,
+          );
+      if (account != null) {
+        state = AsyncData(
+          (state.value ?? current).copyWith(account: account, clearError: true),
+        );
+      }
+      final GoogleDriveCloudReplica cloud = GoogleDriveCloudReplica(
+        accessToken: token,
+      );
+      final CanonicalLibraryRepository initialRepository = ref.read(
+        canonicalLibraryRepositoryProvider,
+      );
+      leaseDeviceId = await initialRepository.deviceId();
+      final SettingsController settingsController = ref.read(
+        settingsProvider.notifier,
+      );
+      await settingsController.ready;
+      try {
+        final AccountDriveSyncResult accountResult =
+            await AccountDriveSyncService(
+              preferences: await SharedPreferences.getInstance(),
+            ).sync(
+              cloud: cloud,
+              deviceId: leaseDeviceId,
+              localAccounts: settingsController.driveAniListAccounts(),
+              activeViewerId: ref.read(settingsProvider).anilistViewerId,
+            );
+        if (accountResult.localStateChanged) {
+          await settingsController.applyDriveAniListAccounts(
+            accounts: accountResult.accounts,
+            preferredActiveViewerId: accountResult.preferredActiveViewerId,
+          );
+          invalidateAniListLibraryProviders(ref.invalidate);
+          ref.invalidate(trackerAnimeListProvider);
+        }
+      } on Object catch (error) {
+        debugPrint('Google Drive account sync failed: $error');
+        replicaWarnings.add('account');
+      }
+      try {
+        final PreferenceDriveSyncResult preferenceResult =
+            await PreferenceDriveSyncService(
+              preferences: await SharedPreferences.getInstance(),
+            ).sync(cloud: cloud, deviceId: leaseDeviceId);
+        if (preferenceResult.localStateChanged) {
+          await settingsController.reloadDrivePreferences();
+          ref.read(drivePreferencesRevisionProvider.notifier).changed();
+          ref.invalidate(playerSettingsProvider);
+          ref.invalidate(aniListUserSettingsProvider);
+          ref.invalidate(watchPartyConnectionSettingsProvider);
+        }
+      } on Object catch (error) {
+        debugPrint('Google Drive preference sync failed: $error');
+        replicaWarnings.add('preferences');
+      }
+      final CanonicalLibraryRepository repository = ref.read(
+        canonicalLibraryRepositoryProvider,
+      );
+      leaseDeviceId = await repository.deviceId();
+      final GoogleDriveCloudReplica libraryCloud = GoogleDriveCloudReplica(
+        accessToken: token,
+        replicaNamespace: repository.replicaNamespace,
+        includeLegacyLibrary: repository.importsLegacyData,
+      );
+      activeCloud = libraryCloud;
+      try {
+        final AddonDriveSyncResult addonResult = await AddonDriveSyncService(
+          preferences: await SharedPreferences.getInstance(),
+          store: ref.read(soraAddonStoreProvider),
+        ).sync(cloud: cloud, deviceId: leaseDeviceId);
+        if (addonResult.localStateChanged) {
+          ref.invalidate(soraJsRuntimeProvider);
+          ref.invalidate(addonCatalogProvider);
+          await ref.read(soraAddonsProvider.notifier).load();
+          await ref.read(addonSourcesProvider.notifier).load();
+        }
+      } on Object catch (error) {
+        // Addons are an independent replica. A bad/unreachable addon must not
+        // prevent canonical library operations from reaching Drive.
+        debugPrint('Google Drive addon sync failed: $error');
+        replicaWarnings.add('addons');
+      }
+      ownsDeliveryLease = await libraryCloud.acquireDeliveryLease(
+        deviceId: leaseDeviceId,
+      );
+      int applied = 0;
+      if (ownsDeliveryLease) {
+        final Set<String> processed = await repository
+            .processedDriveSegmentNames();
+        final List<DriveReplicaSegment> incoming = await libraryCloud
+            .pullSegments(excluding: processed);
+        final Set<TrackerSource> targets = _connectedTrackerTargets(
+          ref.read(settingsProvider),
+        );
+        for (final DriveReplicaSegment segment in incoming) {
+          applied += await repository.applyDriveSegment(
+            segment,
+            trackerTargets: targets,
+          );
+        }
+      }
+      await repository.applyRemoteDeliveryLedger(
+        await libraryCloud.readDeliveryLedger(),
+      );
+      await _pushPendingLibrarySegments(repository, libraryCloud);
+      if (ownsDeliveryLease) {
+        await ref.read(trackerSyncCoordinatorProvider).flushPending();
+        await libraryCloud.mergeDeliveryLedger(
+          await repository.confirmedTrackerDeliveryLedger(),
+        );
+      }
+      state = AsyncData(
+        (state.value ?? current).copyWith(
+          syncing: false,
+          connected: true,
+          lastSyncAt: DateTime.now().toUtc(),
+          appliedSegments: applied,
+          lastError: replicaWarnings.isEmpty
+              ? null
+              : 'Some data could not be synced. Please try again.',
+          clearError: replicaWarnings.isEmpty,
+        ),
+      );
+    } on Object catch (error) {
+      debugPrint('Google Drive sync failed: $error');
+      final GoogleDriveSyncState latest = state.value ?? current;
+      state = AsyncData(
+        latest.copyWith(
+          syncing: false,
+          lastError: 'Google Drive sync failed. Please try again.',
+        ),
+      );
+    } finally {
+      if (ownsDeliveryLease && activeCloud != null && leaseDeviceId != null) {
+        try {
+          await activeCloud.releaseDeliveryLease(deviceId: leaseDeviceId);
+        } on Object {
+          // The short lease expires by itself. A release failure must not turn
+          // a completed local/cloud sync into a destructive retry.
+        }
+      }
+    }
+  }
+
+  Future<void> _pushPendingLibrarySegments(
+    CanonicalLibraryRepository repository,
+    GoogleDriveCloudReplica cloud,
+  ) async {
+    DriveReplicaSegment? outgoing = await repository.buildPendingDriveSegment();
+    while (outgoing != null) {
+      final CloudReplicaFile file = await cloud.pushSegment(outgoing);
+      await repository.markDriveSegmentDelivered(
+        outgoing,
+        remoteFileId: file.id,
+      );
+      outgoing = await repository.buildPendingDriveSegment();
+    }
+  }
+
+  Future<String?> _validAccessToken() async {
+    if (GoogleDriveNativeAuthService.isSupported) {
+      final String? nativeToken = await const GoogleDriveNativeAuthService()
+          .restoreAccessToken();
+      final String? token = nativeToken ?? await _storedAccessToken();
+      if (token == null || token.isEmpty) return null;
+      if (nativeToken != null && nativeToken.isNotEmpty) {
+        await _storeNativeAccessToken(token);
+      }
+      return token;
+    }
+    final String? accessToken = await _storedAccessToken();
+    if (accessToken != null) return accessToken;
+    final String refreshToken =
+        (await _storage.readGoogleDriveRefreshToken()) ?? '';
+    if (refreshToken.isEmpty) return null;
+    final GoogleDriveTokenBundle refreshed = await GoogleDriveOAuthService()
+        .refresh(
+          refreshToken: refreshToken,
+          television: TvPlatform.isAndroidTv,
+        );
+    await connect(refreshed);
+    return refreshed.accessToken;
+  }
+
+  bool get _googleDriveConfigured => TvPlatform.isAndroidTv
+      ? AppConstants.googleOAuthTvConfigured
+      : AppConstants.googleOAuthConfigured;
+
+  Future<String?> _storedAccessToken() async {
+    final String accessToken =
+        (await _storage.readGoogleDriveAccessToken()) ?? '';
+    final DateTime? expiresAt = await _storage.readGoogleDriveExpiresAt();
+    if (accessToken.isNotEmpty &&
+        expiresAt != null &&
+        expiresAt.isAfter(
+          DateTime.now().toUtc().add(const Duration(minutes: 2)),
+        )) {
+      return accessToken;
+    }
+    return null;
+  }
+
+  Future<void> _storeNativeAccessToken(String token) async {
+    await _storage.writeGoogleDriveAccessToken(token);
+    await _storage.writeGoogleDriveExpiresAt(
+      DateTime.now().toUtc().add(const Duration(minutes: 50)),
+    );
+  }
+
+  Future<GoogleDriveAccountProfile?> _storedAccountProfile() async {
+    final String raw =
+        (await _storage.readGoogleDriveAccountProfile())?.trim() ?? '';
+    if (raw.isEmpty) return null;
+    try {
+      final Object? decoded = jsonDecode(raw);
+      if (decoded is! Map<String, dynamic>) return null;
+      return GoogleDriveAccountProfile.fromStoredJson(decoded);
+    } on FormatException {
+      return null;
+    }
+  }
+
+  Future<GoogleDriveAccountProfile?> _fetchAndStoreAccountProfile(
+    String accessToken, {
+    GoogleDriveAccountProfile? fallback,
+  }) async {
+    try {
+      final GoogleDriveAccountProfile account = await GoogleDriveAccountClient()
+          .fetchProfile(accessToken);
+      await _storage.writeGoogleDriveAccountProfile(
+        jsonEncode(account.toJson()),
+      );
+      return account;
+    } on Object {
+      // Account decoration must never block local/cloud synchronization. The
+      // next successful sync retries the lightweight Drive about.get call.
+      return fallback;
+    }
+  }
+}
+
+Set<TrackerSource> _connectedTrackerTargets(SettingsState settings) =>
+    <TrackerSource>{
+      if (settings.hasAniListSession) TrackerSource.anilist,
+      if (settings.hasMalSession) TrackerSource.mal,
+      if (settings.hasShikimoriSession) TrackerSource.shikimori,
+    };

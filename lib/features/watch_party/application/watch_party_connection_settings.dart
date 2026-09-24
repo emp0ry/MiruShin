@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../settings/data/workspace_preferences_store.dart';
 import '../domain/watch_party_models.dart';
 
 final watchPartyConnectionSettingsProvider =
@@ -52,6 +53,7 @@ class WatchPartyConnectionSettingsController
 
   @override
   Future<WatchPartyConnectionSettings> build() async {
+    ref.watch(drivePreferencesRevisionProvider);
     final SharedPreferences preferences = await SharedPreferences.getInstance();
     final String? raw = preferences.getString(_key);
     if (raw == null || raw.isEmpty) {
@@ -88,6 +90,7 @@ class WatchPartyConnectionSettingsController
     state = AsyncData<WatchPartyConnectionSettings>(value);
     final SharedPreferences preferences = await SharedPreferences.getInstance();
     await preferences.setString(_key, jsonEncode(value.toJson()));
+    ref.read(drivePreferencesRevisionProvider.notifier).changed();
   }
 }
 

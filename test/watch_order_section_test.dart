@@ -90,7 +90,7 @@ void main() {
   });
 
   testWidgets(
-    'mobile section displays live status, main filter and current title',
+    'mobile section displays live status and highlights the current title',
     (tester) async {
       tester.view.physicalSize = const Size(320, 1000);
       tester.view.devicePixelRatio = 1;
@@ -124,7 +124,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('Watch Order'), findsOneWidget);
-      expect(find.textContaining('Current title'), findsOneWidget);
+      expect(find.textContaining('Current title'), findsNothing);
       expect(find.text('Anime 2'), findsOneWidget);
       final Finder currentShell = find.byKey(
         const ValueKey<String>('watch-order-shell-1'),
@@ -264,7 +264,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Watch Order'), findsOneWidget);
-    expect(find.textContaining('Current title'), findsOneWidget);
+    expect(find.textContaining('Current title'), findsNothing);
     expect(find.text('Watching · 7 / 12'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });

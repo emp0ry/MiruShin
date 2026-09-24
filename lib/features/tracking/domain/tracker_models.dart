@@ -50,6 +50,17 @@ extension MalListStatus on AniListListStatus {
   /// Whether MAL should mark this entry as a rewatch.
   bool get malIsRewatching => this == AniListListStatus.repeating;
 
+  String get malMangaValue {
+    return switch (this) {
+      AniListListStatus.current => 'reading',
+      AniListListStatus.repeating => 'reading',
+      AniListListStatus.planning => 'plan_to_read',
+      AniListListStatus.completed => 'completed',
+      AniListListStatus.dropped => 'dropped',
+      AniListListStatus.paused => 'on_hold',
+    };
+  }
+
   /// Maps the app's canonical status to a Shikimori user_rate status.
   String get shikimoriValue {
     return switch (this) {
@@ -61,12 +72,23 @@ extension MalListStatus on AniListListStatus {
       AniListListStatus.paused => 'on_hold',
     };
   }
+
+  String get shikimoriMangaValue {
+    return switch (this) {
+      AniListListStatus.current => 'reading',
+      AniListListStatus.repeating => 'rereading',
+      AniListListStatus.planning => 'planned',
+      AniListListStatus.completed => 'completed',
+      AniListListStatus.dropped => 'dropped',
+      AniListListStatus.paused => 'on_hold',
+    };
+  }
 }
 
 AniListListStatus malStatusToCanonical(String? value) {
   return switch (value) {
-    'watching' => AniListListStatus.current,
-    'plan_to_watch' => AniListListStatus.planning,
+    'watching' || 'reading' => AniListListStatus.current,
+    'plan_to_watch' || 'plan_to_read' => AniListListStatus.planning,
     'completed' => AniListListStatus.completed,
     'dropped' => AniListListStatus.dropped,
     'on_hold' => AniListListStatus.paused,
@@ -76,8 +98,8 @@ AniListListStatus malStatusToCanonical(String? value) {
 
 AniListListStatus shikimoriStatusToCanonical(String? value) {
   return switch (value) {
-    'watching' => AniListListStatus.current,
-    'rewatching' => AniListListStatus.repeating,
+    'watching' || 'reading' => AniListListStatus.current,
+    'rewatching' || 'rereading' => AniListListStatus.repeating,
     'planned' => AniListListStatus.planning,
     'completed' => AniListListStatus.completed,
     'dropped' => AniListListStatus.dropped,

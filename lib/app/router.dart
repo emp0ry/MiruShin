@@ -9,6 +9,7 @@ import '../features/calendar/presentation/calendar_page.dart';
 import '../features/discovery/presentation/discovery_page.dart';
 import '../features/downloads/presentation/offline_title_page.dart';
 import '../features/library/presentation/library_page.dart';
+import '../features/library/presentation/library_sync_page.dart';
 import '../features/media_details/presentation/media_details_page.dart';
 import '../features/player/domain/player_models.dart';
 import '../features/player/presentation/player_page.dart';
@@ -146,6 +147,11 @@ GoRouter buildAppRouter(String initialLocation) => GoRouter(
             const SettingsPage(),
             motion: AppPageMotion.fadeThrough,
           ),
+        ),
+        GoRoute(
+          path: AppRoutes.librarySync,
+          pageBuilder: (BuildContext context, GoRouterState state) =>
+              _appPage(context, state, const LibrarySyncPage()),
         ),
         GoRoute(
           path: AppRoutes.profile,

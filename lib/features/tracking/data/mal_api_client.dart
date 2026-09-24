@@ -59,9 +59,25 @@ class MalApiClient {
   /// Fetches the signed-in user's full anime list, mapped into the shared
   /// folder/entry model so the existing library UI can render it unchanged.
   Future<List<AniListAnimeListFolder>> fetchAnimeList() async {
+    return _fetchUserList(
+      '/users/@me/animelist?fields=$_listFields&limit=1000&nsfw=true',
+      manga: false,
+    );
+  }
+
+  Future<List<AniListAnimeListFolder>> fetchMangaList() async {
+    return _fetchUserList(
+      '/users/@me/mangalist?fields=$_listFields&limit=1000&nsfw=true',
+      manga: true,
+    );
+  }
+
+  Future<List<AniListAnimeListFolder>> _fetchUserList(
+    String initialPath, {
+    required bool manga,
+  }) async {
     final List<Map<String, dynamic>> nodes = <Map<String, dynamic>>[];
-    String path =
-        '/users/@me/animelist?fields=$_listFields&limit=1000&nsfw=true';
+    String path = initialPath;
     int guard = 0;
     while (guard < 20) {
       guard++;
@@ -79,7 +95,7 @@ class MalApiClient {
       if (next == null || next.trim().isEmpty) break;
       path = next;
     }
-    return _foldersFromNodes(nodes);
+    return _foldersFromNodes(nodes, manga: manga);
   }
 
   /// Search/read endpoints used only when AniList reads are unavailable.
@@ -126,29 +142,81 @@ class MalApiClient {
     return _mediaFromNode(data, malId);
   }
 
+  Future<MediaItem?> fetchMangaDetails(int malId) async {
+    if (malId <= 0) return null;
+    final Response<dynamic> response = await _get(
+      '/manga/$malId',
+      queryParameters: const <String, dynamic>{
+        'fields':
+            'num_chapters,num_volumes,media_type,main_picture,'
+            'alternative_titles,start_date,mean,synopsis,genres,status,'
+            'nsfw,pictures',
+      },
+    );
+    final Object? data = response.data;
+    if (data is! Map<String, dynamic>) return null;
+    return _mediaFromNode(data, malId, manga: true);
+  }
+
   Future<void> updateStatus({
     required int malId,
+    String mediaKind = 'anime',
     AniListListStatus? status,
     int? episodesWatched,
+    int? volumesRead,
     double? score,
+    bool? isRewatching,
+    int? numTimesRewatched,
+    int? rewatchValue,
+    int? priority,
+    List<String>? tags,
+    String? comments,
+    DateTime? startDate,
+    DateTime? finishDate,
   }) async {
+    final bool? effectiveRewatching = isRewatching ?? status?.malIsRewatching;
+    final bool manga = mediaKind == 'manga';
     final Map<String, dynamic> form = <String, dynamic>{
-      if (status != null) 'status': status.malValue,
-      if (status != null) 'is_rewatching': status.malIsRewatching,
-      'num_watched_episodes': ?episodesWatched,
+      if (status != null)
+        'status': manga ? status.malMangaValue : status.malValue,
+      if (manga)
+        'is_rereading': ?effectiveRewatching
+      else
+        'is_rewatching': ?effectiveRewatching,
+      if (manga)
+        'num_chapters_read': ?episodesWatched
+      else
+        'num_watched_episodes': ?episodesWatched,
+      if (manga) 'num_volumes_read': ?volumesRead,
       if (score != null) 'score': score.round().clamp(0, 10),
+      if (manga)
+        'num_times_reread': ?numTimesRewatched
+      else
+        'num_times_rewatched': ?numTimesRewatched,
+      if (manga)
+        'reread_value': ?rewatchValue
+      else
+        'rewatch_value': ?rewatchValue,
+      if (priority != null) 'priority': priority.clamp(0, 2),
+      if (tags != null) 'tags': tags.join(','),
+      'comments': ?comments,
+      if (startDate != null) 'start_date': _apiDate(startDate),
+      if (finishDate != null) 'finish_date': _apiDate(finishDate),
     };
     if (form.isEmpty) return;
     await _request(
       'PATCH',
-      '/anime/$malId/my_list_status',
+      '/${manga ? 'manga' : 'anime'}/$malId/my_list_status',
       data: form,
       contentType: Headers.formUrlEncodedContentType,
     );
   }
 
-  Future<void> deleteEntry(int malId) async {
-    await _request('DELETE', '/anime/$malId/my_list_status');
+  Future<void> deleteEntry(int malId, {String mediaKind = 'anime'}) async {
+    await _request(
+      'DELETE',
+      '/${mediaKind == 'manga' ? 'manga' : 'anime'}/$malId/my_list_status',
+    );
   }
 
   // Internal helpers
@@ -185,8 +253,9 @@ class MalApiClient {
   }
 
   List<AniListAnimeListFolder> _foldersFromNodes(
-    List<Map<String, dynamic>> nodes,
-  ) {
+    List<Map<String, dynamic>> nodes, {
+    required bool manga,
+  }) {
     final Map<AniListListStatus, List<AniListAnimeListEntry>> grouped =
         <AniListListStatus, List<AniListAnimeListEntry>>{};
     for (final Map<String, dynamic> wrapper in nodes) {
@@ -196,12 +265,13 @@ class MalApiClient {
       final Map<String, dynamic> ls = listStatus is Map<String, dynamic>
           ? listStatus
           : const <String, dynamic>{};
-      final AniListListStatus status = ls['is_rewatching'] == true
+      final AniListListStatus status =
+          (manga ? ls['is_rereading'] : ls['is_rewatching']) == true
           ? AniListListStatus.repeating
           : malStatusToCanonical(ls['status'] as String?);
       grouped
           .putIfAbsent(status, () => <AniListAnimeListEntry>[])
-          .add(_entryFromNode(node, ls, status));
+          .add(_entryFromNode(node, ls, status, manga: manga));
     }
     return _groupedToFolders(grouped);
   }
@@ -228,18 +298,66 @@ class MalApiClient {
   AniListAnimeListEntry _entryFromNode(
     Map<String, dynamic> node,
     Map<String, dynamic> listStatus,
-    AniListListStatus status,
-  ) {
+    AniListListStatus status, {
+    required bool manga,
+  }) {
     final int malId = _int(node['id']);
     final double rawScore = _double(listStatus['score']);
     return AniListAnimeListEntry(
       id: malId,
       status: status,
-      progress: _int(listStatus['num_episodes_watched']),
+      progress: _int(
+        manga
+            ? listStatus['num_chapters_read']
+            : listStatus['num_episodes_watched'],
+      ),
+      progressVolumes: manga ? _int(listStatus['num_volumes_read']) : 0,
       score: rawScore > 0 ? rawScore : null,
-      mediaItem: _mediaFromNode(node, malId),
+      mediaItem: _mediaFromNode(node, malId, manga: manga),
       notes: _string(listStatus['comments']),
-      repeat: _int(listStatus['num_times_rewatched']),
+      repeat: _int(
+        manga
+            ? listStatus['num_times_reread']
+            : listStatus['num_times_rewatched'],
+      ),
+      priority: _int(listStatus['priority']),
+      providerData: <String, dynamic>{
+        'status': _string(listStatus['status']),
+        manga ? 'isRereading' : 'isRewatching':
+            (manga
+                ? listStatus['is_rereading']
+                : listStatus['is_rewatching']) ==
+            true,
+        manga ? 'numTimesReread' : 'numTimesRewatched': _int(
+          manga
+              ? listStatus['num_times_reread']
+              : listStatus['num_times_rewatched'],
+        ),
+        manga ? 'rereadValue' : 'rewatchValue': _int(
+          manga ? listStatus['reread_value'] : listStatus['rewatch_value'],
+        ),
+        'priority': _int(listStatus['priority']),
+        'tags': listStatus['tags'] is List
+            ? List<String>.from(
+                (listStatus['tags'] as List<dynamic>).whereType<String>(),
+              )
+            : const <String>[],
+        'comments': _string(listStatus['comments']),
+        'score': rawScore,
+        if (manga) ...<String, dynamic>{
+          'numChaptersRead': _int(listStatus['num_chapters_read']),
+          'numVolumesRead': _int(listStatus['num_volumes_read']),
+        } else
+          'numEpisodesWatched': _int(listStatus['num_episodes_watched']),
+        if (listStatus['start_date'] != null)
+          'startDate': _string(listStatus['start_date']),
+        if (listStatus['finish_date'] != null)
+          'finishDate': _string(listStatus['finish_date']),
+        if (listStatus['created_at'] != null)
+          'createdAt': _string(listStatus['created_at']),
+        if (listStatus['updated_at'] != null)
+          'updatedAt': _string(listStatus['updated_at']),
+      },
       createdAt: _epochSeconds(listStatus['created_at']),
       updatedAt: _epochSeconds(listStatus['updated_at']),
       startedAt: _date(listStatus['start_date']),
@@ -249,7 +367,11 @@ class MalApiClient {
     );
   }
 
-  MediaItem _mediaFromNode(Map<String, dynamic> node, int malId) {
+  MediaItem _mediaFromNode(
+    Map<String, dynamic> node,
+    int malId, {
+    bool manga = false,
+  }) {
     final Object? picture = node['main_picture'];
     final String poster = picture is Map<String, dynamic>
         ? _string(picture['large']).isNotEmpty
@@ -293,11 +415,11 @@ class MalApiClient {
     final String mediaType = _string(node['media_type']).toUpperCase();
     final String startDate = _string(node['start_date']);
     return MediaItem(
-      id: 'mal:$malId',
+      id: manga ? 'mal:manga:$malId' : 'mal:$malId',
       title: _string(node['title']),
       originalTitle: original,
       overview: _string(node['synopsis']),
-      type: MediaType.anime,
+      type: manga ? MediaType.manga : MediaType.anime,
       year: year,
       posterUrl: poster,
       backdropUrl: backdrop,
@@ -306,6 +428,7 @@ class MalApiClient {
       sourceProvider: 'MyAnimeList',
       externalIds: <String, String>{
         'mal': '$malId',
+        if (manga) 'anilist_type': 'MANGA',
         if (source.isNotEmpty) 'mal_source': source,
         if (nsfw.isNotEmpty) 'mal_nsfw': nsfw,
         if (mediaType.isNotEmpty) 'mal_media_type': mediaType,
@@ -314,7 +437,7 @@ class MalApiClient {
       runtimeMinutes: durationSeconds > 0
           ? (durationSeconds / 60).round()
           : null,
-      episodeCount: _nullableInt(node['num_episodes']),
+      episodeCount: _nullableInt(node[manga ? 'num_chapters' : 'num_episodes']),
       statusLabel: _string(node['status']).toUpperCase(),
       aliases: aliases,
       originalLanguage: 'ja',
@@ -424,3 +547,8 @@ class MalApiClient {
     };
   }
 }
+
+String _apiDate(DateTime value) =>
+    '${value.year.toString().padLeft(4, '0')}-'
+    '${value.month.toString().padLeft(2, '0')}-'
+    '${value.day.toString().padLeft(2, '0')}';

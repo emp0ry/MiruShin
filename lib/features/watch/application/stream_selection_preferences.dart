@@ -4,23 +4,39 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../shared/models/media_item.dart';
+import '../../library/application/canonical_library_repository.dart';
+import '../../library/domain/canonical_library_models.dart';
 import '../domain/normalized_models.dart';
 
 final streamSelectionPreferenceStoreProvider =
     Provider<StreamSelectionPreferenceStore>(
-      (Ref ref) => const StreamSelectionPreferenceStore(),
+      (Ref ref) => StreamSelectionPreferenceStore(
+        repository: ref.watch(canonicalLibraryRepositoryProvider),
+      ),
     );
+
+final streamSelectionMigrationProvider = FutureProvider<void>((Ref ref) {
+  return ref.watch(streamSelectionPreferenceStoreProvider).migrateAllLegacy();
+});
 
 class StreamSelectionPreference {
   const StreamSelectionPreference({
     this.serverId = '',
     this.serverTitle = '',
+    this.addonId = '',
+    this.sourceId = '',
+    this.voiceoverId = '',
+    this.voiceoverTitle = '',
     this.qualityId = '',
     this.qualityLabel = '',
   });
 
   final String serverId;
   final String serverTitle;
+  final String addonId;
+  final String sourceId;
+  final String voiceoverId;
+  final String voiceoverTitle;
   final String qualityId;
   final String qualityLabel;
 
@@ -33,6 +49,10 @@ class StreamSelectionPreference {
   Map<String, Object> toJson() => <String, Object>{
     'serverId': serverId,
     'serverTitle': serverTitle,
+    'addonId': addonId,
+    'sourceId': sourceId,
+    'voiceoverId': voiceoverId,
+    'voiceoverTitle': voiceoverTitle,
     'qualityId': qualityId,
     'qualityLabel': qualityLabel,
   };
@@ -41,6 +61,10 @@ class StreamSelectionPreference {
     return StreamSelectionPreference(
       serverId: json['serverId'] as String? ?? '',
       serverTitle: json['serverTitle'] as String? ?? '',
+      addonId: json['addonId'] as String? ?? '',
+      sourceId: json['sourceId'] as String? ?? '',
+      voiceoverId: json['voiceoverId'] as String? ?? '',
+      voiceoverTitle: json['voiceoverTitle'] as String? ?? '',
       qualityId: json['qualityId'] as String? ?? '',
       qualityLabel: json['qualityLabel'] as String? ?? '',
     );
@@ -140,17 +164,88 @@ NormalizedQuality? _matchingQuality(
 String _normalized(String value) => value.trim().toLowerCase();
 
 class StreamSelectionPreferenceStore {
-  const StreamSelectionPreferenceStore({SharedPreferences? preferences})
-    : _preferences = preferences;
+  const StreamSelectionPreferenceStore({
+    SharedPreferences? preferences,
+    CanonicalLibraryRepository? repository,
+  }) : _preferences = preferences,
+       _repository = repository;
 
   static const String _keyPrefix = 'watch.streamSelection.v1.';
 
   final SharedPreferences? _preferences;
+  final CanonicalLibraryRepository? _repository;
+
+  Future<void> migrateAllLegacy() async {
+    final CanonicalLibraryRepository? repository = _repository;
+    if (repository == null) return;
+    if (!repository.importsLegacyData) return;
+    final SharedPreferences preferences =
+        _preferences ?? await SharedPreferences.getInstance();
+    const String marker = 'watch.streamSelection.v1.migratedToCanonical';
+    if (preferences.getBool(marker) == true) return;
+    for (final String key in preferences.getKeys()) {
+      if (!key.startsWith(_keyPrefix)) continue;
+      final String encoded = key.substring(_keyPrefix.length);
+      try {
+        final String scope = utf8.decode(
+          base64Url.decode(base64Url.normalize(encoded)),
+        );
+        final int separator = scope.indexOf(':');
+        if (separator <= 0 || separator == scope.length - 1) continue;
+        final String typeName = scope.substring(0, separator);
+        final String mediaId = scope.substring(separator + 1);
+        final MediaType mediaType = MediaType.values.firstWhere(
+          (MediaType value) => value.name == typeName,
+          orElse: () => MediaType.anime,
+        );
+        if (mediaType != MediaType.anime) continue;
+        final String? raw = preferences.getString(key);
+        final Object? decoded = raw == null ? null : jsonDecode(raw);
+        if (decoded is! Map) continue;
+        final StreamSelectionPreference preference =
+            StreamSelectionPreference.fromJson(
+              Map<String, dynamic>.from(decoded),
+            );
+        if (!preference.hasServer) continue;
+        await repository.saveStreamPreferenceByMediaId(
+          mediaId: mediaId,
+          mediaType: mediaType,
+          preference: _canonicalPreference(preference),
+          recordActivity: false,
+        );
+      } on Object {
+        // Preserve malformed legacy values for recovery instead of deleting.
+      }
+    }
+    await preferences.setBool(marker, true);
+  }
 
   Future<StreamSelectionPreference?> read({
     required MediaType mediaType,
     required String mediaId,
   }) async {
+    final CanonicalStreamPreference? canonical = mediaType == MediaType.anime
+        ? await _repository?.loadStreamPreference(mediaId: mediaId)
+        : null;
+    if (canonical != null &&
+        (canonical.serverId.trim().isNotEmpty ||
+            canonical.serverTitle.trim().isNotEmpty)) {
+      return StreamSelectionPreference(
+        addonId: canonical.addonId,
+        sourceId: canonical.sourceId,
+        serverId: canonical.serverId,
+        serverTitle: canonical.serverTitle,
+        voiceoverId: canonical.voiceoverId,
+        voiceoverTitle: canonical.voiceoverTitle,
+        qualityId: canonical.qualityId,
+        qualityLabel: canonical.qualityLabel,
+      );
+    }
+    if (mediaType == MediaType.anime &&
+        _repository != null &&
+        !_repository.importsLegacyData) {
+      return null;
+    }
     final SharedPreferences preferences =
         _preferences ?? await SharedPreferences.getInstance();
     final String key = _key(mediaType, mediaId);
@@ -162,6 +257,14 @@ class StreamSelectionPreferenceStore {
       final StreamSelectionPreference preference =
           StreamSelectionPreference.fromJson(decoded.cast<String, dynamic>());
       if (!preference.hasServer) return null;
+      if (mediaType == MediaType.anime) {
+        await _repository?.saveStreamPreferenceByMediaId(
+          mediaId: mediaId,
+          mediaType: mediaType,
+          preference: _canonicalPreference(preference),
+          recordActivity: false,
+        );
+      }
       return preference;
     } on Object {
       await preferences.remove(key);
@@ -175,6 +278,16 @@ class StreamSelectionPreferenceStore {
     required StreamSelectionPreference preference,
   }) async {
     if (mediaId.trim().isEmpty || !preference.hasServer) return;
+    if (mediaType == MediaType.anime) {
+      await _repository?.saveStreamPreferenceByMediaId(
+        mediaId: mediaId,
+        mediaType: mediaType,
+        preference: _canonicalPreference(preference),
+      );
+      if (_repository != null && !_repository.importsLegacyData) {
+        return;
+      }
+    }
     final SharedPreferences preferences =
         _preferences ?? await SharedPreferences.getInstance();
     await preferences.setString(
@@ -191,3 +304,16 @@ class StreamSelectionPreferenceStore {
     return '$_keyPrefix$encoded';
   }
 }
+
+CanonicalStreamPreference _canonicalPreference(
+  StreamSelectionPreference preference,
+) => CanonicalStreamPreference(
+  addonId: preference.addonId,
+  sourceId: preference.sourceId,
+  serverId: preference.serverId,
+  serverTitle: preference.serverTitle,
+  voiceoverId: preference.voiceoverId,
+  voiceoverTitle: preference.voiceoverTitle,
+  qualityId: preference.qualityId,
+  qualityLabel: preference.qualityLabel,
+);

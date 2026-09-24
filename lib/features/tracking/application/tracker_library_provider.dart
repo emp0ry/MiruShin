@@ -25,67 +25,68 @@ final trackerLibraryOptimisticMutationsProvider =
 /// restores pending edits after an app restart. Pending journal mutations are
 /// kept separately so a stale provider response cannot overwrite them.
 final trackerLocalAnimeLibraryProvider =
-    FutureProvider<TrackerLocalAnimeLibrary>((Ref ref) async {
-      final account = ref.watch(
-        settingsProvider.select(
-          (SettingsState settings) => (
-            settings.effectivePrimaryTrackerSource,
-            settings.anilistViewerId,
-            settings.malViewerId,
-            settings.shikimoriViewerId,
+    FutureProvider<TrackerLocalAnimeLibrary>(
+      (Ref ref) => _loadCanonicalLibrary(ref, 'anime'),
+    );
+
+final trackerLocalMangaLibraryProvider =
+    FutureProvider<TrackerLocalAnimeLibrary>(
+      (Ref ref) => _loadCanonicalLibrary(ref, 'manga'),
+    );
+
+Future<TrackerLocalAnimeLibrary> _loadCanonicalLibrary(
+  Ref ref,
+  String mediaKind,
+) async {
+  final account = ref.watch(
+    settingsProvider.select(
+      (SettingsState settings) => (
+        settings.effectivePrimaryTrackerSource,
+        settings.anilistViewerId,
+        settings.malViewerId,
+        settings.shikimoriViewerId,
+      ),
+    ),
+  );
+  // Account ids invalidate provider snapshots and select that AniList
+  // workspace's physically isolated canonical library.
+  final TrackerSource source = account.$1;
+  final store = ref.watch(trackingSyncStoreProvider);
+  final List<UserMediaState> states = await store.loadStates();
+  final List<SyncJournalEntry> journal = await store.loadJournal();
+  final List<UserMediaState> visibleStates = states
+      .where((UserMediaState state) => state.identity.mediaKind == mediaKind)
+      .toList(growable: false);
+  final List<AniListAnimeListFolder> folders = foldersFromUserMediaStates(
+    visibleStates,
+  );
+  final List<AniListAnimeListEntry> entries = <AniListAnimeListEntry>[
+    for (final AniListAnimeListFolder folder in folders) ...folder.entries,
+  ];
+
+  AniListAnimeListEntry? seedFor(MediaIdentity identity) {
+    for (final AniListAnimeListEntry entry in entries) {
+      if (_entryIdentity(entry).matches(identity)) return entry;
+    }
+    return null;
+  }
+
+  return TrackerLocalAnimeLibrary(
+    folders: folders,
+    pendingMutations: <TrackerLibraryOptimisticMutation>[
+      for (final SyncJournalEntry mutation in journal)
+        if (mutation.identity.mediaKind == mediaKind &&
+            mutation.tracks(source) &&
+            (mutation.patch.delete || mutation.patch.touchesLibraryState))
+          TrackerLibraryOptimisticMutation(
+            identity: mutation.identity,
+            patch: mutation.patch,
+            seedEntry: seedFor(mutation.identity),
+            updatedAt: mutation.updatedAt,
           ),
-        ),
-      );
-      // The viewer ids are intentionally part of the dependency above. They
-      // prevent a local snapshot from surviving an account switch in memory.
-      final TrackerSource source = account.$1;
-      final store = ref.watch(trackingSyncStoreProvider);
-      final List<UserMediaState> states = await store.loadStates();
-      final List<SyncJournalEntry> journal = await store.loadJournal();
-
-      bool trackedBySource(MediaIdentity identity) => journal.any(
-        (SyncJournalEntry mutation) =>
-            mutation.identity.matches(identity) && mutation.tracks(source),
-      );
-
-      final List<UserMediaState> visibleStates = states
-          .where(
-            (UserMediaState state) =>
-                state.identity.mediaKind == 'anime' &&
-                (state.providerStates.containsKey(source) ||
-                    trackedBySource(state.identity)),
-          )
-          .toList(growable: false);
-      final List<AniListAnimeListFolder> folders = foldersFromUserMediaStates(
-        visibleStates,
-      );
-      final List<AniListAnimeListEntry> entries = <AniListAnimeListEntry>[
-        for (final AniListAnimeListFolder folder in folders) ...folder.entries,
-      ];
-
-      AniListAnimeListEntry? seedFor(MediaIdentity identity) {
-        for (final AniListAnimeListEntry entry in entries) {
-          if (_entryIdentity(entry).matches(identity)) return entry;
-        }
-        return null;
-      }
-
-      return TrackerLocalAnimeLibrary(
-        folders: folders,
-        pendingMutations: <TrackerLibraryOptimisticMutation>[
-          for (final SyncJournalEntry mutation in journal)
-            if (mutation.identity.mediaKind == 'anime' &&
-                mutation.tracks(source) &&
-                (mutation.patch.delete || mutation.patch.touchesLibraryState))
-              TrackerLibraryOptimisticMutation(
-                identity: mutation.identity,
-                patch: mutation.patch,
-                seedEntry: seedFor(mutation.identity),
-                updatedAt: mutation.updatedAt,
-              ),
-        ],
-      );
-    });
+    ],
+  );
+}
 
 class TrackerLocalAnimeLibrary {
   const TrackerLocalAnimeLibrary({
@@ -366,9 +367,8 @@ List<AniListAnimeListFolder> applyTrackerLibraryOptimisticMutations(
   return result;
 }
 
-/// Combines a provider snapshot with durable pending state and the current
-/// frame's optimistic edits. [useLocalFallback] should only be true before a
-/// live snapshot resolves or while its provider is unavailable.
+/// Combines provider metadata with the canonical local state and optimistic
+/// edits. Once the local database has an entry it is always the UI authority.
 List<AniListAnimeListFolder> effectiveTrackerAnimeLibrary({
   required List<AniListAnimeListFolder> providerFolders,
   TrackerLocalAnimeLibrary? local,
@@ -377,7 +377,11 @@ List<AniListAnimeListFolder> effectiveTrackerAnimeLibrary({
   bool useLocalFallback = false,
   Set<AniListListStatus>? statuses,
 }) {
-  List<AniListAnimeListFolder> result = useLocalFallback && local != null
+  List<AniListAnimeListFolder> result =
+      local != null &&
+          (local.folders.isNotEmpty ||
+              providerFolders.isEmpty ||
+              useLocalFallback)
       ? local.folders
       : providerFolders;
   if (local != null && local.pendingMutations.isNotEmpty) {
@@ -411,6 +415,33 @@ AniListAnimeListEntry _applyPatchToEntry(
   DateTime? mutationUpdatedAt,
 }) {
   final AniListAnimeListEntry metadata = seedEntry ?? base;
+  final Map<String, dynamic> providerData = <String, dynamic>{
+    ...base.providerData,
+  };
+  if (patch.touches(UserMediaField.scoreFormat)) {
+    providerData['scoreFormat'] = patch.scoreFormat;
+  }
+  if (patch.touches(UserMediaField.malPriority) ||
+      patch.touches(UserMediaField.malRewatchValue) ||
+      patch.touches(UserMediaField.malTags)) {
+    final Object? rawSnapshots = providerData['providerSnapshots'];
+    final Map<String, dynamic> snapshots = rawSnapshots is Map
+        ? Map<String, dynamic>.from(rawSnapshots)
+        : <String, dynamic>{};
+    final Object? rawMal = snapshots['mal'];
+    snapshots['mal'] = <String, dynamic>{
+      if (rawMal is Map) ...Map<String, dynamic>.from(rawMal),
+      if (patch.touches(UserMediaField.malPriority))
+        'priority': patch.malPriority,
+      if (patch.touches(UserMediaField.malRewatchValue))
+        (_entryIdentity(base).mediaKind == 'manga'
+                ? 'rereadValue'
+                : 'rewatchValue'):
+            patch.malRewatchValue,
+      if (patch.touches(UserMediaField.malTags)) 'tags': patch.malTags,
+    };
+    providerData['providerSnapshots'] = snapshots;
+  }
   return AniListAnimeListEntry(
     id: base.id > 0 ? base.id : metadata.id,
     status: patch.touches(UserMediaField.status)
@@ -419,18 +450,46 @@ AniListAnimeListEntry _applyPatchToEntry(
     progress: patch.touches(UserMediaField.progress)
         ? patch.progress ?? base.progress
         : base.progress,
+    progressVolumes: patch.touches(UserMediaField.progressVolumes)
+        ? patch.progressVolumes ?? base.progressVolumes
+        : base.progressVolumes,
     score: patch.touches(UserMediaField.score) ? patch.score : base.score,
+    scoreRaw: patch.touches(UserMediaField.score)
+        ? patch.score == null
+              ? null
+              : (patch.score! * 10).round().clamp(0, 100)
+        : base.scoreRaw,
     mediaItem: metadata.mediaItem,
     notes: patch.touches(UserMediaField.notes) ? patch.notes ?? '' : base.notes,
     repeat: patch.touches(UserMediaField.repeat)
         ? patch.repeat ?? 0
         : base.repeat,
+    priority: patch.touches(UserMediaField.priority)
+        ? patch.priority ?? base.priority
+        : base.priority,
+    private: patch.touches(UserMediaField.private)
+        ? patch.private ?? base.private
+        : base.private,
+    hiddenFromStatusLists: patch.touches(UserMediaField.hiddenFromStatusLists)
+        ? patch.hiddenFromStatusLists ?? base.hiddenFromStatusLists
+        : base.hiddenFromStatusLists,
+    customLists: patch.touches(UserMediaField.customLists)
+        ? patch.customLists ?? base.customLists
+        : base.customLists,
+    advancedScores: patch.touches(UserMediaField.advancedScores)
+        ? patch.advancedScores ?? base.advancedScores
+        : base.advancedScores,
+    providerData: providerData,
     createdAt: metadata.createdAt ?? base.createdAt,
     updatedAt: mutationUpdatedAt == null
         ? metadata.updatedAt ?? base.updatedAt
         : mutationUpdatedAt.millisecondsSinceEpoch ~/ 1000,
-    startedAt: metadata.startedAt ?? base.startedAt,
-    completedAt: metadata.completedAt ?? base.completedAt,
+    startedAt: patch.touches(UserMediaField.startedAt)
+        ? patch.startedAt
+        : metadata.startedAt ?? base.startedAt,
+    completedAt: patch.touches(UserMediaField.completedAt)
+        ? patch.completedAt
+        : metadata.completedAt ?? base.completedAt,
     nextEpisode: metadata.nextEpisode ?? base.nextEpisode,
     airingAt: metadata.airingAt ?? base.airingAt,
     avgScore: metadata.avgScore ?? base.avgScore,
@@ -447,12 +506,73 @@ bool _sameTouchedState(
     final bool same = switch (field) {
       UserMediaField.status => left.status == right.status,
       UserMediaField.progress => left.progress == right.progress,
+      UserMediaField.progressVolumes =>
+        left.progressVolumes == right.progressVolumes,
       UserMediaField.score => left.score == right.score,
       UserMediaField.notes => left.notes == right.notes,
       UserMediaField.repeat => left.repeat == right.repeat,
+      UserMediaField.startedAt => left.startedAt == right.startedAt,
+      UserMediaField.completedAt => left.completedAt == right.completedAt,
+      UserMediaField.priority => left.priority == right.priority,
+      UserMediaField.private => left.private == right.private,
+      UserMediaField.hiddenFromStatusLists =>
+        left.hiddenFromStatusLists == right.hiddenFromStatusLists,
+      UserMediaField.customLists => _sameMap(
+        left.customLists,
+        right.customLists,
+      ),
+      UserMediaField.advancedScores => _sameMap(
+        left.advancedScores,
+        right.advancedScores,
+      ),
+      UserMediaField.scoreFormat =>
+        left.providerData['scoreFormat'] == right.providerData['scoreFormat'],
+      UserMediaField.malPriority =>
+        _malProviderData(left)['priority'] ==
+            _malProviderData(right)['priority'],
+      UserMediaField.malRewatchValue =>
+        _malProviderData(left)[_entryIdentity(left).mediaKind == 'manga'
+                ? 'rereadValue'
+                : 'rewatchValue'] ==
+            _malProviderData(right)[_entryIdentity(right).mediaKind == 'manga'
+                ? 'rereadValue'
+                : 'rewatchValue'],
+      UserMediaField.malTags => _sameStringValues(
+        _malProviderData(left)['tags'],
+        _malProviderData(right)['tags'],
+      ),
       UserMediaField.favorite => true,
     };
     if (!same) return false;
+  }
+  return true;
+}
+
+Map<Object?, Object?> _malProviderData(AniListAnimeListEntry entry) {
+  final Object? snapshots = entry.providerData['providerSnapshots'];
+  if (snapshots is! Map || snapshots['mal'] is! Map) {
+    return const <Object?, Object?>{};
+  }
+  return Map<Object?, Object?>.from(snapshots['mal'] as Map);
+}
+
+bool _sameStringValues(Object? left, Object? right) {
+  final Set<String> leftValues = left is List
+      ? left.map((Object? value) => '$value').toSet()
+      : const <String>{};
+  final Set<String> rightValues = right is List
+      ? right.map((Object? value) => '$value').toSet()
+      : const <String>{};
+  return leftValues.length == rightValues.length &&
+      leftValues.containsAll(rightValues);
+}
+
+bool _sameMap(Map<Object?, Object?> left, Map<Object?, Object?> right) {
+  if (left.length != right.length) return false;
+  for (final MapEntry<Object?, Object?> entry in left.entries) {
+    if (!right.containsKey(entry.key) || right[entry.key] != entry.value) {
+      return false;
+    }
   }
   return true;
 }
@@ -467,18 +587,26 @@ bool _touchesEveryEditableField(UserMediaPatch patch) {
   }.every(patch.touches);
 }
 
-/// Local-first anime library for MAL/Shikimori selection. The selected source
-/// is tried first, then connected providers are used as fallbacks. The common
-/// cache is returned when every provider is unavailable.
+/// Local-first anime library backed by independent complete snapshots from
+/// every connected tracker. The preferred source only controls fetch order;
+/// it no longer prevents AniList, MAL or Shikimori reconciliation.
 final trackerAnimeListProvider = FutureProvider<List<AniListAnimeListFolder>>((
   Ref ref,
 ) async {
-  final SettingsState settings = ref.watch(settingsProvider);
   final TrackerLibrarySnapshot result = await ref
       .read(trackerSyncCoordinatorProvider)
-      .refreshAnimeLibrary(preferred: settings.effectivePrimaryTrackerSource);
+      .refreshAllConnectedLibraries();
   ref
       .read(trackerLibraryOptimisticMutationsProvider.notifier)
       .reconcile(result.folders);
+  return result.folders;
+});
+
+final trackerMangaListProvider = FutureProvider<List<AniListAnimeListFolder>>((
+  Ref ref,
+) async {
+  final TrackerLibrarySnapshot result = await ref
+      .read(trackerSyncCoordinatorProvider)
+      .refreshAllConnectedLibraries(mediaKind: 'manga');
   return result.folders;
 });

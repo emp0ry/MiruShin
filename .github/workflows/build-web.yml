@@ -1,0 +1,58 @@
+name: Build Web
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  APP_NAME: MiruShin
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  build-web:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Flutter (stable)
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter pub get
+        run: flutter pub get
+
+      - name: Generate .env (TMDB key)
+        uses: ./.github/actions/generate-env
+        with:
+          tmdb-read-access-token: ${{ secrets.TMDB_READ_ACCESS_TOKEN }}
+          module-library-url: ${{ secrets.MODULE_LIBRARY_URL }}
+          fanart-tv-api-key: ${{ secrets.FANART_TV_API_KEY }}
+
+      - name: Build Web (release)
+        run: flutter build web --release --no-pub
+
+      - name: Read version from pubspec.yaml
+        id: ver
+        shell: bash
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d'+' -f1)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Package Web artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd build/web
+          zip -r "../../${APP_NAME}-web-v${{ steps.ver.outputs.version }}.zip" .
+
+      - name: Upload Web artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: MiruShin-web
+          path: MiruShin-web-v*.zip

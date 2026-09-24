@@ -1,5 +1,6 @@
 import 'dart:ui';
 
+import 'package:drift/drift.dart' show driftRuntimeOptions;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -19,6 +20,9 @@ import 'features/settings/application/settings_state.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // MiruShin intentionally opens one Drift database per AniList workspace.
+  // They use separate files and are shared through providers by database name.
+  driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
   MiruShinDeepLinkService.instance.initialize();
   final bool isPrimaryInstance = await acquireMiruShinSingleInstanceLock();
   if (!isPrimaryInstance) {

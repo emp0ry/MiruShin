@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../settings/application/settings_state.dart';
+import '../../settings/data/workspace_preferences_store.dart';
 import '../domain/player_models.dart';
 
 final playerSettingsProvider =
@@ -15,16 +17,27 @@ class PlayerSettingsController extends AsyncNotifier<PlayerSettings> {
 
   @override
   Future<PlayerSettings> build() async {
+    ref.watch(drivePreferencesRevisionProvider);
+    final int? viewerId = ref.watch(
+      settingsProvider.select((SettingsState value) => value.anilistViewerId),
+    );
     final SharedPreferences prefs = await SharedPreferences.getInstance();
     final String? raw = prefs.getString(_key);
-    if (raw == null || raw.isEmpty) return const PlayerSettings();
+    PlayerSettings result = const PlayerSettings();
     try {
-      return PlayerSettings.fromJson(
-        Map<String, Object?>.from(jsonDecode(raw) as Map),
-      );
+      if (raw != null && raw.isNotEmpty) {
+        result = PlayerSettings.fromJson(
+          Map<String, Object?>.from(jsonDecode(raw) as Map),
+        );
+      }
     } on Object {
-      return const PlayerSettings();
+      result = const PlayerSettings();
     }
+    final String workspaceId = viewerId == null ? 'local' : 'anilist:$viewerId';
+    final Object? scoped = WorkspacePreferencesStore(
+      prefs,
+    ).read(workspaceId, WorkspacePreferencesStore.playerAutoTrackKey);
+    return scoped is bool ? result.copyWith(autoAnilistSync: scoped) : result;
   }
 
   Future<void> _update(PlayerSettings settings) async {
@@ -173,5 +186,13 @@ class PlayerSettingsController extends AsyncNotifier<PlayerSettings> {
   Future<void> setAutoAnilistSync(bool value) async {
     final PlayerSettings current = state.value ?? const PlayerSettings();
     await _update(current.copyWith(autoAnilistSync: value));
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    final int? viewerId = ref.read(settingsProvider).anilistViewerId;
+    await WorkspacePreferencesStore(prefs).write(
+      viewerId == null ? 'local' : 'anilist:$viewerId',
+      WorkspacePreferencesStore.playerAutoTrackKey,
+      value,
+    );
+    ref.read(drivePreferencesRevisionProvider.notifier).changed();
   }
 }

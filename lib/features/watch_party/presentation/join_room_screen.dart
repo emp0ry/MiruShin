@@ -7,6 +7,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import '../../../app/app_routes.dart';
 import '../../../app/localization/app_localizations.dart';
 import '../../../app/navigation_helpers.dart';
+import '../../settings/data/workspace_preferences_store.dart';
 import '../application/watch_party_connection_settings.dart';
 import '../application/watch_party_controller.dart';
 import '../data/relay_trust_store.dart';
@@ -155,7 +156,10 @@ class _JoinRoomScreenState extends ConsumerState<JoinRoomScreen> {
           },
         );
         if (accepted != true) return;
-        if (remember) await trustStore.trust(relay);
+        if (remember) {
+          await trustStore.trust(relay);
+          ref.read(drivePreferencesRevisionProvider.notifier).changed();
+        }
       }
       if (!mounted) return;
       setState(() {

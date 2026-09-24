@@ -2,7 +2,26 @@ import '../../../shared/models/anilist_models.dart';
 import '../../../shared/models/media_item.dart';
 import 'tracker_models.dart';
 
-enum UserMediaField { status, progress, score, notes, repeat, favorite }
+enum UserMediaField {
+  status,
+  progress,
+  progressVolumes,
+  score,
+  notes,
+  repeat,
+  startedAt,
+  completedAt,
+  priority,
+  private,
+  hiddenFromStatusLists,
+  customLists,
+  advancedScores,
+  scoreFormat,
+  malPriority,
+  malRewatchValue,
+  malTags,
+  favorite,
+}
 
 /// Stable, provider-independent identity. [localId] never changes after an
 /// identity has been persisted; newly discovered provider ids are merged into
@@ -10,6 +29,7 @@ enum UserMediaField { status, progress, score, notes, repeat, favorite }
 class MediaIdentity {
   const MediaIdentity({
     required this.localId,
+    this.kind,
     this.anilistId,
     this.malId,
     this.shikimoriId,
@@ -39,6 +59,7 @@ class MediaIdentity {
         malId: malId,
         shikimoriId: shikimoriId,
       ),
+      kind: kind,
       anilistId: anilistId,
       malId: malId,
       shikimoriId: shikimoriId,
@@ -50,6 +71,13 @@ class MediaIdentity {
     final int? malId = _positiveInt(json['malId']);
     final int? shikimoriId = _positiveInt(json['shikimoriId']);
     final String stored = '${json['localId'] ?? ''}'.trim();
+    final String? kind = switch ('${json['mediaKind'] ?? json['kind'] ?? ''}'
+        .trim()
+        .toLowerCase()) {
+      'manga' => 'manga',
+      'anime' => 'anime',
+      _ => null,
+    };
     return MediaIdentity(
       localId: stored.isEmpty
           ? _defaultLocalId(
@@ -59,6 +87,7 @@ class MediaIdentity {
               shikimoriId: shikimoriId,
             )
           : stored,
+      kind: kind,
       anilistId: anilistId,
       malId: malId,
       shikimoriId: shikimoriId,
@@ -66,6 +95,7 @@ class MediaIdentity {
   }
 
   final String localId;
+  final String? kind;
   final int? anilistId;
   final int? malId;
   final int? shikimoriId;
@@ -73,7 +103,8 @@ class MediaIdentity {
   bool get hasProviderId =>
       anilistId != null || malId != null || shikimoriId != null;
 
-  String get mediaKind => localId.startsWith('manga:') ? 'manga' : 'anime';
+  String get mediaKind =>
+      kind ?? (localId.startsWith('manga:') ? 'manga' : 'anime');
 
   int? idFor(TrackerSource provider) => switch (provider) {
     TrackerSource.anilist => anilistId,
@@ -92,6 +123,7 @@ class MediaIdentity {
   MediaIdentity merge(MediaIdentity other) {
     return MediaIdentity(
       localId: localId,
+      kind: mediaKind,
       anilistId: anilistId ?? other.anilistId,
       malId: malId ?? other.malId,
       shikimoriId: shikimoriId ?? other.shikimoriId,
@@ -104,11 +136,13 @@ class MediaIdentity {
       if (anilistId != null) 'anilist': '$anilistId',
       if (malId != null) 'mal': '$malId',
       if (shikimoriId != null) 'shikimori': '$shikimoriId',
+      if (mediaKind == 'manga') 'anilist_type': 'MANGA',
     };
   }
 
   Map<String, dynamic> toJson() => <String, dynamic>{
     'localId': localId,
+    'mediaKind': mediaKind,
     if (anilistId != null) 'anilistId': anilistId,
     if (malId != null) 'malId': malId,
     if (shikimoriId != null) 'shikimoriId': shikimoriId,
@@ -183,6 +217,7 @@ class UserMediaState {
     required this.mediaItem,
     required this.status,
     required this.progress,
+    this.progressVolumes = 0,
     this.score,
     this.notes = '',
     this.repeat = 0,
@@ -222,6 +257,7 @@ class UserMediaState {
       ),
       status: _statusFromName(json['status']?.toString()),
       progress: _nonNegativeInt(json['progress']),
+      progressVolumes: _nonNegativeInt(json['progressVolumes']),
       score: (json['score'] as num?)?.toDouble(),
       notes: '${json['notes'] ?? ''}',
       repeat: _nonNegativeInt(json['repeat']),
@@ -242,6 +278,7 @@ class UserMediaState {
   final MediaItem mediaItem;
   final AniListListStatus status;
   final int progress;
+  final int progressVolumes;
   final double? score;
   final String notes;
   final int repeat;
@@ -256,7 +293,11 @@ class UserMediaState {
   final TrackerSource source;
   final Map<TrackerSource, ProviderUserMediaState> providerStates;
 
-  UserMediaState apply(UserMediaPatch patch, DateTime timestamp) {
+  UserMediaState apply(
+    UserMediaPatch patch,
+    DateTime timestamp, {
+    TrackerSource? providerSource,
+  }) {
     if (patch.delete) return this;
     final AniListListStatus nextStatus = patch.touches(UserMediaField.status)
         ? patch.status ?? status
@@ -275,11 +316,89 @@ class UserMediaState {
     final bool touchesStartedState =
         patch.touches(UserMediaField.status) ||
         patch.touches(UserMediaField.progress);
+    final TrackerSource snapshotSource = providerSource ?? source;
+    final ProviderUserMediaState? currentProvider =
+        providerStates[snapshotSource];
+    final Map<String, dynamic> providerData = <String, dynamic>{
+      ...?currentProvider?.data,
+      if (patch.touches(UserMediaField.progressVolumes))
+        'progressVolumes': patch.progressVolumes,
+      if (patch.touches(UserMediaField.startedAt))
+        'startedAt': patch.startedAt?.toIso8601String(),
+      if (patch.touches(UserMediaField.completedAt))
+        'completedAt': patch.completedAt?.toIso8601String(),
+    };
+    final Map<TrackerSource, ProviderUserMediaState> nextProviderStates =
+        <TrackerSource, ProviderUserMediaState>{...providerStates};
+    if (currentProvider != null || providerData.isNotEmpty) {
+      nextProviderStates[snapshotSource] = ProviderUserMediaState(
+        provider: snapshotSource,
+        entryId: currentProvider?.entryId,
+        rawStatus: currentProvider?.rawStatus,
+        rawScore: currentProvider?.rawScore,
+        updatedAt: timestamp,
+        data: providerData,
+      );
+    }
+    if (patch.touches(UserMediaField.priority) ||
+        patch.touches(UserMediaField.private) ||
+        patch.touches(UserMediaField.hiddenFromStatusLists) ||
+        patch.touches(UserMediaField.customLists) ||
+        patch.touches(UserMediaField.advancedScores) ||
+        patch.touches(UserMediaField.scoreFormat)) {
+      final ProviderUserMediaState? aniList =
+          nextProviderStates[TrackerSource.anilist];
+      nextProviderStates[TrackerSource.anilist] = ProviderUserMediaState(
+        provider: TrackerSource.anilist,
+        entryId: aniList?.entryId,
+        rawStatus: aniList?.rawStatus,
+        rawScore: aniList?.rawScore,
+        updatedAt: timestamp,
+        data: <String, dynamic>{
+          ...?aniList?.data,
+          if (patch.touches(UserMediaField.priority))
+            'priority': patch.priority,
+          if (patch.touches(UserMediaField.private)) 'private': patch.private,
+          if (patch.touches(UserMediaField.hiddenFromStatusLists))
+            'hiddenFromStatusLists': patch.hiddenFromStatusLists,
+          if (patch.touches(UserMediaField.customLists))
+            'customLists': patch.customLists,
+          if (patch.touches(UserMediaField.advancedScores))
+            'advancedScores': patch.advancedScores,
+          if (patch.touches(UserMediaField.scoreFormat))
+            'scoreFormat': patch.scoreFormat,
+        },
+      );
+    }
+    if (patch.touches(UserMediaField.malPriority) ||
+        patch.touches(UserMediaField.malRewatchValue) ||
+        patch.touches(UserMediaField.malTags)) {
+      final ProviderUserMediaState? mal = nextProviderStates[TrackerSource.mal];
+      nextProviderStates[TrackerSource.mal] = ProviderUserMediaState(
+        provider: TrackerSource.mal,
+        entryId: mal?.entryId,
+        rawStatus: mal?.rawStatus,
+        rawScore: mal?.rawScore,
+        updatedAt: timestamp,
+        data: <String, dynamic>{
+          ...?mal?.data,
+          if (patch.touches(UserMediaField.malPriority))
+            'priority': patch.malPriority,
+          if (patch.touches(UserMediaField.malRewatchValue))
+            (identity.mediaKind == 'manga' ? 'rereadValue' : 'rewatchValue'):
+                patch.malRewatchValue,
+          if (patch.touches(UserMediaField.malTags)) 'tags': patch.malTags,
+        },
+      );
+    }
     return UserMediaState(
       identity: identity,
       mediaItem: mediaItem,
       status: nextStatus,
       progress: nextProgress,
+      progressVolumes: patch.touches(UserMediaField.progressVolumes)
+          ? (patch.progressVolumes ?? progressVolumes).clamp(0, 0x7fffffff)
+          : progressVolumes,
       score: patch.touches(UserMediaField.score)
           ? normalizeCanonicalScore(patch.score)
           : score,
@@ -289,20 +408,22 @@ class UserMediaState {
           : repeat,
       createdAt: createdAt,
       updatedAt: timestamp,
-      startedAt:
-          startedAt ?? (touchesStartedState && hasStarted ? timestamp : null),
-      completedAt:
-          completedAt ??
-          (patch.touches(UserMediaField.status) &&
-                  nextStatus == AniListListStatus.completed
-              ? timestamp
-              : null),
+      startedAt: patch.touches(UserMediaField.startedAt)
+          ? patch.startedAt
+          : startedAt ?? (touchesStartedState && hasStarted ? timestamp : null),
+      completedAt: patch.touches(UserMediaField.completedAt)
+          ? patch.completedAt
+          : completedAt ??
+                (patch.touches(UserMediaField.status) &&
+                        nextStatus == AniListListStatus.completed
+                    ? timestamp
+                    : null),
       nextEpisode: nextEpisode,
       airingAt: airingAt,
       avgScore: avgScore,
       format: format,
       source: source,
-      providerStates: providerStates,
+      providerStates: nextProviderStates,
     );
   }
 
@@ -314,6 +435,7 @@ class UserMediaState {
       ),
       status: status,
       progress: progress,
+      progressVolumes: progressVolumes,
       score: score,
       notes: notes,
       repeat: repeat,
@@ -330,11 +452,73 @@ class UserMediaState {
     );
   }
 
+  UserMediaState withMediaItem(MediaItem next) {
+    return UserMediaState(
+      identity: identity,
+      mediaItem: next.copyWith(
+        externalIds: identity.mergeExternalIds(next.externalIds),
+      ),
+      status: status,
+      progress: progress,
+      progressVolumes: progressVolumes,
+      score: score,
+      notes: notes,
+      repeat: repeat,
+      createdAt: createdAt,
+      updatedAt: updatedAt,
+      startedAt: startedAt,
+      completedAt: completedAt,
+      nextEpisode: nextEpisode,
+      airingAt: airingAt,
+      avgScore: avgScore,
+      format: format,
+      source: source,
+      providerStates: providerStates,
+    );
+  }
+
+  UserMediaState withProviderSnapshot(
+    ProviderUserMediaState snapshot, {
+    MediaIdentity? identity,
+    MediaItem? mediaItem,
+  }) {
+    final MediaIdentity nextIdentity = identity ?? this.identity;
+    final MediaItem nextMedia = (mediaItem ?? this.mediaItem).copyWith(
+      externalIds: nextIdentity.mergeExternalIds(
+        (mediaItem ?? this.mediaItem).externalIds,
+      ),
+    );
+    return UserMediaState(
+      identity: nextIdentity,
+      mediaItem: nextMedia,
+      status: status,
+      progress: progress,
+      progressVolumes: progressVolumes,
+      score: score,
+      notes: notes,
+      repeat: repeat,
+      createdAt: createdAt,
+      updatedAt: updatedAt,
+      startedAt: startedAt,
+      completedAt: completedAt,
+      nextEpisode: nextEpisode,
+      airingAt: airingAt,
+      avgScore: avgScore,
+      format: format,
+      source: source,
+      providerStates: <TrackerSource, ProviderUserMediaState>{
+        ...providerStates,
+        snapshot.provider: snapshot,
+      },
+    );
+  }
+
   Map<String, dynamic> toJson() => <String, dynamic>{
     'identity': identity.toJson(),
     'mediaItem': mediaItem.toJson(),
     'status': status.name,
     'progress': progress,
+    'progressVolumes': progressVolumes,
     if (score != null) 'score': score,
     'notes': notes,
     'repeat': repeat,
@@ -398,9 +582,21 @@ class UserMediaPatch {
   UserMediaPatch({
     this.status,
     this.progress,
+    this.progressVolumes,
     this.score,
     this.notes,
     this.repeat,
+    this.startedAt,
+    this.completedAt,
+    this.priority,
+    this.private,
+    this.hiddenFromStatusLists,
+    this.customLists,
+    this.advancedScores,
+    this.scoreFormat,
+    this.malPriority,
+    this.malRewatchValue,
+    this.malTags,
     this.favorite,
     this.delete = false,
     Set<UserMediaField>? fields,
@@ -409,9 +605,22 @@ class UserMediaPatch {
              <UserMediaField>{
                if (status != null) UserMediaField.status,
                if (progress != null) UserMediaField.progress,
+               if (progressVolumes != null) UserMediaField.progressVolumes,
                if (score != null) UserMediaField.score,
                if (notes != null) UserMediaField.notes,
                if (repeat != null) UserMediaField.repeat,
+               if (startedAt != null) UserMediaField.startedAt,
+               if (completedAt != null) UserMediaField.completedAt,
+               if (priority != null) UserMediaField.priority,
+               if (private != null) UserMediaField.private,
+               if (hiddenFromStatusLists != null)
+                 UserMediaField.hiddenFromStatusLists,
+               if (customLists != null) UserMediaField.customLists,
+               if (advancedScores != null) UserMediaField.advancedScores,
+               if (scoreFormat != null) UserMediaField.scoreFormat,
+               if (malPriority != null) UserMediaField.malPriority,
+               if (malRewatchValue != null) UserMediaField.malRewatchValue,
+               if (malTags != null) UserMediaField.malTags,
                if (favorite != null) UserMediaField.favorite,
              },
        );
@@ -428,9 +637,37 @@ class UserMediaPatch {
       progress: json['progress'] == null
           ? null
           : _nonNegativeInt(json['progress']),
+      progressVolumes: json['progressVolumes'] == null
+          ? null
+          : _nonNegativeInt(json['progressVolumes']),
       score: (json['score'] as num?)?.toDouble(),
       notes: json['notes']?.toString(),
       repeat: json['repeat'] == null ? null : _nonNegativeInt(json['repeat']),
+      startedAt: DateTime.tryParse('${json['startedAt'] ?? ''}'),
+      completedAt: DateTime.tryParse('${json['completedAt'] ?? ''}'),
+      priority: json['priority'] == null
+          ? null
+          : _nonNegativeInt(json['priority']),
+      private: json['private'] as bool?,
+      hiddenFromStatusLists: json['hiddenFromStatusLists'] as bool?,
+      customLists: json['customLists'] is Map
+          ? _boolMap(json['customLists'])
+          : null,
+      advancedScores: json['advancedScores'] is Map
+          ? _doubleMap(json['advancedScores'])
+          : null,
+      scoreFormat: json['scoreFormat']?.toString(),
+      malPriority: json['malPriority'] == null
+          ? null
+          : _nonNegativeInt(json['malPriority']),
+      malRewatchValue: json['malRewatchValue'] == null
+          ? null
+          : _nonNegativeInt(json['malRewatchValue']),
+      malTags: json['malTags'] is List
+          ? List<String>.from(
+              (json['malTags'] as List).map((Object? value) => '$value'),
+            )
+          : null,
       favorite: json['favorite'] as bool?,
       delete: json['delete'] == true,
       fields: fields,
@@ -439,9 +676,21 @@ class UserMediaPatch {
 
   final AniListListStatus? status;
   final int? progress;
+  final int? progressVolumes;
   final double? score;
   final String? notes;
   final int? repeat;
+  final DateTime? startedAt;
+  final DateTime? completedAt;
+  final int? priority;
+  final bool? private;
+  final bool? hiddenFromStatusLists;
+  final Map<String, bool>? customLists;
+  final Map<String, double>? advancedScores;
+  final String? scoreFormat;
+  final int? malPriority;
+  final int? malRewatchValue;
+  final List<String>? malTags;
   final bool? favorite;
   final bool delete;
   final Set<UserMediaField> fields;
@@ -488,6 +737,11 @@ class UserMediaPatch {
           : replacingDelete
           ? null
           : progress,
+      progressVolumes: newer.touches(UserMediaField.progressVolumes)
+          ? newer.progressVolumes
+          : replacingDelete
+          ? null
+          : progressVolumes,
       score: newer.touches(UserMediaField.score)
           ? newer.score
           : replacingDelete
@@ -503,6 +757,61 @@ class UserMediaPatch {
           : replacingDelete
           ? null
           : repeat,
+      startedAt: newer.touches(UserMediaField.startedAt)
+          ? newer.startedAt
+          : replacingDelete
+          ? null
+          : startedAt,
+      completedAt: newer.touches(UserMediaField.completedAt)
+          ? newer.completedAt
+          : replacingDelete
+          ? null
+          : completedAt,
+      priority: newer.touches(UserMediaField.priority)
+          ? newer.priority
+          : replacingDelete
+          ? null
+          : priority,
+      private: newer.touches(UserMediaField.private)
+          ? newer.private
+          : replacingDelete
+          ? null
+          : private,
+      hiddenFromStatusLists: newer.touches(UserMediaField.hiddenFromStatusLists)
+          ? newer.hiddenFromStatusLists
+          : replacingDelete
+          ? null
+          : hiddenFromStatusLists,
+      customLists: newer.touches(UserMediaField.customLists)
+          ? newer.customLists
+          : replacingDelete
+          ? null
+          : customLists,
+      advancedScores: newer.touches(UserMediaField.advancedScores)
+          ? newer.advancedScores
+          : replacingDelete
+          ? null
+          : advancedScores,
+      scoreFormat: newer.touches(UserMediaField.scoreFormat)
+          ? newer.scoreFormat
+          : replacingDelete
+          ? null
+          : scoreFormat,
+      malPriority: newer.touches(UserMediaField.malPriority)
+          ? newer.malPriority
+          : replacingDelete
+          ? null
+          : malPriority,
+      malRewatchValue: newer.touches(UserMediaField.malRewatchValue)
+          ? newer.malRewatchValue
+          : replacingDelete
+          ? null
+          : malRewatchValue,
+      malTags: newer.touches(UserMediaField.malTags)
+          ? newer.malTags
+          : replacingDelete
+          ? null
+          : malTags,
       favorite: newer.touches(UserMediaField.favorite)
           ? newer.favorite
           : favorite,
@@ -516,9 +825,27 @@ class UserMediaPatch {
     if (touches(UserMediaField.status) && status != null)
       'status': status!.name,
     if (touches(UserMediaField.progress)) 'progress': progress,
+    if (touches(UserMediaField.progressVolumes))
+      'progressVolumes': progressVolumes,
     if (touches(UserMediaField.score)) 'score': score,
     if (touches(UserMediaField.notes)) 'notes': notes,
     if (touches(UserMediaField.repeat)) 'repeat': repeat,
+    if (touches(UserMediaField.startedAt))
+      'startedAt': startedAt?.toIso8601String(),
+    if (touches(UserMediaField.completedAt))
+      'completedAt': completedAt?.toIso8601String(),
+    if (touches(UserMediaField.priority)) 'priority': priority,
+    if (touches(UserMediaField.private)) 'private': private,
+    if (touches(UserMediaField.hiddenFromStatusLists))
+      'hiddenFromStatusLists': hiddenFromStatusLists,
+    if (touches(UserMediaField.customLists)) 'customLists': customLists,
+    if (touches(UserMediaField.advancedScores))
+      'advancedScores': advancedScores,
+    if (touches(UserMediaField.scoreFormat)) 'scoreFormat': scoreFormat,
+    if (touches(UserMediaField.malPriority)) 'malPriority': malPriority,
+    if (touches(UserMediaField.malRewatchValue))
+      'malRewatchValue': malRewatchValue,
+    if (touches(UserMediaField.malTags)) 'malTags': malTags,
     if (touches(UserMediaField.favorite)) 'favorite': favorite,
     if (delete) 'delete': true,
   };
@@ -672,6 +999,24 @@ class SyncJournalEntry {
   };
 }
 
+class ProviderReconciliationResult {
+  const ProviderReconciliationResult({
+    required this.states,
+    required this.journal,
+    this.requiresAccountApproval = false,
+    this.quarantined = false,
+    this.importedChanges = 0,
+    this.destructiveChangesPending = 0,
+  });
+
+  final List<UserMediaState> states;
+  final List<SyncJournalEntry> journal;
+  final bool requiresAccountApproval;
+  final bool quarantined;
+  final int importedChanges;
+  final int destructiveChangesPending;
+}
+
 enum TrackerProviderAvailability {
   unknown,
   healthy,
@@ -794,6 +1139,7 @@ class UserMediaConflictResolver {
       mediaItem: media,
       status: winner.status,
       progress: winner.progress,
+      progressVolumes: winner.progressVolumes,
       score: winner.score,
       notes: winner.notes,
       repeat: winner.repeat,
@@ -941,6 +1287,8 @@ List<AniListAnimeListFolder> foldersFromUserMediaStates(
   for (final UserMediaState state in states) {
     final ProviderUserMediaState? sourceState =
         state.providerStates[state.source];
+    final ProviderUserMediaState? aniListState =
+        state.providerStates[TrackerSource.anilist];
     final int displayProgress = canonicalEpisodeProgress(
       state.progress,
       state.mediaItem.episodeCount,
@@ -961,6 +1309,11 @@ List<AniListAnimeListFolder> foldersFromUserMediaStates(
             status: displayStatus,
             progress: displayProgress,
             score: state.score,
+            scoreRaw: aniListState?.data['scoreRaw'] is num
+                ? (aniListState!.data['scoreRaw'] as num).toInt()
+                : state.score == null
+                ? null
+                : (state.score! * 10).round().clamp(0, 100),
             mediaItem: state.mediaItem.copyWith(
               externalIds: state.identity.mergeExternalIds(
                 state.mediaItem.externalIds,
@@ -968,6 +1321,24 @@ List<AniListAnimeListFolder> foldersFromUserMediaStates(
             ),
             notes: state.notes,
             repeat: state.repeat,
+            progressVolumes: state.progressVolumes,
+            priority: (aniListState?.data['priority'] as num?)?.toInt() ?? 0,
+            private: aniListState?.data['private'] == true,
+            hiddenFromStatusLists:
+                aniListState?.data['hiddenFromStatusLists'] == true,
+            customLists: _boolMap(aniListState?.data['customLists']),
+            advancedScores: _doubleMap(aniListState?.data['advancedScores']),
+            providerData: <String, dynamic>{
+              ...?sourceState?.data,
+              if (aniListState?.data['scoreFormat'] != null)
+                'scoreFormat': aniListState?.data['scoreFormat'],
+              'providerSnapshots': <String, dynamic>{
+                for (final MapEntry<TrackerSource, ProviderUserMediaState>
+                    provider
+                    in state.providerStates.entries)
+                  provider.key.name: provider.value.data,
+              },
+            },
             createdAt: state.createdAt.millisecondsSinceEpoch ~/ 1000,
             updatedAt: state.updatedAt.millisecondsSinceEpoch ~/ 1000,
             startedAt: state.startedAt,
@@ -1040,6 +1411,7 @@ UserMediaState _stateFromEntry(
     ),
     status: entry.status,
     progress: entry.progress,
+    progressVolumes: entry.progressVolumes,
     score: normalizeCanonicalScore(entry.score),
     notes: entry.notes,
     repeat: entry.repeat,
@@ -1060,8 +1432,17 @@ UserMediaState _stateFromEntry(
         rawScore: entry.score,
         updatedAt: updatedAt,
         data: <String, dynamic>{
-          if (source == TrackerSource.anilist) 'notes': entry.notes,
-          if (source == TrackerSource.anilist) 'repeat': entry.repeat,
+          ...entry.providerData,
+          'notes': entry.notes,
+          'repeat': entry.repeat,
+          'progress': entry.progress,
+          'progressVolumes': entry.progressVolumes,
+          if (entry.scoreRaw != null) 'scoreRaw': entry.scoreRaw,
+          'priority': entry.priority,
+          'private': entry.private,
+          'hiddenFromStatusLists': entry.hiddenFromStatusLists,
+          'customLists': entry.customLists,
+          'advancedScores': entry.advancedScores,
           if (entry.createdAt != null)
             'createdAt': createdAt.toIso8601String()
           else
@@ -1153,4 +1534,20 @@ int? _positiveInt(Object? value) {
 String? _nullableTrimmedString(Object? value) {
   final String parsed = '${value ?? ''}'.trim();
   return parsed.isEmpty ? null : parsed;
+}
+
+Map<String, bool> _boolMap(Object? value) {
+  if (value is! Map) return <String, bool>{};
+  return <String, bool>{
+    for (final MapEntry<dynamic, dynamic> entry in value.entries)
+      '${entry.key}': entry.value == true,
+  };
+}
+
+Map<String, double> _doubleMap(Object? value) {
+  if (value is! Map) return <String, double>{};
+  return <String, double>{
+    for (final MapEntry<dynamic, dynamic> entry in value.entries)
+      if (entry.value is num) '${entry.key}': (entry.value as num).toDouble(),
+  };
 }

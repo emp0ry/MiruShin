@@ -17,11 +17,14 @@ import '../features/addons/application/sora_addons_provider.dart';
 import '../features/addons/data/sora_js_runtime.dart';
 import '../features/addons/presentation/cloudflare_challenge_page.dart';
 import '../features/catalog/application/catalog_mode.dart';
+import '../features/library/application/google_drive_sync_controller.dart';
 import '../features/metadata/application/metadata_cache_provider.dart';
 import '../features/player/application/playback_controller.dart';
 import '../features/profile/application/anilist_user_settings_provider.dart';
 import '../features/settings/application/settings_state.dart';
 import '../features/tracking/application/anilist_library_provider.dart';
+import '../features/tracking/application/tracker_reconciliation_lifecycle.dart';
+import '../features/watch/application/stream_selection_preferences.dart';
 import 'app_routes.dart';
 import 'deep_links/mirushin_deep_link_service.dart';
 import 'localization/app_localizations.dart';
@@ -107,6 +110,9 @@ class _MiruShinAppState extends ConsumerState<MiruShinApp> {
     final SettingsState settings = ref.watch(settingsProvider);
     final metadataCache = ref.watch(metadataCacheStoreProvider);
     ref.watch(soraAddonsProvider);
+    ref.watch(googleDriveSyncLifecycleProvider);
+    ref.watch(trackerReconciliationLifecycleProvider);
+    ref.watch(streamSelectionMigrationProvider);
     PaintingBinding.instance.imageCache.maximumSizeBytes =
         settings.cacheLimitMb * 1024 * 1024;
     configureMiruShinArtworkCache(

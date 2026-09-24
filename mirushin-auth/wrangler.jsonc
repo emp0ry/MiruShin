@@ -13,7 +13,9 @@
 	],
 	"vars": {
 		"SHIKIMORI_REDIRECT_URI": "https://auth.emp0ry.com/callback",
-		"SHIKIMORI_USER_AGENT": "MiruShin"
+		"SHIKIMORI_USER_AGENT": "MiruShin",
+		"GOOGLE_DESKTOP_CLIENT_ID": "77095881269-macrb5098to4uirb3v4c5rolqi96fl8o.apps.googleusercontent.com",
+		"GOOGLE_WEB_CLIENT_ID": "77095881269-gpka49ipagksvge36o4qdqbudaduc6eg.apps.googleusercontent.com"
 	},
 	// Temporary WebRTC signaling for the watch-party feature. Create the namespace
 	// with `wrangler kv namespace create WATCH_PARTY` and paste its id below before

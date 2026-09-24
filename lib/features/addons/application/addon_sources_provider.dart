@@ -59,7 +59,7 @@ class AddonSourcesState {
 }
 
 class AddonSourcesController extends Notifier<AddonSourcesState> {
-  static const String _key = 'sora.moduleSources';
+  static const String storageKey = 'sora.moduleSources';
 
   @override
   AddonSourcesState build() {
@@ -71,7 +71,7 @@ class AddonSourcesController extends Notifier<AddonSourcesState> {
     try {
       final SharedPreferences preferences =
           await SharedPreferences.getInstance();
-      final String? raw = preferences.getString(_key);
+      final String? raw = preferences.getString(storageKey);
       state = state.copyWith(
         sources: _decode(raw),
         loading: false,
@@ -135,7 +135,7 @@ class AddonSourcesController extends Notifier<AddonSourcesState> {
   Future<void> _save(List<AddonSource> sources) async {
     final SharedPreferences preferences = await SharedPreferences.getInstance();
     await preferences.setString(
-      _key,
+      storageKey,
       jsonEncode(sources.map((AddonSource source) => source.toJson()).toList()),
     );
   }

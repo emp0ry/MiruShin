@@ -23,6 +23,15 @@ class AppSecureStorage {
   static const String shikimoriExpiresAtKey = 'shikimori.expiresAt';
   static const String shikimoriCustomClientSecretKey =
       'shikimori.customClientSecret';
+  static const String trackerAccountWorkspacesKey = 'tracker.accountWorkspaces';
+  static const String accountDriveSnapshotKey = 'accounts.drive.snapshot.v1';
+  static const String preferencesDriveSnapshotKey =
+      'preferences.drive.snapshot.v1';
+  static const String googleDriveAccessTokenKey = 'googleDrive.accessToken';
+  static const String googleDriveRefreshTokenKey = 'googleDrive.refreshToken';
+  static const String googleDriveExpiresAtKey = 'googleDrive.expiresAt';
+  static const String googleDriveAccountProfileKey =
+      'googleDrive.accountProfile';
   static const String _fallbackPrefix = 'secureStorageFallback.';
 
   /// Every secret that belongs in a portable MiruShin backup. Keep this list
@@ -41,6 +50,7 @@ class AppSecureStorage {
     shikimoriRefreshTokenKey,
     shikimoriExpiresAtKey,
     shikimoriCustomClientSecretKey,
+    trackerAccountWorkspacesKey,
   ];
 
   Future<Map<String, String>> exportBackupValues() async {
@@ -185,6 +195,61 @@ class AppSecureStorage {
 
   Future<void> writeShikimoriCustomClientSecret(String secret) =>
       _writeOrDelete(shikimoriCustomClientSecretKey, secret);
+
+  Future<String?> readTrackerAccountWorkspaces() =>
+      _read(trackerAccountWorkspacesKey);
+
+  Future<void> writeTrackerAccountWorkspaces(String value) =>
+      _writeOrDelete(trackerAccountWorkspacesKey, value);
+
+  Future<String?> readAccountDriveSnapshot() => _read(accountDriveSnapshotKey);
+
+  Future<void> writeAccountDriveSnapshot(String value) =>
+      _writeOrDelete(accountDriveSnapshotKey, value);
+
+  Future<String?> readPreferencesDriveSnapshot() =>
+      _read(preferencesDriveSnapshotKey);
+
+  Future<void> writePreferencesDriveSnapshot(String value) =>
+      _writeOrDelete(preferencesDriveSnapshotKey, value);
+
+  // Google Drive refresh credentials are deliberately device-local and are
+  // not listed in [backupKeys], so they never enter portable backups/Drive.
+  Future<String?> readGoogleDriveAccessToken() =>
+      _read(googleDriveAccessTokenKey);
+
+  Future<void> writeGoogleDriveAccessToken(String token) =>
+      _writeOrDelete(googleDriveAccessTokenKey, token);
+
+  Future<String?> readGoogleDriveRefreshToken() =>
+      _read(googleDriveRefreshTokenKey);
+
+  Future<void> writeGoogleDriveRefreshToken(String token) =>
+      _writeOrDelete(googleDriveRefreshTokenKey, token);
+
+  Future<DateTime?> readGoogleDriveExpiresAt() async {
+    final String? value = await _read(googleDriveExpiresAtKey);
+    return value == null ? null : DateTime.tryParse(value);
+  }
+
+  Future<void> writeGoogleDriveExpiresAt(DateTime? value) {
+    return value == null
+        ? _delete(googleDriveExpiresAtKey)
+        : _write(googleDriveExpiresAtKey, value.toIso8601String());
+  }
+
+  Future<String?> readGoogleDriveAccountProfile() =>
+      _read(googleDriveAccountProfileKey);
+
+  Future<void> writeGoogleDriveAccountProfile(String value) =>
+      _writeOrDelete(googleDriveAccountProfileKey, value);
+
+  Future<void> clearGoogleDriveSession() async {
+    await _delete(googleDriveAccessTokenKey);
+    await _delete(googleDriveRefreshTokenKey);
+    await _delete(googleDriveExpiresAtKey);
+    await _delete(googleDriveAccountProfileKey);
+  }
 
   Future<void> _writeOrDelete(String key, String value) {
     final String trimmed = value.trim();

@@ -60,6 +60,7 @@ Future<OAuthCodeListener> startOAuthCodeListener({required int port}) async {
   Future<void> handleRequest(HttpRequest request) async {
     final String? code = request.uri.queryParameters['code'];
     final String? state = request.uri.queryParameters['state'];
+    final String? error = request.uri.queryParameters['error'];
 
     request.response.headers.contentType = ContentType.html;
     request.response.write(
@@ -69,6 +70,10 @@ Future<OAuthCodeListener> startOAuthCodeListener({required int port}) async {
 
     if (!completer.isCompleted && code != null && code.trim().isNotEmpty) {
       completer.complete(OAuthCodeResult(code: code.trim(), state: state));
+      _activeListener = null;
+      await closeServers();
+    } else if (!completer.isCompleted && error != null) {
+      completer.complete(null);
       _activeListener = null;
       await closeServers();
     }
@@ -84,33 +89,21 @@ Future<OAuthCodeListener> startOAuthCodeListener({required int port}) async {
 }
 
 Future<List<HttpServer>> _bindServers(int port) async {
-  if (!Platform.isLinux) {
-    try {
-      return <HttpServer>[
-        await HttpServer.bind(
-          InternetAddress.loopbackIPv6,
-          port,
-          v6Only: false,
-          shared: true,
-        ),
-      ];
-    } catch (error) {
-      if (kDebugMode) {
-        debugPrint('[Tracker OAuth] Failed to bind localhost:$port: $error');
-      }
-      rethrow;
-    }
-  }
-
   final List<HttpServer> servers = <HttpServer>[];
   Object? lastError;
 
+  // Bind both loopback families explicitly on every desktop platform. Safari
+  // commonly resolves `localhost` to 127.0.0.1 while a dual-stack IPv6 Dart
+  // socket on macOS does not reliably accept that IPv4 connection.
   try {
     servers.add(
       await HttpServer.bind(InternetAddress.loopbackIPv4, port, shared: true),
     );
   } catch (error) {
     lastError = error;
+    if (kDebugMode) {
+      debugPrint('[Tracker OAuth] Failed to bind 127.0.0.1:$port: $error');
+    }
   }
 
   try {
@@ -124,6 +117,9 @@ Future<List<HttpServer>> _bindServers(int port) async {
     );
   } catch (error) {
     lastError = error;
+    if (kDebugMode) {
+      debugPrint('[Tracker OAuth] Failed to bind [::1]:$port: $error');
+    }
   }
 
   if (servers.isEmpty) {

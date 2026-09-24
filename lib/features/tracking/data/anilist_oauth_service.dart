@@ -30,10 +30,12 @@ class AniListOAuthService {
         await listener.cancel();
         return null;
       }
-      return listener.wait();
+      return await listener.wait();
     } catch (_) {
       await listener.cancel();
       rethrow;
+    } finally {
+      await listener.cancel();
     }
   }
 }

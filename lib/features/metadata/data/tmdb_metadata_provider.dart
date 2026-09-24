@@ -101,6 +101,7 @@ class TmdbMetadataProvider implements PagedDiscoveryProvider {
           'with_original_language': 'ja',
           'sort_by': 'popularity.desc',
         }),
+      MediaType.manga => Future<List<MediaItem>>.value(const <MediaItem>[]),
     };
   }
 
@@ -594,6 +595,7 @@ class TmdbMetadataProvider implements PagedDiscoveryProvider {
           'vote_count.gte': 50,
           'sort_by': 'vote_average.desc',
         }),
+      MediaType.manga => Future<List<MediaItem>>.value(const <MediaItem>[]),
     };
   }
 
@@ -624,6 +626,7 @@ class TmdbMetadataProvider implements PagedDiscoveryProvider {
           'with_genres': '16',
           'with_original_language': 'ja',
         }),
+      MediaType.manga => Future<List<MediaItem>>.value(const <MediaItem>[]),
     };
   }
 
@@ -652,6 +655,7 @@ class TmdbMetadataProvider implements PagedDiscoveryProvider {
           'with_genres': '16',
           'with_original_language': 'ja',
         }),
+      MediaType.manga => Future<List<MediaItem>>.value(const <MediaItem>[]),
     };
   }
 
@@ -1221,6 +1225,7 @@ class TmdbMetadataProvider implements PagedDiscoveryProvider {
             MediaType.movie => 'Movie release',
             MediaType.series => 'Series airing',
             MediaType.anime => 'Anime airing',
+            MediaType.manga => 'Manga release',
           };
           return CalendarItem(
             id: 'tmdb-calendar:${media.externalIds['tmdb']}:${date.toIso8601String()}',
@@ -1275,6 +1280,7 @@ class TmdbMetadataProvider implements PagedDiscoveryProvider {
             MediaType.movie => 'movie',
             MediaType.series => 'tv',
             MediaType.anime => 'anime',
+            MediaType.manga => 'manga',
           }}:$id',
       title: title.isEmpty ? originalTitle : title,
       originalTitle: originalTitle.isEmpty ? title : originalTitle,

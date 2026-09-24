@@ -57,6 +57,7 @@ MiruShin lets you browse trending titles, build your library, keep your progress
 | --- | --- |
 | 🔥 **Discover** | Browse trending, popular, and filtered rails. Switch between TMDB and AniList catalogs anytime. |
 | 📚 **Library** | Keep your own library, sync AniList, MyAnimeList, and Shikimori, continue watching, and track your progress in one place. |
+| ☁️ **Google Drive Sync** | Optionally sync isolated per-AniList-account libraries and preferences, playback state, addons, API connections, relay preferences, and each account's MAL/Shikimori connections through private Drive app data. |
 | ▶️ **Watch** | Play HLS, MP4, and DASH with quality selection, voiceovers, subtitles, and autoplay next. |
 | 👥 **Watch Together** | Create a Watch with Friends room by code or QR and sync playback peer-to-peer across devices. |
 | 📥 **Offline** | Download episodes from the watch page and play them later from the Downloaded library tab. |
@@ -71,6 +72,7 @@ MiruShin lets you browse trending titles, build your library, keep your progress
 - 🔐 **Host-controlled watch-party permissions** for guest play/pause, seek, and speed changes.
 - 🎮 **Discord Rich Presence** on supported desktops.
 - 🔄 **Tracker sync** for AniList, MyAnimeList, and Shikimori account workflows.
+- 🔐 **Per-account workspaces** so switching AniList accounts also switches that account's Local Library and MAL/Shikimori connections.
 - 📤 **Exports** to MyAnimeList XML and Shikimori JSON.
 - 🧩 **Add-ons** (Sora-compatible modules) for source search, installable by URL.
 
@@ -129,6 +131,7 @@ Want more? Two optional steps unlock the rest:
 - **Sign in to AniList, MyAnimeList, or Shikimori** to sync library status and progress. AniList also unlocks profile pages, social surfaces, exports, and the AniList catalog.
 - **Add modules to watch** by opening the **Addons** page and pasting a trusted module manifest URL, then install and enable it. Need modules? Join the [Sora Discord](https://discord.gg/XR3SrmUbpd) to find them.
 - **Watch with friends** from Settings or the player. The host creates a short-lived room code/QR, guests join on their own device, and playback events sync after pairing.
+- **Connect Google Drive Sync** to restore Local Library workspaces, per-account Library settings, playback preferences, addons, API connections, persistent Watch with Friends relay preferences, AniList accounts, and their MAL/Shikimori sessions on another device. Tracker sessions and user-provided API credentials are stored in the selected Google account's private `appDataFolder`; Google Drive OAuth tokens, temporary Watch Party credentials, and MiruShin's own OAuth secrets stay out of those synced records.
 
 > [!TIP]
 > Switch between TMDB and AniList anytime by tapping the top-left logo (or via **More** in compact mode).

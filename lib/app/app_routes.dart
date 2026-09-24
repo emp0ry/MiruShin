@@ -21,6 +21,7 @@ abstract final class AppRoutes {
   static const String profileSettings = '/profile/settings';
   static const String profileUser = '/profile/user/:id';
   static const String settings = '/settings';
+  static const String librarySync = '/settings/library-sync';
   static const String mediaDetails = '/media/:id';
   static const String watch = '/watch/:id';
   static const String watchPlay = '/watch/play';

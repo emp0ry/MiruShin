@@ -1,16 +1,21 @@
 import 'dart:async';
 
+import 'package:drift/native.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mirushin/features/library/application/canonical_library_repository.dart';
 import 'package:mirushin/features/library/application/local_library_provider.dart';
+import 'package:mirushin/features/library/data/canonical_library_database.dart';
 import 'package:mirushin/features/player/application/playback_controller.dart';
 import 'package:mirushin/features/player/application/player_settings.dart';
 import 'package:mirushin/features/player/domain/playback_end_decision.dart';
 import 'package:mirushin/features/player/domain/player_models.dart';
 import 'package:mirushin/features/player/engine/player_engine.dart';
+import 'package:mirushin/features/tracking/application/tracker_sync_coordinator.dart';
 import 'package:mirushin/features/watch/domain/normalized_models.dart';
+import 'package:mirushin/shared/models/anilist_models.dart';
 import 'package:mirushin/shared/models/media_item.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -22,8 +27,16 @@ void main() {
   });
 
   ProviderContainer container() {
-    final ProviderContainer container = ProviderContainer();
-    addTearDown(container.dispose);
+    final CanonicalLibraryDatabase database = CanonicalLibraryDatabase(
+      NativeDatabase.memory(),
+    );
+    final ProviderContainer container = ProviderContainer(
+      overrides: [canonicalLibraryDatabaseProvider.overrideWithValue(database)],
+    );
+    addTearDown(() async {
+      container.dispose();
+      await database.close();
+    });
     return container;
   }
 
@@ -37,6 +50,9 @@ void main() {
         );
         final MediaPlaybackItem item = _testPlaybackItem(
           'party-guest-progress',
+          episodeCount: 1,
+          mediaStatusLabel: 'FINISHED',
+          externalIds: const <String, String>{'anilist': '10'},
         ).withIgnoreProgress(true);
         final _FakePlayerEngine engine = _FakePlayerEngine(
           const PlayerEngineState(
@@ -67,6 +83,10 @@ void main() {
               ?.completed,
           isTrue,
         );
+        final states = await c.read(trackingSyncStoreProvider).loadStates();
+        expect(states.single.progress, 1);
+        expect(states.single.status, AniListListStatus.completed);
+        expect(states.single.completedAt, isNotNull);
 
         engine.setState(
           engine.value.copyWith(position: const Duration(seconds: 1436)),
@@ -336,8 +356,12 @@ void main() {
           openGate: openGate,
         );
         addTearDown(engine.disposeNotifier);
+        final CanonicalLibraryDatabase database = CanonicalLibraryDatabase(
+          NativeDatabase.memory(),
+        );
         final ProviderContainer c = ProviderContainer(
           overrides: [
+            canonicalLibraryDatabaseProvider.overrideWithValue(database),
             playerEngineBuilderProvider.overrideWithValue(
               ({
                 double? initialAspectRatio,
@@ -348,7 +372,10 @@ void main() {
             ),
           ],
         );
-        addTearDown(c.dispose);
+        addTearDown(() async {
+          c.dispose();
+          await database.close();
+        });
         final PlaybackController controller = c.read(
           playbackControllerProvider.notifier,
         );
@@ -383,8 +410,12 @@ void main() {
           first,
           recovered,
         ];
+        final CanonicalLibraryDatabase database = CanonicalLibraryDatabase(
+          NativeDatabase.memory(),
+        );
         final ProviderContainer c = ProviderContainer(
           overrides: [
+            canonicalLibraryDatabaseProvider.overrideWithValue(database),
             playerEngineBuilderProvider.overrideWithValue(
               ({
                 double? initialAspectRatio,
@@ -395,7 +426,10 @@ void main() {
             ),
           ],
         );
-        addTearDown(c.dispose);
+        addTearDown(() async {
+          c.dispose();
+          await database.close();
+        });
         final PlaybackController controller = c.read(
           playbackControllerProvider.notifier,
         );
@@ -1728,6 +1762,9 @@ MediaPlaybackItem _testPlaybackItem(
   String id, {
   PlaybackStartPolicy startPolicy = PlaybackStartPolicy.resumeSaved,
   Duration startPosition = Duration.zero,
+  int? episodeCount,
+  String mediaStatusLabel = '',
+  Map<String, String> externalIds = const <String, String>{},
 }) {
   return MediaPlaybackItem(
     id: id,
@@ -1735,6 +1772,9 @@ MediaPlaybackItem _testPlaybackItem(
     mediaType: MediaType.anime,
     startPolicy: startPolicy,
     startPosition: startPosition,
+    episodeCount: episodeCount,
+    mediaStatusLabel: mediaStatusLabel,
+    externalIds: externalIds,
     servers: const <MediaServer>[
       MediaServer(
         id: 'server',

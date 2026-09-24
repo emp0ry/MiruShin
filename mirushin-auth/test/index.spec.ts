@@ -1,5 +1,5 @@
-import { createExecutionContext, env, waitOnExecutionContext } from 'cloudflare:test';
-import { describe, expect, it } from 'vitest';
+import { createExecutionContext, env, fetchMock, waitOnExecutionContext } from 'cloudflare:test';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import worker from '../src/index';
 
 const IncomingRequest = Request<unknown, IncomingRequestCfProperties>;
@@ -14,6 +14,10 @@ const baseEnv = {
 	SHIKIMORI_USER_AGENT: 'MiruShin',
 	MAL_CLIENT_ID_DESKTOP: 'mal-desktop',
 	MAL_CLIENT_ID_MOBILE: 'mal-mobile',
+	GOOGLE_DESKTOP_CLIENT_ID: 'google-desktop-client',
+	GOOGLE_DESKTOP_CLIENT_SECRET: 'google-desktop-secret',
+	GOOGLE_WEB_CLIENT_ID: 'google-web-client',
+	GOOGLE_WEB_CLIENT_SECRET: 'google-web-secret',
 	APP_PROOF_SECRET: 'test-app-proof-secret',
 };
 
@@ -43,6 +47,12 @@ async function appProofQuery(): Promise<string> {
 	return params.toString();
 }
 
+async function pkceChallenge(verifier: string): Promise<string> {
+	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+	const binary = String.fromCharCode(...new Uint8Array(digest));
+	return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
+}
+
 async function fetchWorker(
 	path: string,
 	init?: RequestInit<IncomingRequestCfProperties>,
@@ -68,6 +78,16 @@ async function fetchWorker(
 }
 
 describe('mirushin-auth worker', () => {
+	beforeEach(() => {
+		fetchMock.activate();
+		fetchMock.disableNetConnect();
+	});
+
+	afterEach(() => {
+		fetchMock.assertNoPendingInterceptors();
+		fetchMock.deactivate();
+	});
+
 	it('renders a callback error instead of throwing when no code is present', async () => {
 		const response = await fetchWorker('/callback');
 
@@ -121,6 +141,155 @@ describe('mirushin-auth worker', () => {
 		expect(location.pathname).toBe('/v1/oauth2/authorize');
 		expect(location.searchParams.get('client_id')).toBe('mal-mobile');
 		expect(location.searchParams.get('redirect_uri')).toBe('app://mirushin/auth');
+	});
+
+	it('exchanges a desktop Google code with server-side credentials and fixed redirect', async () => {
+		let upstreamForm: URLSearchParams | undefined;
+		fetchMock
+			.get('https://oauth2.googleapis.com')
+			.intercept({
+				path: '/token',
+				method: 'POST',
+				body: (body) => {
+					upstreamForm = new URLSearchParams(body);
+					return true;
+				},
+			})
+			.reply(200, JSON.stringify({ access_token: 'access', refresh_token: 'refresh', expires_in: 3600 }), {
+				headers: { 'content-type': 'application/json' },
+			});
+
+		const response = await fetchWorker('/token', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({
+				provider: 'google',
+				action: 'token',
+				platform: 'desktop',
+				grant_type: 'authorization_code',
+				code: 'authorization-code',
+				code_verifier: 'pkce-verifier',
+				redirect_uri: 'http://127.0.0.1:28375/',
+				client_id: 'attacker-controlled-client',
+				client_secret: 'attacker-controlled-secret',
+			}),
+		});
+
+		expect(response.status).toBe(200);
+		expect(response.headers.get('cache-control')).toBe('no-store');
+		expect(upstreamForm?.get('client_id')).toBe('google-desktop-client');
+		expect(upstreamForm?.get('client_secret')).toBe('google-desktop-secret');
+		expect(upstreamForm?.get('code')).toBe('authorization-code');
+		expect(upstreamForm?.get('code_verifier')).toBe('pkce-verifier');
+		expect(upstreamForm?.get('redirect_uri')).toBe('http://127.0.0.1:28375/');
+	});
+
+	it('runs Google TV QR handoff with PKCE and server-side Web credentials', async () => {
+		const verifier = 'A'.repeat(64);
+		const challenge = await pkceChallenge(verifier);
+		const started = await fetchWorker('/token', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({
+				provider: 'google',
+				action: 'device_code',
+				platform: 'tv',
+				code_challenge: challenge,
+				client_id: 'ignored',
+			}),
+		});
+
+		expect(started.status).toBe(200);
+		const startPayload = (await started.json()) as { device_code: string; user_code: string; verification_uri: string };
+		expect(startPayload.device_code).toMatch(/^google_tv_[a-f0-9]{32}$/);
+		expect(startPayload.user_code).toBe('');
+		const authorizeUrl = new URL(startPayload.verification_uri);
+		expect(authorizeUrl.origin).toBe('https://accounts.google.com');
+		expect(authorizeUrl.searchParams.get('client_id')).toBe('google-web-client');
+		expect(authorizeUrl.searchParams.get('redirect_uri')).toBe('https://auth.emp0ry.com/callback');
+		expect(authorizeUrl.searchParams.get('scope')).toBe('https://www.googleapis.com/auth/drive.appdata');
+		expect(authorizeUrl.searchParams.get('code_challenge')).toBe(challenge);
+		expect(authorizeUrl.searchParams.get('state')).toBe(startPayload.device_code);
+
+		const pending = await fetchWorker('/token', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({
+				provider: 'google',
+				action: 'token',
+				platform: 'tv',
+				grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+				device_code: startPayload.device_code,
+				code_verifier: verifier,
+			}),
+		});
+		expect(pending.status).toBe(428);
+		expect((await pending.json()) as unknown).toEqual({
+			error: 'authorization_pending',
+			error_description: 'Waiting for Google authorization.',
+		});
+
+		const callback = await fetchWorker(
+			`/callback?code=tv-authorization-code&state=${encodeURIComponent(startPayload.device_code)}`,
+			{ redirect: 'manual' },
+			{ proof: false },
+		);
+		expect(callback.status).toBe(200);
+		expect(await callback.text()).toContain('Google Drive connected');
+
+		let tokenForm: URLSearchParams | undefined;
+		fetchMock
+			.get('https://oauth2.googleapis.com')
+			.intercept({
+				path: '/token',
+				method: 'POST',
+				body: (body) => {
+					tokenForm = new URLSearchParams(body);
+					return true;
+				},
+			})
+			.reply(200, JSON.stringify({ access_token: 'tv-access', refresh_token: 'tv-refresh', expires_in: 3600 }), {
+				headers: { 'content-type': 'application/json' },
+			});
+
+		const completed = await fetchWorker('/token', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({
+				provider: 'google',
+				action: 'token',
+				platform: 'tv',
+				grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+				device_code: startPayload.device_code,
+				code_verifier: verifier,
+			}),
+		});
+		expect(completed.status).toBe(200);
+		expect(tokenForm?.get('client_id')).toBe('google-web-client');
+		expect(tokenForm?.get('client_secret')).toBe('google-web-secret');
+		expect(tokenForm?.get('grant_type')).toBe('authorization_code');
+		expect(tokenForm?.get('code')).toBe('tv-authorization-code');
+		expect(tokenForm?.get('code_verifier')).toBe(verifier);
+		expect(tokenForm?.get('redirect_uri')).toBe('https://auth.emp0ry.com/callback');
+	});
+
+	it('rejects an unexpected Google redirect before contacting Google', async () => {
+		const response = await fetchWorker('/token', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({
+				provider: 'google',
+				action: 'token',
+				platform: 'desktop',
+				grant_type: 'authorization_code',
+				code: 'authorization-code',
+				code_verifier: 'pkce-verifier',
+				redirect_uri: 'https://attacker.example/callback',
+			}),
+		});
+
+		expect(response.status).toBe(400);
+		expect((await response.json()) as unknown).toEqual({ error: 'invalid_redirect_uri' });
 	});
 
 	it('runs a full watch-party signaling handshake', async () => {

@@ -6,6 +6,26 @@ import '../../../shared/models/anilist_models.dart';
 import '../domain/tracker_models.dart';
 import '../domain/tracking_sync_models.dart';
 
+class TrackingEpisodeCheckpoint {
+  const TrackingEpisodeCheckpoint({
+    required this.mediaId,
+    required this.season,
+    required this.episode,
+    required this.positionSeconds,
+    required this.completed,
+    this.durationSeconds,
+    this.watchCycle = 0,
+  });
+
+  final String mediaId;
+  final int season;
+  final double episode;
+  final int positionSeconds;
+  final int? durationSeconds;
+  final bool completed;
+  final int watchCycle;
+}
+
 abstract class TrackingSyncStore {
   Future<List<UserMediaState>> loadStates();
 
@@ -22,6 +42,59 @@ abstract class TrackingSyncStore {
   Future<Map<TrackerSource, TrackerProviderHealth>> loadHealth();
 
   Future<void> saveHealth(Map<TrackerSource, TrackerProviderHealth> health);
+}
+
+/// Optional transactional extension used by the canonical SQLite store.
+///
+/// Older/in-memory stores keep implementing [TrackingSyncStore] unchanged,
+/// while production can commit the state, journal, favorites and audit event
+/// in one database transaction.
+abstract class AtomicTrackingSyncStore {
+  Future<void> commitMutation({
+    required List<UserMediaState> states,
+    required List<SyncJournalEntry> journal,
+    required List<LocalMediaFavoriteState> favorites,
+    required MediaIdentity identity,
+    required UserMediaPatch patch,
+    required Set<TrackerSource> targets,
+    required DateTime occurredAt,
+    String? mediaTitle,
+    TrackingEpisodeCheckpoint? episodeCheckpoint,
+  });
+}
+
+/// Optional SQLite-backed reconciliation contract. A full authenticated
+/// provider snapshot is persisted first, diffed only against that same
+/// provider account, and accepted into canonical state field-by-field.
+abstract class ReconciliationTrackingSyncStore {
+  Future<ProviderReconciliationResult> reconcileProviderSnapshot({
+    required TrackerSource source,
+    required String accountId,
+    required String mediaKind,
+    required List<UserMediaState> remote,
+    required List<SyncJournalEntry> journal,
+    required Set<TrackerSource> propagationTargets,
+    required bool completeSnapshot,
+  });
+}
+
+/// Optional delivery-state bridge for stores with a first-class outbox.
+/// The sync engine reports transport progress without coupling provider
+/// adapters to the canonical database implementation.
+abstract class DeliveryTrackingSyncStore {
+  Future<void> updateTrackerDelivery({
+    required MediaIdentity identity,
+    required TrackerSource target,
+    required String state,
+    String? error,
+  });
+}
+
+/// Optional guard exposed by stores that migrate a legacy library into a new
+/// persistence engine. When migration verification fails, callers keep using
+/// the legacy data but must not contact trackers until a later retry succeeds.
+abstract class MigrationSafeModeTrackingSyncStore {
+  Future<bool> isInMigrationSafeMode();
 }
 
 /// Versioned local persistence for canonical user state, identity mappings,

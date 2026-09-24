@@ -255,7 +255,6 @@ class _WatchOrderTile extends ConsumerWidget {
       if (media.format.isNotEmpty) media.format.replaceAll('_', ' '),
       if (media.startDate.year != null) '${media.startDate.year}',
       if (item.rating > 0) '★ ${item.rating.toStringAsFixed(1)}',
-      if (current) context.t('Current title'),
     ];
     Widget placeholder() => ColoredBox(
       color: palette.surfaceSoftColor,

@@ -174,6 +174,13 @@ class SoraAddonManifest {
             token.contains('ani') ||
             token.contains('donghua'),
       ),
+      MediaType.manga => tokens.any(
+        (String token) =>
+            token.contains('manga') ||
+            token.contains('comic') ||
+            token.contains('manhwa') ||
+            token.contains('manhua'),
+      ),
       MediaType.movie => tokens.any(
         (String token) =>
             token.contains('movie') ||

@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -17,8 +19,9 @@ import '../domain/tracker_models.dart';
 import 'oauth_code_webview_page.dart';
 
 bool get _isMobile =>
-    defaultTargetPlatform == TargetPlatform.android ||
-    defaultTargetPlatform == TargetPlatform.iOS;
+    !kIsWeb &&
+    (defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS);
 
 /// Launches the MyAnimeList OAuth2 (authorization code + PKCE) flow and, on
 /// success, stores the tokens and refreshes the tracker library.
@@ -42,29 +45,31 @@ Future<void> loginMal(BuildContext context, WidgetRef ref) async {
   final String redirectUri = _isMobile
       ? AppConstants.trackerMobileRedirectUri
       : AppConstants.malDesktopRedirectUri;
+  final String oauthState = _newOAuthState('mal');
   final MalOAuthService service = MalOAuthService();
   final Uri authUri = service.buildAuthorizeUri(
     clientId: clientId,
     codeChallenge: verifier,
     redirectUri: redirectUri,
-    state: 'mal',
+    state: oauthState,
   );
 
   try {
-    final String? code = await _obtainAuthCode(
+    final OAuthCodeResult? result = await _obtainAuthCode(
       context: context,
       authUri: authUri,
       redirectUri: redirectUri,
       desktopPort: AppConstants.malDesktopCallbackPort,
       title: context.t('MyAnimeList Login'),
+      expectedState: oauthState,
     );
-    if (code == null) {
+    if (result == null) {
       messenger.showSnackBar(SnackBar(content: Text(canceledMessage)));
       return;
     }
     final OAuthTokenBundle tokens = await service.exchangeCode(
       clientId: clientId,
-      code: code,
+      code: result.code,
       codeVerifier: verifier,
       redirectUri: redirectUri,
     );
@@ -115,30 +120,40 @@ Future<void> loginShikimori(BuildContext context, WidgetRef ref) async {
     return;
   }
 
-  const String redirectUri = AppConstants.shikimoriCallbackUrl;
+  final bool customCredentials = settings.shikimoriUseCustomCredentials;
+  final String redirectUri = customCredentials
+      ? AppConstants.shikimoriOobRedirectUri
+      : AppConstants.shikimoriCallbackUrl;
+  final String oauthState = _newOAuthState('shikimori');
   final ShikimoriOAuthService service = ShikimoriOAuthService();
   final Uri authUri = service.buildAuthorizeUri(
     clientId: clientId,
     redirectUri: redirectUri,
-    state: 'shikimori',
+    state: oauthState,
   );
 
   try {
-    final String? code = await _obtainAuthCode(
+    final OAuthCodeResult? result = await _obtainAuthCode(
       context: context,
       authUri: authUri,
       redirectUri: redirectUri,
       desktopPort: AppConstants.shikimoriDesktopCallbackPort,
       title: context.t('Shikimori Login'),
+      expectedState: oauthState,
+      manualCodeEntry: customCredentials && !_isMobile,
+      oobCodePathPrefix: customCredentials
+          ? AppConstants.shikimoriOobCodePathPrefix
+          : null,
+      allowMissingState: customCredentials,
     );
-    if (code == null) {
+    if (result == null) {
       messenger.showSnackBar(SnackBar(content: Text(canceledMessage)));
       return;
     }
     final OAuthTokenBundle tokens = await service.exchangeCode(
       clientId: clientId,
       clientSecret: clientSecret,
-      code: code,
+      code: result.code,
       redirectUri: redirectUri,
     );
     final TrackerViewer viewer = await ShikimoriApiClient(
@@ -178,62 +193,71 @@ Future<void> loginShikimori(BuildContext context, WidgetRef ref) async {
 /// - Desktop (MAL, Shikimori): localhost callback server on [desktopPort]. For
 ///   Shikimori the Worker callback page forwards the code to that listener.
 /// - Web: manual URL/code paste.
-Future<String?> _obtainAuthCode({
+Future<OAuthCodeResult?> _obtainAuthCode({
   required BuildContext context,
   required Uri authUri,
   required String redirectUri,
   required String title,
+  required String expectedState,
   int? desktopPort,
   bool manualCodeEntry = false,
   String? oobCodePathPrefix,
+  bool allowMissingState = false,
 }) async {
   final bool oob = oobCodePathPrefix != null;
+  OAuthCodeResult? result;
   if (kIsWeb || manualCodeEntry || (oob && !_isMobile)) {
-    return _pasteCodeOnWeb(context, authUri, title);
-  }
-  if (_isMobile) {
-    final OAuthCodeResult? result = await Navigator.of(context)
-        .push<OAuthCodeResult>(
-          MaterialPageRoute<OAuthCodeResult>(
-            builder: (BuildContext ctx) => OAuthCodeWebViewPage(
-              authUrl: authUri.toString(),
-              redirectUri: redirectUri,
-              title: title,
-              oobCodePathPrefix: oobCodePathPrefix,
-            ),
-          ),
-        );
-    return result?.code;
-  }
-  // Desktop with a real redirect: start the localhost listener, then open the
-  // system browser.
-  final OAuthCodeListener listener = await startOAuthCodeListener(
-    port: desktopPort!,
-  );
-  try {
-    final bool launched = await launchUrl(
+    result = await _pasteCodeOnWeb(
+      context,
       authUri,
-      mode: LaunchMode.externalApplication,
+      title,
+      expectedState: expectedState,
     );
-    if (!launched) {
+  } else if (_isMobile) {
+    result = await Navigator.of(context).push<OAuthCodeResult>(
+      MaterialPageRoute<OAuthCodeResult>(
+        builder: (BuildContext ctx) => OAuthCodeWebViewPage(
+          authUrl: authUri.toString(),
+          redirectUri: redirectUri,
+          title: title,
+          oobCodePathPrefix: oobCodePathPrefix,
+        ),
+      ),
+    );
+  } else {
+    // Desktop with a real redirect: start the localhost listener, then open the
+    // system browser.
+    final OAuthCodeListener listener = await startOAuthCodeListener(
+      port: desktopPort!,
+    );
+    try {
+      final bool launched = await launchUrl(
+        authUri,
+        mode: LaunchMode.externalApplication,
+      );
+      if (!launched) return null;
+      result = await listener.wait();
+    } finally {
       await listener.cancel();
-      return null;
     }
-    final OAuthCodeResult? result = await listener.wait();
-    return result?.code;
-  } catch (_) {
-    await listener.cancel();
-    rethrow;
   }
+
+  if (result == null) return null;
+  if (result.state != expectedState &&
+      !(allowMissingState && result.state == null)) {
+    throw StateError('OAuth state verification failed.');
+  }
+  return result;
 }
 
-Future<String?> _pasteCodeOnWeb(
+Future<OAuthCodeResult?> _pasteCodeOnWeb(
   BuildContext context,
   Uri authUri,
-  String title,
-) async {
+  String title, {
+  required String expectedState,
+}) async {
   String rawInput = '';
-  return showDialog<String>(
+  return showDialog<OAuthCodeResult>(
     context: context,
     builder: (BuildContext dialogContext) {
       return AlertDialog(
@@ -273,8 +297,9 @@ Future<String?> _pasteCodeOnWeb(
             label: Text(dialogContext.t('Open login page')),
           ),
           FilledButton.icon(
-            onPressed: () =>
-                Navigator.of(dialogContext).pop(_parseCode(rawInput)),
+            onPressed: () => Navigator.of(
+              dialogContext,
+            ).pop(_parseCode(rawInput, fallbackState: expectedState)),
             icon: const Icon(Icons.check_rounded),
             label: Text(dialogContext.t('Connect account')),
           ),
@@ -284,21 +309,37 @@ Future<String?> _pasteCodeOnWeb(
   );
 }
 
-String? _parseCode(String rawInput) {
+OAuthCodeResult? _parseCode(String rawInput, {required String fallbackState}) {
   final String raw = rawInput.trim();
   if (raw.isEmpty) return null;
   final Uri? uri = Uri.tryParse(raw);
   if (uri != null) {
     final String? queryCode = uri.queryParameters['code'];
-    if (queryCode != null && queryCode.isNotEmpty) return queryCode;
+    if (queryCode != null && queryCode.isNotEmpty) {
+      return OAuthCodeResult(
+        code: queryCode,
+        state: uri.queryParameters['state'],
+      );
+    }
     // Shikimori OOB shows the code at .../oauth/authorize/<code>.
     final int idx = uri.path.indexOf(AppConstants.shikimoriOobCodePathPrefix);
     if (idx >= 0) {
       final String tail = uri.path.substring(
         idx + AppConstants.shikimoriOobCodePathPrefix.length,
       );
-      if (tail.isNotEmpty && !tail.contains('/')) return tail;
+      if (tail.isNotEmpty && !tail.contains('/')) {
+        return OAuthCodeResult(code: tail, state: fallbackState);
+      }
     }
   }
-  return raw;
+  return OAuthCodeResult(code: raw, state: fallbackState);
+}
+
+String _newOAuthState(String provider) {
+  final Random random = Random.secure();
+  final String nonce = List<int>.generate(
+    24,
+    (_) => random.nextInt(256),
+  ).map((int byte) => byte.toRadixString(16).padLeft(2, '0')).join();
+  return '$provider-$nonce';
 }

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 abstract final class AppConstants {
@@ -25,6 +26,87 @@ abstract final class AppConstants {
   // On mobile the in-app WebView intercepts this URL before navigation; on
   // desktop the local callback server listens on the matching localhost port.
   static const String trackerMobileRedirectUri = 'app://mirushin/auth';
+
+  // Google Drive appDataFolder sync. OAuth client ids are public application
+  // identifiers. Desktop/TV token exchange is proxied through mirushin-auth so
+  // no Google client secret is ever included in a Flutter or Web build.
+  static const String _googleOAuthClientIdOverride = String.fromEnvironment(
+    'GOOGLE_OAUTH_CLIENT_ID',
+  );
+  static const String googleOAuthAndroidClientId = String.fromEnvironment(
+    'GOOGLE_OAUTH_CLIENT_ID_ANDROID',
+    defaultValue:
+        '77095881269-0e650r5a4va10mg58in43jp44vare97a.apps.googleusercontent.com',
+  );
+  static const String googleOAuthIosClientId = String.fromEnvironment(
+    'GOOGLE_OAUTH_CLIENT_ID_IOS',
+    defaultValue:
+        '77095881269-gaji31e827i85ro8loeu2srbegektntu.apps.googleusercontent.com',
+  );
+  static const String googleOAuthDesktopClientId = String.fromEnvironment(
+    'GOOGLE_OAUTH_CLIENT_ID_DESKTOP',
+    defaultValue:
+        '77095881269-macrb5098to4uirb3v4c5rolqi96fl8o.apps.googleusercontent.com',
+  );
+  static const String googleOAuthTvClientId = String.fromEnvironment(
+    'GOOGLE_OAUTH_CLIENT_ID_TV',
+    defaultValue:
+        '77095881269-6kojpc9iivfodvqimj2lp2346mvodo6v.apps.googleusercontent.com',
+  );
+  static const String googleOAuthWebClientId = String.fromEnvironment(
+    'GOOGLE_OAUTH_CLIENT_ID_WEB',
+    defaultValue:
+        '77095881269-gpka49ipagksvge36o4qdqbudaduc6eg.apps.googleusercontent.com',
+  );
+
+  // The existing PKCE + loopback implementation is used on desktop. Android
+  // and iOS use the native Google authorization SDK; Android's SDK requires
+  // the Web client id as its serverClientId while the Android client registered
+  // in Google Cloud validates this package name and signing certificate.
+  static String get googleOAuthClientId {
+    if (_googleOAuthClientIdOverride.trim().isNotEmpty) {
+      return _googleOAuthClientIdOverride.trim();
+    }
+    if (kIsWeb) return googleOAuthWebClientId.trim();
+    return switch (defaultTargetPlatform) {
+      TargetPlatform.windows ||
+      TargetPlatform.linux ||
+      TargetPlatform.macOS => googleOAuthDesktopClientId,
+      TargetPlatform.android => googleOAuthWebClientId,
+      TargetPlatform.iOS => googleOAuthIosClientId,
+      TargetPlatform.fuchsia => '',
+    };
+  }
+
+  static bool get googleOAuthConfigured {
+    if (kIsWeb) return googleOAuthClientId.trim().isNotEmpty;
+    return switch (defaultTargetPlatform) {
+      TargetPlatform.android =>
+        googleOAuthAndroidClientId.trim().isNotEmpty &&
+            googleOAuthClientId.trim().isNotEmpty,
+      TargetPlatform.iOS => googleOAuthClientId.trim().isNotEmpty,
+      TargetPlatform.windows ||
+      TargetPlatform.linux ||
+      TargetPlatform.macOS => googleOAuthClientId.trim().isNotEmpty,
+      TargetPlatform.fuchsia => false,
+    };
+  }
+
+  // Android TV uses the Web OAuth client through an ephemeral Worker/PKCE QR
+  // handoff because Google's live device endpoint rejects Drive appdata even
+  // though it is still documented as an allowed Limited Input scope.
+  static bool get googleOAuthTvConfigured =>
+      googleOAuthWebClientId.trim().isNotEmpty;
+
+  static const int googleOAuthDesktopCallbackPort = 28375;
+  static const String googleOAuthDesktopRedirectUri = 'http://127.0.0.1:28375/';
+  static const String googleOAuthAuthorizeUrl =
+      'https://accounts.google.com/o/oauth2/v2/auth';
+  static const String googleOAuthProxyUrl = 'https://auth.emp0ry.com/token';
+  static const String googleDriveApiBaseUrl =
+      'https://www.googleapis.com/drive/v3';
+  static const String googleDriveUploadBaseUrl =
+      'https://www.googleapis.com/upload/drive/v3';
 
   // MyAnimeList OAuth2 (authorization code + PKCE, no client secret).
   static const String malAuthorizeUrl =

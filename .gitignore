@@ -213,6 +213,10 @@ lib/core/env/env.g.dart
 *.crt
 *.der
 *.key
+# Downloaded Google OAuth credential bundles may contain client secrets.
+*apps.googleusercontent.com.json
+*apps.googleusercontent.com.plist
+GoogleService-Info.plist
 
 # =====================
 # Binaries / Release builds

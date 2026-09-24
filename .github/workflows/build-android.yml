@@ -62,7 +62,10 @@ jobs:
           echo "Building Android $VERSION+$BUILD_NUMBER"
 
       - name: Build APK (release)
-        run: flutter build apk --release --build-name "${{ steps.ver.outputs.version }}" --build-number "${{ steps.ver.outputs.build_number }}"
+        run: |
+          flutter build apk --release \
+            --build-name "${{ steps.ver.outputs.version }}" \
+            --build-number "${{ steps.ver.outputs.build_number }}"
 
       - name: Rename APK to MiruShin-android-vX.Y.Z.apk
         id: apk

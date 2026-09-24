@@ -18,8 +18,9 @@ Future<void> loginAniList(BuildContext context, WidgetRef ref) async {
   final SettingsController controller = ref.read(settingsProvider.notifier);
   final SettingsState current = ref.read(settingsProvider);
   final bool isMobile =
-      defaultTargetPlatform == TargetPlatform.android ||
-      defaultTargetPlatform == TargetPlatform.iOS;
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS);
   final String clientId = isMobile
       ? current.anilistMobileClientId
       : current.anilistDesktopClientId;

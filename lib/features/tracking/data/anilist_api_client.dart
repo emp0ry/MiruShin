@@ -741,6 +741,24 @@ class AniListApiClient {
     return null;
   }
 
+  Future<MediaItem?> resolveMangaByMalId(int malId) async {
+    if (malId <= 0) return null;
+    final List<MediaItem> items = await _mediaPage(
+      '''
+      query MangaByMalId(\$id: Int) {
+        Page(page: 1, perPage: 1) {
+          media(type: MANGA, idMal: \$id$_isAdultClause) { $_mediaFields }
+        }
+      }
+      ''',
+      <String, dynamic>{'id': malId},
+    );
+    for (final MediaItem item in items) {
+      if (int.tryParse(item.externalIds['mal'] ?? '') == malId) return item;
+    }
+    return null;
+  }
+
   Future<MediaItem?> getCatalogDetails(String id) async {
     final List<String> parts = id.split(':');
     if (parts.length == 2 && parts.first == 'anilist') {
@@ -1522,9 +1540,16 @@ class AniListApiClient {
               id
               status
               progress
+              progressVolumes
               score(format: POINT_10_DECIMAL)
+              scoreRaw: score(format: POINT_100)
               notes
               repeat
+              priority
+              private
+              hiddenFromStatusLists
+              customLists
+              advancedScores
               createdAt
               updatedAt
               startedAt { year month day }
@@ -1569,9 +1594,16 @@ class AniListApiClient {
           id
           status
           progress
+          progressVolumes
           score(format: POINT_10_DECIMAL)
+          scoreRaw: score(format: POINT_100)
           notes
           repeat
+          priority
+          private
+          hiddenFromStatusLists
+          customLists
+          advancedScores
           createdAt
           updatedAt
           startedAt { year month day }
@@ -1602,16 +1634,25 @@ class AniListApiClient {
     required int mediaId,
     AniListListStatus? status,
     int? progress,
+    int? progressVolumes,
     double? score,
     int? scoreRaw,
     String? notes,
     int? repeat,
+    int? priority,
+    bool? private,
+    bool? hiddenFromStatusLists,
+    List<String>? customLists,
+    List<double>? advancedScores,
+    Map<String, int?>? startedAt,
+    Map<String, int?>? completedAt,
   }) async {
     final Map<String, dynamic> variables = <String, dynamic>{
       'mediaId': mediaId,
     };
     if (status != null) variables['status'] = status.graphQlValue;
     if (progress != null) variables['progress'] = progress;
+    if (progressVolumes != null) variables['progressVolumes'] = progressVolumes;
     if (scoreRaw != null) {
       variables['scoreRaw'] = scoreRaw.clamp(0, 100).toInt();
     } else if (score != null) {
@@ -1619,6 +1660,15 @@ class AniListApiClient {
     }
     if (notes != null) variables['notes'] = notes;
     if (repeat != null) variables['repeat'] = repeat;
+    if (priority != null) variables['priority'] = priority.clamp(0, 100);
+    if (private != null) variables['private'] = private;
+    if (hiddenFromStatusLists != null) {
+      variables['hiddenFromStatusLists'] = hiddenFromStatusLists;
+    }
+    if (customLists != null) variables['customLists'] = customLists;
+    if (advancedScores != null) variables['advancedScores'] = advancedScores;
+    if (startedAt != null) variables['startedAt'] = startedAt;
+    if (completedAt != null) variables['completedAt'] = completedAt;
 
     await _post(
       '''
@@ -1626,26 +1676,49 @@ class AniListApiClient {
         \$mediaId: Int,
         \$status: MediaListStatus,
         \$progress: Int,
+        \$progressVolumes: Int,
         \$score: Float,
         \$scoreRaw: Int,
         \$notes: String,
-        \$repeat: Int
+        \$repeat: Int,
+        \$priority: Int,
+        \$private: Boolean,
+        \$hiddenFromStatusLists: Boolean,
+        \$customLists: [String],
+        \$advancedScores: [Float],
+        \$startedAt: FuzzyDateInput,
+        \$completedAt: FuzzyDateInput
       ) {
         SaveMediaListEntry(
           mediaId: \$mediaId,
           status: \$status,
           progress: \$progress,
+          progressVolumes: \$progressVolumes,
           score: \$score,
           scoreRaw: \$scoreRaw,
           notes: \$notes,
-          repeat: \$repeat
+          repeat: \$repeat,
+          priority: \$priority,
+          private: \$private,
+          hiddenFromStatusLists: \$hiddenFromStatusLists,
+          customLists: \$customLists,
+          advancedScores: \$advancedScores,
+          startedAt: \$startedAt,
+          completedAt: \$completedAt
         ) {
           id
           status
           progress
+          progressVolumes
           score(format: POINT_10_DECIMAL)
+          scoreRaw: score(format: POINT_100)
           notes
           repeat
+          priority
+          private
+          hiddenFromStatusLists
+          customLists
+          advancedScores
         }
       }
       ''',
@@ -2372,9 +2445,34 @@ class AniListApiClient {
       status: AniListListStatusLabel.fromGraphQl(_string(json['status'])),
       progress: _int(json['progress']),
       score: _num(json['score'])?.toDouble(),
+      scoreRaw: _int(json['scoreRaw']) == 0 ? null : _int(json['scoreRaw']),
       mediaItem: _mediaFromJson(media),
       notes: _string(json['notes']),
       repeat: _int(json['repeat']),
+      progressVolumes: _int(json['progressVolumes']),
+      priority: _int(json['priority']),
+      private: json['private'] == true,
+      hiddenFromStatusLists: json['hiddenFromStatusLists'] == true,
+      customLists: _boolMap(json['customLists']),
+      advancedScores: _doubleMap(json['advancedScores']),
+      providerData: <String, dynamic>{
+        'status': _string(json['status']),
+        'progress': _int(json['progress']),
+        'progressVolumes': _int(json['progressVolumes']),
+        'scoreRaw': _int(json['scoreRaw']),
+        'repeat': _int(json['repeat']),
+        'priority': _int(json['priority']),
+        'private': json['private'] == true,
+        'hiddenFromStatusLists': json['hiddenFromStatusLists'] == true,
+        'customLists': _boolMap(json['customLists']),
+        'advancedScores': _doubleMap(json['advancedScores']),
+        if (json['startedAt'] is Map)
+          'startedAtFuzzy': Map<String, dynamic>.from(json['startedAt'] as Map),
+        if (json['completedAt'] is Map)
+          'completedAtFuzzy': Map<String, dynamic>.from(
+            json['completedAt'] as Map,
+          ),
+      },
       createdAt: json['createdAt'] is int ? json['createdAt'] as int : null,
       updatedAt: json['updatedAt'] is int ? json['updatedAt'] as int : null,
       startedAt: _fuzzyDate(json['startedAt']),
@@ -2574,7 +2672,7 @@ class AniListApiClient {
       overview: _stripHtml(
         _string(json['description'], fallback: 'No AniList description yet.'),
       ),
-      type: MediaType.anime,
+      type: mediaType == 'MANGA' ? MediaType.manga : MediaType.anime,
       year: startYear == 0 ? DateTime.now().year : startYear,
       posterUrl: cover,
       backdropUrl: banner,
@@ -3223,6 +3321,22 @@ class AniListApiClient {
       return <String>[];
     }
     return value.whereType<String>().toList();
+  }
+
+  static Map<String, bool> _boolMap(Object? value) {
+    if (value is! Map) return <String, bool>{};
+    return <String, bool>{
+      for (final MapEntry<dynamic, dynamic> entry in value.entries)
+        '${entry.key}': entry.value == true,
+    };
+  }
+
+  static Map<String, double> _doubleMap(Object? value) {
+    if (value is! Map) return <String, double>{};
+    return <String, double>{
+      for (final MapEntry<dynamic, dynamic> entry in value.entries)
+        if (entry.value is num) '${entry.key}': (entry.value as num).toDouble(),
+    };
   }
 
   static List<String> _namedStringList(Object? value, String key) {

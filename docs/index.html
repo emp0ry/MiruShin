@@ -575,8 +575,9 @@
               <div class="feature-icon icon-grid"></div>
               <h3>Library that stays useful</h3>
               <p>
-                Keep local progress, sync AniList, MyAnimeList, and Shikimori, return to what matters, and keep the whole
-                experience centered on actual watching.
+                Keep a separate Local Library for every AniList account, switch that account's MAL and
+                Shikimori connections with it, and optionally restore everything through private Google
+                Drive app data.
               </p>
             </article>
             <article class="feature-card reveal reveal-delay-sm">
@@ -591,8 +592,10 @@
               <div class="feature-icon icon-lock"></div>
               <h3>Local-first posture</h3>
               <p>
-                Tokens are stored on device where supported, and default MAL/Shikimori auth goes through
-                a small Cloudflare Worker so shared app credentials are not shipped in releases.
+                Every edit lands locally first. Default MAL/Shikimori auth uses a small Cloudflare Worker
+                so shared app credentials are not shipped; optional Drive Sync can restore user tracker
+                sessions, user API connections, relay preferences, and per-account Library settings while
+                Google OAuth credentials and temporary Watch Party credentials remain device-local.
               </p>
             </article>
           </div>

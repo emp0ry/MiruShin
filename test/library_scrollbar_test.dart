@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:drift/drift.dart' show driftRuntimeOptions;
+import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,12 +10,16 @@ import 'package:mirushin/app/localization/app_localizations.dart';
 import 'package:mirushin/app/theme/app_theme.dart';
 import 'package:mirushin/features/downloads/application/downloads_provider.dart';
 import 'package:mirushin/features/downloads/domain/download_models.dart';
+import 'package:mirushin/features/library/application/canonical_library_repository.dart';
+import 'package:mirushin/features/library/data/canonical_library_database.dart';
 import 'package:mirushin/features/library/presentation/library_page.dart';
+import 'package:mirushin/features/profile/application/anilist_user_settings_provider.dart';
 import 'package:mirushin/features/settings/application/settings_state.dart';
 import 'package:mirushin/features/tracking/application/anilist_library_provider.dart';
 import 'package:mirushin/features/tracking/application/local_first_sync_engine.dart';
 import 'package:mirushin/features/tracking/application/tracker_library_provider.dart';
 import 'package:mirushin/features/tracking/application/tracker_sync_coordinator.dart';
+import 'package:mirushin/features/tracking/data/canonical_tracking_sync_store.dart';
 import 'package:mirushin/features/tracking/data/tracking_sync_store.dart';
 import 'package:mirushin/features/tracking/domain/tracker_models.dart';
 import 'package:mirushin/features/tracking/domain/tracking_sync_models.dart';
@@ -26,6 +32,7 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   setUpAll(() async {
+    driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
     await AppLocalizations.load(const Locale('en'));
   });
 
@@ -249,7 +256,11 @@ void main() {
               return folders;
             }),
             trackerSyncCoordinatorProvider.overrideWith(
-              (Ref ref) => _BlockingTrackerSyncCoordinator(ref, delivery),
+              (Ref ref) => _BlockingTrackerSyncCoordinator(
+                ref,
+                delivery,
+                localCommitImmediate: true,
+              ),
             ),
             anilistMangaListProvider.overrideWith(
               (Ref ref) async => const <AniListAnimeListFolder>[],
@@ -335,7 +346,11 @@ void main() {
               (Ref ref) async => const <AniListAnimeListFolder>[],
             ),
             trackerSyncCoordinatorProvider.overrideWith(
-              (Ref ref) => _BlockingTrackerSyncCoordinator(ref, delivery),
+              (Ref ref) => _BlockingTrackerSyncCoordinator(
+                ref,
+                delivery,
+                localCommitImmediate: true,
+              ),
             ),
             anilistMangaListProvider.overrideWith(
               (Ref ref) async => const <AniListAnimeListFolder>[],
@@ -544,7 +559,11 @@ void main() {
               (Ref ref) async => folders,
             ),
             trackerSyncCoordinatorProvider.overrideWith(
-              (Ref ref) => _BlockingTrackerSyncCoordinator(ref, delivery),
+              (Ref ref) => _BlockingTrackerSyncCoordinator(
+                ref,
+                delivery,
+                localCommitImmediate: true,
+              ),
             ),
             anilistMangaListProvider.overrideWith(
               (Ref ref) async => const <AniListAnimeListFolder>[],
@@ -630,8 +649,15 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
 
     final AniListAnimeListEntry entry = _newEntry(904, 'Durable Offline Anime');
+    final CanonicalLibraryDatabase database = CanonicalLibraryDatabase(
+      NativeDatabase.memory(),
+    );
+    addTearDown(database.close);
+    final CanonicalLibraryRepository repository = CanonicalLibraryRepository(
+      database,
+    );
     final LocalFirstSyncEngine engine = LocalFirstSyncEngine(
-      store: const SharedPreferencesTrackingSyncStore(),
+      store: CanonicalTrackingSyncStore(repository: repository),
       adapters: const <TrackerSource, TrackerProviderAdapter>{},
       primary: TrackerSource.anilist,
     );
@@ -660,6 +686,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          canonicalLibraryDatabaseProvider.overrideWithValue(database),
           settingsProvider.overrideWith(_ConnectedSettings.new),
           anilistAnimeListProvider.overrideWith(
             () => _TestAniListLibrary(const <AniListAnimeListFolder>[]),
@@ -765,6 +792,51 @@ void main() {
     expect(mutations, hasLength(1));
     expect(mutations.single.patch.progress, 2);
     expect(mutations.single.patch.notes, 'Must survive route pop');
+  });
+
+  testWidgets('refresh can finish safely after the caller is unmounted', (
+    WidgetTester tester,
+  ) async {
+    final Completer<void> previewGate = Completer<void>();
+    final Completer<void> refreshCompleted = Completer<void>();
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          settingsProvider.overrideWith(_ConnectedSettings.new),
+          aniListEffectiveTitleLanguageProvider.overrideWithValue('ENGLISH'),
+          anilistAnimeListProvider.overrideWith(
+            () => _TestAniListLibrary(const <AniListAnimeListFolder>[]),
+          ),
+          anilistAnimePreviewListProvider.overrideWith((Ref ref) async {
+            await previewGate.future;
+            return const <AniListAnimeListFolder>[];
+          }),
+          trackerLocalAnimeLibraryProvider.overrideWith(
+            (Ref ref) async => const TrackerLocalAnimeLibrary(
+              folders: <AniListAnimeListFolder>[],
+              pendingMutations: <TrackerLibraryOptimisticMutation>[],
+            ),
+          ),
+        ],
+        child: MaterialApp(
+          home: _UnmountingRefreshHarness(completed: refreshCompleted),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byKey(const ValueKey<String>('refresh-and-unmount')));
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey<String>('refresh-and-unmount')),
+      findsNothing,
+    );
+
+    previewGate.complete();
+    await refreshCompleted.future;
+    await tester.pump();
+
+    expect(tester.takeException(), isNull);
   });
 
   test(
@@ -1086,6 +1158,47 @@ class _SaveThenUnmountButton extends ConsumerWidget {
   }
 }
 
+class _UnmountingRefreshHarness extends StatefulWidget {
+  const _UnmountingRefreshHarness({required this.completed});
+
+  final Completer<void> completed;
+
+  @override
+  State<_UnmountingRefreshHarness> createState() =>
+      _UnmountingRefreshHarnessState();
+}
+
+class _UnmountingRefreshHarnessState extends State<_UnmountingRefreshHarness> {
+  bool _showButton = true;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: _showButton
+          ? FilledButton(
+              key: const ValueKey<String>('refresh-and-unmount'),
+              onPressed: () {
+                final ProviderContainer container = ProviderScope.containerOf(
+                  context,
+                  listen: false,
+                );
+                final Future<void> refresh = refreshAniListLibraryForMediaType(
+                  container,
+                  mediaType: 'ANIME',
+                );
+                setState(() => _showButton = false);
+                refresh.then(
+                  (_) => widget.completed.complete(),
+                  onError: widget.completed.completeError,
+                );
+              },
+              child: const Text('Refresh and close'),
+            )
+          : const SizedBox.shrink(),
+    );
+  }
+}
+
 AniListAnimeListFolder _folder(AniListListStatus status, int firstId) {
   return AniListAnimeListFolder(
     name: status.label,
@@ -1136,9 +1249,14 @@ class _ConnectedMalSettings extends SettingsController {
 }
 
 class _BlockingTrackerSyncCoordinator extends TrackerSyncCoordinator {
-  _BlockingTrackerSyncCoordinator(super.ref, this.delivery);
+  _BlockingTrackerSyncCoordinator(
+    super.ref,
+    this.delivery, {
+    this.localCommitImmediate = false,
+  });
 
   final Completer<SyncDispatchResult> delivery;
+  final bool localCommitImmediate;
 
   @override
   Future<SyncDispatchResult> pushEntryEdit({
@@ -1148,13 +1266,32 @@ class _BlockingTrackerSyncCoordinator extends TrackerSyncCoordinator {
     MediaItem? mediaItem,
     AniListListStatus? status,
     int? progress,
+    int? progressVolumes,
     double? score,
     String? notes,
     int? repeat,
+    DateTime? startedAt,
+    DateTime? completedAt,
+    int? priority,
+    bool? private,
+    bool? hiddenFromStatusLists,
+    Map<String, bool>? customLists,
+    Map<String, double>? advancedScores,
+    String? scoreFormat,
+    int? malPriority,
+    int? malRewatchValue,
+    List<String>? malTags,
     Set<UserMediaField>? fields,
     Set<TrackerSource>? targets,
     Map<TrackerSource, int> providerEntryIds = const <TrackerSource, int>{},
-  }) => delivery.future;
+    TrackingEpisodeCheckpoint? episodeCheckpoint,
+  }) => localCommitImmediate
+      ? Future<SyncDispatchResult>.value(
+          const SyncDispatchResult(
+            pendingTargets: <TrackerSource>{TrackerSource.mal},
+          ),
+        )
+      : delivery.future;
 }
 
 class _BlockingDeleteSyncCoordinator extends TrackerSyncCoordinator {
@@ -1169,7 +1306,11 @@ class _BlockingDeleteSyncCoordinator extends TrackerSyncCoordinator {
     String? mediaTitle,
     Set<TrackerSource>? targets,
     Map<TrackerSource, int> providerEntryIds = const <TrackerSource, int>{},
-  }) => delivery.future;
+  }) => Future<SyncDispatchResult>.value(
+    const SyncDispatchResult(
+      pendingTargets: <TrackerSource>{TrackerSource.mal},
+    ),
+  );
 }
 
 class _TestAniListLibrary extends AniListLibraryNotifier {

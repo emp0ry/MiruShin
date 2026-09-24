@@ -53,29 +53,18 @@ class AniListFavoriteController extends Notifier<Map<String, bool>> {
       mediaId: item.id,
     );
     final bool next = !current;
-    final Map<String, bool> previous = state;
+    await ref
+        .read(trackerSyncCoordinatorProvider)
+        .pushFavorite(mediaItem: item, favorite: next);
+    // The heart changes only after SQLite committed the desired value and its
+    // durable outbox. Network delivery remains asynchronous and idempotent.
     state = <String, bool>{
       ...state,
       for (final String key in favoriteIdentityKeys(identity)) key: next,
     };
-
-    try {
-      await ref
-          .read(trackerSyncCoordinatorProvider)
-          .pushFavorite(mediaItem: item, favorite: next);
-      // Keep the local desired value while an offline AniList delivery is
-      // pending. The adapter checks server state before toggling, so replay is
-      // idempotent even if the first response was lost.
-      // Favorite is independent from list membership. Re-fetching every
-      // Library folder here discarded a perfectly valid local screen and made
-      // a heart toggle look delayed until the network list returned.
-      final int? mediaId = aniListMediaIdOf(item);
-      if (mediaId != null) {
-        ref.invalidate(anilistMediaFavoriteStatusProvider(mediaId));
-      }
-    } catch (_) {
-      state = previous;
-      rethrow;
+    final int? mediaId = aniListMediaIdOf(item);
+    if (mediaId != null) {
+      ref.invalidate(anilistMediaFavoriteStatusProvider(mediaId));
     }
   }
 }

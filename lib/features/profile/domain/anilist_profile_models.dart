@@ -69,10 +69,7 @@ class AniListUserSettings {
       displayAdultContent: optionsMap['displayAdultContent'] == true,
       airingNotifications: optionsMap['airingNotifications'] != false,
       airingNotificationScope: AiringNotificationScope.all,
-      scoreFormat: _string(
-        mediaListMap['scoreFormat'],
-        fallback: 'POINT_10_DECIMAL',
-      ),
+      scoreFormat: _scoreFormat(mediaListMap['scoreFormat']),
       rowOrder: _string(mediaListMap['rowOrder'], fallback: 'title'),
       splitCompletedAnime: animeList['splitCompletedSectionByFormat'] == true,
       splitCompletedManga: mangaList['splitCompletedSectionByFormat'] == true,
@@ -102,7 +99,7 @@ class AniListUserSettings {
       airingNotificationScope: AiringNotificationScope.fromCacheValue(
         json['airingNotificationScope'],
       ),
-      scoreFormat: _string(json['scoreFormat'], fallback: 'POINT_10_DECIMAL'),
+      scoreFormat: _scoreFormat(json['scoreFormat']),
       rowOrder: _string(json['rowOrder'], fallback: 'title'),
       splitCompletedAnime: json['splitCompletedAnime'] == true,
       splitCompletedManga: json['splitCompletedManga'] == true,
@@ -463,6 +460,11 @@ String _string(Object? value, {String fallback = ''}) {
     return value.trim();
   }
   return fallback;
+}
+
+String _scoreFormat(Object? value) {
+  final String format = _string(value, fallback: 'POINT_10_DECIMAL');
+  return format == 'SMILEY' ? 'POINT_3' : format;
 }
 
 int _int(Object? value, {int fallback = 0}) {

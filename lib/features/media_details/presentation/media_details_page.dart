@@ -37,7 +37,6 @@ import '../../profile/application/anilist_user_settings_provider.dart';
 import '../../settings/application/settings_state.dart';
 import '../../tracking/application/anilist_library_provider.dart';
 import '../../tracking/application/tracker_library_provider.dart';
-import '../../tracking/domain/tracker_models.dart';
 import '../../tracking/domain/tracking_sync_models.dart';
 import '../../tracking/presentation/anilist_entry_editor.dart';
 import '../../tracking/presentation/anilist_favorite_button.dart';
@@ -228,18 +227,16 @@ AniListAnimeListEntry? _findAniListEntry(WidgetRef ref, MediaItem item) {
   if (!identity.hasProviderId) return null;
 
   final bool isManga = _isAniListManga(item);
-  final bool useTrackerSource =
-      !isManga &&
-      ref.watch(
-            settingsProvider.select(
-              (SettingsState settings) =>
-                  settings.effectivePrimaryTrackerSource,
-            ),
-          ) !=
-          TrackerSource.anilist;
+  final bool useTrackerSource = ref.watch(
+    settingsProvider.select(
+      (SettingsState settings) => !settings.hasAniListSession,
+    ),
+  );
   final AsyncValue<List<AniListAnimeListFolder>> fullAsync = ref.watch(
     isManga
-        ? anilistMangaListProvider
+        ? useTrackerSource
+              ? trackerMangaListProvider
+              : anilistMangaListProvider
         : useTrackerSource
         ? trackerAnimeListProvider
         : anilistAnimeListProvider,
@@ -249,26 +246,26 @@ AniListAnimeListEntry? _findAniListEntry(WidgetRef ref, MediaItem item) {
     data: (List<AniListAnimeListFolder> folders) => folders,
     orElse: () => const <AniListAnimeListFolder>[],
   );
-  final TrackerLocalAnimeLibrary? local = isManga
-      ? null
-      : ref
-            .watch(trackerLocalAnimeLibraryProvider)
-            .maybeWhen(
-              skipLoadingOnReload: true,
-              data: (TrackerLocalAnimeLibrary value) => value,
-              orElse: () => null,
-            );
+  final TrackerLocalAnimeLibrary? local = ref
+      .watch(
+        isManga
+            ? trackerLocalMangaLibraryProvider
+            : trackerLocalAnimeLibraryProvider,
+      )
+      .maybeWhen(
+        skipLoadingOnReload: true,
+        data: (TrackerLocalAnimeLibrary value) => value,
+        orElse: () => null,
+      );
   final List<TrackerLibraryOptimisticMutation> optimistic = isManga
       ? const <TrackerLibraryOptimisticMutation>[]
       : ref.watch(trackerLibraryOptimisticMutationsProvider);
-  if (!isManga) {
-    fullFolders = effectiveTrackerAnimeLibrary(
-      providerFolders: fullFolders,
-      local: local,
-      optimistic: optimistic,
-      useLocalFallback: !fullAsync.hasValue,
-    );
-  }
+  fullFolders = effectiveTrackerAnimeLibrary(
+    providerFolders: fullFolders,
+    local: local,
+    optimistic: optimistic,
+    useLocalFallback: !fullAsync.hasValue,
+  );
   final AniListAnimeListEntry? fullEntry = _findAniListEntryInFolders(
     identity,
     fullFolders,
@@ -277,7 +274,9 @@ AniListAnimeListEntry? _findAniListEntry(WidgetRef ref, MediaItem item) {
 
   final AsyncValue<List<AniListAnimeListFolder>> previewAsync = ref.watch(
     isManga
-        ? anilistMangaPreviewListProvider
+        ? useTrackerSource
+              ? trackerMangaListProvider
+              : anilistMangaPreviewListProvider
         : useTrackerSource
         ? trackerAnimeListProvider
         : anilistAnimePreviewListProvider,
@@ -287,18 +286,16 @@ AniListAnimeListEntry? _findAniListEntry(WidgetRef ref, MediaItem item) {
     data: (List<AniListAnimeListFolder> folders) => folders,
     orElse: () => const <AniListAnimeListFolder>[],
   );
-  if (!isManga) {
-    previewFolders = effectiveTrackerAnimeLibrary(
-      providerFolders: previewFolders,
-      local: local,
-      optimistic: optimistic,
-      useLocalFallback: !previewAsync.hasValue,
-      statuses: const <AniListListStatus>{
-        AniListListStatus.current,
-        AniListListStatus.repeating,
-      },
-    );
-  }
+  previewFolders = effectiveTrackerAnimeLibrary(
+    providerFolders: previewFolders,
+    local: local,
+    optimistic: optimistic,
+    useLocalFallback: !previewAsync.hasValue,
+    statuses: const <AniListListStatus>{
+      AniListListStatus.current,
+      AniListListStatus.repeating,
+    },
+  );
   return _findAniListEntryInFolders(identity, previewFolders);
 }
 
@@ -1807,7 +1804,10 @@ Future<void> _editAniListEntry(
     context,
     ref: ref,
     entry: editableEntry,
-    status: editableEntry.status,
+    // A title that is not in the library yet must visibly start as unset.
+    // The synthetic entry still carries Planning as the safe API fallback if
+    // the user saves without choosing a different status.
+    status: entry?.status,
     progress: editableEntry.progress,
     score: editableEntry.score,
     notes: editableEntry.notes,
@@ -2313,8 +2313,7 @@ class _SeasonsPanel extends ConsumerWidget {
         .map((LibraryItem i) => i.mediaItem.id)
         .toList(growable: false);
 
-    final bool useTrackerSource =
-        settings.effectivePrimaryTrackerSource != TrackerSource.anilist;
+    final bool useTrackerSource = !settings.hasAniListSession;
     final AsyncValue<List<AniListAnimeListFolder>> anilistFoldersAsync = ref
         .watch(
           useTrackerSource
@@ -2435,7 +2434,7 @@ class _SeasonsPanel extends ConsumerWidget {
                 context,
                 ref: ref,
                 entry: entry,
-                status: entry.status,
+                status: anilistEntry?.status,
                 progress: entry.progress,
                 score: entry.score,
                 notes: entry.notes,

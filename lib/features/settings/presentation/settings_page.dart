@@ -32,7 +32,10 @@ import '../../calendar/application/calendar_items_provider.dart';
 import '../../catalog/application/catalog_mode.dart';
 import '../../downloads/application/download_settings.dart';
 import '../../downloads/application/downloads_provider.dart';
+import '../../library/application/google_drive_sync_controller.dart';
 import '../../library/application/local_library_provider.dart';
+import '../../library/data/google_drive_account_client.dart';
+import '../../library/presentation/google_drive_login_flow.dart';
 import '../../metadata/application/metadata_cache_provider.dart';
 import '../../metadata/application/metadata_providers.dart';
 import '../../metadata/data/tmdb_metadata_provider.dart';
@@ -42,7 +45,6 @@ import '../../player/domain/player_models.dart';
 import '../../profile/application/anilist_user_settings_provider.dart';
 import '../../tracking/application/anilist_library_provider.dart';
 import '../../tracking/application/tracker_library_provider.dart';
-import '../../tracking/domain/tracker_models.dart';
 import '../../tracking/presentation/anilist_login_flow.dart';
 import '../../tracking/presentation/tracker_login_flow.dart';
 import '../../watch_party/application/watch_party_connection_settings.dart';
@@ -88,10 +90,14 @@ class SettingsPage extends ConsumerWidget {
             const _AniListSettingsShortcutSection(),
             const SizedBox(height: AppSpacing.lg),
           ],
+          const _GoogleDriveSyncSection(),
+          const SizedBox(height: AppSpacing.lg),
           if (showAniListSettings) ...<Widget>[
             const _TrackerConnectionsSection(),
             const SizedBox(height: AppSpacing.lg),
           ],
+          const _LibrarySyncSection(),
+          const SizedBox(height: AppSpacing.lg),
           _AppearanceSection(settings: settings, controller: controller),
           const SizedBox(height: AppSpacing.lg),
           const _WatchPartySection(),
@@ -483,6 +489,276 @@ class _AniListSettingsShortcutSection extends StatelessWidget {
   }
 }
 
+class _LibrarySyncSection extends StatelessWidget {
+  const _LibrarySyncSection();
+
+  @override
+  Widget build(BuildContext context) {
+    return SettingsSection(
+      title: context.t('Library Log'),
+      icon: Icons.history_rounded,
+      children: <Widget>[
+        SettingsRow(
+          title: context.t('Library history'),
+          subtitle: context.t(
+            'See library changes, fix sync issues, and undo changes.',
+          ),
+          trailing: FilledButton.icon(
+            onPressed: () => context.go(AppRoutes.librarySync),
+            icon: const Icon(Icons.history_rounded),
+            label: Text(context.t('Open')),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _GoogleDriveSyncSection extends ConsumerStatefulWidget {
+  const _GoogleDriveSyncSection();
+
+  @override
+  ConsumerState<_GoogleDriveSyncSection> createState() =>
+      _GoogleDriveSyncSectionState();
+}
+
+class _GoogleDriveSyncSectionState
+    extends ConsumerState<_GoogleDriveSyncSection> {
+  bool _busy = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final AsyncValue<GoogleDriveSyncState> asyncState = ref.watch(
+      googleDriveSyncControllerProvider,
+    );
+    final GoogleDriveSyncState? state = asyncState.value;
+    final bool connected = state?.connected == true;
+    final bool configured = state?.configured == true;
+    final bool syncing = state?.syncing == true;
+    final String status = !configured
+        ? context.t(
+            'Google OAuth is not configured in this build. Local Library and tracker sync continue normally.',
+          )
+        : connected
+        ? state?.lastSyncAt == null
+              ? context.t('Connected. Waiting for the first sync.')
+              : '${context.t('Last sync')}: ${_formatDriveTime(state!.lastSyncAt!)}'
+        : context.t(
+            'Connect Google Drive to keep your MiruShin data up to date across your devices.',
+          );
+
+    return SettingsSection(
+      title: context.t('Google Drive Sync'),
+      icon: connected ? Icons.cloud_done_rounded : Icons.cloud_sync_rounded,
+      children: <Widget>[
+        if (connected)
+          _GoogleDriveAccountCard(
+            account: state?.account,
+            status: status,
+            syncing: syncing,
+            busy: _busy,
+            onSync: _syncNow,
+            onDisconnect: _disconnect,
+          )
+        else
+          SettingsRow(
+            title: 'Google Drive',
+            subtitle: status,
+            fullWidthTrailing: true,
+            trailing: FilledButton.icon(
+              onPressed: !configured || _busy ? null : _connect,
+              icon: _busy
+                  ? const SizedBox.square(
+                      dimension: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.login_rounded),
+              label: Text(context.t('Connect Google Drive')),
+            ),
+          ),
+        SettingsRow(
+          title: context.t('Sync across devices'),
+          subtitle: context.t(
+            'Keep your library, watch progress, accounts, API connections, addons, relay preferences, and Library settings up to date across your devices.',
+          ),
+        ),
+        if (state?.lastError != null)
+          Text(
+            context.t(state!.lastError!),
+            style: TextStyle(color: Theme.of(context).colorScheme.error),
+          ),
+      ],
+    );
+  }
+
+  Future<void> _connect() async {
+    setState(() => _busy = true);
+    try {
+      await loginGoogleDrive(context, ref);
+    } on Object catch (error) {
+      debugPrint('Google Drive sign-in failed: $error');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              context.t('Could not connect to Google Drive. Please try again.'),
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _syncNow() async {
+    setState(() => _busy = true);
+    try {
+      await ref.read(googleDriveSyncControllerProvider.notifier).syncNow();
+    } on Object catch (error) {
+      debugPrint('Google Drive manual sync failed: $error');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              context.t('Google Drive sync failed. Please try again.'),
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _disconnect() async {
+    setState(() => _busy = true);
+    try {
+      await ref.read(googleDriveSyncControllerProvider.notifier).disconnect();
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+}
+
+class _GoogleDriveAccountCard extends StatelessWidget {
+  const _GoogleDriveAccountCard({
+    required this.account,
+    required this.status,
+    required this.syncing,
+    required this.busy,
+    required this.onSync,
+    required this.onDisconnect,
+  });
+
+  final GoogleDriveAccountProfile? account;
+  final String status;
+  final bool syncing;
+  final bool busy;
+  final VoidCallback onSync;
+  final VoidCallback onDisconnect;
+
+  @override
+  Widget build(BuildContext context) {
+    final String? avatarUrl = account?.avatarUrl;
+    final Widget identity = Row(
+      children: <Widget>[
+        CircleAvatar(
+          radius: 24,
+          backgroundColor: Theme.of(
+            context,
+          ).colorScheme.surfaceContainerHighest,
+          backgroundImage: avatarUrl == null
+              ? null
+              : CachedNetworkImageProvider(avatarUrl),
+          child: avatarUrl == null
+              ? Icon(
+                  Icons.person_rounded,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                )
+              : null,
+        ),
+        const SizedBox(width: AppSpacing.md),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Text(
+                account?.title ?? 'Google Drive',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              if (account?.email.isNotEmpty == true)
+                Text(
+                  account!.email,
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+              const SizedBox(height: AppSpacing.xs),
+              Text(
+                status,
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: AppColors.success),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+    final Widget actions = Wrap(
+      spacing: AppSpacing.sm,
+      runSpacing: AppSpacing.sm,
+      children: <Widget>[
+        FilledButton.icon(
+          onPressed: busy || syncing ? null : onSync,
+          icon: syncing
+              ? const SizedBox.square(
+                  dimension: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.sync_rounded),
+          label: Text(context.t('Sync now')),
+        ),
+        OutlinedButton.icon(
+          onPressed: busy ? null : onDisconnect,
+          icon: const Icon(Icons.logout_rounded),
+          label: Text(context.t('Disconnect')),
+        ),
+      ],
+    );
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
+      child: LayoutBuilder(
+        builder: (BuildContext context, BoxConstraints constraints) {
+          if (constraints.maxWidth < 720) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                identity,
+                const SizedBox(height: AppSpacing.md),
+                actions,
+              ],
+            );
+          }
+          return Row(
+            children: <Widget>[
+              Expanded(child: identity),
+              const SizedBox(width: AppSpacing.lg),
+              actions,
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+String _formatDriveTime(DateTime value) {
+  final DateTime local = value.toLocal();
+  String two(int number) => number.toString().padLeft(2, '0');
+  return '${local.year}-${two(local.month)}-${two(local.day)} '
+      '${two(local.hour)}:${two(local.minute)}';
+}
+
 class _DiscordRpcSection extends StatelessWidget {
   const _DiscordRpcSection({required this.settings, required this.controller});
 
@@ -750,6 +1026,17 @@ class _TrackerConnectionsSection extends ConsumerWidget {
       title: context.t('Connections'),
       icon: Icons.link_rounded,
       children: <Widget>[
+        SettingsRow(
+          title: settings.hasAniListSession
+              ? context.tf('Connections for {name}', <String, Object?>{
+                  'name': settings.anilistViewerName ?? 'AniList',
+                })
+              : context.t('No active AniList account'),
+          subtitle: context.t(
+            'MAL and Shikimori connections belong to this AniList account and switch with it.',
+          ),
+        ),
+        const Divider(height: AppSpacing.xl),
         // MyAnimeList
         SettingsRow(
           title: 'MyAnimeList',
@@ -841,24 +1128,6 @@ class _TrackerConnectionsSection extends ConsumerWidget {
             ),
           ),
         ],
-        const Divider(height: AppSpacing.xl),
-        SettingsRow(
-          title: context.t('Primary library source'),
-          subtitle: context.t('Which tracker fills the Library tab'),
-          trailing: DropdownButton<TrackerSource>(
-            value: settings.primaryTrackerSource,
-            onChanged: (TrackerSource? value) {
-              if (value != null) controller.setPrimaryTrackerSource(value);
-            },
-            items: <DropdownMenuItem<TrackerSource>>[
-              for (final TrackerSource source in TrackerSource.values)
-                DropdownMenuItem<TrackerSource>(
-                  value: source,
-                  child: Text(context.t(source.label)),
-                ),
-            ],
-          ),
-        ),
       ],
     );
   }
@@ -906,7 +1175,7 @@ class _AccountSection extends ConsumerWidget {
     final List<AniListSavedAccount> saved = settings.anilistSavedAccounts;
 
     return SettingsSection(
-      title: context.t('Accounts'),
+      title: context.t('AniList Accounts'),
       icon: Icons.manage_accounts_rounded,
       children: <Widget>[
         // Active account

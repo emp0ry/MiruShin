@@ -599,6 +599,7 @@ class MediaPlaybackItem {
     this.seasonNumber = 1,
     this.episodeNumber = 1.0,
     this.episodeCount,
+    this.mediaStatusLabel = '',
     this.ignoreProgress = false,
     this.initialQualityId,
     this.initialVoiceoverId,
@@ -621,6 +622,7 @@ class MediaPlaybackItem {
   final int seasonNumber;
   final double episodeNumber;
   final int? episodeCount;
+  final String mediaStatusLabel;
   final bool ignoreProgress;
 
   /// Quality the user explicitly picked for this playback (id/label), which wins
@@ -650,6 +652,7 @@ class MediaPlaybackItem {
       seasonNumber: seasonNumber,
       episodeNumber: episodeNumber,
       episodeCount: episodeCount,
+      mediaStatusLabel: mediaStatusLabel,
       ignoreProgress: value,
       initialQualityId: initialQualityId,
       initialVoiceoverId: initialVoiceoverId,
@@ -767,6 +770,7 @@ class MediaPlaybackItem {
       seasonNumber: seasonNumber,
       episodeNumber: episodeNumber,
       episodeCount: _episodeCountForPlayback(item, seasonNumber),
+      mediaStatusLabel: item.statusLabel,
       ignoreProgress: ignoreProgress,
       // Only an explicit per-playback choice (e.g. from the stream sheet) is
       // carried; the auto-play/auto-next paths pass null so the saved global

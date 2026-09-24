@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
@@ -28,12 +29,13 @@ import '../../downloads/application/downloads_provider.dart';
 import '../../downloads/presentation/downloaded_tab.dart';
 import '../../profile/application/anilist_user_settings_provider.dart';
 import '../../settings/application/settings_state.dart';
+import '../../settings/data/workspace_preferences_store.dart';
 import '../../tracking/application/anilist_library_provider.dart';
 import '../../tracking/application/tracker_library_provider.dart';
-import '../../tracking/domain/tracker_models.dart';
 import '../../tracking/domain/tracking_sync_models.dart';
 import '../../tracking/presentation/anilist_entry_editor.dart';
 import '../../tracking/presentation/anilist_login_flow.dart';
+import '../application/canonical_library_repository.dart';
 import '../application/local_library_provider.dart';
 import 'local_library_editor.dart';
 
@@ -86,6 +88,42 @@ bool _hasAnyEntries(List<AniListAnimeListFolder> folders) {
   return folders.any(
     (AniListAnimeListFolder folder) => folder.entries.isNotEmpty,
   );
+}
+
+bool _isRenderableLibraryEntry(AniListAnimeListEntry entry) {
+  final String title = entry.mediaItem.title.trim();
+  if (title.isEmpty || title.toLowerCase() == 'saved media') return false;
+  return !RegExp(
+    r'^(anime|manga)\s*#\d+$',
+    caseSensitive: false,
+  ).hasMatch(title);
+}
+
+({List<AniListAnimeListFolder> folders, int hiddenCount})
+_filterRenderableLibraryFolders(List<AniListAnimeListFolder> folders) {
+  final Set<String> hidden = <String>{};
+  final List<AniListAnimeListFolder> filtered = folders
+      .map((AniListAnimeListFolder folder) {
+        final List<AniListAnimeListEntry> entries = folder.entries
+            .where((AniListAnimeListEntry entry) {
+              if (_isRenderableLibraryEntry(entry)) return true;
+              final MediaIdentity identity = MediaIdentity.fromExternalIds(
+                entry.mediaItem.externalIds,
+                mediaId: entry.mediaItem.id,
+              );
+              hidden.add(jsonEncode(identity.toJson()));
+              return false;
+            })
+            .toList(growable: false);
+        return AniListAnimeListFolder(
+          name: folder.name,
+          status: folder.status,
+          entries: entries,
+        );
+      })
+      .where((AniListAnimeListFolder folder) => folder.entries.isNotEmpty)
+      .toList(growable: false);
+  return (folders: filtered, hiddenCount: hidden.length);
 }
 
 // Sort
@@ -197,7 +235,12 @@ class _LibraryPageState extends ConsumerState<LibraryPage>
           .watch(localLibraryProvider)
           .where((LibraryItem item) => item.mediaItem.id.startsWith('tmdb:'))
           .toList(growable: false);
-      return _LocalLibraryView(items: localLibrary);
+      return _LocalLibraryView(
+        key: ValueKey<String>(
+          'local-library:${settings.anilistViewerId ?? 'local'}',
+        ),
+        items: localLibrary,
+      );
     }
 
     final bool animeConnected =
@@ -237,6 +280,9 @@ class _LibraryPageState extends ConsumerState<LibraryPage>
               controller: _mainTab,
               children: <Widget>[
                 _AniListDataTab(
+                  key: ValueKey<String>(
+                    'anime-library:${settings.anilistViewerId ?? 'local'}',
+                  ),
                   connected: animeConnected,
                   mediaType: 'ANIME',
                   defaultPage: settings.anilistLibraryDefaultPage,
@@ -244,6 +290,9 @@ class _LibraryPageState extends ConsumerState<LibraryPage>
                       'Add anime to your AniList account to see them here.',
                 ),
                 _AniListDataTab(
+                  key: ValueKey<String>(
+                    'manga-library:${settings.anilistViewerId ?? 'local'}',
+                  ),
                   connected: mangaConnected,
                   mediaType: 'MANGA',
                   defaultPage: settings.anilistLibraryDefaultPage,
@@ -261,6 +310,7 @@ class _LibraryPageState extends ConsumerState<LibraryPage>
 
 class _AniListDataTab extends ConsumerStatefulWidget {
   const _AniListDataTab({
+    super.key,
     required this.connected,
     required this.mediaType,
     required this.defaultPage,
@@ -346,12 +396,48 @@ class _AniListDataTabState extends ConsumerState<_AniListDataTab>
   Widget build(BuildContext context) {
     super.build(context);
     if (!widget.connected) {
-      return _AniListTabContent(
-        connected: false,
-        state: const _AniListTabViewState(phase: _AniListTabPhase.empty),
-        mediaType: widget.mediaType,
-        defaultPage: widget.defaultPage,
-        emptyMessage: widget.emptyMessage,
+      final AsyncValue<TrackerLocalAnimeLibrary> local = ref.watch(
+        widget.mediaType == 'MANGA'
+            ? trackerLocalMangaLibraryProvider
+            : trackerLocalAnimeLibraryProvider,
+      );
+      return local.when(
+        loading: () => _AniListTabContent(
+          connected: true,
+          state: const _AniListTabViewState(
+            phase: _AniListTabPhase.loading,
+            loadingTitle: 'Loading your MiruShin Library...',
+            loadingMessage: 'Reading the local library database.',
+          ),
+          mediaType: widget.mediaType,
+          defaultPage: widget.defaultPage,
+          emptyMessage: widget.emptyMessage,
+        ),
+        error: (Object error, StackTrace stackTrace) => _AniListTabContent(
+          connected: true,
+          state: _AniListTabViewState(
+            phase: _AniListTabPhase.offline,
+            offlineTitle: 'Local Library is unavailable',
+            offlineMessage: '$error',
+          ),
+          mediaType: widget.mediaType,
+          defaultPage: widget.defaultPage,
+          emptyMessage: widget.emptyMessage,
+        ),
+        data: (TrackerLocalAnimeLibrary value) => _AniListTabContent(
+          connected: true,
+          state: _AniListTabViewState(
+            phase: value.folders.isEmpty
+                ? _AniListTabPhase.empty
+                : _AniListTabPhase.content,
+            folders: _orderedFolders(value.folders),
+          ),
+          mediaType: widget.mediaType,
+          defaultPage: widget.defaultPage,
+          emptyMessage: widget.mediaType == 'MANGA'
+              ? 'Add manga to your MiruShin Library to see it here.'
+              : 'Add anime to your MiruShin Library to see it here.',
+        ),
       );
     }
 
@@ -364,20 +450,18 @@ class _AniListDataTabState extends ConsumerState<_AniListDataTab>
     final bool wantsRussianTitles =
         ref.watch(aniListEffectiveTitleLanguageProvider) == 'RUSSIAN';
 
-    // When the primary library source is a secondary tracker (MAL / Shikimori),
-    // read its anime list instead of AniList. Manga stays AniList-only.
-    final bool useTrackerSource =
-        widget.mediaType != 'MANGA' &&
-        ref.watch(
-              settingsProvider.select(
-                (SettingsState s) => s.effectivePrimaryTrackerSource,
-              ),
-            ) !=
-            TrackerSource.anilist;
+    // AniList keeps its richer presentation when connected. Without AniList,
+    // the provider-neutral snapshot supplies the view from MAL/Shikimori.
+    // Every connected provider is reconciled independently in either path.
+    final bool useTrackerSource = ref.watch(
+      settingsProvider.select((SettingsState s) => !s.hasAniListSession),
+    );
 
     final AsyncValue<List<AniListAnimeListFolder>> previewLists =
         widget.mediaType == 'MANGA'
-        ? ref.watch(anilistMangaPreviewListProvider)
+        ? useTrackerSource
+              ? ref.watch(trackerMangaListProvider)
+              : ref.watch(anilistMangaPreviewListProvider)
         : useTrackerSource
         ? ref.watch(trackerAnimeListProvider)
         : ref.watch(anilistAnimePreviewListProvider);
@@ -390,7 +474,9 @@ class _AniListDataTabState extends ConsumerState<_AniListDataTab>
         watchAniListLibraryLoadStatus(ref, mediaType: widget.mediaType);
     final AsyncValue<List<AniListAnimeListFolder>> fullLists =
         widget.mediaType == 'MANGA'
-        ? ref.watch(anilistMangaListProvider)
+        ? useTrackerSource
+              ? ref.watch(trackerMangaListProvider)
+              : ref.watch(anilistMangaListProvider)
         : useTrackerSource
         ? ref.watch(trackerAnimeListProvider)
         : ref.watch(anilistAnimeListProvider);
@@ -433,16 +519,17 @@ class _AniListDataTabState extends ConsumerState<_AniListDataTab>
           orElse: () => fullFolders,
         ) ??
         fullFolders;
-    final TrackerLocalAnimeLibrary? localAnimeLibrary =
-        widget.mediaType == 'MANGA'
-        ? null
-        : ref
-              .watch(trackerLocalAnimeLibraryProvider)
-              .maybeWhen(
-                skipLoadingOnReload: true,
-                data: (TrackerLocalAnimeLibrary value) => value,
-                orElse: () => null,
-              );
+    final TrackerLocalAnimeLibrary? localAnimeLibrary = ref
+        .watch(
+          widget.mediaType == 'MANGA'
+              ? trackerLocalMangaLibraryProvider
+              : trackerLocalAnimeLibraryProvider,
+        )
+        .maybeWhen(
+          skipLoadingOnReload: true,
+          data: (TrackerLocalAnimeLibrary value) => value,
+          orElse: () => null,
+        );
     final List<TrackerLibraryOptimisticMutation> optimisticMutations =
         widget.mediaType == 'MANGA'
         ? const <TrackerLibraryOptimisticMutation>[]
@@ -496,11 +583,13 @@ class _AniListDataTabState extends ConsumerState<_AniListDataTab>
         !fullLists.hasValue;
     _syncSlowFullListState(waitingForFirstFullResult);
 
-    final List<AniListAnimeListFolder> displayFolders = hasFullContent
+    final List<AniListAnimeListFolder> rawDisplayFolders = hasFullContent
         ? fullDisplayFolders
         : hasPreviewContent
         ? previewDisplayFolders
         : const <AniListAnimeListFolder>[];
+    final filteredDisplay = _filterRenderableLibraryFolders(rawDisplayFolders);
+    final List<AniListAnimeListFolder> displayFolders = filteredDisplay.folders;
     final bool fullUnavailable =
         hasPreviewContent && !hasFullContent && fullLoadStatus.isFailed;
     final bool showOfflinePlaceholder =
@@ -529,14 +618,33 @@ class _AniListDataTabState extends ConsumerState<_AniListDataTab>
             ? '$_fullListUnavailableMessage\nError: $errorDetail'
             : _fullListUnavailableMessage,
         actionLabel: 'Retry',
-        onAction: () =>
-            retryAniListFullListForMediaType(ref, mediaType: widget.mediaType),
+        onAction: () => retryAniListFullListForMediaType(
+          ProviderScope.containerOf(context, listen: false),
+          mediaType: widget.mediaType,
+        ),
       );
     } else if ((hasFullContent && fullRussianPending) ||
         (!hasFullContent && hasPreviewContent && previewRussianPending)) {
       banner = const _AniListStatusBannerState(
         message: 'Updating Russian titles in the background.',
         isLoading: true,
+      );
+    }
+    if (filteredDisplay.hiddenCount > 0) {
+      final String unavailable = context.tf(
+        'Some library entries are temporarily unavailable ({count}). Metadata will retry automatically.',
+        <String, Object?>{'count': filteredDisplay.hiddenCount},
+      );
+      banner = _AniListStatusBannerState(
+        message: banner == null
+            ? unavailable
+            : '${banner.message}\n$unavailable',
+        isLoading: banner?.isLoading ?? false,
+        actionLabel: 'Retry',
+        onAction: () => refreshAniListLibraryForMediaType(
+          ProviderScope.containerOf(context, listen: false),
+          mediaType: widget.mediaType,
+        ),
       );
     }
 
@@ -555,8 +663,10 @@ class _AniListDataTabState extends ConsumerState<_AniListDataTab>
         offlineMessage:
             anilistOfflineNotice?.message ??
             'MiruShin cannot load this page yet because the AniList full list request failed. Please try again later.',
-        onRetry: () =>
-            refreshAniListLibraryForMediaType(ref, mediaType: widget.mediaType),
+        onRetry: () => refreshAniListLibraryForMediaType(
+          ProviderScope.containerOf(context, listen: false),
+          mediaType: widget.mediaType,
+        ),
       );
     } else if (showEmptyPlaceholder) {
       state = const _AniListTabViewState(phase: _AniListTabPhase.empty);
@@ -1080,6 +1190,21 @@ class _FolderViewState extends ConsumerState<_FolderView>
     AniListAnimeListFolder folder,
     String mediaType,
   ) {
+    final String workspaceId = ref.read(
+      libraryWorkspaceScopeProvider.select(
+        (LibraryWorkspaceScope value) => value.workspaceId,
+      ),
+    );
+    return workspacePreferenceKey(
+      workspaceId,
+      _legacyPreferencesPrefixFor(folder, mediaType),
+    );
+  }
+
+  String _legacyPreferencesPrefixFor(
+    AniListAnimeListFolder folder,
+    String mediaType,
+  ) {
     final String status = folder.status?.name ?? folder.name;
     return 'library.anilist.$mediaType.$status';
   }
@@ -1087,48 +1212,60 @@ class _FolderViewState extends ConsumerState<_FolderView>
   Future<void> _loadSavedPreferences() async {
     final SharedPreferences prefs = await SharedPreferences.getInstance();
     final String prefix = _preferencesPrefix;
-    final String? sortName = prefs.getString('$prefix.sort');
+    final String legacyPrefix = _legacyPreferencesPrefixFor(
+      widget.folder,
+      widget.mediaType,
+    );
+    T? savedValue<T>(String suffix) {
+      final String scopedKey = '$prefix.$suffix';
+      final String legacyKey = '$legacyPrefix.$suffix';
+      final Object? value = prefs.containsKey(scopedKey)
+          ? prefs.get(scopedKey)
+          : prefs.get(legacyKey);
+      return value is T ? value : null;
+    }
+
+    final String? sortName = savedValue<String>('sort');
     final _Sort savedSort = _Sort.values.firstWhere(
       (_Sort sort) => sort.name == sortName,
       orElse: () => _sort,
     );
     final List<String> savedGenres =
-        prefs.getStringList('$prefix.genres') ?? const <String>[];
+        savedValue<List<String>>('genres') ?? const <String>[];
     final List<String> savedGenreExcludes =
-        prefs.getStringList('$prefix.genres.excluded') ?? const <String>[];
+        savedValue<List<String>>('genres.excluded') ?? const <String>[];
     final List<String> savedFormats =
-        prefs.getStringList('$prefix.formats') ?? const <String>[];
+        savedValue<List<String>>('formats') ?? const <String>[];
     final List<String> savedFormatExcludes =
-        prefs.getStringList('$prefix.formats.excluded') ?? const <String>[];
+        savedValue<List<String>>('formats.excluded') ?? const <String>[];
     final List<String> savedStatuses =
-        prefs.getStringList('$prefix.statuses') ?? const <String>[];
+        savedValue<List<String>>('statuses') ?? const <String>[];
     final List<String> savedStatusExcludes =
-        prefs.getStringList('$prefix.statuses.excluded') ?? const <String>[];
+        savedValue<List<String>>('statuses.excluded') ?? const <String>[];
     final List<String> savedMediaStatuses =
-        prefs.getStringList('$prefix.mediaStatuses') ?? const <String>[];
+        savedValue<List<String>>('mediaStatuses') ?? const <String>[];
     final List<String> savedMediaStatusExcludes =
-        prefs.getStringList('$prefix.mediaStatuses.excluded') ??
-        const <String>[];
+        savedValue<List<String>>('mediaStatuses.excluded') ?? const <String>[];
     final List<String> savedSources =
-        prefs.getStringList('$prefix.sources') ?? const <String>[];
+        savedValue<List<String>>('sources') ?? const <String>[];
     final List<String> savedSourceExcludes =
-        prefs.getStringList('$prefix.sources.excluded') ?? const <String>[];
+        savedValue<List<String>>('sources.excluded') ?? const <String>[];
     final List<String> savedTags =
-        prefs.getStringList('$prefix.tags') ?? const <String>[];
+        savedValue<List<String>>('tags') ?? const <String>[];
     final List<String> savedTagExcludes =
-        prefs.getStringList('$prefix.tags.excluded') ?? const <String>[];
+        savedValue<List<String>>('tags.excluded') ?? const <String>[];
     final List<String> savedFlags =
-        prefs.getStringList('$prefix.flags') ?? const <String>[];
+        savedValue<List<String>>('flags') ?? const <String>[];
     final List<String> savedFlagExcludes =
-        prefs.getStringList('$prefix.flags.excluded') ?? const <String>[];
+        savedValue<List<String>>('flags.excluded') ?? const <String>[];
     final bool? savedAdultFilter = _boolFilterFromPref(
-      prefs.getString('$prefix.adultFilter'),
+      savedValue<String>('adultFilter'),
     );
     final bool? savedLicensedFilter = _boolFilterFromPref(
-      prefs.getString('$prefix.licensedFilter'),
+      savedValue<String>('licensedFilter'),
     );
-    final double savedMinScore = prefs.getDouble('$prefix.minScore') ?? 0;
-    final bool savedGrid = prefs.getBool('$prefix.grid') ?? _isGrid;
+    final double savedMinScore = savedValue<double>('minScore') ?? 0;
+    final bool savedGrid = savedValue<bool>('grid') ?? _isGrid;
     if (!mounted) return;
     setState(() {
       _sort = savedSort;
@@ -1242,6 +1379,7 @@ class _FolderViewState extends ConsumerState<_FolderView>
     await _saveBoolFilter(prefs, '$prefix.adultFilter', _adultFilter);
     await _saveBoolFilter(prefs, '$prefix.licensedFilter', _licensedFilter);
     await prefs.setDouble('$prefix.minScore', _minScore);
+    ref.read(drivePreferencesRevisionProvider.notifier).changed();
   }
 
   List<AniListAnimeListEntry> get _filtered {
@@ -2138,8 +2276,10 @@ class _FolderViewState extends ConsumerState<_FolderView>
     final List<AniListAnimeListEntry> upcoming = _upcomingEntries(entries);
 
     return RefreshIndicator(
-      onRefresh: () =>
-          refreshAniListLibraryForMediaType(ref, mediaType: widget.mediaType),
+      onRefresh: () => refreshAniListLibraryForMediaType(
+        ProviderScope.containerOf(context, listen: false),
+        mediaType: widget.mediaType,
+      ),
       child: CustomScrollView(
         physics: const AlwaysScrollableScrollPhysics(),
         slivers: <Widget>[
@@ -3119,6 +3259,7 @@ String _mediaTypeFilterValue(MediaItem item) {
     MediaType.movie => 'Movie',
     MediaType.series => 'Series',
     MediaType.anime => 'Anime',
+    MediaType.manga => 'Manga',
   };
 }
 
@@ -3842,7 +3983,7 @@ const List<LibraryStatus> _kLocalStatuses = <LibraryStatus>[
 ];
 
 class _LocalLibraryView extends ConsumerStatefulWidget {
-  const _LocalLibraryView({required this.items});
+  const _LocalLibraryView({super.key, required this.items});
   final List<LibraryItem> items;
 
   @override
@@ -3850,7 +3991,14 @@ class _LocalLibraryView extends ConsumerStatefulWidget {
 }
 
 class _LocalLibraryViewState extends ConsumerState<_LocalLibraryView> {
-  static const String _preferencesPrefix = 'library.local';
+  String get _preferencesPrefix {
+    final String workspaceId = ref.read(
+      libraryWorkspaceScopeProvider.select(
+        (LibraryWorkspaceScope value) => value.workspaceId,
+      ),
+    );
+    return workspacePreferenceKey(workspaceId, 'library.local');
+  }
 
   final TextEditingController _search = TextEditingController();
   _Sort _sort = _Sort.addedNewest;
@@ -3881,35 +4029,39 @@ class _LocalLibraryViewState extends ConsumerState<_LocalLibraryView> {
 
   Future<void> _loadSavedPreferences() async {
     final SharedPreferences prefs = await SharedPreferences.getInstance();
-    final String? sortName = prefs.getString('$_preferencesPrefix.sort');
+    const String legacyPrefix = 'library.local';
+    T? savedValue<T>(String suffix) {
+      final String scopedKey = '$_preferencesPrefix.$suffix';
+      final String legacyKey = '$legacyPrefix.$suffix';
+      final Object? value = prefs.containsKey(scopedKey)
+          ? prefs.get(scopedKey)
+          : prefs.get(legacyKey);
+      return value is T ? value : null;
+    }
+
+    final String? sortName = savedValue<String>('sort');
     final _Sort savedSort = _Sort.values.firstWhere(
       (_Sort sort) => sort.name == sortName,
       orElse: () => _sort,
     );
-    final bool savedGrid = prefs.getBool('$_preferencesPrefix.grid') ?? false;
+    final bool savedGrid = savedValue<bool>('grid') ?? false;
     final List<String> savedStatuses =
-        prefs.getStringList('$_preferencesPrefix.statuses') ?? const <String>[];
+        savedValue<List<String>>('statuses') ?? const <String>[];
     final List<String> savedStatusExcludes =
-        prefs.getStringList('$_preferencesPrefix.statuses.excluded') ??
-        const <String>[];
+        savedValue<List<String>>('statuses.excluded') ?? const <String>[];
     final List<String> savedTypes =
-        prefs.getStringList('$_preferencesPrefix.types') ?? const <String>[];
+        savedValue<List<String>>('types') ?? const <String>[];
     final List<String> savedTypeExcludes =
-        prefs.getStringList('$_preferencesPrefix.types.excluded') ??
-        const <String>[];
+        savedValue<List<String>>('types.excluded') ?? const <String>[];
     final List<String> savedProviders =
-        prefs.getStringList('$_preferencesPrefix.providers') ??
-        const <String>[];
+        savedValue<List<String>>('providers') ?? const <String>[];
     final List<String> savedProviderExcludes =
-        prefs.getStringList('$_preferencesPrefix.providers.excluded') ??
-        const <String>[];
+        savedValue<List<String>>('providers.excluded') ?? const <String>[];
     final List<String> savedGenres =
-        prefs.getStringList('$_preferencesPrefix.genres') ?? const <String>[];
+        savedValue<List<String>>('genres') ?? const <String>[];
     final List<String> savedGenreExcludes =
-        prefs.getStringList('$_preferencesPrefix.genres.excluded') ??
-        const <String>[];
-    final double savedMinRating =
-        prefs.getDouble('$_preferencesPrefix.minRating') ?? 0;
+        savedValue<List<String>>('genres.excluded') ?? const <String>[];
+    final double savedMinRating = savedValue<double>('minRating') ?? 0;
     if (!mounted) return;
     setState(() {
       _sort = savedSort;
@@ -3987,6 +4139,7 @@ class _LocalLibraryViewState extends ConsumerState<_LocalLibraryView> {
       _genreExcludes.toList()..sort(),
     );
     await prefs.setDouble('$_preferencesPrefix.minRating', _minRating);
+    ref.read(drivePreferencesRevisionProvider.notifier).changed();
   }
 
   List<LibraryStatus> get _presentStatuses {
@@ -4708,6 +4861,7 @@ class _LocalTileState extends ConsumerState<_LocalTile> {
       MediaType.movie => 'Movie',
       MediaType.series => 'Series',
       MediaType.anime => 'Anime',
+      MediaType.manga => 'Manga',
     };
     rail[typeLabel] = false;
     if (media.year > 0) rail[media.year.toString()] = false;

@@ -69,6 +69,7 @@ Future<AniListOAuthListener> startAniListOAuthListener({
     if (request.uri.path == '/token') {
       String? token = request.uri.queryParameters['access_token'];
       String? expiresIn = request.uri.queryParameters['expires_in'];
+      String? error = request.uri.queryParameters['error'];
 
       if (request.method.toUpperCase() == 'POST') {
         final List<int> bytes = await request.fold<List<int>>(
@@ -80,10 +81,13 @@ Future<AniListOAuthListener> startAniListOAuthListener({
         );
         token = body['access_token'] ?? token;
         expiresIn = body['expires_in'] ?? expiresIn;
+        error = body['error'] ?? error;
       }
 
       request.response.headers.contentType = ContentType.html;
-      request.response.write(_successPage);
+      request.response.write(
+        token != null && token.trim().isNotEmpty ? _successPage : _failurePage,
+      );
       await request.response.close();
 
       final int validSeconds = int.tryParse(expiresIn ?? '') ?? 31536000;
@@ -94,6 +98,10 @@ Future<AniListOAuthListener> startAniListOAuthListener({
             expiresAt: DateTime.now().add(Duration(seconds: validSeconds)),
           ),
         );
+        _activeListener = null;
+        await closeServers();
+      } else if (!completer.isCompleted && error != null) {
+        completer.complete(null);
         _activeListener = null;
         await closeServers();
       }
@@ -117,27 +125,12 @@ Future<AniListOAuthListener> startAniListOAuthListener({
 }
 
 Future<List<HttpServer>> _bindOAuthServers(int port) async {
-  if (!Platform.isLinux) {
-    try {
-      return <HttpServer>[
-        await HttpServer.bind(
-          InternetAddress.loopbackIPv6,
-          port,
-          v6Only: false,
-          shared: true,
-        ),
-      ];
-    } catch (error) {
-      if (kDebugMode) {
-        debugPrint('[AniList OAuth] Failed to bind localhost:$port: $error');
-      }
-      rethrow;
-    }
-  }
-
   final List<HttpServer> servers = <HttpServer>[];
   Object? lastError;
 
+  // Bind IPv4 and IPv6 independently. A single IPv6 socket with v6Only=false
+  // is not a portable dual-stack localhost listener (notably with Safari on
+  // macOS), so it can leave a valid OAuth redirect with no reachable server.
   try {
     servers.add(
       await HttpServer.bind(InternetAddress.loopbackIPv4, port, shared: true),
@@ -211,7 +204,12 @@ const String _fragmentCapturePage = '''
         var hash = new URLSearchParams((window.location.hash || '').replace(/^#/, ''));
         var token = hash.get('access_token');
         var expiresIn = hash.get('expires_in') || '';
+        var error = hash.get('error') || '';
         if (!token) {
+          if (error) {
+            window.location.replace('/token?error=' + encodeURIComponent(error));
+            return;
+          }
           status.textContent = 'No access token was found. You can close this tab.';
           return;
         }
@@ -259,6 +257,16 @@ const String _successPage = '''
     <script>
       try { history.replaceState({}, document.title, '/'); } catch (e) {}
     </script>
+  </body>
+</html>
+''';
+
+const String _failurePage = '''
+<!DOCTYPE html>
+<html>
+  <head><meta charset="utf-8" /><title>AniList Login</title></head>
+  <body>
+    <p>Authorization was not completed. You can close this tab and return to MiruShin.</p>
   </body>
 </html>
 ''';

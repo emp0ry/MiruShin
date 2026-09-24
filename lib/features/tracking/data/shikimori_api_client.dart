@@ -11,10 +11,9 @@ import '../domain/tracker_models.dart';
 /// access token for authenticated calls. When [onRefreshToken] is provided and
 /// a request returns 401, the token is refreshed once and the call retried.
 ///
-/// Note on ids: Shikimori keeps its anime ids aligned with MyAnimeList ids
-/// (it imported from MAL), so the MAL id is used directly as the Shikimori
-/// `target_id` for any anime that exists on MAL, which is exactly the set the
-/// app carries a MAL id for.
+/// Shikimori `target_id` is always treated as a Shikimori media id. A known
+/// MAL id can be used to resolve that id, but only after Shikimori returns the
+/// same `malId` as exact identity evidence.
 class ShikimoriApiClient {
   ShikimoriApiClient({
     required String accessToken,
@@ -38,6 +37,7 @@ class ShikimoriApiClient {
   String _accessToken;
   int _userId;
   final Future<String?> Function()? _onRefreshToken;
+  final Map<String, int?> _resolvedMediaIds = <String, int?>{};
 
   Future<TrackerViewer> fetchViewer() async {
     final Response<dynamic> response = await _request(
@@ -64,6 +64,87 @@ class ShikimoriApiClient {
   /// Fetches the user's anime rates and enriches them with title/poster from
   /// the GraphQL API, mapped into the shared folder/entry model.
   Future<List<AniListAnimeListFolder>> fetchAnimeList() async {
+    return _fetchList(manga: false);
+  }
+
+  Future<List<AniListAnimeListFolder>> fetchMangaList() async {
+    return _fetchList(manga: true);
+  }
+
+  /// Resolves a MAL id to the exact Shikimori media id used by user rates.
+  ///
+  /// Most imported entries still share the same numeric id, which is why the
+  /// legacy sync path worked by sending the MAL id directly. Shikimori now
+  /// exposes both ids separately, so the candidate is verified against the
+  /// returned `malId` before it is allowed to become a write target. A title
+  /// search is only a discovery fallback: a result is accepted exclusively
+  /// when its `malId` is an exact match.
+  Future<int?> resolveMediaIdByMalId({
+    required int malId,
+    String mediaKind = 'anime',
+    String? title,
+  }) async {
+    if (malId <= 0) return null;
+    final bool manga = mediaKind == 'manga';
+    final String cacheKey = '${manga ? 'manga' : 'anime'}:$malId';
+    if (_resolvedMediaIds.containsKey(cacheKey)) {
+      return _resolvedMediaIds[cacheKey];
+    }
+
+    int? resolved = await _resolveMediaId(
+      malId: malId,
+      manga: manga,
+      ids: '$malId',
+    );
+    final String query = title?.trim() ?? '';
+    if (resolved == null && query.isNotEmpty) {
+      resolved = await _resolveMediaId(
+        malId: malId,
+        manga: manga,
+        search: query,
+      );
+    }
+    _resolvedMediaIds[cacheKey] = resolved;
+    return resolved;
+  }
+
+  Future<int?> _resolveMediaId({
+    required int malId,
+    required bool manga,
+    String? ids,
+    String? search,
+  }) async {
+    final String field = manga ? 'mangas' : 'animes';
+    final bool byIds = ids != null;
+    final String argument = byIds ? 'ids' : 'search';
+    final Response<dynamic> response = await _request(
+      'POST',
+      '/api/graphql',
+      data: <String, dynamic>{
+        'query':
+            'query ResolveShikimoriMedia(\$$argument: String!) { '
+            '$field($argument: \$$argument, limit: ${byIds ? 1 : 50}) '
+            '{ id malId } }',
+        'variables': <String, dynamic>{argument: ids ?? search},
+      },
+      authenticated: false,
+    );
+    final Object? body = response.data;
+    final Object? payload = body is Map<String, dynamic> ? body['data'] : null;
+    final Object? values = payload is Map<String, dynamic>
+        ? payload[field]
+        : null;
+    if (values is! List<dynamic>) return null;
+    for (final Object? value in values) {
+      if (value is! Map) continue;
+      if (_int(value['malId']) != malId) continue;
+      final int id = _int(value['id']);
+      if (id > 0) return id;
+    }
+    return null;
+  }
+
+  Future<List<AniListAnimeListFolder>> _fetchList({required bool manga}) async {
     final List<Map<String, dynamic>> rates = <Map<String, dynamic>>[];
     int page = 1;
     while (page <= 50) {
@@ -72,7 +153,7 @@ class ShikimoriApiClient {
         '/api/v2/user_rates',
         queryParameters: <String, dynamic>{
           'user_id': _userId,
-          'target_type': 'Anime',
+          'target_type': manga ? 'Manga' : 'Anime',
           'limit': 1000,
           'page': page,
         },
@@ -93,7 +174,10 @@ class ShikimoriApiClient {
         .where((int id) => id > 0)
         .toSet()
         .toList(growable: false);
-    final Map<int, Map<String, dynamic>> nodes = await _fetchAnimeNodes(ids);
+    final Map<int, Map<String, dynamic>> nodes = await _fetchMediaNodes(
+      ids,
+      manga: manga,
+    );
 
     final Map<AniListListStatus, List<AniListAnimeListEntry>> grouped =
         <AniListListStatus, List<AniListAnimeListEntry>>{};
@@ -109,9 +193,32 @@ class ShikimoriApiClient {
             AniListAnimeListEntry(
               id: _int(rate['id']),
               status: status,
-              progress: _int(rate['episodes']),
+              progress: _int(manga ? rate['chapters'] : rate['episodes']),
+              progressVolumes: manga ? _int(rate['volumes']) : 0,
               score: score > 0 ? score : null,
-              mediaItem: _mediaFromNode(nodes[targetId], targetId),
+              mediaItem: _mediaFromNode(
+                nodes[targetId],
+                targetId,
+                manga: manga,
+              ),
+              notes: _string(rate['text']),
+              repeat: _int(rate['rewatches']),
+              providerData: <String, dynamic>{
+                'rateId': _int(rate['id']),
+                'targetId': targetId,
+                'status': _string(rate['status']),
+                'score': score,
+                'episodes': _int(rate['episodes']),
+                'chapters': _int(rate['chapters']),
+                'volumes': _int(rate['volumes']),
+                'rewatches': _int(rate['rewatches']),
+                'text': _string(rate['text']),
+                'textHtml': _string(rate['text_html']),
+                if (rate['created_at'] != null)
+                  'createdAt': _string(rate['created_at']),
+                if (rate['updated_at'] != null)
+                  'updatedAt': _string(rate['updated_at']),
+              },
               createdAt: _epochSeconds(rate['created_at']),
               updatedAt: _epochSeconds(rate['updated_at']),
             ),
@@ -133,19 +240,29 @@ class ShikimoriApiClient {
     return folders;
   }
 
-  /// Creates or updates the user's rate for [malId] (used as the Shikimori
-  /// target id).
+  /// Creates or updates the user's rate for the exact [targetId].
   Future<void> updateUserRate({
-    required int malId,
+    required int targetId,
+    String mediaKind = 'anime',
     AniListListStatus? status,
     int? episodes,
     double? score,
+    int? chapters,
+    int? volumes,
+    int? rewatches,
+    String? text,
   }) async {
-    final int? existingId = await _findRateId(malId);
+    final bool manga = mediaKind == 'manga';
+    final int? existingId = await _findRateId(targetId, mediaKind: mediaKind);
     final Map<String, dynamic> rate = <String, dynamic>{
-      if (status != null) 'status': status.shikimoriValue,
-      'episodes': ?episodes,
+      if (status != null)
+        'status': manga ? status.shikimoriMangaValue : status.shikimoriValue,
+      if (!manga) 'episodes': ?episodes,
       if (score != null) 'score': score.round().clamp(0, 10),
+      'chapters': ?chapters,
+      'volumes': ?volumes,
+      'rewatches': ?rewatches,
+      'text': ?text,
     };
     if (existingId != null) {
       if (rate.isEmpty) return;
@@ -161,8 +278,8 @@ class ShikimoriApiClient {
         data: <String, dynamic>{
           'user_rate': <String, dynamic>{
             'user_id': _userId,
-            'target_id': malId,
-            'target_type': 'Anime',
+            'target_id': targetId,
+            'target_type': manga ? 'Manga' : 'Anime',
             ...rate,
           },
         },
@@ -170,15 +287,18 @@ class ShikimoriApiClient {
     }
   }
 
-  Future<void> deleteUserRate(int malId) async {
-    final int? existingId = await _findRateId(malId);
+  Future<void> deleteUserRate(
+    int targetId, {
+    String mediaKind = 'anime',
+  }) async {
+    final int? existingId = await _findRateId(targetId, mediaKind: mediaKind);
     if (existingId == null) return;
     await _request('DELETE', '/api/v2/user_rates/$existingId');
   }
 
   // Internal helpers
 
-  Future<int?> _findRateId(int targetId) async {
+  Future<int?> _findRateId(int targetId, {String mediaKind = 'anime'}) async {
     try {
       final Response<dynamic> response = await _request(
         'GET',
@@ -186,7 +306,7 @@ class ShikimoriApiClient {
         queryParameters: <String, dynamic>{
           'user_id': _userId,
           'target_id': targetId,
-          'target_type': 'Anime',
+          'target_type': mediaKind == 'manga' ? 'Manga' : 'Anime',
         },
       );
       final Object? data = response.data;
@@ -200,18 +320,23 @@ class ShikimoriApiClient {
     return null;
   }
 
-  Future<Map<int, Map<String, dynamic>>> _fetchAnimeNodes(List<int> ids) async {
+  Future<Map<int, Map<String, dynamic>>> _fetchMediaNodes(
+    List<int> ids, {
+    required bool manga,
+  }) async {
     final Map<int, Map<String, dynamic>> result = <int, Map<String, dynamic>>{};
     for (int i = 0; i < ids.length; i += 50) {
       final int end = i + 50 < ids.length ? i + 50 : ids.length;
       final String joined = ids.sublist(i, end).join(',');
       try {
+        final String field = manga ? 'mangas' : 'animes';
+        final String progressFields = manga ? 'chapters volumes' : 'episodes';
         final Response<dynamic> response = await _request(
           'POST',
           '/api/graphql',
           data: <String, dynamic>{
             'query':
-                '{ animes(ids: "$joined", limit: 50) { id malId name russian episodes score poster { originalUrl mainUrl } } }',
+                '{ $field(ids: "$joined", limit: 50) { id malId name russian $progressFields score poster { originalUrl mainUrl } } }',
           },
           authenticated: false,
         );
@@ -219,11 +344,11 @@ class ShikimoriApiClient {
         final Object? payload = body is Map<String, dynamic>
             ? body['data']
             : null;
-        final Object? animes = payload is Map<String, dynamic>
-            ? payload['animes']
+        final Object? entries = payload is Map<String, dynamic>
+            ? payload[field]
             : null;
-        if (animes is List<dynamic>) {
-          for (final Object? node in animes) {
+        if (entries is List<dynamic>) {
+          for (final Object? node in entries) {
             if (node is Map<String, dynamic>) {
               result[_int(node['id'])] = node;
             }
@@ -236,7 +361,11 @@ class ShikimoriApiClient {
     return result;
   }
 
-  MediaItem _mediaFromNode(Map<String, dynamic>? node, int shikimoriId) {
+  MediaItem _mediaFromNode(
+    Map<String, dynamic>? node,
+    int shikimoriId, {
+    bool manga = false,
+  }) {
     final Object? poster = node?['poster'];
     final String posterUrl = poster is Map<String, dynamic>
         ? _absoluteUrl(
@@ -249,11 +378,21 @@ class ShikimoriApiClient {
     final String russian = _string(node?['russian']);
     final int malId = _int(node?['malId']);
     return MediaItem(
-      id: malId > 0 ? 'mal:$malId' : 'shikimori:$shikimoriId',
-      title: title.isNotEmpty ? title : 'Anime #$shikimoriId',
+      id: malId > 0
+          ? manga
+                ? 'mal:manga:$malId'
+                : 'mal:$malId'
+          : manga
+          ? 'shikimori:manga:$shikimoriId'
+          : 'shikimori:$shikimoriId',
+      title: title.isNotEmpty
+          ? title
+          : manga
+          ? 'Manga #$shikimoriId'
+          : 'Anime #$shikimoriId',
       originalTitle: russian,
       overview: '',
-      type: MediaType.anime,
+      type: manga ? MediaType.manga : MediaType.anime,
       year: 0,
       posterUrl: posterUrl,
       backdropUrl: '',
@@ -263,9 +402,12 @@ class ShikimoriApiClient {
       externalIds: <String, String>{
         'shikimori': '$shikimoriId',
         if (malId > 0) 'mal': '$malId',
+        if (manga) 'anilist_type': 'MANGA',
       },
       aliases: russian.isNotEmpty ? <String>[russian] : const <String>[],
-      episodeCount: _nullableInt(node?['episodes']),
+      episodeCount: _nullableInt(
+        node == null ? null : node[manga ? 'chapters' : 'episodes'],
+      ),
       statusLabel: '',
     );
   }

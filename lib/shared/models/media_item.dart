@@ -3,7 +3,7 @@ import '../utils/media_status_formatter.dart';
 const String anilistNextAiringEpisodeKey = 'anilist_next_airing_episode';
 const String anilistNextAiringAtKey = 'anilist_next_airing_at';
 
-enum MediaType { movie, series, anime }
+enum MediaType { movie, series, anime, manga }
 
 extension MediaTypeLabel on MediaType {
   String get labelKey {
@@ -11,6 +11,7 @@ extension MediaTypeLabel on MediaType {
       MediaType.movie => 'Movie',
       MediaType.series => 'Series type',
       MediaType.anime => 'Anime type',
+      MediaType.manga => 'Manga',
     };
   }
 }

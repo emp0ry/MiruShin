@@ -37,6 +37,8 @@ class SettingsPreferences {
   static const String anilistLibraryDefaultPageKey =
       'settings.anilistLibraryDefaultPage';
   static const String anilistSavedAccountsKey = 'settings.anilistSavedAccounts';
+  static const String canonicalLibraryOwnerAniListIdKey =
+      'settings.canonicalLibraryOwnerAniListId';
   static const String anilistScoreFormatKey = 'settings.anilistScoreFormat';
   static const String anilistUserSettingsCacheKey =
       'settings.anilistUserSettingsCache';
@@ -145,8 +147,14 @@ class SettingsPreferences {
         .toList();
   }
 
-  String readAniListScoreFormat() =>
-      _preferences.getString(anilistScoreFormatKey) ?? 'POINT_10_DECIMAL';
+  int? readCanonicalLibraryOwnerAniListId() =>
+      _preferences.getInt(canonicalLibraryOwnerAniListIdKey);
+
+  String readAniListScoreFormat() {
+    final String value =
+        _preferences.getString(anilistScoreFormatKey) ?? 'POINT_10_DECIMAL';
+    return value == 'SMILEY' ? 'POINT_3' : value;
+  }
 
   String readSoraWebProxyUrl() =>
       _preferences.getString(soraWebProxyUrlKey) ??
@@ -242,8 +250,16 @@ class SettingsPreferences {
     );
   }
 
-  Future<void> saveAniListScoreFormat(String value) =>
-      _preferences.setString(anilistScoreFormatKey, value);
+  Future<void> clearAniListSavedAccounts() =>
+      _preferences.remove(anilistSavedAccountsKey);
+
+  Future<void> saveCanonicalLibraryOwnerAniListId(int viewerId) =>
+      _preferences.setInt(canonicalLibraryOwnerAniListIdKey, viewerId);
+
+  Future<void> saveAniListScoreFormat(String value) => _preferences.setString(
+    anilistScoreFormatKey,
+    value == 'SMILEY' ? 'POINT_3' : value,
+  );
 
   Future<void> saveStartupPage(String value) =>
       _preferences.setString(startupPageKey, value);

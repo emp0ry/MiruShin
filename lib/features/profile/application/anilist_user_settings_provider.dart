@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/utils/settings_preferences.dart';
 import '../../notifications/airing_notification_scheduler.dart';
 import '../../settings/application/settings_state.dart';
+import '../../settings/data/workspace_preferences_store.dart';
 import '../../tracking/data/anilist_api_client.dart';
 import '../domain/anilist_profile_models.dart';
 
@@ -59,13 +60,22 @@ final aniListEffectiveScoreFormatProvider = Provider<String>((Ref ref) {
 class AniListUserSettingsController extends AsyncNotifier<AniListUserSettings> {
   @override
   Future<AniListUserSettings> build() async {
+    ref.watch(drivePreferencesRevisionProvider);
     final SettingsState settings = ref.watch(settingsProvider);
     final AniListUserSettings fallback = _fallbackFromSettings(settings);
-    final SettingsPreferences prefs = SettingsPreferences(
-      await SharedPreferences.getInstance(),
+    final SharedPreferences rawPreferences =
+        await SharedPreferences.getInstance();
+    final SettingsPreferences prefs = SettingsPreferences(rawPreferences);
+    final WorkspacePreferencesStore workspaceStore = WorkspacePreferencesStore(
+      rawPreferences,
     );
     final AniListUserSettings? cached = _decodeCache(
-      prefs.readAniListUserSettingsCache(),
+      workspaceStore.read(
+                _workspaceId(settings),
+                WorkspacePreferencesStore.userSettingsCacheKey,
+              )
+              as String? ??
+          prefs.readAniListUserSettingsCache(),
     );
 
     if (!settings.hasAniListSession) {
@@ -82,6 +92,12 @@ class AniListUserSettingsController extends AsyncNotifier<AniListUserSettings> {
         localPreferences: cached ?? fallback,
       );
       await prefs.saveAniListUserSettingsCache(jsonEncode(local.toCacheJson()));
+      await _saveWorkspaceCache(workspaceStore, settings, local);
+      final SettingsController settingsController = ref.read(
+        settingsProvider.notifier,
+      );
+      settingsController.setAniListShowAdultContent(local.displayAdultContent);
+      settingsController.setAniListScoreFormat(local.scoreFormat);
       return local;
     } catch (_) {
       return cached ?? fallback;
@@ -93,14 +109,18 @@ class AniListUserSettingsController extends AsyncNotifier<AniListUserSettings> {
     final SettingsController settingsController = ref.read(
       settingsProvider.notifier,
     );
-    final SettingsPreferences prefs = SettingsPreferences(
-      await SharedPreferences.getInstance(),
+    final SharedPreferences rawPreferences =
+        await SharedPreferences.getInstance();
+    final SettingsPreferences prefs = SettingsPreferences(rawPreferences);
+    final WorkspacePreferencesStore workspaceStore = WorkspacePreferencesStore(
+      rawPreferences,
     );
     final AniListUserSettings? previous = state.hasValue
         ? state.requireValue
         : null;
     if (!settings.hasAniListSession) {
       await prefs.saveAniListUserSettingsCache(jsonEncode(draft.toCacheJson()));
+      await _saveWorkspaceCache(workspaceStore, settings, draft);
       settingsController.setAniListTitleLanguage(draft.titleLanguage);
       settingsController.setAniListShowAdultContent(draft.displayAdultContent);
       settingsController.setAniListScoreFormat(draft.scoreFormat);
@@ -112,13 +132,21 @@ class AniListUserSettingsController extends AsyncNotifier<AniListUserSettings> {
     }
 
     final AniListUserSettings localPreferences =
-        (_decodeCache(prefs.readAniListUserSettingsCache()) ??
+        (_decodeCache(
+                  workspaceStore.read(
+                            _workspaceId(settings),
+                            WorkspacePreferencesStore.userSettingsCacheKey,
+                          )
+                          as String? ??
+                      prefs.readAniListUserSettingsCache(),
+                ) ??
                 previous ??
                 draft)
             .copyWith(airingNotificationScope: draft.airingNotificationScope);
     await prefs.saveAniListUserSettingsCache(
       jsonEncode(localPreferences.toCacheJson()),
     );
+    await _saveWorkspaceCache(workspaceStore, settings, localPreferences);
     state = AsyncData<AniListUserSettings>(draft);
     if (_shouldResetAiringNotifications(previous, draft)) {
       await AiringNotificationScheduler.cancelAll();
@@ -131,6 +159,7 @@ class AniListUserSettingsController extends AsyncNotifier<AniListUserSettings> {
       airingNotificationScope: draft.airingNotificationScope,
     );
     await prefs.saveAniListUserSettingsCache(jsonEncode(local.toCacheJson()));
+    await _saveWorkspaceCache(workspaceStore, settings, local);
     settingsController.setAniListTitleLanguage(local.titleLanguage);
     settingsController.setAniListShowAdultContent(local.displayAdultContent);
     settingsController.setAniListScoreFormat(local.scoreFormat);
@@ -140,6 +169,30 @@ class AniListUserSettingsController extends AsyncNotifier<AniListUserSettings> {
 
   AniListApiClient _client(SettingsState settings) {
     return AniListApiClient(accessToken: settings.anilistAccessToken.trim());
+  }
+
+  String _workspaceId(SettingsState settings) =>
+      settings.anilistViewerId == null
+      ? 'local'
+      : 'anilist:${settings.anilistViewerId}';
+
+  Future<void> _saveWorkspaceCache(
+    WorkspacePreferencesStore store,
+    SettingsState settings,
+    AniListUserSettings value,
+  ) async {
+    final String workspaceId = _workspaceId(settings);
+    await store.write(
+      workspaceId,
+      WorkspacePreferencesStore.userSettingsCacheKey,
+      jsonEncode(value.toCacheJson()),
+    );
+    await store.write(
+      workspaceId,
+      WorkspacePreferencesStore.airingScopeKey,
+      value.airingNotificationScope.name,
+    );
+    ref.read(drivePreferencesRevisionProvider.notifier).changed();
   }
 
   AniListUserSettings? _decodeCache(String? raw) {

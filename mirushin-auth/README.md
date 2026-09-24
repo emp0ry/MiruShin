@@ -1,6 +1,6 @@
 # MiruShin Auth Worker
 
-Cloudflare Worker used by MiruShin for default MyAnimeList and Shikimori OAuth.
+Cloudflare Worker used by MiruShin for Google Drive, MyAnimeList, and Shikimori OAuth.
 
 The Worker keeps shared OAuth app credentials out of the Flutter repository,
 GitHub Actions, and release binaries. It builds provider authorization URLs,
@@ -14,6 +14,8 @@ handles token exchange/refresh, and serves the shared Shikimori callback page at
 - `GET /shikimori/authorize`
 - `POST /token`
 - `GET /callback`
+- `POST /token` with `provider=google` — desktop/TV token exchange, refresh,
+  and Android TV limited-input device authorization
 
 ### Watch with Friends signaling
 
@@ -150,6 +152,8 @@ npx wrangler secret put SHIKIMORI_CLIENT_ID
 npx wrangler secret put SHIKIMORI_CLIENT_SECRET
 npx wrangler secret put MAL_CLIENT_ID_DESKTOP
 npx wrangler secret put MAL_CLIENT_ID_MOBILE
+npx wrangler secret put GOOGLE_DESKTOP_CLIENT_SECRET
+npx wrangler secret put GOOGLE_WEB_CLIENT_SECRET
 ```
 
 If your MAL apps have client secrets, set those too:
@@ -166,9 +170,20 @@ npx wrangler secret put MAL_CLIENT_SECRET_MOBILE
 ```jsonc
 "vars": {
   "SHIKIMORI_REDIRECT_URI": "https://auth.emp0ry.com/callback",
-  "SHIKIMORI_USER_AGENT": "MiruShin"
+  "SHIKIMORI_USER_AGENT": "MiruShin",
+  "GOOGLE_DESKTOP_CLIENT_ID": "<public desktop client id>",
+  "GOOGLE_WEB_CLIENT_ID": "<public Web client id>"
 }
 ```
+
+Google Desktop and Web secrets are stored only in Cloudflare. The Worker ignores
+client ids/secrets sent by callers, fixes Drive access to `drive.appdata`, and
+accepts only the exact grants and redirects used by MiruShin. Android TV starts
+an ephemeral Web-client authorization session and displays its Google URL as a
+QR code. `/callback` stores the authorization code in KV for at most five
+minutes; the TV must prove possession of the original PKCE verifier before the
+Worker exchanges it. Refresh/access tokens pass through TLS but are not logged
+or persisted by the Worker.
 
 ## KV namespace (watch-party)
 
@@ -188,6 +203,7 @@ npx wrangler kv namespace create WATCH_PARTY
 Configure OAuth apps with these redirect URLs:
 
 - Shikimori: `https://auth.emp0ry.com/callback`
+- Google Web client (Android TV QR handoff): `https://auth.emp0ry.com/callback`
 - MAL desktop app: `http://localhost:28373/token`
 - MAL mobile app: `app://mirushin/auth`
 

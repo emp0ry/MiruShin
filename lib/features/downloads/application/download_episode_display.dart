@@ -98,7 +98,20 @@ String _downloadFileUrl(
   final String root = rootPath?.trim() ?? '';
   final String file = fileName.trim();
   if (root.isEmpty || file.isEmpty) return '';
-  return Uri.file(p.join(root, episode.relDir, file)).toString();
+  return downloadLocalFileUrl(p.join(root, episode.relDir, file));
+}
+
+/// Converts an absolute local path to a file URL using the path's syntax,
+/// rather than the OS currently running the conversion. This matters when a
+/// Windows download is restored or tested on another platform: on POSIX,
+/// `Uri.file(r'C:\downloads\video.mp4')` otherwise treats the drive path as a
+/// relative URI and produces no `file:` scheme.
+String downloadLocalFileUrl(String path) {
+  final String value = path.trim();
+  if (value.isEmpty) return '';
+  final bool windows =
+      RegExp(r'^[A-Za-z]:[\\/]').hasMatch(value) || value.startsWith(r'\\');
+  return Uri.file(value, windows: windows).toString();
 }
 
 String _cleanEpisodePrefix(String title) {

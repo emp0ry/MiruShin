@@ -491,6 +491,45 @@ class SoraAddonStore {
     );
   }
 
+  /// Makes the installed registry match a portable MiruShin addon document.
+  /// Missing addons are removed only after every desired addon was restored,
+  /// so a temporary network failure can never turn into destructive deletion.
+  Future<SoraAddonImportResult> reconcileInstalledJson(String raw) async {
+    final List<_SoraAddonImportCandidate> candidates =
+        _importCandidatesFromJson(raw);
+    final Object? decoded = jsonDecode(raw);
+    final bool explicitlyEmpty =
+        decoded is Map &&
+        decoded['addons'] is List &&
+        (decoded['addons'] as List<dynamic>).isEmpty;
+    if (candidates.isEmpty && !explicitlyEmpty) {
+      throw const SoraAddonException('Sync data does not contain addons.');
+    }
+
+    final SoraAddonImportResult result = candidates.isEmpty
+        ? const SoraAddonImportResult(
+            installed: 0,
+            failed: 0,
+            failures: <String>[],
+          )
+        : await importInstalledJson(raw);
+    if (result.hasFailures) return result;
+
+    final Set<String> desiredUrls = candidates
+        .map(
+          (_SoraAddonImportCandidate candidate) =>
+              candidate.manifestUrl.trim().toLowerCase(),
+        )
+        .toSet();
+    final List<SoraInstalledAddon> current = await loadInstalled();
+    for (final SoraInstalledAddon addon in current) {
+      if (!desiredUrls.contains(addon.manifestUrl.trim().toLowerCase())) {
+        await remove(addon.id);
+      }
+    }
+    return result;
+  }
+
   Future<SoraInstalledAddon> _require(String id) async {
     final SoraInstalledAddon? addon = _find(await loadInstalled(), id);
     if (addon == null) {

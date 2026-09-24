@@ -1921,6 +1921,7 @@ class _TmdbDiscoveryFilterSheetState extends State<_TmdbDiscoveryFilterSheet> {
       MediaType.movie => _movieGenres,
       MediaType.anime =>
         _tvGenres.where((({int id, String label}) g) => g.id != 16).toList(),
+      MediaType.manga => const <({int id, String label})>[],
       MediaType.series => _tvGenres,
       null => <({int id, String label})>[
         ..._movieGenres,

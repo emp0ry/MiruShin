@@ -22,7 +22,7 @@ MediaPlaybackItem buildOfflinePlaybackItem({
     episode.relDir,
     episode.videoFileName,
   );
-  final String fileUrl = Uri.file(videoPath).toString();
+  final String fileUrl = downloadLocalFileUrl(videoPath);
   // Keep the original container type even when an offline DASH download is
   // represented by local HLS metadata. The player uses this distinction to
   // select the backend that can safely consume those fragmented-MP4 tracks.
@@ -37,7 +37,7 @@ MediaPlaybackItem buildOfflinePlaybackItem({
       SubtitleTrack(
         id: s.fileName,
         label: s.label.isNotEmpty ? s.label : s.language,
-        url: Uri.file(p.join(rootPath, episode.relDir, s.fileName)).toString(),
+        url: downloadLocalFileUrl(p.join(rootPath, episode.relDir, s.fileName)),
         language: s.language,
         format: _subtitleFormat(s.fileName),
       ),

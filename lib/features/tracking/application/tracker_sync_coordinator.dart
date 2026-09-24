@@ -5,9 +5,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../shared/models/anilist_models.dart';
 import '../../../shared/models/media_item.dart';
+import '../../library/application/canonical_library_repository.dart';
 import '../../profile/application/anilist_user_settings_provider.dart';
 import '../../settings/application/settings_state.dart';
 import '../data/anilist_api_client.dart';
+import '../data/canonical_tracking_sync_store.dart';
 import '../data/mal_api_client.dart';
 import '../data/shikimori_api_client.dart';
 import '../data/tracking_sync_store.dart';
@@ -16,7 +18,9 @@ import '../domain/tracking_sync_models.dart';
 import 'local_first_sync_engine.dart';
 
 final trackingSyncStoreProvider = Provider<TrackingSyncStore>(
-  (Ref ref) => const SharedPreferencesTrackingSyncStore(),
+  (Ref ref) => CanonicalTrackingSyncStore(
+    repository: ref.watch(canonicalLibraryRepositoryProvider),
+  ),
 );
 
 final trackerProviderHealthProvider =
@@ -54,9 +58,21 @@ TrackerEpisodeProgress normalizeTrackerEpisodeProgress({
   required int episode,
   required int? total,
   AniListListStatus? currentStatus,
+  String? mediaStatus,
 }) {
   final int progress = canonicalEpisodeProgress(episode, total);
-  final bool reachedKnownEnd = total != null && total > 0 && episode >= total;
+  final String normalizedMediaStatus = (mediaStatus ?? '').trim().toUpperCase();
+  final bool explicitlyStillReleasing = <String>{
+    'RELEASING',
+    'NOT_YET_RELEASED',
+    'CURRENTLY_AIRING',
+    'NOT_YET_AIRED',
+  }.contains(normalizedMediaStatus);
+  final bool reachedKnownEnd =
+      total != null &&
+      total > 0 &&
+      episode >= total &&
+      !explicitlyStillReleasing;
   final AniListListStatus status = currentStatus == AniListListStatus.repeating
       ? AniListListStatus.repeating
       : reachedKnownEnd
@@ -83,6 +99,45 @@ bool trackerEpisodeUpdateNeeded({
   return repairsOverflow || completesCurrent || advancesProgress;
 }
 
+const Set<UserMediaField> _aniListEntryFields = <UserMediaField>{
+  UserMediaField.status,
+  UserMediaField.progress,
+  UserMediaField.progressVolumes,
+  UserMediaField.score,
+  UserMediaField.notes,
+  UserMediaField.repeat,
+  UserMediaField.startedAt,
+  UserMediaField.completedAt,
+  UserMediaField.priority,
+  UserMediaField.private,
+  UserMediaField.hiddenFromStatusLists,
+  UserMediaField.customLists,
+  UserMediaField.advancedScores,
+};
+
+const Set<UserMediaField> _malEntryFields = <UserMediaField>{
+  UserMediaField.status,
+  UserMediaField.progress,
+  UserMediaField.progressVolumes,
+  UserMediaField.score,
+  UserMediaField.notes,
+  UserMediaField.repeat,
+  UserMediaField.startedAt,
+  UserMediaField.completedAt,
+  UserMediaField.malPriority,
+  UserMediaField.malRewatchValue,
+  UserMediaField.malTags,
+};
+
+const Set<UserMediaField> _shikimoriEntryFields = <UserMediaField>{
+  UserMediaField.status,
+  UserMediaField.progress,
+  UserMediaField.progressVolumes,
+  UserMediaField.score,
+  UserMediaField.notes,
+  UserMediaField.repeat,
+};
+
 /// Application facade over the provider-neutral local-first engine. It decides
 /// which authenticated adapters are available, while the engine owns local
 /// state, identity reconciliation, conflict policy and journal replay.
@@ -104,15 +159,12 @@ class TrackerSyncCoordinator {
     String? mediaTitle,
     MediaItem? mediaItem,
     Set<TrackerSource>? targets,
+    TrackingEpisodeCheckpoint? episodeCheckpoint,
   }) async {
     final MediaIdentity identity = MediaIdentity.fromExternalIds(
       externalIds,
       mediaId: mediaId,
     );
-    if (!identity.hasProviderId) {
-      return const SyncDispatchResult(pendingTargets: <TrackerSource>{});
-    }
-
     final List<UserMediaState> cached = await _store.loadStates();
     UserMediaState? matched;
     for (final UserMediaState state in cached) {
@@ -125,6 +177,7 @@ class TrackerSyncCoordinator {
       episode: episode,
       total: canonicalTotal,
       currentStatus: matched?.status,
+      mediaStatus: mediaItem?.statusLabel,
     );
     if (!trackerEpisodeUpdateNeeded(
       current: matched,
@@ -140,7 +193,16 @@ class TrackerSyncCoordinator {
       mediaItem: mediaItem,
       status: update.status,
       progress: update.progress,
+      startedAt: matched?.startedAt == null && update.progress > 0
+          ? DateTime.now().toUtc()
+          : null,
+      completedAt:
+          update.status == AniListListStatus.completed &&
+              matched?.completedAt == null
+          ? DateTime.now().toUtc()
+          : null,
       targets: targets,
+      episodeCheckpoint: episodeCheckpoint,
     );
   }
 
@@ -151,25 +213,32 @@ class TrackerSyncCoordinator {
     MediaItem? mediaItem,
     AniListListStatus? status,
     int? progress,
+    int? progressVolumes,
     double? score,
     String? notes,
     int? repeat,
+    DateTime? startedAt,
+    DateTime? completedAt,
+    int? priority,
+    bool? private,
+    bool? hiddenFromStatusLists,
+    Map<String, bool>? customLists,
+    Map<String, double>? advancedScores,
+    String? scoreFormat,
+    int? malPriority,
+    int? malRewatchValue,
+    List<String>? malTags,
     Set<UserMediaField>? fields,
     Set<TrackerSource>? targets,
     Map<TrackerSource, int> providerEntryIds = const <TrackerSource, int>{},
+    TrackingEpisodeCheckpoint? episodeCheckpoint,
   }) => _serial<SyncDispatchResult>(() async {
     final MediaIdentity identity = MediaIdentity.fromExternalIds(
       externalIds,
       mediaId: mediaId,
     );
-    if (!identity.hasProviderId) {
-      return const SyncDispatchResult(pendingTargets: <TrackerSource>{});
-    }
     final Set<TrackerSource> resolvedTargets =
         targets ?? _connectedTargets(identity);
-    if (resolvedTargets.isEmpty) {
-      return const SyncDispatchResult(pendingTargets: <TrackerSource>{});
-    }
     final int? canonicalTotal = mediaItem?.episodeCount;
     final int? safeProgress = progress == null
         ? null
@@ -180,16 +249,31 @@ class TrackerSyncCoordinator {
       patch: UserMediaPatch(
         status: status,
         progress: safeProgress,
+        progressVolumes: progressVolumes,
         score: score,
         notes: notes,
         repeat: repeat,
+        startedAt: startedAt,
+        completedAt: completedAt,
+        priority: priority,
+        private: private,
+        hiddenFromStatusLists: hiddenFromStatusLists,
+        customLists: customLists,
+        advancedScores: advancedScores,
+        scoreFormat: scoreFormat,
+        malPriority: malPriority,
+        malRewatchValue: malRewatchValue,
+        malTags: malTags,
         fields: fields,
       ),
       targets: resolvedTargets,
       mediaItem: mediaItem,
       mediaTitle: mediaTitle,
       providerEntryIds: providerEntryIds,
+      backgroundDelivery: true,
+      episodeCheckpoint: episodeCheckpoint,
     );
+    unawaited(flushPending());
     _invalidateHealth();
     return result;
   });
@@ -202,18 +286,19 @@ class TrackerSyncCoordinator {
       mediaItem.externalIds,
       mediaId: mediaItem.id,
     );
-    if ((identity.anilistId == null && identity.malId == null) ||
-        _settings.anilistAccessToken.trim().isEmpty) {
-      return const SyncDispatchResult(pendingTargets: <TrackerSource>{});
-    }
+    final bool canSyncAniList =
+        (identity.anilistId != null || identity.malId != null) &&
+        _settings.anilistAccessToken.trim().isNotEmpty;
     final LocalFirstSyncEngine engine = await _engine();
     final SyncDispatchResult result = await engine.recordMutation(
       identity: identity,
       patch: UserMediaPatch(favorite: favorite),
-      targets: const <TrackerSource>{TrackerSource.anilist},
+      targets: <TrackerSource>{if (canSyncAniList) TrackerSource.anilist},
       mediaItem: mediaItem,
       mediaTitle: mediaItem.title,
+      backgroundDelivery: true,
     );
+    unawaited(flushPending());
     _invalidateHealth();
     return result;
   });
@@ -229,9 +314,6 @@ class TrackerSyncCoordinator {
       externalIds,
       mediaId: mediaId,
     );
-    if (!identity.hasProviderId) {
-      return const SyncDispatchResult(pendingTargets: <TrackerSource>{});
-    }
     final LocalFirstSyncEngine engine = await _engine();
     final SyncDispatchResult result = await engine.recordMutation(
       identity: identity,
@@ -239,7 +321,9 @@ class TrackerSyncCoordinator {
       targets: targets ?? _connectedTargets(identity),
       mediaTitle: mediaTitle,
       providerEntryIds: providerEntryIds,
+      backgroundDelivery: true,
     );
+    unawaited(flushPending());
     _invalidateHealth();
     return result;
   });
@@ -277,19 +361,126 @@ class TrackerSyncCoordinator {
     );
   });
 
+  Future<TrackerLibrarySnapshot> refreshMangaLibrary({
+    required TrackerSource preferred,
+    Set<TrackerSource> excluded = const <TrackerSource>{},
+  }) => _serial<TrackerLibrarySnapshot>(() async {
+    final LocalFirstSyncEngine engine = await _engine();
+    final List<TrackerSource> order =
+        <TrackerSource>[
+              preferred,
+              TrackerSource.anilist,
+              TrackerSource.mal,
+              TrackerSource.shikimori,
+            ]
+            .where((TrackerSource source) => !excluded.contains(source))
+            .toSet()
+            .toList();
+    final LocalFirstLibraryResult result = await engine.refreshAnimeList(
+      providerOrder: order,
+      cacheSource: preferred,
+      mediaKind: 'manga',
+    );
+    _invalidateHealth();
+    return TrackerLibrarySnapshot(
+      folders: foldersFromUserMediaStates(
+        result.states
+            .where(
+              (UserMediaState state) => state.identity.mediaKind == 'manga',
+            )
+            .toList(growable: false),
+      ),
+      remoteSource: result.remoteSource,
+      fromCache: result.fromCache,
+    );
+  });
+
+  /// Reconciles a complete authenticated snapshot from every connected
+  /// tracker instead of stopping after the first provider that responds.
+  Future<TrackerLibrarySnapshot> refreshAllConnectedLibraries({
+    String mediaKind = 'anime',
+    Set<TrackerSource> excluded = const <TrackerSource>{},
+  }) => _serial<TrackerLibrarySnapshot>(() async {
+    final LocalFirstSyncEngine engine = await _engine();
+    final List<TrackerSource> order =
+        <TrackerSource>[
+              TrackerSource.anilist,
+              TrackerSource.mal,
+              TrackerSource.shikimori,
+            ]
+            .where((TrackerSource source) => !excluded.contains(source))
+            .toSet()
+            .toList();
+    final LocalFirstLibraryResult result = await engine
+        .refreshAllProviderSnapshots(
+          providerOrder: order,
+          mediaKind: mediaKind,
+        );
+    _invalidateHealth();
+    final List<UserMediaState> states = result.states
+        .where((UserMediaState state) => state.identity.mediaKind == mediaKind)
+        .toList(growable: false);
+    return TrackerLibrarySnapshot(
+      folders: foldersFromUserMediaStates(states),
+      remoteSource: result.remoteSource,
+      fromCache: result.fromCache,
+    );
+  });
+
   Future<List<AniListAnimeListFolder>> ingestAnimeLibrary({
     required TrackerSource source,
     required List<AniListAnimeListFolder> folders,
     required bool liveSnapshot,
     required bool completeSnapshot,
+    String mediaKind = 'anime',
   }) => _serial<List<AniListAnimeListFolder>>(() async {
+    final List<UserMediaState> remote = userMediaStatesFromFolders(
+      folders,
+      source: source,
+    );
+    final TrackingSyncStore store = _store;
+    if (liveSnapshot &&
+        completeSnapshot &&
+        store is ReconciliationTrackingSyncStore) {
+      final SettingsState settings = _settings;
+      final String accountId = switch (source) {
+        TrackerSource.anilist => '${settings.anilistViewerId ?? 'unknown'}',
+        TrackerSource.mal => '${settings.malViewerId ?? 'unknown'}',
+        TrackerSource.shikimori => '${settings.shikimoriViewerId ?? 'unknown'}',
+      };
+      final Set<TrackerSource> propagationTargets = <TrackerSource>{
+        if (settings.hasAniListSession) TrackerSource.anilist,
+        if (settings.hasMalSession) TrackerSource.mal,
+        if (settings.hasShikimoriSession) TrackerSource.shikimori,
+      }..remove(source);
+      final ProviderReconciliationResult result =
+          await (store as ReconciliationTrackingSyncStore)
+              .reconcileProviderSnapshot(
+                source: source,
+                accountId: accountId,
+                mediaKind: mediaKind,
+                remote: remote,
+                journal: await store.loadJournal(),
+                propagationTargets: propagationTargets,
+                completeSnapshot: true,
+              );
+      await store.saveJournal(result.journal);
+      _invalidateHealth();
+      return foldersFromUserMediaStates(
+        result.states
+            .where(
+              (UserMediaState state) => state.identity.mediaKind == mediaKind,
+            )
+            .toList(growable: false),
+      );
+    }
     final LocalFirstSyncEngine engine = LocalFirstSyncEngine(
       store: _store,
       adapters: const <TrackerSource, TrackerProviderAdapter>{},
-      primary: _settings.primaryTrackerSource,
+      primary: _settings.effectivePrimaryTrackerSource,
     );
     final List<UserMediaState> merged = await engine.ingestRemoteStates(
-      userMediaStatesFromFolders(folders, source: source),
+      remote,
       snapshotSource: source,
       confirmRemoteMutations: liveSnapshot && completeSnapshot,
       incomingProviderIsAuthoritative: liveSnapshot,
@@ -298,7 +489,13 @@ class TrackerSyncCoordinator {
     );
     await engine.recordSuccess(source);
     _invalidateHealth();
-    return foldersFromUserMediaStates(merged);
+    return foldersFromUserMediaStates(
+      merged
+          .where(
+            (UserMediaState state) => state.identity.mediaKind == mediaKind,
+          )
+          .toList(growable: false),
+    );
   });
 
   Future<List<AniListAnimeListFolder>> cachedAnimeLibrary() async {
@@ -310,7 +507,7 @@ class TrackerSyncCoordinator {
         final LocalFirstSyncEngine engine = LocalFirstSyncEngine(
           store: _store,
           adapters: const <TrackerSource, TrackerProviderAdapter>{},
-          primary: _settings.primaryTrackerSource,
+          primary: _settings.effectivePrimaryTrackerSource,
         );
         await engine.recordFailure(source, error);
         _invalidateHealth();
@@ -321,7 +518,7 @@ class TrackerSyncCoordinator {
         final LocalFirstSyncEngine engine = LocalFirstSyncEngine(
           store: _store,
           adapters: const <TrackerSource, TrackerProviderAdapter>{},
-          primary: _settings.primaryTrackerSource,
+          primary: _settings.effectivePrimaryTrackerSource,
         );
         await engine.recordSuccess(source);
         _invalidateHealth();
@@ -334,9 +531,7 @@ class TrackerSyncCoordinator {
           (identity.anilistId != null || identity.malId != null))
         TrackerSource.anilist,
       if (settings.hasMalSession && identity.malId != null) TrackerSource.mal,
-      if (settings.hasShikimoriSession &&
-          (identity.shikimoriId != null || identity.malId != null))
-        TrackerSource.shikimori,
+      if (settings.hasShikimoriSession) TrackerSource.shikimori,
     };
   }
 
@@ -344,7 +539,7 @@ class TrackerSyncCoordinator {
     return LocalFirstSyncEngine(
       store: _store,
       adapters: await _adapters(),
-      primary: _settings.primaryTrackerSource,
+      primary: _settings.effectivePrimaryTrackerSource,
     );
   }
 
@@ -352,6 +547,7 @@ class TrackerSyncCoordinator {
     final SettingsState settings = _settings;
     final Map<TrackerSource, TrackerProviderAdapter> adapters =
         <TrackerSource, TrackerProviderAdapter>{};
+    MalApiClient? malMetadataClient;
 
     final String aniListToken = settings.anilistAccessToken.trim();
     if (aniListToken.isNotEmpty) {
@@ -370,11 +566,13 @@ class TrackerSyncCoordinator {
     if (settings.hasMalSession) {
       final String? token = await _controller.validMalAccessToken();
       if (token != null && token.trim().isNotEmpty) {
+        malMetadataClient = MalApiClient(
+          accessToken: token,
+          onRefreshToken: _controller.refreshMalToken,
+        );
         adapters[TrackerSource.mal] = _MalAdapter(
-          MalApiClient(
-            accessToken: token,
-            onRefreshToken: _controller.refreshMalToken,
-          ),
+          malMetadataClient,
+          settings.malViewerId!,
         );
       }
     }
@@ -389,6 +587,22 @@ class TrackerSyncCoordinator {
             userId: shikimoriViewerId,
             onRefreshToken: _controller.refreshShikimoriToken,
           ),
+          shikimoriViewerId,
+          enrichFromMal: malMetadataClient == null
+              ? null
+              : (int malId, String mediaKind) => mediaKind == 'manga'
+                    ? malMetadataClient!.fetchMangaDetails(malId)
+                    : malMetadataClient!.fetchAnimeDetails(malId),
+          onResolvedIdentity: (MediaIdentity identity, int shikimoriId) {
+            return _ref
+                .read(canonicalLibraryRepositoryProvider)
+                .attachVerifiedProviderBinding(
+                  identity: identity,
+                  provider: TrackerSource.shikimori,
+                  externalMediaId: shikimoriId,
+                  evidence: 'exact_mal_id_lookup',
+                );
+          },
         );
       }
     }
@@ -417,10 +631,24 @@ class _AniListAdapter implements TrackerProviderAdapter {
   TrackerSource get source => TrackerSource.anilist;
 
   @override
+  String get accountId => '${viewerId ?? 'unknown'}';
+
+  @override
   Future<List<UserMediaState>> fetchAnimeList() async {
     try {
       final List<AniListAnimeListFolder> folders = await client
           .fetchMediaListCollection(userId: viewerId, type: 'ANIME');
+      return userMediaStatesFromFolders(folders, source: source);
+    } on DioException catch (error) {
+      _throwAuthentication(source, error);
+    }
+  }
+
+  @override
+  Future<List<UserMediaState>> fetchMangaList() async {
+    try {
+      final List<AniListAnimeListFolder> folders = await client
+          .fetchMediaListCollection(userId: viewerId, type: 'MANGA');
       return userMediaStatesFromFolders(folders, source: source);
     } on DioException catch (error) {
       _throwAuthentication(source, error);
@@ -433,7 +661,9 @@ class _AniListAdapter implements TrackerProviderAdapter {
       int? mediaId = mutation.identity.anilistId;
       final int? malId = mutation.identity.malId;
       if (mediaId == null && malId != null) {
-        final MediaItem? resolved = await client.resolveAnimeByMalId(malId);
+        final MediaItem? resolved = mutation.identity.mediaKind == 'manga'
+            ? await client.resolveMangaByMalId(malId)
+            : await client.resolveAnimeByMalId(malId);
         mediaId = int.tryParse(resolved?.externalIds['anilist'] ?? '');
       }
       if (mediaId == null) {
@@ -459,7 +689,7 @@ class _AniListAdapter implements TrackerProviderAdapter {
         await client.deleteListEntry(entryId);
         return;
       }
-      if (!mutation.patch.touchesLibraryState) return;
+      if (!mutation.patch.fields.any(_aniListEntryFields.contains)) return;
       await client.updateListEntry(
         mediaId: mediaId,
         status: mutation.patch.touches(UserMediaField.status)
@@ -468,16 +698,42 @@ class _AniListAdapter implements TrackerProviderAdapter {
         progress: mutation.patch.touches(UserMediaField.progress)
             ? mutation.patch.progress
             : null,
-        scoreRaw:
-            mutation.patch.touches(UserMediaField.score) &&
-                mutation.patch.score != null
-            ? aniListDisplayScoreToRaw(mutation.patch.score!)
+        progressVolumes: mutation.patch.touches(UserMediaField.progressVolumes)
+            ? mutation.patch.progressVolumes
+            : null,
+        scoreRaw: mutation.patch.touches(UserMediaField.score)
+            ? aniListDisplayScoreToRaw(mutation.patch.score ?? 0)
             : null,
         notes: mutation.patch.touches(UserMediaField.notes)
             ? mutation.patch.notes
             : null,
         repeat: mutation.patch.touches(UserMediaField.repeat)
             ? mutation.patch.repeat
+            : null,
+        priority: mutation.patch.touches(UserMediaField.malPriority)
+            ? mutation.patch.malPriority
+            : null,
+        private: mutation.patch.touches(UserMediaField.private)
+            ? mutation.patch.private
+            : null,
+        hiddenFromStatusLists:
+            mutation.patch.touches(UserMediaField.hiddenFromStatusLists)
+            ? mutation.patch.hiddenFromStatusLists
+            : null,
+        customLists: mutation.patch.touches(UserMediaField.customLists)
+            ? mutation.patch.customLists?.entries
+                  .where((MapEntry<String, bool> entry) => entry.value)
+                  .map((MapEntry<String, bool> entry) => entry.key)
+                  .toList(growable: false)
+            : null,
+        advancedScores: mutation.patch.touches(UserMediaField.advancedScores)
+            ? mutation.patch.advancedScores?.values.toList(growable: false)
+            : null,
+        startedAt: mutation.patch.touches(UserMediaField.startedAt)
+            ? _fuzzyDateInput(mutation.patch.startedAt)
+            : null,
+        completedAt: mutation.patch.touches(UserMediaField.completedAt)
+            ? _fuzzyDateInput(mutation.patch.completedAt)
             : null,
       );
     } on DioException catch (error) {
@@ -487,18 +743,34 @@ class _AniListAdapter implements TrackerProviderAdapter {
 }
 
 class _MalAdapter implements TrackerProviderAdapter {
-  _MalAdapter(this.client);
+  _MalAdapter(this.client, this.viewerId);
 
   final MalApiClient client;
+  final int viewerId;
 
   @override
   TrackerSource get source => TrackerSource.mal;
+
+  @override
+  String get accountId => '$viewerId';
 
   @override
   Future<List<UserMediaState>> fetchAnimeList() async {
     try {
       return userMediaStatesFromFolders(
         await client.fetchAnimeList(),
+        source: source,
+      );
+    } on DioException catch (error) {
+      _throwAuthentication(source, error);
+    }
+  }
+
+  @override
+  Future<List<UserMediaState>> fetchMangaList() async {
+    try {
+      return userMediaStatesFromFolders(
+        await client.fetchMangaList(),
         source: source,
       );
     } on DioException catch (error) {
@@ -514,19 +786,48 @@ class _MalAdapter implements TrackerProviderAdapter {
     }
     try {
       if (mutation.patch.delete) {
-        await client.deleteEntry(malId);
+        await client.deleteEntry(malId, mediaKind: mutation.identity.mediaKind);
         return;
       }
+      if (!mutation.patch.fields.any(_malEntryFields.contains)) return;
       await client.updateStatus(
         malId: malId,
+        mediaKind: mutation.identity.mediaKind,
         status: mutation.patch.touches(UserMediaField.status)
             ? mutation.patch.status
             : null,
         episodesWatched: mutation.patch.touches(UserMediaField.progress)
             ? mutation.patch.progress
             : null,
+        volumesRead: mutation.patch.touches(UserMediaField.progressVolumes)
+            ? mutation.patch.progressVolumes
+            : null,
         score: mutation.patch.touches(UserMediaField.score)
-            ? mutation.patch.score
+            ? mutation.patch.score ?? 0
+            : null,
+        isRewatching: mutation.patch.touches(UserMediaField.status)
+            ? mutation.patch.status == AniListListStatus.repeating
+            : null,
+        numTimesRewatched: mutation.patch.touches(UserMediaField.repeat)
+            ? mutation.patch.repeat
+            : null,
+        rewatchValue: mutation.patch.touches(UserMediaField.malRewatchValue)
+            ? mutation.patch.malRewatchValue
+            : null,
+        priority: mutation.patch.touches(UserMediaField.priority)
+            ? mutation.patch.priority
+            : null,
+        tags: mutation.patch.touches(UserMediaField.malTags)
+            ? mutation.patch.malTags
+            : null,
+        comments: mutation.patch.touches(UserMediaField.notes)
+            ? mutation.patch.notes
+            : null,
+        startDate: mutation.patch.touches(UserMediaField.startedAt)
+            ? mutation.patch.startedAt
+            : null,
+        finishDate: mutation.patch.touches(UserMediaField.completedAt)
+            ? mutation.patch.completedAt
             : null,
       );
     } on DioException catch (error) {
@@ -536,19 +837,33 @@ class _MalAdapter implements TrackerProviderAdapter {
 }
 
 class _ShikimoriAdapter implements TrackerProviderAdapter {
-  _ShikimoriAdapter(this.client);
+  _ShikimoriAdapter(
+    this.client,
+    this.viewerId, {
+    required this.onResolvedIdentity,
+    this.enrichFromMal,
+  });
 
   final ShikimoriApiClient client;
+  final int viewerId;
+  final Future<bool> Function(MediaIdentity identity, int shikimoriId)
+  onResolvedIdentity;
+  final Future<MediaItem?> Function(int malId, String mediaKind)? enrichFromMal;
 
   @override
   TrackerSource get source => TrackerSource.shikimori;
 
   @override
+  String get accountId => '$viewerId';
+
+  @override
   Future<List<UserMediaState>> fetchAnimeList() async {
     try {
-      return userMediaStatesFromFolders(
-        await client.fetchAnimeList(),
-        source: source,
+      return _enrichStatesFromMal(
+        userMediaStatesFromFolders(
+          await client.fetchAnimeList(),
+          source: source,
+        ),
       );
     } on DioException catch (error) {
       _throwAuthentication(source, error);
@@ -556,30 +871,110 @@ class _ShikimoriAdapter implements TrackerProviderAdapter {
   }
 
   @override
+  Future<List<UserMediaState>> fetchMangaList() async {
+    try {
+      return _enrichStatesFromMal(
+        userMediaStatesFromFolders(
+          await client.fetchMangaList(),
+          source: source,
+        ),
+      );
+    } on DioException catch (error) {
+      _throwAuthentication(source, error);
+    }
+  }
+
+  Future<List<UserMediaState>> _enrichStatesFromMal(
+    List<UserMediaState> states,
+  ) async {
+    final Future<MediaItem?> Function(int, String)? enrich = enrichFromMal;
+    if (enrich == null) return states;
+    final List<UserMediaState> result = <UserMediaState>[];
+    for (final UserMediaState state in states) {
+      final int? malId = state.identity.malId;
+      final MediaItem media = state.mediaItem;
+      final bool incomplete =
+          _isTechnicalTitle(media.title) ||
+          media.posterUrl.trim().isEmpty ||
+          media.overview.trim().isEmpty;
+      if (malId == null || malId <= 0 || !incomplete) {
+        result.add(state);
+        continue;
+      }
+      try {
+        final MediaItem? enriched = await enrich(
+          malId,
+          state.identity.mediaKind,
+        );
+        result.add(enriched == null ? state : state.withMediaItem(enriched));
+      } on Object {
+        result.add(state);
+      }
+    }
+    return result;
+  }
+
+  bool _isTechnicalTitle(String title) => RegExp(
+    r'^(saved media|(anime|manga)\s*#\d+)$',
+    caseSensitive: false,
+  ).hasMatch(title.trim());
+
+  @override
   Future<void> applyMutation(SyncJournalEntry mutation) async {
-    // Preserve MiruShin's established Shikimori contract: anime target_id is
-    // the MAL id. The explicit Shikimori id remains a fallback for records
-    // returned without malId and for future identity reconciliation.
-    final int? targetId =
-        mutation.identity.malId ?? mutation.identity.shikimoriId;
+    // Shikimori's target_id is its own internal media id. Older MiruShin
+    // versions sent the MAL id directly because the ids are commonly aligned.
+    // Keep that working, but verify the candidate through Shikimori's own
+    // `malId` field and persist the binding before any write.
+    int? targetId = mutation.identity.shikimoriId;
+    final int? malId = mutation.identity.malId;
+    if (targetId == null && malId != null) {
+      final int? resolved = await client.resolveMediaIdByMalId(
+        malId: malId,
+        mediaKind: mutation.identity.mediaKind,
+        title: mutation.mediaTitle,
+      );
+      if (resolved != null &&
+          await onResolvedIdentity(mutation.identity, resolved)) {
+        targetId = resolved;
+      }
+    }
     if (targetId == null) {
       throw const UnresolvedProviderIdentityException(TrackerSource.shikimori);
     }
     try {
       if (mutation.patch.delete) {
-        await client.deleteUserRate(targetId);
+        await client.deleteUserRate(
+          targetId,
+          mediaKind: mutation.identity.mediaKind,
+        );
         return;
       }
+      if (!mutation.patch.fields.any(_shikimoriEntryFields.contains)) return;
       await client.updateUserRate(
-        malId: targetId,
+        targetId: targetId,
+        mediaKind: mutation.identity.mediaKind,
         status: mutation.patch.touches(UserMediaField.status)
             ? mutation.patch.status
             : null,
         episodes: mutation.patch.touches(UserMediaField.progress)
             ? mutation.patch.progress
             : null,
+        chapters:
+            mutation.identity.mediaKind == 'manga' &&
+                mutation.patch.touches(UserMediaField.progress)
+            ? mutation.patch.progress
+            : null,
+        volumes: mutation.patch.touches(UserMediaField.progressVolumes)
+            ? mutation.patch.progressVolumes
+            : null,
         score: mutation.patch.touches(UserMediaField.score)
-            ? mutation.patch.score
+            ? mutation.patch.score ?? 0
+            : null,
+        rewatches: mutation.patch.touches(UserMediaField.repeat)
+            ? mutation.patch.repeat
+            : null,
+        text: mutation.patch.touches(UserMediaField.notes)
+            ? mutation.patch.notes
             : null,
       );
     } on DioException catch (error) {
@@ -587,6 +982,12 @@ class _ShikimoriAdapter implements TrackerProviderAdapter {
     }
   }
 }
+
+Map<String, int?> _fuzzyDateInput(DateTime? value) => <String, int?>{
+  'year': value?.year,
+  'month': value?.month,
+  'day': value?.day,
+};
 
 Never _throwAuthentication(TrackerSource source, DioException error) {
   if (error.response?.statusCode == 401) {

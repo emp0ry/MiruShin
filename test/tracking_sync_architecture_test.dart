@@ -53,6 +53,75 @@ void main() {
       expect(normalizeCanonicalScore(-2), 0);
     });
 
+    test('preserves score format and MAL-only fields in operation patches', () {
+      final UserMediaPatch original = UserMediaPatch(
+        scoreFormat: 'POINT_3',
+        malPriority: 2,
+        malRewatchValue: 4,
+        malTags: const <String>['favorites', 'dub'],
+      );
+      final UserMediaPatch restored = UserMediaPatch.fromJson(
+        jsonDecode(jsonEncode(original.toJson())) as Map<String, dynamic>,
+      );
+
+      expect(restored.scoreFormat, 'POINT_3');
+      expect(restored.malPriority, 2);
+      expect(restored.malRewatchValue, 4);
+      expect(restored.malTags, <String>['favorites', 'dub']);
+      expect(restored.fields, <UserMediaField>{
+        UserMediaField.scoreFormat,
+        UserMediaField.malPriority,
+        UserMediaField.malRewatchValue,
+        UserMediaField.malTags,
+      });
+    });
+
+    test(
+      'applies MAL extras without overwriting another provider snapshot',
+      () {
+        final UserMediaState current =
+            _state(
+              source: TrackerSource.anilist,
+              progress: 3,
+              updatedAt: DateTime.utc(2026, 9, 1),
+            ).withProviderSnapshot(
+              ProviderUserMediaState(
+                provider: TrackerSource.mal,
+                entryId: 20,
+                data: const <String, dynamic>{
+                  'tags': <String>['old'],
+                  'rewatchValue': 1,
+                },
+              ),
+            );
+
+        final UserMediaState updated = current.apply(
+          UserMediaPatch(
+            scoreFormat: 'POINT_3',
+            malPriority: 2,
+            malRewatchValue: 5,
+            malTags: const <String>['new'],
+          ),
+          DateTime.utc(2026, 9, 2),
+        );
+
+        expect(
+          updated.providerStates[TrackerSource.anilist]!.data['scoreFormat'],
+          'POINT_3',
+        );
+        expect(updated.providerStates[TrackerSource.mal]!.data['priority'], 2);
+        expect(
+          updated.providerStates[TrackerSource.mal]!.data['rewatchValue'],
+          5,
+        );
+        expect(
+          updated.providerStates[TrackerSource.mal]!.data['tags'],
+          <String>['new'],
+        );
+        expect(updated.progress, 3);
+      },
+    );
+
     test('clamps addon extras to the canonical tracker total', () {
       final TrackerEpisodeProgress update = normalizeTrackerEpisodeProgress(
         episode: 13,
@@ -210,6 +279,50 @@ void main() {
   });
 
   group('offline journal', () {
+    test(
+      'migration safe mode queues locally without contacting providers',
+      () async {
+        final _SafeModeTrackingSyncStore store = _SafeModeTrackingSyncStore();
+        final _FakeAdapter aniList = _FakeAdapter(TrackerSource.anilist)
+          ..remote = <UserMediaState>[
+            _state(
+              source: TrackerSource.anilist,
+              progress: 99,
+              updatedAt: DateTime.utc(2026, 9, 23),
+            ),
+          ];
+        final LocalFirstSyncEngine engine = LocalFirstSyncEngine(
+          store: store,
+          adapters: <TrackerSource, TrackerProviderAdapter>{
+            TrackerSource.anilist: aniList,
+          },
+          now: () => DateTime.utc(2026, 9, 23),
+        );
+
+        final SyncDispatchResult mutation = await engine.recordMutation(
+          identity: const MediaIdentity(
+            localId: 'anime:anilist:10',
+            anilistId: 10,
+          ),
+          patch: UserMediaPatch(progress: 4),
+          targets: const <TrackerSource>{TrackerSource.anilist},
+        );
+        final LocalFirstLibraryResult refresh = await engine.refreshAnimeList(
+          providerOrder: const <TrackerSource>[TrackerSource.anilist],
+        );
+
+        expect(store.states.single.progress, 4);
+        expect(store.journal.single.pendingTargets, <TrackerSource>{
+          TrackerSource.anilist,
+        });
+        expect(mutation.pendingTargets, <TrackerSource>{TrackerSource.anilist});
+        expect(aniList.applied, isEmpty);
+        expect(aniList.fetchCalls, 0);
+        expect(refresh.fromCache, isTrue);
+        expect(refresh.states.single.progress, 4);
+      },
+    );
+
     test('persists remote-confirmation targets across restarts', () {
       final SyncJournalEntry restored = SyncJournalEntry.fromJson(
         SyncJournalEntry(
@@ -411,6 +524,66 @@ void main() {
   });
 
   group('outage, recovery and conflict resolution', () {
+    test(
+      'complete refresh visits every connected provider when one is unavailable',
+      () async {
+        final _MemoryTrackingSyncStore store = _MemoryTrackingSyncStore();
+        final _FakeAdapter aniList = _FakeAdapter(TrackerSource.anilist)
+          ..remote = <UserMediaState>[
+            _state(
+              source: TrackerSource.anilist,
+              progress: 3,
+              updatedAt: DateTime.utc(2026, 9, 24),
+            ),
+          ];
+        final _FakeAdapter mal = _FakeAdapter(TrackerSource.mal)
+          ..failFetch = true;
+        final _FakeAdapter shikimori = _FakeAdapter(TrackerSource.shikimori)
+          ..remote = <UserMediaState>[
+            _state(
+              source: TrackerSource.shikimori,
+              progress: 3,
+              updatedAt: DateTime.utc(2026, 9, 24),
+            ),
+          ];
+        final LocalFirstSyncEngine engine = LocalFirstSyncEngine(
+          store: store,
+          adapters: <TrackerSource, TrackerProviderAdapter>{
+            TrackerSource.anilist: aniList,
+            TrackerSource.mal: mal,
+            TrackerSource.shikimori: shikimori,
+          },
+        );
+
+        final LocalFirstLibraryResult result = await engine
+            .refreshAllProviderSnapshots(
+              providerOrder: const <TrackerSource>[
+                TrackerSource.anilist,
+                TrackerSource.mal,
+                TrackerSource.shikimori,
+              ],
+            );
+
+        expect(aniList.fetchCalls, 1);
+        expect(mal.fetchCalls, 1);
+        expect(shikimori.fetchCalls, 1);
+        expect(result.fromCache, isFalse);
+        expect(result.remoteSource, TrackerSource.anilist);
+        expect(
+          store.health[TrackerSource.anilist]?.availability,
+          TrackerProviderAvailability.healthy,
+        );
+        expect(
+          store.health[TrackerSource.mal]?.availability,
+          TrackerProviderAvailability.unavailable,
+        );
+        expect(
+          store.health[TrackerSource.shikimori]?.availability,
+          TrackerProviderAvailability.healthy,
+        );
+      },
+    );
+
     test('a provider snapshot does not leak another account library', () async {
       final UserMediaState aniListState = _state(
         source: TrackerSource.anilist,
@@ -1338,22 +1511,36 @@ class _MemoryTrackingSyncStore implements TrackingSyncStore {
   }
 }
 
+class _SafeModeTrackingSyncStore extends _MemoryTrackingSyncStore
+    implements MigrationSafeModeTrackingSyncStore {
+  @override
+  Future<bool> isInMigrationSafeMode() async => true;
+}
+
 class _FakeAdapter implements TrackerProviderAdapter {
   _FakeAdapter(this.source, {this.applicationOrder});
 
   @override
   final TrackerSource source;
+
+  @override
+  String get accountId => 'fake-${source.name}';
   final List<TrackerSource>? applicationOrder;
   bool failFetch = false;
   bool failMutation = false;
+  int fetchCalls = 0;
   List<UserMediaState> remote = <UserMediaState>[];
   final List<SyncJournalEntry> applied = <SyncJournalEntry>[];
 
   @override
   Future<List<UserMediaState>> fetchAnimeList() async {
+    fetchCalls += 1;
     if (failFetch) throw StateError('${source.name} unavailable');
     return remote;
   }
+
+  @override
+  Future<List<UserMediaState>> fetchMangaList() => fetchAnimeList();
 
   @override
   Future<void> applyMutation(SyncJournalEntry mutation) async {

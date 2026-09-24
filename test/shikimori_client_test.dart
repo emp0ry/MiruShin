@@ -7,6 +7,7 @@ import 'package:mirushin/features/metadata/data/shikimori_client.dart';
 import 'package:mirushin/features/tracking/data/shikimori_api_client.dart'
     as tracking;
 import 'package:mirushin/shared/models/anilist_models.dart';
+import 'package:mirushin/shared/models/media_item.dart';
 
 void main() {
   test('batchRussianTitles fetches large libraries in chunks', () async {
@@ -183,7 +184,7 @@ void main() {
     expect(details?.youtubeTrailerUrl, isEmpty);
   });
 
-  test('tracking uses MAL id as Shikimori anime target_id', () async {
+  test('tracking writes the exact Shikimori anime target_id', () async {
     final _FakeShikimoriAdapter adapter = _FakeShikimoriAdapter();
     final Dio dio = Dio()..httpClientAdapter = adapter;
     final tracking.ShikimoriApiClient client = tracking.ShikimoriApiClient(
@@ -193,7 +194,7 @@ void main() {
     );
 
     await client.updateUserRate(
-      malId: 5114,
+      targetId: 5114,
       status: AniListListStatus.current,
       episodes: 3,
       score: 8.4,
@@ -202,6 +203,102 @@ void main() {
     expect(adapter.createdUserRate?['target_id'], 5114);
     expect(adapter.createdUserRate?['target_type'], 'Anime');
   });
+
+  test(
+    'tracking resolves an exact Shikimori id from a MAL id before writing',
+    () async {
+      final _FakeShikimoriAdapter adapter = _FakeShikimoriAdapter()
+        ..graphqlMediaByRequestedId[31553] = <String, Object>{
+          'id': '31553',
+          'malId': '31553',
+        };
+      final Dio dio = Dio()..httpClientAdapter = adapter;
+      final tracking.ShikimoriApiClient client = tracking.ShikimoriApiClient(
+        accessToken: 'token',
+        userId: 7,
+        dio: dio,
+      );
+
+      final int? targetId = await client.resolveMediaIdByMalId(malId: 31553);
+      expect(targetId, 31553);
+
+      await client.updateUserRate(
+        targetId: targetId!,
+        status: AniListListStatus.completed,
+        episodes: 1,
+      );
+      expect(adapter.createdUserRate?['target_id'], 31553);
+    },
+  );
+
+  test(
+    'tracking rejects a Shikimori candidate with a different MAL id',
+    () async {
+      final _FakeShikimoriAdapter adapter = _FakeShikimoriAdapter()
+        ..graphqlMediaByRequestedId[31553] = <String, Object>{
+          'id': '99999',
+          'malId': '28999',
+        };
+      final Dio dio = Dio()..httpClientAdapter = adapter;
+      final tracking.ShikimoriApiClient client = tracking.ShikimoriApiClient(
+        accessToken: 'token',
+        userId: 7,
+        dio: dio,
+      );
+
+      expect(await client.resolveMediaIdByMalId(malId: 31553), isNull);
+      expect(adapter.createdUserRate, isNull);
+    },
+  );
+
+  test(
+    'tracking manga list preserves exact ids and presentation data',
+    () async {
+      final _FakeShikimoriAdapter adapter = _FakeShikimoriAdapter()
+        ..userRates.add(<String, Object>{
+          'id': 700,
+          'target_id': 44,
+          'status': 'watching',
+          'chapters': 12,
+          'volumes': 2,
+          'score': 9,
+          'rewatches': 1,
+          'text': 'Reading note',
+        })
+        ..graphqlMediaByRequestedId[0] = <String, Object>{
+          'id': '44',
+          'malId': '55',
+          'name': 'Exact Manga',
+          'russian': 'Точная манга',
+          'chapters': 380,
+          'volumes': 42,
+          'score': 8.8,
+          'poster': <String, Object>{
+            'originalUrl': '/system/mangas/original/44.jpg',
+          },
+        };
+      final Dio dio = Dio()..httpClientAdapter = adapter;
+      final tracking.ShikimoriApiClient client = tracking.ShikimoriApiClient(
+        accessToken: 'token',
+        userId: 7,
+        dio: dio,
+      );
+
+      final List<AniListAnimeListFolder> folders = await client
+          .fetchMangaList();
+      final AniListAnimeListEntry entry = folders.single.entries.single;
+
+      expect(entry.progress, 12);
+      expect(entry.progressVolumes, 2);
+      expect(entry.mediaItem.type, MediaType.manga);
+      expect(entry.mediaItem.title, 'Exact Manga');
+      expect(entry.mediaItem.originalTitle, 'Точная манга');
+      expect(entry.mediaItem.externalIds['shikimori'], '44');
+      expect(entry.mediaItem.externalIds['mal'], '55');
+      expect(entry.mediaItem.episodeCount, 380);
+      expect(entry.mediaItem.posterUrl, contains('/44.jpg'));
+    },
+  );
 }
 
 class _FakeShikimoriAdapter implements HttpClientAdapter {
@@ -210,6 +307,9 @@ class _FakeShikimoriAdapter implements HttpClientAdapter {
       <int, Map<String, Object>>{};
   final Map<String, List<Map<String, Object>>> searchResults =
       <String, List<Map<String, Object>>>{};
+  final Map<int, Map<String, Object>> graphqlMediaByRequestedId =
+      <int, Map<String, Object>>{};
+  final List<Map<String, Object>> userRates = <Map<String, Object>>[];
   Map<String, dynamic>? createdUserRate;
 
   @override
@@ -218,9 +318,28 @@ class _FakeShikimoriAdapter implements HttpClientAdapter {
     Stream<Uint8List>? requestStream,
     Future<void>? cancelFuture,
   ) async {
+    if (options.uri.path == '/api/graphql') {
+      final Object? payload = options.data;
+      final Object? rawVariables = payload is Map ? payload['variables'] : null;
+      final Map<dynamic, dynamic> variables = rawVariables is Map
+          ? rawVariables
+          : const <dynamic, dynamic>{};
+      final int requestedId = int.tryParse('${variables['ids'] ?? ''}') ?? 0;
+      final Map<String, Object>? node = graphqlMediaByRequestedId[requestedId];
+      final String query = payload is Map ? '${payload['query'] ?? ''}' : '';
+      final String field = query.contains('mangas(') ? 'mangas' : 'animes';
+      return _json(
+        jsonEncode(<String, Object>{
+          'data': <String, Object>{
+            field: <Map<String, Object>>[?node],
+          },
+        }),
+      );
+    }
+
     if (options.uri.path == '/api/v2/user_rates') {
       if (options.method == 'GET') {
-        return _json('[]');
+        return _json(jsonEncode(userRates));
       }
       final Object? payload = options.data;
       if (payload is Map<String, dynamic>) {

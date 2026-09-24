@@ -20,8 +20,20 @@
 		<string>6.0</string>
 		<key>CFBundleName</key>
 		<string>MiruShin</string>
+		<key>GIDClientID</key>
+		<string>77095881269-gaji31e827i85ro8loeu2srbegektntu.apps.googleusercontent.com</string>
 		<key>CFBundleURLTypes</key>
 		<array>
+			<dict>
+				<key>CFBundleURLName</key>
+				<string>MiruShin Google OAuth</string>
+				<key>CFBundleTypeRole</key>
+				<string>Editor</string>
+				<key>CFBundleURLSchemes</key>
+				<array>
+					<string>com.googleusercontent.apps.77095881269-gaji31e827i85ro8loeu2srbegektntu</string>
+				</array>
+			</dict>
 			<dict>
 				<key>CFBundleURLName</key>
 				<string>MiruShin AniList OAuth</string>
