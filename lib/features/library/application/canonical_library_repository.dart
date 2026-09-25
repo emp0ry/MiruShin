@@ -47,6 +47,20 @@ class LibraryWorkspaceScope {
   );
 }
 
+class DriveSnapshotApplyResult {
+  const DriveSnapshotApplyResult({
+    required this.cloudEntryCount,
+    required this.localEntryCount,
+    required this.restoredEntries,
+    required this.freshBootstrap,
+  });
+
+  final int cloudEntryCount;
+  final int localEntryCount;
+  final int restoredEntries;
+  final bool freshBootstrap;
+}
+
 final libraryWorkspaceScopeProvider = Provider<LibraryWorkspaceScope>((
   Ref ref,
 ) {
@@ -705,6 +719,72 @@ class CanonicalLibraryRepository {
     );
   }
 
+  /// Merges richer presentation data without changing the user's tracking
+  /// state. The canonical media and library row are then replicated to Drive
+  /// so a title remains fully renderable while providers are unavailable.
+  Future<MediaItem> enrichPresentationMetadata({
+    required MediaIdentity identity,
+    required MediaItem mediaItem,
+  }) async {
+    await initialize();
+    return database.transaction(() async {
+      final String localId = await _resolveOrCreateMediaLocked(
+        identity: identity,
+        mediaItem: mediaItem,
+      );
+      final CanonicalMediaRecord storedMedia =
+          await (database.select(database.canonicalMediaRecords)..where(
+                (CanonicalMediaRecords table) => table.localId.equals(localId),
+              ))
+              .getSingle();
+      final MediaItem merged = MediaItem.fromJson(
+        _jsonMap(storedMedia.mediaJson),
+      );
+      final CanonicalLibraryRecord? libraryRow =
+          await (database.select(database.canonicalLibraryRecords)..where(
+                (CanonicalLibraryRecords table) =>
+                    table.localId.equals(localId) &
+                    table.inLibrary.equals(true),
+              ))
+              .getSingleOrNull();
+      if (libraryRow == null) return merged;
+
+      final UserMediaState before = UserMediaState.fromJson(
+        _jsonMap(libraryRow.canonicalStateJson),
+      );
+      if (jsonEncode(before.mediaItem.toJson()) ==
+          jsonEncode(merged.toJson())) {
+        return merged;
+      }
+      final UserMediaState after = before.withMediaItem(merged);
+      final int now = DateTime.now().toUtc().millisecondsSinceEpoch;
+      await (database.update(database.canonicalLibraryRecords)..where(
+            (CanonicalLibraryRecords table) => table.localId.equals(localId),
+          ))
+          .write(
+            CanonicalLibraryRecordsCompanion(
+              canonicalStateJson: Value<String>(jsonEncode(after.toJson())),
+              updatedAtMs: Value<int>(now),
+            ),
+          );
+      await _appendOperationLocked(
+        LibraryOperationDraft(
+          localId: localId,
+          originKind: LibraryOriginKind.system,
+          intent: LibraryMutationIntent.edit,
+          fields: const <String>{'metadata'},
+          before: <String, dynamic>{'media': before.mediaItem.toJson()},
+          after: <String, dynamic>{'media': merged.toJson()},
+          targets: const <String>{'drive'},
+          occurredAt: DateTime.fromMillisecondsSinceEpoch(now, isUtc: true),
+          title: merged.title,
+          visibleInLog: false,
+        ),
+      );
+      return merged;
+    });
+  }
+
   /// Persists an exact provider id learned after a local entry was created.
   ///
   /// Identity discovery is deliberately separate from user-state mutations:
@@ -904,17 +984,20 @@ class CanonicalLibraryRepository {
         // Replace only the corrupt cached presentation row.
       }
     }
-    await database
-        .into(database.canonicalMediaRecords)
-        .insertOnConflictUpdate(
-          CanonicalMediaRecordsCompanion.insert(
-            localId: localId,
-            mediaKind: identity.mediaKind,
-            mediaJson: jsonEncode(canonicalMedia.toJson()),
-            createdAtMs: existing?.createdAtMs ?? now,
-            updatedAtMs: now,
-          ),
-        );
+    final String canonicalMediaJson = jsonEncode(canonicalMedia.toJson());
+    if (existing == null || existing.mediaJson != canonicalMediaJson) {
+      await database
+          .into(database.canonicalMediaRecords)
+          .insertOnConflictUpdate(
+            CanonicalMediaRecordsCompanion.insert(
+              localId: localId,
+              mediaKind: identity.mediaKind,
+              mediaJson: canonicalMediaJson,
+              createdAtMs: existing?.createdAtMs ?? now,
+              updatedAtMs: now,
+            ),
+          );
+    }
 
     if (identity.localId.trim().isNotEmpty &&
         !identity.localId.endsWith(':unresolved')) {
@@ -965,7 +1048,9 @@ class CanonicalLibraryRepository {
       final String oldTrimmed = oldValue.trim();
       final String nextTrimmed = nextValue.trim();
       if (nextTrimmed.isEmpty) return oldValue;
-      if (oldTrimmed.isEmpty || _isTechnicalMediaTitle(oldTrimmed)) {
+      if (oldTrimmed.isEmpty ||
+          _isTechnicalMediaTitle(oldTrimmed) ||
+          oldTrimmed == 'No AniList description yet.') {
         return nextValue;
       }
       return incomingPreferred ? nextValue : oldValue;
@@ -1062,6 +1147,8 @@ class CanonicalLibraryRepository {
     required int externalMediaId,
     required String evidence,
     int? providerEntryId,
+    int? verifiedAtMs,
+    bool? quarantined,
   }) async {
     final ProviderBindingRecord? byExternal =
         await (database.select(database.providerBindingRecords)..where(
@@ -1094,6 +1181,10 @@ class CanonicalLibraryRepository {
       );
       return false;
     }
+    final bool acceptsIncomingMetadata =
+        byLocal == null ||
+        verifiedAtMs == null ||
+        verifiedAtMs >= byLocal.verifiedAtMs;
     await database
         .into(database.providerBindingRecords)
         .insertOnConflictUpdate(
@@ -1106,13 +1197,24 @@ class CanonicalLibraryRepository {
             mediaKind: Value<String>(mediaKind),
             externalMediaId: Value<int>(externalMediaId),
             providerEntryId: Value<int?>(
-              providerEntryId ?? byLocal?.providerEntryId,
+              acceptsIncomingMetadata
+                  ? providerEntryId ?? byLocal?.providerEntryId
+                  : byLocal.providerEntryId,
             ),
-            evidence: Value<String>(evidence),
+            evidence: Value<String>(
+              acceptsIncomingMetadata ? evidence : byLocal.evidence,
+            ),
             verifiedAtMs: Value<int>(
-              DateTime.now().toUtc().millisecondsSinceEpoch,
+              acceptsIncomingMetadata
+                  ? verifiedAtMs ??
+                        DateTime.now().toUtc().millisecondsSinceEpoch
+                  : byLocal.verifiedAtMs,
             ),
-            quarantined: const Value<bool>(false),
+            quarantined: Value<bool>(
+              acceptsIncomingMetadata
+                  ? quarantined ?? false
+                  : byLocal.quarantined,
+            ),
           ),
         );
     return true;
@@ -2595,6 +2697,391 @@ class CanonicalLibraryRepository {
     );
   }
 
+  Future<DriveLibrarySnapshot> buildDriveSnapshot() async {
+    await initialize();
+    final List<CanonicalLibraryRecord> library = await database
+        .select(database.canonicalLibraryRecords)
+        .get();
+    final Set<String> localIds = library
+        .map((CanonicalLibraryRecord row) => row.localId)
+        .toSet();
+    final List<CanonicalMediaRecord> media = localIds.isEmpty
+        ? const <CanonicalMediaRecord>[]
+        : await (database.select(database.canonicalMediaRecords)..where(
+                (CanonicalMediaRecords table) => table.localId.isIn(localIds),
+              ))
+              .get();
+    final List<ProviderBindingRecord> bindings = localIds.isEmpty
+        ? const <ProviderBindingRecord>[]
+        : await (database.select(database.providerBindingRecords)..where(
+                (ProviderBindingRecords table) => table.localId.isIn(localIds),
+              ))
+              .get();
+    final List<ProviderSnapshotRecord> providerSnapshots = localIds.isEmpty
+        ? const <ProviderSnapshotRecord>[]
+        : await (database.select(database.providerSnapshotRecords)..where(
+                (ProviderSnapshotRecords table) => table.localId.isIn(localIds),
+              ))
+              .get();
+    final List<EpisodeStateRecord> episodes = localIds.isEmpty
+        ? const <EpisodeStateRecord>[]
+        : await (database.select(database.episodeStateRecords)..where(
+                (EpisodeStateRecords table) => table.localId.isIn(localIds),
+              ))
+              .get();
+    final List<StreamPreferenceRecord> streams = localIds.isEmpty
+        ? const <StreamPreferenceRecord>[]
+        : await (database.select(database.streamPreferenceRecords)..where(
+                (StreamPreferenceRecords table) => table.localId.isIn(localIds),
+              ))
+              .get();
+    final List<LibraryOperationRecord> operations = localIds.isEmpty
+        ? const <LibraryOperationRecord>[]
+        : await (database.select(database.libraryOperationRecords)..where(
+                (LibraryOperationRecords table) => table.localId.isIn(localIds),
+              ))
+              .get();
+    return DriveLibrarySnapshot(
+      snapshotId: _uuid.v7(),
+      deviceId: await deviceId(),
+      createdAt: DateTime.now().toUtc(),
+      replicaNamespace: replicaNamespace,
+      media: media.map(_mediaRowJson).toList(growable: false),
+      libraryEntries: library.map(_libraryRowJson).toList(growable: false),
+      providerBindings: bindings
+          .map(_providerBindingRowJson)
+          .toList(growable: false),
+      providerSnapshots: providerSnapshots
+          .map(_providerSnapshotRowJson)
+          .toList(growable: false),
+      episodeStates: episodes.map(_episodeRowJson).toList(growable: false),
+      streamPreferences: streams
+          .map(_streamReplicaRowJson)
+          .toList(growable: false),
+      operations: operations.map(_operationRowJson).toList(growable: false),
+    );
+  }
+
+  Future<bool> hasAppliedDriveSnapshot(String checksum) async {
+    await initialize();
+    final SyncCursorRecord? cursor =
+        await (database.select(database.syncCursorRecords)..where(
+              (SyncCursorRecords table) =>
+                  table.scope.equals('drive.snapshot:$replicaNamespace'),
+            ))
+            .getSingleOrNull();
+    return cursor?.cursor == checksum;
+  }
+
+  /// Atomically merges a complete Drive checkpoint into the current
+  /// workspace. A fresh device must end with exactly the advertised number of
+  /// active entries or the whole transaction is rolled back.
+  Future<DriveSnapshotApplyResult> applyDriveSnapshot(
+    DriveLibrarySnapshot snapshot, {
+    void Function(int completed, int total)? onProgress,
+  }) async {
+    await initialize();
+    if (snapshot.replicaNamespace != replicaNamespace &&
+        !(importsLegacyData && snapshot.replicaNamespace == 'legacy')) {
+      throw StateError(
+        'Drive library workspace mismatch: '
+        '${snapshot.replicaNamespace} != $replicaNamespace',
+      );
+    }
+    return database.transaction(() async {
+      final int beforeCount =
+          await (database.selectOnly(database.canonicalLibraryRecords)
+                ..addColumns(<Expression<Object>>[
+                  database.canonicalLibraryRecords.localId.count(),
+                ])
+                ..where(
+                  database.canonicalLibraryRecords.inLibrary.equals(true),
+                ))
+              .map(
+                (TypedResult row) =>
+                    row.read(
+                      database.canonicalLibraryRecords.localId.count(),
+                    ) ??
+                    0,
+              )
+              .getSingle();
+      final bool freshBootstrap = beforeCount == 0;
+      final Map<String, String> translatedIds = <String, String>{};
+      final int total = snapshot.media.length + snapshot.libraryEntries.length;
+      int completed = 0;
+
+      for (final Map<String, dynamic> row in snapshot.media) {
+        final String remoteLocalId = '${row['localId'] ?? ''}';
+        final Object? rawMedia = row['media'];
+        if (remoteLocalId.isEmpty || rawMedia is! Map) continue;
+        final MediaItem media = MediaItem.fromJson(
+          Map<String, dynamic>.from(rawMedia),
+        );
+        final MediaIdentity parsed = MediaIdentity.fromExternalIds(
+          media.externalIds,
+          mediaId: media.id,
+        );
+        translatedIds[remoteLocalId] = await _resolveOrCreateMediaLocked(
+          identity: MediaIdentity(
+            localId: remoteLocalId,
+            kind: '${row['mediaKind'] ?? ''}' == 'manga' ? 'manga' : null,
+            anilistId: parsed.anilistId,
+            malId: parsed.malId,
+            shikimoriId: parsed.shikimoriId,
+          ),
+          mediaItem: media,
+        );
+        completed += 1;
+        onProgress?.call(completed, total);
+      }
+
+      int restored = 0;
+      final Set<String> activeIds = (await _readBucketLocked(
+        'tracking.stateIds',
+      )).whereType<String>().toSet();
+      final Set<String> restoredRemoteIds = <String>{};
+      for (final Map<String, dynamic> row in snapshot.libraryEntries) {
+        final String remoteLocalId = '${row['localId'] ?? ''}';
+        final Object? rawState = row['state'];
+        if (remoteLocalId.isEmpty || rawState is! Map) continue;
+        final UserMediaState remote = UserMediaState.fromJson(
+          Map<String, dynamic>.from(rawState),
+        );
+        final String localId = translatedIds[remoteLocalId] ??=
+            await _resolveOrCreateMediaLocked(
+              identity: remote.identity,
+              mediaItem: remote.mediaItem,
+            );
+        final CanonicalLibraryRecord? existing =
+            await (database.select(database.canonicalLibraryRecords)..where(
+                  (CanonicalLibraryRecords table) =>
+                      table.localId.equals(localId),
+                ))
+                .getSingleOrNull();
+        final int remoteUpdated =
+            (row['updatedAtMs'] as num?)?.toInt() ??
+            remote.updatedAt.toUtc().millisecondsSinceEpoch;
+        // A checkpoint is authoritative for missing rows, not a second merge
+        // protocol. Existing rows continue to merge through immutable
+        // operations and field revisions below, so a newer whole-record
+        // timestamp can never erase an unrelated local field change.
+        if (existing == null) {
+          final MediaIdentity translated = MediaIdentity(
+            localId: localId,
+            kind: remote.identity.mediaKind,
+            anilistId: remote.identity.anilistId,
+            malId: remote.identity.malId,
+            shikimoriId: remote.identity.shikimoriId,
+          );
+          await _upsertTrackingStateLocked(remote.withIdentity(translated));
+          await (database.update(database.canonicalLibraryRecords)..where(
+                (CanonicalLibraryRecords table) =>
+                    table.localId.equals(localId),
+              ))
+              .write(
+                CanonicalLibraryRecordsCompanion(
+                  inLibrary: Value<bool>(row['inLibrary'] == true),
+                  fieldRevisionsJson: Value<String>(
+                    jsonEncode(_jsonMap(row['fieldRevisions'])),
+                  ),
+                  updatedAtMs: Value<int>(remoteUpdated),
+                  tombstonedAtMs: Value<int?>(
+                    (row['tombstonedAtMs'] as num?)?.toInt(),
+                  ),
+                ),
+              );
+          restored += 1;
+          restoredRemoteIds.add(remoteLocalId);
+          if (row['inLibrary'] == true) {
+            activeIds.add(localId);
+          } else {
+            activeIds.remove(localId);
+          }
+        }
+        completed += 1;
+        onProgress?.call(completed, total);
+      }
+      await _writeBucketLocked('tracking.stateIds', activeIds.toList()..sort());
+
+      for (final Map<String, dynamic> row in snapshot.providerBindings) {
+        final String? localId = translatedIds['${row['localId'] ?? ''}'];
+        final int externalId = (row['externalMediaId'] as num?)?.toInt() ?? 0;
+        if (localId == null || externalId <= 0) continue;
+        await _upsertBindingLocked(
+          localId: localId,
+          provider: '${row['provider'] ?? ''}',
+          mediaKind: '${row['mediaKind'] ?? 'anime'}',
+          externalMediaId: externalId,
+          providerEntryId: (row['providerEntryId'] as num?)?.toInt(),
+          evidence: '${row['evidence'] ?? 'drive_snapshot'}',
+          verifiedAtMs: (row['verifiedAtMs'] as num?)?.toInt(),
+          quarantined: row['quarantined'] == true,
+        );
+      }
+      for (final Map<String, dynamic> row in snapshot.providerSnapshots) {
+        final String? localId = translatedIds['${row['localId'] ?? ''}'];
+        if (localId == null) continue;
+        final String provider = '${row['provider'] ?? ''}';
+        final String accountId = '${row['accountId'] ?? 'active'}';
+        if (provider.isEmpty) continue;
+        final String snapshotId = '$provider:$accountId:$localId';
+        final int fetchedAtMs =
+            (row['fetchedAtMs'] as num?)?.toInt() ??
+            snapshot.createdAt.millisecondsSinceEpoch;
+        final ProviderSnapshotRecord? existingSnapshot =
+            await (database.select(database.providerSnapshotRecords)..where(
+                  (ProviderSnapshotRecords table) =>
+                      table.snapshotId.equals(snapshotId),
+                ))
+                .getSingleOrNull();
+        if (existingSnapshot != null &&
+            existingSnapshot.fetchedAtMs >= fetchedAtMs) {
+          continue;
+        }
+        await database
+            .into(database.providerSnapshotRecords)
+            .insertOnConflictUpdate(
+              ProviderSnapshotRecordsCompanion.insert(
+                snapshotId: snapshotId,
+                localId: localId,
+                provider: provider,
+                accountId: accountId,
+                providerEntryId: Value<int?>(
+                  (row['providerEntryId'] as num?)?.toInt(),
+                ),
+                normalizedJson: jsonEncode(
+                  row['normalized'] ?? const <String, dynamic>{},
+                ),
+                rawJson: jsonEncode(row['raw'] ?? const <String, dynamic>{}),
+                contentHash: '${row['contentHash'] ?? ''}',
+                fetchedAtMs: fetchedAtMs,
+                completeSnapshot: row['completeSnapshot'] == true,
+                destructiveConfirmationCount: Value<int>(
+                  (row['destructiveConfirmationCount'] as num?)?.toInt() ?? 0,
+                ),
+              ),
+            );
+      }
+
+      final DriveReplicaSegment rows = DriveReplicaSegment(
+        segmentId: snapshot.snapshotId,
+        deviceId: snapshot.deviceId,
+        createdAt: snapshot.createdAt,
+        operations: const <Map<String, dynamic>>[],
+        media: snapshot.media,
+        libraryEntries: snapshot.libraryEntries,
+        episodeStates: snapshot.episodeStates,
+        streamPreferences: snapshot.streamPreferences,
+        replicaNamespace: snapshot.replicaNamespace,
+      );
+      await _importDriveEpisodeRows(rows, translatedIds, snapshot.createdAt);
+      await _importDriveStreamRows(rows, translatedIds, snapshot.createdAt);
+      await _importSnapshotOperations(
+        snapshot.operations.where(
+          (Map<String, dynamic> row) =>
+              restoredRemoteIds.contains('${row['localId'] ?? ''}'),
+        ),
+        translatedIds,
+      );
+
+      final int localCount =
+          await (database.selectOnly(database.canonicalLibraryRecords)
+                ..addColumns(<Expression<Object>>[
+                  database.canonicalLibraryRecords.localId.count(),
+                ])
+                ..where(
+                  database.canonicalLibraryRecords.inLibrary.equals(true),
+                ))
+              .map(
+                (TypedResult row) =>
+                    row.read(
+                      database.canonicalLibraryRecords.localId.count(),
+                    ) ??
+                    0,
+              )
+              .getSingle();
+      if (freshBootstrap && localCount != snapshot.entryCount) {
+        throw StateError(
+          'Drive snapshot restore count mismatch: '
+          '$localCount != ${snapshot.entryCount}',
+        );
+      }
+      await database
+          .into(database.syncCursorRecords)
+          .insertOnConflictUpdate(
+            SyncCursorRecordsCompanion.insert(
+              scope: 'drive.snapshot:${snapshot.replicaNamespace}',
+              cursor: snapshot.checksum,
+              metadataJson: Value<String>(
+                jsonEncode(<String, dynamic>{
+                  'snapshotId': snapshot.snapshotId,
+                  'entryCount': snapshot.entryCount,
+                  'localEntryCount': localCount,
+                }),
+              ),
+              updatedAtMs: DateTime.now().toUtc().millisecondsSinceEpoch,
+            ),
+          );
+      return DriveSnapshotApplyResult(
+        cloudEntryCount: snapshot.entryCount,
+        localEntryCount: localCount,
+        restoredEntries: restored,
+        freshBootstrap: freshBootstrap,
+      );
+    });
+  }
+
+  Future<void> _importSnapshotOperations(
+    Iterable<Map<String, dynamic>> operations,
+    Map<String, String> translatedIds,
+  ) async {
+    for (final Map<String, dynamic> row in operations) {
+      final String operationId = '${row['operationId'] ?? ''}';
+      final String? localId = translatedIds['${row['localId'] ?? ''}'];
+      if (operationId.isEmpty || localId == null) continue;
+      final LibraryOperationRecord? existing =
+          await (database.select(database.libraryOperationRecords)..where(
+                (LibraryOperationRecords table) =>
+                    table.operationId.equals(operationId),
+              ))
+              .getSingleOrNull();
+      if (existing != null) continue;
+      await database
+          .into(database.libraryOperationRecords)
+          .insert(
+            LibraryOperationRecordsCompanion.insert(
+              operationId: operationId,
+              localId: localId,
+              deviceId: '${row['deviceId'] ?? ''}',
+              originKind:
+                  '${row['originKind'] ?? LibraryOriginKind.drive.name}',
+              originId: Value<String?>(row['originId']?.toString()),
+              intent: '${row['intent'] ?? LibraryMutationIntent.edit.name}',
+              fieldsJson: jsonEncode(row['fields'] ?? const <String>[]),
+              beforeJson: jsonEncode(
+                row['before'] ?? const <String, dynamic>{},
+              ),
+              afterJson: jsonEncode(row['after'] ?? const <String, dynamic>{}),
+              baseRevisionsJson: jsonEncode(
+                row['baseRevisions'] ?? const <String, dynamic>{},
+              ),
+              resultingRevisionsJson: jsonEncode(
+                row['resultingRevisions'] ?? const <String, dynamic>{},
+              ),
+              targetsJson: jsonEncode(row['targets'] ?? const <String>[]),
+              undoOf: Value<String?>(row['undoOf']?.toString()),
+              title: Value<String?>(row['title']?.toString()),
+              visibleInLog: Value<bool>(row['visibleInLog'] != false),
+              occurredAtMs:
+                  DateTime.tryParse(
+                    '${row['occurredAt'] ?? ''}',
+                  )?.millisecondsSinceEpoch ??
+                  DateTime.now().toUtc().millisecondsSinceEpoch,
+            ),
+          );
+    }
+  }
+
   Future<void> markDriveSegmentDelivered(
     DriveReplicaSegment segment, {
     required String remoteFileId,
@@ -4013,6 +4500,7 @@ Map<String, dynamic> _operationRowJson(LibraryOperationRecord value) =>
       'targets': _jsonList(value.targetsJson),
       if (value.undoOf != null) 'undoOf': value.undoOf,
       if (value.title != null) 'title': value.title,
+      'visibleInLog': value.visibleInLog,
       'occurredAt': DateTime.fromMillisecondsSinceEpoch(
         value.occurredAtMs,
         isUtc: true,
@@ -4037,6 +4525,34 @@ Map<String, dynamic> _libraryRowJson(CanonicalLibraryRecord value) =>
       'updatedAtMs': value.updatedAtMs,
       if (value.tombstonedAtMs != null) 'tombstonedAtMs': value.tombstonedAtMs,
     };
+
+Map<String, dynamic> _providerBindingRowJson(
+  ProviderBindingRecord value,
+) => <String, dynamic>{
+  'localId': value.localId,
+  'provider': value.provider,
+  'mediaKind': value.mediaKind,
+  'externalMediaId': value.externalMediaId,
+  if (value.providerEntryId != null) 'providerEntryId': value.providerEntryId,
+  'evidence': value.evidence,
+  'verifiedAtMs': value.verifiedAtMs,
+  'quarantined': value.quarantined,
+};
+
+Map<String, dynamic> _providerSnapshotRowJson(
+  ProviderSnapshotRecord value,
+) => <String, dynamic>{
+  'localId': value.localId,
+  'provider': value.provider,
+  'accountId': value.accountId,
+  if (value.providerEntryId != null) 'providerEntryId': value.providerEntryId,
+  'normalized': _jsonMap(value.normalizedJson),
+  'raw': _decodeJsonValue(value.rawJson),
+  'contentHash': value.contentHash,
+  'fetchedAtMs': value.fetchedAtMs,
+  'completeSnapshot': value.completeSnapshot,
+  'destructiveConfirmationCount': value.destructiveConfirmationCount,
+};
 
 Map<String, dynamic> _episodeRowJson(
   EpisodeStateRecord value,

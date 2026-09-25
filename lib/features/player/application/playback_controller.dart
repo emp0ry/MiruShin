@@ -4238,6 +4238,10 @@ class PlaybackController extends Notifier<PlaybackState> {
         item.id;
     final String key = '$identity:$episodeNumber';
     if (!_syncedTrackerProgress.add(key)) return false;
+    if (!ref.mounted) {
+      _syncedTrackerProgress.remove(key);
+      return false;
+    }
     final MediaItem trackingItem = _trackingMediaItem(item);
     final TrackerEpisodeProgress update = normalizeTrackerEpisodeProgress(
       episode: episodeNumber,
@@ -4272,6 +4276,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       // is safely queued by the coordinator). Allow the next save tick/end
       // signal to retry instead of permanently suppressing this episode.
       _syncedTrackerProgress.remove(key);
+      if (!ref.mounted) return false;
       debugPrint(
         'TrackerSync: progress retry scheduled (${error.runtimeType})',
       );

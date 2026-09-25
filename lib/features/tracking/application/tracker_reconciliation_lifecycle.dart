@@ -14,9 +14,11 @@ final trackerReconciliationLifecycleProvider = Provider<void>((Ref ref) {
   Timer? debounce;
   Future<void>? active;
   bool runAgain = false;
+  bool disposed = false;
   DateTime? lastCompletedAt;
 
   Future<void> reconcile({bool force = false}) async {
+    if (disposed) return;
     final DateTime now = DateTime.now().toUtc();
     final DateTime? last = lastCompletedAt;
     if (!force &&
@@ -30,6 +32,7 @@ final trackerReconciliationLifecycleProvider = Provider<void>((Ref ref) {
     }
     final Future<void> operation = () async {
       await ref.read(settingsProvider.notifier).ready;
+      if (disposed) return;
       final SettingsState settings = ref.read(settingsProvider);
       if (!settings.hasAniListSession &&
           !settings.hasMalSession &&
@@ -40,7 +43,9 @@ final trackerReconciliationLifecycleProvider = Provider<void>((Ref ref) {
         trackerSyncCoordinatorProvider,
       );
       await coordinator.refreshAllConnectedLibraries();
+      if (disposed) return;
       await coordinator.refreshAllConnectedLibraries(mediaKind: 'manga');
+      if (disposed) return;
       ref.invalidate(trackerLocalAnimeLibraryProvider);
       ref.invalidate(trackerLocalMangaLibraryProvider);
       ref.invalidate(trackerAnimeListProvider);
@@ -54,7 +59,7 @@ final trackerReconciliationLifecycleProvider = Provider<void>((Ref ref) {
       debugPrint('Tracker reconciliation failed safely: $error');
     } finally {
       if (identical(active, operation)) active = null;
-      if (runAgain) {
+      if (!disposed && runAgain) {
         runAgain = false;
         unawaited(reconcile(force: true));
       }
@@ -62,15 +67,17 @@ final trackerReconciliationLifecycleProvider = Provider<void>((Ref ref) {
   }
 
   void schedule({bool force = false}) {
+    if (disposed) return;
     debounce?.cancel();
-    debounce = Timer(
-      const Duration(seconds: 1),
-      () => unawaited(reconcile(force: force)),
-    );
+    debounce = Timer(const Duration(seconds: 1), () {
+      if (disposed) return;
+      unawaited(reconcile(force: force));
+    });
   }
 
   unawaited(() async {
     await ref.read(settingsProvider.notifier).ready;
+    if (disposed) return;
     schedule(force: true);
   }());
 
@@ -95,6 +102,8 @@ final trackerReconciliationLifecycleProvider = Provider<void>((Ref ref) {
     onResume: schedule,
   );
   ref.onDispose(() {
+    disposed = true;
+    runAgain = false;
     debounce?.cancel();
     lifecycle.dispose();
   });

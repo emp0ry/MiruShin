@@ -15,6 +15,7 @@ import 'package:mirushin/features/library/data/canonical_library_database.dart';
 import 'package:mirushin/features/library/presentation/library_page.dart';
 import 'package:mirushin/features/profile/application/anilist_user_settings_provider.dart';
 import 'package:mirushin/features/settings/application/settings_state.dart';
+import 'package:mirushin/features/settings/data/workspace_preferences_store.dart';
 import 'package:mirushin/features/tracking/application/anilist_library_provider.dart';
 import 'package:mirushin/features/tracking/application/local_first_sync_engine.dart';
 import 'package:mirushin/features/tracking/application/tracker_library_provider.dart';
@@ -72,6 +73,18 @@ void main() {
             anilistMangaPreviewListProvider.overrideWith(
               (Ref ref) async => const <AniListAnimeListFolder>[],
             ),
+            trackerLocalAnimeLibraryProvider.overrideWith(
+              (Ref ref) async => TrackerLocalAnimeLibrary(
+                folders: folders,
+                pendingMutations: const <TrackerLibraryOptimisticMutation>[],
+              ),
+            ),
+            trackerLocalMangaLibraryProvider.overrideWith(
+              (Ref ref) async => const TrackerLocalAnimeLibrary(
+                folders: <AniListAnimeListFolder>[],
+                pendingMutations: <TrackerLibraryOptimisticMutation>[],
+              ),
+            ),
             downloadsProvider.overrideWith(_EmptyDownloads.new),
           ],
           child: MaterialApp(
@@ -105,6 +118,110 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('each Library folder restores only its own saved filters', (
+    WidgetTester tester,
+  ) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'catalog.mode': 'anilist',
+      'settings.appLanguage': 'en',
+      workspacePreferenceKey(
+        'anilist:1',
+        'library.anilist.ANIME.current.genres',
+      ): <String>[
+        'Action',
+      ],
+      workspacePreferenceKey(
+        'anilist:1',
+        'library.anilist.ANIME.completed.genres',
+      ): <String>[
+        'Drama',
+      ],
+    });
+    tester.view.physicalSize = const Size(1280, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    AniListAnimeListEntry entry(
+      int id,
+      String title,
+      String genre,
+      AniListListStatus status,
+    ) {
+      final AniListAnimeListEntry base = _newEntry(id, title);
+      return AniListAnimeListEntry(
+        id: base.id,
+        status: status,
+        progress: base.progress,
+        mediaItem: base.mediaItem.copyWith(genres: <String>[genre]),
+      );
+    }
+
+    final List<AniListAnimeListFolder> folders = <AniListAnimeListFolder>[
+      AniListAnimeListFolder(
+        name: AniListListStatus.current.label,
+        status: AniListListStatus.current,
+        entries: <AniListAnimeListEntry>[
+          entry(31, 'Current Action', 'Action', AniListListStatus.current),
+          entry(32, 'Current Drama', 'Drama', AniListListStatus.current),
+        ],
+      ),
+      AniListAnimeListFolder(
+        name: AniListListStatus.completed.label,
+        status: AniListListStatus.completed,
+        entries: <AniListAnimeListEntry>[
+          entry(33, 'Completed Action', 'Action', AniListListStatus.completed),
+          entry(34, 'Completed Drama', 'Drama', AniListListStatus.completed),
+        ],
+      ),
+    ];
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          settingsProvider.overrideWith(_ConnectedSettings.new),
+          trackerLocalAnimeLibraryProvider.overrideWith(
+            (Ref ref) async => TrackerLocalAnimeLibrary(
+              folders: folders,
+              pendingMutations: const <TrackerLibraryOptimisticMutation>[],
+            ),
+          ),
+          trackerLocalMangaLibraryProvider.overrideWith(
+            (Ref ref) async => const TrackerLocalAnimeLibrary(
+              folders: <AniListAnimeListFolder>[],
+              pendingMutations: <TrackerLibraryOptimisticMutation>[],
+            ),
+          ),
+          downloadsProvider.overrideWith(_EmptyDownloads.new),
+        ],
+        child: MaterialApp(
+          locale: const Locale('en'),
+          theme: AppTheme.dark().copyWith(platform: TargetPlatform.macOS),
+          supportedLocales: AppLocalizations.supportedLocales,
+          localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
+            AppLocalizations.delegate,
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+          home: const Scaffold(body: LibraryPage()),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Watching  2'));
+    await tester.pumpAndSettle();
+    expect(find.text('Current Action'), findsOneWidget);
+    expect(find.text('Current Drama'), findsNothing);
+
+    await tester.tap(find.text('Completed  2'));
+    await tester.pumpAndSettle();
+    expect(find.text('Completed Drama'), findsOneWidget);
+    expect(find.text('Completed Action'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
 
   test(
     'new AniList entry is visible while the initial library fetch is in flight',
@@ -179,6 +296,18 @@ void main() {
             ),
             anilistMangaPreviewListProvider.overrideWith(
               (Ref ref) async => const <AniListAnimeListFolder>[],
+            ),
+            trackerLocalAnimeLibraryProvider.overrideWith(
+              (Ref ref) async => const TrackerLocalAnimeLibrary(
+                folders: <AniListAnimeListFolder>[],
+                pendingMutations: <TrackerLibraryOptimisticMutation>[],
+              ),
+            ),
+            trackerLocalMangaLibraryProvider.overrideWith(
+              (Ref ref) async => const TrackerLocalAnimeLibrary(
+                folders: <AniListAnimeListFolder>[],
+                pendingMutations: <TrackerLibraryOptimisticMutation>[],
+              ),
             ),
             downloadsProvider.overrideWith(_EmptyDownloads.new),
           ],
@@ -268,6 +397,18 @@ void main() {
             anilistMangaPreviewListProvider.overrideWith(
               (Ref ref) async => const <AniListAnimeListFolder>[],
             ),
+            trackerLocalAnimeLibraryProvider.overrideWith(
+              (Ref ref) async => TrackerLocalAnimeLibrary(
+                folders: folders,
+                pendingMutations: const <TrackerLibraryOptimisticMutation>[],
+              ),
+            ),
+            trackerLocalMangaLibraryProvider.overrideWith(
+              (Ref ref) async => const TrackerLocalAnimeLibrary(
+                folders: <AniListAnimeListFolder>[],
+                pendingMutations: <TrackerLibraryOptimisticMutation>[],
+              ),
+            ),
             downloadsProvider.overrideWith(_EmptyDownloads.new),
           ],
           child: MaterialApp(
@@ -297,7 +438,9 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('Watching  1'), findsOneWidget);
-      expect(trackerLoads, 1);
+      // The visible Library is entirely canonical-local. Provider snapshots
+      // refresh independently and are not fetched by opening this page.
+      expect(trackerLoads, 0);
 
       await tester.tap(find.byKey(const ValueKey<String>('save-entry')));
       await tester.pump();
@@ -312,7 +455,7 @@ void main() {
         const SyncDispatchResult(pendingTargets: <TrackerSource>{}),
       );
       await tester.pumpAndSettle();
-      expect(trackerLoads, 1);
+      expect(trackerLoads, 0);
     },
   );
 
@@ -357,6 +500,18 @@ void main() {
             ),
             anilistMangaPreviewListProvider.overrideWith(
               (Ref ref) async => const <AniListAnimeListFolder>[],
+            ),
+            trackerLocalAnimeLibraryProvider.overrideWith(
+              (Ref ref) async => const TrackerLocalAnimeLibrary(
+                folders: <AniListAnimeListFolder>[],
+                pendingMutations: <TrackerLibraryOptimisticMutation>[],
+              ),
+            ),
+            trackerLocalMangaLibraryProvider.overrideWith(
+              (Ref ref) async => const TrackerLocalAnimeLibrary(
+                folders: <AniListAnimeListFolder>[],
+                pendingMutations: <TrackerLibraryOptimisticMutation>[],
+              ),
             ),
             downloadsProvider.overrideWith(_EmptyDownloads.new),
           ],
@@ -442,6 +597,18 @@ void main() {
             ),
             anilistMangaPreviewListProvider.overrideWith(
               (Ref ref) async => const <AniListAnimeListFolder>[],
+            ),
+            trackerLocalAnimeLibraryProvider.overrideWith(
+              (Ref ref) async => const TrackerLocalAnimeLibrary(
+                folders: <AniListAnimeListFolder>[],
+                pendingMutations: <TrackerLibraryOptimisticMutation>[],
+              ),
+            ),
+            trackerLocalMangaLibraryProvider.overrideWith(
+              (Ref ref) async => const TrackerLocalAnimeLibrary(
+                folders: <AniListAnimeListFolder>[],
+                pendingMutations: <TrackerLibraryOptimisticMutation>[],
+              ),
             ),
             downloadsProvider.overrideWith(_EmptyDownloads.new),
           ],
@@ -570,6 +737,18 @@ void main() {
             ),
             anilistMangaPreviewListProvider.overrideWith(
               (Ref ref) async => const <AniListAnimeListFolder>[],
+            ),
+            trackerLocalAnimeLibraryProvider.overrideWith(
+              (Ref ref) async => TrackerLocalAnimeLibrary(
+                folders: folders,
+                pendingMutations: const <TrackerLibraryOptimisticMutation>[],
+              ),
+            ),
+            trackerLocalMangaLibraryProvider.overrideWith(
+              (Ref ref) async => const TrackerLocalAnimeLibrary(
+                folders: <AniListAnimeListFolder>[],
+                pendingMutations: <TrackerLibraryOptimisticMutation>[],
+              ),
             ),
             downloadsProvider.overrideWith(_EmptyDownloads.new),
           ],
@@ -924,6 +1103,18 @@ void main() {
             anilistMangaPreviewListProvider.overrideWith(
               (Ref ref) async => const <AniListAnimeListFolder>[],
             ),
+            trackerLocalAnimeLibraryProvider.overrideWith(
+              (Ref ref) async => TrackerLocalAnimeLibrary(
+                folders: folders,
+                pendingMutations: const <TrackerLibraryOptimisticMutation>[],
+              ),
+            ),
+            trackerLocalMangaLibraryProvider.overrideWith(
+              (Ref ref) async => const TrackerLocalAnimeLibrary(
+                folders: <AniListAnimeListFolder>[],
+                pendingMutations: <TrackerLibraryOptimisticMutation>[],
+              ),
+            ),
             downloadsProvider.overrideWith(_EmptyDownloads.new),
           ],
           child: MaterialApp(
@@ -948,6 +1139,7 @@ void main() {
 
       expect(delivery.isCompleted, isFalse);
       expect(find.text('Delete Immediately'), findsNothing);
+      expect(find.text('Removed from Library'), findsOneWidget);
 
       delivery.complete(
         const SyncDispatchResult(pendingTargets: <TrackerSource>{}),

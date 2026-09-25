@@ -500,6 +500,12 @@ class AniListApiClient {
     final Object? media = data['Media'];
     if (media is! Map<String, dynamic>) return null;
     MediaItem item = _mediaFromJson(media);
+    item = item.copyWith(
+      externalIds: <String, String>{
+        ...item.externalIds,
+        'mirushin_anilist_metadata': 'details_v2',
+      },
+    );
     final String upperType = type.toUpperCase();
     if (_wantsRussian && (upperType == 'ANIME' || upperType == 'MANGA')) {
       final ShikimoriRussianDetails? details = await _russianDetailsForItem(
@@ -1556,7 +1562,6 @@ class AniListApiClient {
               completedAt { year month day }
               media {
                 $_collectionMediaFields
-                format
               }
             }
           }
@@ -2440,13 +2445,19 @@ class AniListApiClient {
       airingAt = _epochToDateTime(_int(nextAiring['airingAt']));
     }
     final String fmt = _string(media['format']);
+    final MediaItem mediaItem = _mediaFromJson(media);
     return AniListAnimeListEntry(
       id: _int(json['id']),
       status: AniListListStatusLabel.fromGraphQl(_string(json['status'])),
       progress: _int(json['progress']),
       score: _num(json['score'])?.toDouble(),
       scoreRaw: _int(json['scoreRaw']) == 0 ? null : _int(json['scoreRaw']),
-      mediaItem: _mediaFromJson(media),
+      mediaItem: mediaItem.copyWith(
+        externalIds: <String, String>{
+          ...mediaItem.externalIds,
+          'mirushin_anilist_metadata': 'library_v2',
+        },
+      ),
       notes: _string(json['notes']),
       repeat: _int(json['repeat']),
       progressVolumes: _int(json['progressVolumes']),
@@ -2669,11 +2680,9 @@ class AniListApiClient {
       id: '$idPrefix:$id',
       title: title.isEmpty ? native : title,
       originalTitle: native.isEmpty ? romaji : native,
-      overview: _stripHtml(
-        _string(json['description'], fallback: 'No AniList description yet.'),
-      ),
+      overview: _stripHtml(_string(json['description'])),
       type: mediaType == 'MANGA' ? MediaType.manga : MediaType.anime,
-      year: startYear == 0 ? DateTime.now().year : startYear,
+      year: startYear,
       posterUrl: cover,
       backdropUrl: banner,
       rating: averageScore == null
@@ -3181,28 +3190,41 @@ class AniListApiClient {
     nextAiringEpisode { episode airingAt }
   ''';
 
-  // Library collection queries omit heavy per-entry fields
-  // (description, synonyms, bannerImage) that are only needed on detail pages.
-  // Keeps response size manageable for users with large libraries (500+ entries).
+  // Keep the canonical library independently renderable when AniList is down.
+  // Relations stay detail-only because that graph grows quickly, while every
+  // field used by the title header, overview and Details panel is persisted in
+  // SQLite and replicated to Drive with the library entry.
   static const String _collectionMediaFields = '''
     id
     idMal
     type
+    format
     title { romaji english native }
+    description(asHtml: false)
     coverImage { extraLarge large color }
+    bannerImage
     averageScore
     genres
+    synonyms
     episodes
     chapters
     volumes
     duration
+    trailer { id site thumbnail }
     status
     isFavourite
     source
     isAdult
     isLicensed
+    season
+    seasonYear
+    countryOfOrigin
+    popularity
+    favourites
     tags { name rank isGeneralSpoiler isMediaSpoiler category }
-    startDate { year }
+    startDate { year month day }
+    endDate { year month day }
+    studios { nodes { id name isAnimationStudio } }
     siteUrl
     nextAiringEpisode { episode airingAt }
   ''';
@@ -3223,6 +3245,7 @@ class AniListApiClient {
     chapters
     volumes
     duration
+    trailer { id site thumbnail }
     status
     isFavourite
     isAdult

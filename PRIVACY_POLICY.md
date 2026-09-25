@@ -29,7 +29,8 @@ If you explicitly connect Google Drive Sync, MiruShin uses the limited `drive.ap
 
 Synced data can include:
 
-- Separate anime and manga Local Library workspaces for each AniList account, including operations, tombstones, provider bindings, tracker delivery state, and conflicts
+- Separate anime and manga Local Library workspaces for each AniList account, including complete checksummed Library checkpoints, operations, tombstones, provider bindings, tracker delivery state, and conflicts
+- Render and filter metadata cached from connected catalog providers, such as titles, descriptions, artwork URLs, genres, studios, relations, episode/chapter totals, scores, popularity, favourites, and airing information
 - Episode playback positions, completion state, watch cycles, and stream/source/server/voiceover/quality preferences
 - Online and offline addon configuration and content, addon ordering, and user-added addon catalog sources
 - Saved AniList account profiles and the MyAnimeList and Shikimori connections assigned to each profile
@@ -41,7 +42,7 @@ Synced data can include:
 
 Google Drive OAuth access/refresh tokens remain on the device and are not uploaded into Drive. MiruShin's own shared OAuth client secrets remain in the Cloudflare Worker and are not included in the app or Drive data. Active Watch with Friends rooms, room IDs, invite/join tokens, participants, source cookies, downloaded media files, and temporary caches are not synced.
 
-Account and library records use separate account/workspace identifiers so switching AniList accounts does not overwrite another account's Local Library or MAL/Shikimori connections. Drive records use immutable checksummed segments and deletion tombstones rather than uploading the live SQLite file.
+Account and library records use separate account/workspace identifiers so switching AniList accounts does not overwrite another account's Local Library or MAL/Shikimori connections. Drive records use complete checksummed checkpoints plus immutable operation segments and deletion tombstones rather than uploading the live SQLite file.
 
 Disconnecting Google Drive stops MiruShin from accessing the Drive account on that device. Data already written to `appDataFolder` may remain in the Google account until it is removed through the relevant Google account or app-data controls.
 

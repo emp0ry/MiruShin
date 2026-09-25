@@ -7,6 +7,7 @@ import '../../../shared/models/media_item.dart';
 import '../../catalog/application/catalog_mode.dart';
 import '../../catalog/application/catalog_repository.dart';
 import '../../catalog/application/catalog_status.dart';
+import '../../library/application/canonical_library_repository.dart';
 import '../../profile/application/anilist_user_settings_provider.dart';
 import '../../settings/application/settings_state.dart';
 import '../../tracking/application/tracker_sync_coordinator.dart';
@@ -225,17 +226,129 @@ final mediaDetailsProvider = FutureProvider.family<MediaItem?, String>((
   String id,
 ) async {
   final CatalogMode? mode = catalogModeForMediaId(id);
-  if (mode == null) return null;
-  final CatalogRepository? repository = ref.watch(
-    catalogRepositoryProvider(mode),
-  );
-  if (repository == null) return null;
-  try {
-    return repository.details(id);
-  } catch (_) {
-    return null;
+  if (mode == CatalogMode.tmdb) {
+    final CatalogRepository? repository = ref.watch(
+      catalogRepositoryProvider(CatalogMode.tmdb),
+    );
+    if (repository == null) return null;
+    try {
+      return repository.details(id);
+    } catch (_) {
+      return null;
+    }
   }
+
+  final CatalogRepository? repository = ref.watch(
+    catalogRepositoryProvider(CatalogMode.anilist),
+  );
+  final trackingStore = ref.watch(trackingSyncStoreProvider);
+  final canonicalRepository = ref.watch(canonicalLibraryRepositoryProvider);
+  final SettingsState settings = ref.watch(settingsProvider);
+  final settingsController = ref.read(settingsProvider.notifier);
+  final List<UserMediaState> states = await trackingStore.loadStates();
+  final MediaIdentity requested = MediaIdentity.fromExternalIds(
+    const <String, String>{},
+    mediaId: id,
+  );
+  UserMediaState? localState;
+  for (final UserMediaState state in states) {
+    if (state.mediaItem.id == id ||
+        state.identity.localId == id ||
+        (requested.hasProviderId && state.identity.matches(requested))) {
+      localState = state;
+      break;
+    }
+  }
+
+  MediaItem? result = localState?.mediaItem;
+  final MediaIdentity? localIdentity = localState?.identity;
+  if (_hasCompleteOfflineDetails(result)) return result;
+  final String requestId = _bestDetailsMediaId(id, localIdentity);
+  if (repository != null && _hasExactDetailRoute(requestId)) {
+    try {
+      final MediaItem? fetched = await repository.details(requestId);
+      if (fetched != null) {
+        result = await canonicalRepository.enrichPresentationMetadata(
+          identity:
+              localIdentity ??
+              MediaIdentity.fromExternalIds(
+                fetched.externalIds,
+                mediaId: fetched.id,
+              ),
+          mediaItem: fetched,
+        );
+      }
+    } catch (_) {
+      // The exact MAL fallback below can still render the saved entry.
+    }
+  }
+
+  final MediaIdentity fallbackIdentity =
+      localIdentity ??
+      MediaIdentity.fromExternalIds(
+        result?.externalIds ?? const <String, String>{},
+        mediaId: result?.id ?? id,
+      );
+  final int? malId = fallbackIdentity.malId;
+  if (malId != null &&
+      settings.hasMalSession &&
+      !_hasCompleteOfflineDetails(result)) {
+    try {
+      final String? token = await settingsController.validMalAccessToken();
+      if (token != null && token.trim().isNotEmpty) {
+        final MalApiClient mal = MalApiClient(
+          accessToken: token,
+          onRefreshToken: settingsController.refreshMalToken,
+        );
+        final MediaItem? fallback = fallbackIdentity.mediaKind == 'manga'
+            ? await mal.fetchMangaDetails(malId)
+            : await mal.fetchAnimeDetails(malId);
+        if (fallback != null) {
+          result = await canonicalRepository.enrichPresentationMetadata(
+            identity: fallbackIdentity,
+            mediaItem: fallback,
+          );
+        }
+      }
+    } catch (_) {
+      // Keep the canonical snapshot visible even if MAL is also unavailable.
+    }
+  }
+  return result;
 });
+
+bool _hasExactDetailRoute(String mediaId) {
+  final String normalized = mediaId.trim().toLowerCase();
+  return normalized.startsWith('anilist:') || normalized.startsWith('mal:');
+}
+
+String _bestDetailsMediaId(String requested, MediaIdentity? identity) {
+  final int? anilistId = identity?.anilistId;
+  if (anilistId != null) {
+    return identity!.mediaKind == 'manga'
+        ? 'anilist:manga:$anilistId'
+        : 'anilist:$anilistId';
+  }
+  final int? malId = identity?.malId;
+  if (malId != null) {
+    return identity!.mediaKind == 'manga' ? 'mal:manga:$malId' : 'mal:$malId';
+  }
+  return requested;
+}
+
+bool _hasCompleteOfflineDetails(MediaItem? item) {
+  if (item == null) return false;
+  if (item.externalIds['mirushin_anilist_metadata'] != null ||
+      item.externalIds['mirushin_mal_metadata'] != null) {
+    return true;
+  }
+  final String overview = item.overview.trim();
+  return overview.isNotEmpty &&
+      overview != 'No AniList description yet.' &&
+      item.backdropUrl.trim().isNotEmpty &&
+      item.genres.isNotEmpty &&
+      (item.runtimeMinutes != null || item.episodeCount != null);
+}
 
 final animeEpisodeMetadataProvider =
     FutureProvider.family<

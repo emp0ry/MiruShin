@@ -86,6 +86,162 @@ void main() {
     });
 
     test(
+      'full Drive snapshot bootstraps every render-ready library entry atomically',
+      () async {
+        final UserMediaState base = _state(progress: 7);
+        final UserMediaState rich = base.withMediaItem(
+          base.mediaItem.copyWith(
+            overview: 'Complete offline presentation metadata',
+            posterUrl: 'https://cdn.example/poster.jpg',
+            externalIds: <String, String>{
+              ...base.mediaItem.externalIds,
+              'anilist_popularity': '123456',
+              'anilist_favourites': '7890',
+              anilistNextAiringEpisodeKey: '9',
+              anilistNextAiringAtKey: '1790280000',
+            },
+          ),
+        );
+        await repository.saveTrackingStates(<UserMediaState>[rich]);
+        final DriveLibrarySnapshot snapshot = await repository
+            .buildDriveSnapshot();
+        expect(snapshot.entryCount, 1);
+        expect(snapshot.media.single['media'], isA<Map>());
+
+        final CanonicalLibraryDatabase peerDatabase = CanonicalLibraryDatabase(
+          NativeDatabase.memory(),
+        );
+        final CanonicalLibraryRepository peer = CanonicalLibraryRepository(
+          peerDatabase,
+        );
+        addTearDown(peerDatabase.close);
+        final DriveSnapshotApplyResult result = await peer.applyDriveSnapshot(
+          snapshot,
+        );
+        expect(result.freshBootstrap, isTrue);
+        expect(result.cloudEntryCount, 1);
+        expect(result.localEntryCount, 1);
+        final UserMediaState restored =
+            (await peer.loadTrackingStates()).single;
+        expect(restored.progress, 7);
+        expect(restored.mediaItem.posterUrl, contains('poster.jpg'));
+        expect(restored.mediaItem.externalIds['anilist_popularity'], '123456');
+        expect(
+          restored.mediaItem.externalIds[anilistNextAiringEpisodeKey],
+          '9',
+        );
+        expect(restored.providerStates[TrackerSource.anilist]?.entryId, 100);
+      },
+    );
+
+    test(
+      'Drive snapshot checksum changes only with replicated content',
+      () async {
+        await repository.saveTrackingStates(<UserMediaState>[
+          _state(progress: 4),
+        ]);
+        final DriveLibrarySnapshot first = await repository
+            .buildDriveSnapshot();
+        await Future<void>.delayed(const Duration(milliseconds: 2));
+        final DriveLibrarySnapshot same = await repository.buildDriveSnapshot();
+
+        expect(same.snapshotId, isNot(first.snapshotId));
+        expect(same.createdAt, isNot(first.createdAt));
+        expect(same.checksum, first.checksum);
+        expect(
+          same.legacyEnvelopeChecksum,
+          isNot(first.legacyEnvelopeChecksum),
+        );
+
+        await repository.saveTrackingStates(<UserMediaState>[
+          _state(progress: 5),
+        ]);
+        final DriveLibrarySnapshot changed = await repository
+            .buildDriveSnapshot();
+        expect(changed.checksum, isNot(first.checksum));
+      },
+    );
+
+    test('detail enrichment updates only metadata and queues Drive', () async {
+      final UserMediaState initial = _state(progress: 6);
+      await repository.saveTrackingStates(<UserMediaState>[initial]);
+      final MediaItem rich = initial.mediaItem.copyWith(
+        overview: 'Offline synopsis',
+        backdropUrl: 'https://example.com/banner.jpg',
+        genres: const <String>['Comedy'],
+        externalIds: <String, String>{
+          ...initial.mediaItem.externalIds,
+          'anilist_tags': 'Slapstick:85:0:0:Theme',
+          'anilist_studios': 'ENGI:1',
+          'anilist_popularity': '12345',
+        },
+      );
+
+      final MediaItem merged = await repository.enrichPresentationMetadata(
+        identity: initial.identity,
+        mediaItem: rich,
+      );
+      final UserMediaState stored =
+          (await repository.loadTrackingStates()).single;
+
+      expect(merged.overview, 'Offline synopsis');
+      expect(stored.progress, 6);
+      expect(stored.status, initial.status);
+      expect(stored.mediaItem.backdropUrl, contains('banner.jpg'));
+      expect(
+        stored.mediaItem.externalIds['anilist_tags'],
+        contains('Slapstick'),
+      );
+      expect(await repository.watchActivity().first, isEmpty);
+      expect(await repository.watchPendingDriveDeliveryCount().first, 1);
+    });
+
+    test(
+      'Drive checkpoint fills missing entries without whole-record overwrites',
+      () async {
+        final UserMediaState remoteShared = _state(progress: 7, score: 7);
+        final UserMediaState remoteOnly = _remoteShikimoriState(333);
+        await repository.saveTrackingStates(<UserMediaState>[
+          remoteShared,
+          remoteOnly,
+        ]);
+        final DriveLibrarySnapshot snapshot = await repository
+            .buildDriveSnapshot();
+
+        final CanonicalLibraryDatabase peerDatabase = CanonicalLibraryDatabase(
+          NativeDatabase.memory(),
+        );
+        final CanonicalLibraryRepository peer = CanonicalLibraryRepository(
+          peerDatabase,
+        );
+        addTearDown(peerDatabase.close);
+        await peer.saveTrackingStates(<UserMediaState>[
+          _state(progress: 2, score: 9.5),
+        ]);
+
+        final DriveSnapshotApplyResult result = await peer.applyDriveSnapshot(
+          snapshot,
+        );
+        final List<UserMediaState> restored = await peer.loadTrackingStates();
+        final UserMediaState shared = restored.singleWhere(
+          (UserMediaState value) => value.identity.anilistId == 10,
+        );
+
+        expect(result.freshBootstrap, isFalse);
+        expect(result.restoredEntries, 1);
+        expect(result.localEntryCount, 2);
+        expect(shared.progress, 2);
+        expect(shared.score, 9.5);
+        expect(
+          restored.any(
+            (UserMediaState value) => value.identity.shikimoriId == 100333,
+          ),
+          isTrue,
+        );
+      },
+    );
+
+    test(
       'commits canonical state, operation and deliveries atomically',
       () async {
         final UserMediaState state = _state(progress: 12, completed: true);
@@ -300,28 +456,66 @@ void main() {
       },
     );
 
-    test('pending Drive delivery stream reacts without polling', () async {
-      expect(await repository.watchPendingDriveDeliveryCount().first, 0);
-      final UserMediaState state = _state(progress: 5);
-      await repository.commitTrackingMutation(
-        states: <UserMediaState>[state],
-        journal: const <SyncJournalEntry>[],
-        favorites: const <LocalMediaFavoriteState>[],
-        identity: state.identity,
-        patch: UserMediaPatch(progress: 5),
-        targets: const <TrackerSource>{},
-        occurredAt: DateTime.utc(2026, 9, 24),
-      );
+    test(
+      'add, edit, and remove create Drive work and update snapshot count',
+      () async {
+        expect(await repository.watchPendingDriveDeliveryCount().first, 0);
+        final UserMediaState state = _state(progress: 5);
+        await repository.commitTrackingMutation(
+          states: <UserMediaState>[state],
+          journal: const <SyncJournalEntry>[],
+          favorites: const <LocalMediaFavoriteState>[],
+          identity: state.identity,
+          patch: UserMediaPatch(progress: 5),
+          targets: const <TrackerSource>{},
+          occurredAt: DateTime.utc(2026, 9, 24),
+        );
 
-      expect(await repository.watchPendingDriveDeliveryCount().first, 1);
-      final DriveReplicaSegment segment = (await repository
-          .buildPendingDriveSegment())!;
-      await repository.markDriveSegmentDelivered(
-        segment,
-        remoteFileId: 'drive-file-1',
-      );
-      expect(await repository.watchPendingDriveDeliveryCount().first, 0);
-    });
+        expect(await repository.watchPendingDriveDeliveryCount().first, 1);
+        expect((await repository.buildDriveSnapshot()).entryCount, 1);
+        DriveReplicaSegment segment = (await repository
+            .buildPendingDriveSegment())!;
+        await repository.markDriveSegmentDelivered(
+          segment,
+          remoteFileId: 'drive-file-1',
+        );
+        expect(await repository.watchPendingDriveDeliveryCount().first, 0);
+
+        final UserMediaState edited = _state(progress: 7);
+        await repository.commitTrackingMutation(
+          states: <UserMediaState>[edited],
+          journal: const <SyncJournalEntry>[],
+          favorites: const <LocalMediaFavoriteState>[],
+          identity: edited.identity,
+          patch: UserMediaPatch(progress: 7),
+          targets: const <TrackerSource>{},
+          occurredAt: DateTime.utc(2026, 9, 24, 0, 1),
+        );
+        expect(await repository.watchPendingDriveDeliveryCount().first, 1);
+        expect((await repository.buildDriveSnapshot()).entryCount, 1);
+        segment = (await repository.buildPendingDriveSegment())!;
+        expect(segment.operations.single['intent'], 'progress');
+        await repository.markDriveSegmentDelivered(
+          segment,
+          remoteFileId: 'drive-file-2',
+        );
+        expect(await repository.watchPendingDriveDeliveryCount().first, 0);
+
+        await repository.commitTrackingMutation(
+          states: const <UserMediaState>[],
+          journal: const <SyncJournalEntry>[],
+          favorites: const <LocalMediaFavoriteState>[],
+          identity: edited.identity,
+          patch: UserMediaPatch(delete: true),
+          targets: const <TrackerSource>{},
+          occurredAt: DateTime.utc(2026, 9, 24, 0, 2),
+        );
+        expect(await repository.watchPendingDriveDeliveryCount().first, 1);
+        expect((await repository.buildDriveSnapshot()).entryCount, 0);
+        segment = (await repository.buildPendingDriveSegment())!;
+        expect(segment.operations.single['intent'], 'remove');
+      },
+    );
 
     test('undo is append-only and restores unchanged fields safely', () async {
       final UserMediaState before = _state(progress: 3);

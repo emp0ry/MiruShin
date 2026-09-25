@@ -66,19 +66,21 @@ class PreferenceDriveSyncService {
     final _LoadedPreferenceSnapshot loaded = await _loadSnapshot(deviceId);
     PreferenceReplicaSegment local = loaded.segment;
     final Map<String, Object?> current = await _readCurrentValues();
-    final _PreferenceCaptureResult captured = _captureLocal(
-      previous: local,
-      current: current,
-      deviceId: deviceId,
-    );
-    local = captured.segment;
-    bool pending =
-        (_preferences.getBool(pendingKey) ?? false) || captured.changed;
-
     final Set<String> processed =
         _preferences.getStringList(processedKey)?.toSet() ?? <String>{};
     final List<PreferenceReplicaSegment> incoming = await cloud
         .pullPreferenceSegments(excluding: processed);
+    // A clean installation must restore the cloud values before its locally
+    // persisted defaults are interpreted as user edits. Otherwise defaults
+    // such as the Airing Notification Scope get a newer timestamp and win
+    // over the user's real setting from Drive.
+    final bool restoreFirst = loaded.isFresh && incoming.isNotEmpty;
+    final _PreferenceCaptureResult captured = restoreFirst
+        ? _PreferenceCaptureResult(segment: local, changed: false)
+        : _captureLocal(previous: local, current: current, deviceId: deviceId);
+    local = captured.segment;
+    bool pending =
+        (_preferences.getBool(pendingKey) ?? false) || captured.changed;
     final PreferenceReplicaSegment merged = _merge(
       <PreferenceReplicaSegment>[local, ...incoming],
       deviceId: deviceId,
@@ -129,6 +131,7 @@ class PreferenceDriveSyncService {
             PreferenceReplicaSegment.decode(raw),
             deviceId: deviceId,
           ),
+          isFresh: false,
         );
       } on Object {
         // Rebuild only this independent replica from the selected keys.
@@ -142,6 +145,7 @@ class PreferenceDriveSyncService {
         values: const <String, PreferenceSyncValue>{},
         tombstones: const <String, PreferenceSyncVersion>{},
       ),
+      isFresh: true,
     );
   }
 
@@ -383,8 +387,12 @@ class PreferenceDriveSyncService {
 }
 
 class _LoadedPreferenceSnapshot {
-  const _LoadedPreferenceSnapshot({required this.segment});
+  const _LoadedPreferenceSnapshot({
+    required this.segment,
+    required this.isFresh,
+  });
   final PreferenceReplicaSegment segment;
+  final bool isFresh;
 }
 
 class _PreferenceCaptureResult {

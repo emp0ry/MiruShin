@@ -221,9 +221,10 @@
             <p>
               If you explicitly connect Google Drive Sync, MiruShin uses the limited
               <code>drive.appdata</code> permission. Synced records can include separate anime and manga
-              Local Library workspaces for every AniList account, operations and tombstones, provider
-              bindings, episode playback state, stream preferences, online and offline addons, addon
-              sources, and tracker delivery state.
+              Local Library workspaces for every AniList account, complete checksummed Library checkpoints,
+              operations and tombstones, render/filter metadata and artwork URLs, provider bindings,
+              episode playback state, stream preferences, online and offline addons, addon sources, and
+              tracker delivery state.
             </p>
             <p>
               Saved AniList profiles and each profile's MyAnimeList and Shikimori connections are also
@@ -242,8 +243,8 @@
               the Cloudflare Worker and are not written to the app or Drive. Source cookies, downloaded
               media, temporary caches, active rooms, room IDs, invite/join tokens, participants, and other
               temporary Watch Party state are not synced. Account-specific namespaces prevent one AniList
-              account from overwriting another account's library or connections; immutable checksummed
-              segments are synced instead of the live SQLite file.
+              account from overwriting another account's library or connections; complete checksummed
+              checkpoints and immutable operation segments are synced instead of the live SQLite file.
             </p>
             <p>
               Disconnecting Drive stops access on that device. Data already stored in

@@ -455,7 +455,9 @@ class AniListCatalogRepository implements CatalogRepository {
   Future<MediaItem?> _detailsWithFallback(String id) async {
     final int? directMalId = _malIdFromMediaId(id);
     if (directMalId != null) {
-      return malFallback?.fetchAnimeDetails(directMalId);
+      return _isMangaMediaId(id)
+          ? malFallback?.fetchMangaDetails(directMalId)
+          : malFallback?.fetchAnimeDetails(directMalId);
     }
     try {
       return await _primaryRead(() => client.getCatalogDetails(id));
@@ -463,7 +465,9 @@ class AniListCatalogRepository implements CatalogRepository {
       final MalApiClient? mal = malFallback;
       final int? mappedMalId = await resolveMalId?.call(id);
       if (mal == null || mappedMalId == null) rethrow;
-      return mal.fetchAnimeDetails(mappedMalId);
+      return _isMangaMediaId(id)
+          ? mal.fetchMangaDetails(mappedMalId)
+          : mal.fetchAnimeDetails(mappedMalId);
     }
   }
 }
@@ -489,9 +493,18 @@ String _malRankingType(String filter) {
 
 int? _malIdFromMediaId(String id) {
   final List<String> parts = id.trim().toLowerCase().split(':');
-  if (parts.length != 2 || parts.first != 'mal') return null;
+  if ((parts.length != 2 && parts.length != 3) || parts.first != 'mal') {
+    return null;
+  }
   final int? parsed = int.tryParse(parts.last);
   return parsed != null && parsed > 0 ? parsed : null;
+}
+
+bool _isMangaMediaId(String id) {
+  final String normalized = id.trim().toLowerCase();
+  return normalized.startsWith('anilist:manga:') ||
+      normalized.startsWith('mal:manga:') ||
+      normalized.startsWith('shikimori:manga:');
 }
 
 /// Returns the previous complete board snapshot immediately, then replaces the

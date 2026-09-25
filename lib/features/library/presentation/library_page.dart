@@ -229,6 +229,11 @@ class _LibraryPageState extends ConsumerState<LibraryPage>
   Widget build(BuildContext context) {
     final CatalogMode mode = ref.watch(catalogModeProvider);
     final SettingsState settings = ref.watch(settingsProvider);
+    final String workspaceId = ref.watch(
+      libraryWorkspaceScopeProvider.select(
+        (LibraryWorkspaceScope value) => value.workspaceId,
+      ),
+    );
 
     if (mode == CatalogMode.tmdb) {
       final localLibrary = ref
@@ -236,18 +241,16 @@ class _LibraryPageState extends ConsumerState<LibraryPage>
           .where((LibraryItem item) => item.mediaItem.id.startsWith('tmdb:'))
           .toList(growable: false);
       return _LocalLibraryView(
-        key: ValueKey<String>(
-          'local-library:${settings.anilistViewerId ?? 'local'}',
-        ),
+        key: ValueKey<String>('local-library:$workspaceId'),
         items: localLibrary,
       );
     }
 
-    final bool animeConnected =
-        settings.hasAniListSession ||
-        settings.hasMalSession ||
-        settings.hasShikimoriSession;
-    final bool mangaConnected = settings.hasAniListSession;
+    // The visible Library is always the reactive canonical SQLite view.
+    // Connected trackers reconcile into it in the background; they never own
+    // page loading or replace the currently rendered collection.
+    const bool animeConnected = false;
+    const bool mangaConnected = false;
     // Do not wrap the tab views in a NestedScrollView. Its shared inner
     // controller is attached to every kept-alive folder view; desktop's
     // interactive Scrollbar requires exactly one ScrollPosition per
@@ -401,6 +404,10 @@ class _AniListDataTabState extends ConsumerState<_AniListDataTab>
             ? trackerLocalMangaLibraryProvider
             : trackerLocalAnimeLibraryProvider,
       );
+      final List<TrackerLibraryOptimisticMutation> optimisticMutations =
+          widget.mediaType == 'MANGA'
+          ? const <TrackerLibraryOptimisticMutation>[]
+          : ref.watch(trackerLibraryOptimisticMutationsProvider);
       return local.when(
         loading: () => _AniListTabContent(
           connected: true,
@@ -424,20 +431,44 @@ class _AniListDataTabState extends ConsumerState<_AniListDataTab>
           defaultPage: widget.defaultPage,
           emptyMessage: widget.emptyMessage,
         ),
-        data: (TrackerLocalAnimeLibrary value) => _AniListTabContent(
-          connected: true,
-          state: _AniListTabViewState(
-            phase: value.folders.isEmpty
-                ? _AniListTabPhase.empty
-                : _AniListTabPhase.content,
-            folders: _orderedFolders(value.folders),
-          ),
-          mediaType: widget.mediaType,
-          defaultPage: widget.defaultPage,
-          emptyMessage: widget.mediaType == 'MANGA'
-              ? 'Add manga to your MiruShin Library to see it here.'
-              : 'Add anime to your MiruShin Library to see it here.',
-        ),
+        data: (TrackerLocalAnimeLibrary value) {
+          final List<AniListAnimeListFolder> effectiveFolders =
+              effectiveTrackerAnimeLibrary(
+                providerFolders: const <AniListAnimeListFolder>[],
+                local: value,
+                optimistic: optimisticMutations,
+                useLocalFallback: true,
+              );
+          final filtered = _filterRenderableLibraryFolders(effectiveFolders);
+          final _AniListStatusBannerState? banner = filtered.hiddenCount == 0
+              ? null
+              : _AniListStatusBannerState(
+                  message: context.tf(
+                    'Some library entries are temporarily unavailable ({count}). Metadata will retry automatically.',
+                    <String, Object?>{'count': filtered.hiddenCount},
+                  ),
+                  actionLabel: 'Retry',
+                  onAction: () => refreshAniListLibraryForMediaType(
+                    ProviderScope.containerOf(context, listen: false),
+                    mediaType: widget.mediaType,
+                  ),
+                );
+          return _AniListTabContent(
+            connected: true,
+            state: _AniListTabViewState(
+              phase: filtered.folders.isEmpty
+                  ? _AniListTabPhase.empty
+                  : _AniListTabPhase.content,
+              folders: _orderedFolders(filtered.folders),
+              banner: banner,
+            ),
+            mediaType: widget.mediaType,
+            defaultPage: widget.defaultPage,
+            emptyMessage: widget.mediaType == 'MANGA'
+                ? 'Add manga to your MiruShin Library to see it here.'
+                : 'Add anime to your MiruShin Library to see it here.',
+          );
+        },
       );
     }
 
@@ -1020,6 +1051,11 @@ class _AniListViewState extends ConsumerState<_AniListView>
     final ColorScheme cs = Theme.of(context).colorScheme;
     final AppThemeExtension palette = AppThemeExtension.of(context);
     final List<AniListAnimeListFolder> folders = _viewFolders;
+    final String workspaceId = ref.watch(
+      libraryWorkspaceScopeProvider.select(
+        (LibraryWorkspaceScope value) => value.workspaceId,
+      ),
+    );
 
     int downloadCount = 0;
     if (_showDownloads) {
@@ -1041,8 +1077,17 @@ class _AniListViewState extends ConsumerState<_AniListView>
 
     final List<Widget> views = <Widget>[
       ...folders.asMap().entries.map((entry) {
+        final AniListAnimeListFolder folder = entry.value;
+        final String pageId = entry.key == 0
+            ? 'all'
+            : folder.status == null
+            ? 'custom:${folder.name}'
+            : 'status:${folder.status!.name}';
         return _FolderView(
-          folder: entry.value,
+          key: ValueKey<String>(
+            'library-folder:$workspaceId:${widget.mediaType}:$pageId',
+          ),
+          folder: folder,
           mediaType: widget.mediaType,
           enableRussianAliasLoad: entry.key == _activeTabIndex,
         );
@@ -1099,6 +1144,7 @@ class _AniListViewState extends ConsumerState<_AniListView>
 
 class _FolderView extends ConsumerStatefulWidget {
   const _FolderView({
+    super.key,
     required this.folder,
     required this.mediaType,
     required this.enableRussianAliasLoad,
@@ -1137,6 +1183,8 @@ class _FolderViewState extends ConsumerState<_FolderView>
   bool? _licensedFilter;
   double _minScore = 0;
   bool _isGrid = false;
+  int _preferenceLoadGeneration = 0;
+  Future<void> _preferenceWriteTail = Future<void>.value();
 
   @override
   void dispose() {
@@ -1210,12 +1258,14 @@ class _FolderViewState extends ConsumerState<_FolderView>
   }
 
   Future<void> _loadSavedPreferences() async {
-    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    final int generation = ++_preferenceLoadGeneration;
     final String prefix = _preferencesPrefix;
     final String legacyPrefix = _legacyPreferencesPrefixFor(
       widget.folder,
       widget.mediaType,
     );
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    if (!mounted || generation != _preferenceLoadGeneration) return;
     T? savedValue<T>(String suffix) {
       final String scopedKey = '$prefix.$suffix';
       final String legacyKey = '$legacyPrefix.$suffix';
@@ -1225,39 +1275,42 @@ class _FolderViewState extends ConsumerState<_FolderView>
       return value is T ? value : null;
     }
 
+    List<String> savedStringList(String suffix) {
+      final String scopedKey = '$prefix.$suffix';
+      final String legacyKey = '$legacyPrefix.$suffix';
+      return prefs.getStringList(
+            prefs.containsKey(scopedKey) ? scopedKey : legacyKey,
+          ) ??
+          const <String>[];
+    }
+
     final String? sortName = savedValue<String>('sort');
     final _Sort savedSort = _Sort.values.firstWhere(
       (_Sort sort) => sort.name == sortName,
       orElse: () => _sort,
     );
-    final List<String> savedGenres =
-        savedValue<List<String>>('genres') ?? const <String>[];
-    final List<String> savedGenreExcludes =
-        savedValue<List<String>>('genres.excluded') ?? const <String>[];
-    final List<String> savedFormats =
-        savedValue<List<String>>('formats') ?? const <String>[];
-    final List<String> savedFormatExcludes =
-        savedValue<List<String>>('formats.excluded') ?? const <String>[];
-    final List<String> savedStatuses =
-        savedValue<List<String>>('statuses') ?? const <String>[];
-    final List<String> savedStatusExcludes =
-        savedValue<List<String>>('statuses.excluded') ?? const <String>[];
-    final List<String> savedMediaStatuses =
-        savedValue<List<String>>('mediaStatuses') ?? const <String>[];
-    final List<String> savedMediaStatusExcludes =
-        savedValue<List<String>>('mediaStatuses.excluded') ?? const <String>[];
-    final List<String> savedSources =
-        savedValue<List<String>>('sources') ?? const <String>[];
-    final List<String> savedSourceExcludes =
-        savedValue<List<String>>('sources.excluded') ?? const <String>[];
-    final List<String> savedTags =
-        savedValue<List<String>>('tags') ?? const <String>[];
-    final List<String> savedTagExcludes =
-        savedValue<List<String>>('tags.excluded') ?? const <String>[];
-    final List<String> savedFlags =
-        savedValue<List<String>>('flags') ?? const <String>[];
-    final List<String> savedFlagExcludes =
-        savedValue<List<String>>('flags.excluded') ?? const <String>[];
+    final List<String> savedGenres = savedStringList('genres');
+    final List<String> savedGenreExcludes = savedStringList('genres.excluded');
+    final List<String> savedFormats = savedStringList('formats');
+    final List<String> savedFormatExcludes = savedStringList(
+      'formats.excluded',
+    );
+    final List<String> savedStatuses = savedStringList('statuses');
+    final List<String> savedStatusExcludes = savedStringList(
+      'statuses.excluded',
+    );
+    final List<String> savedMediaStatuses = savedStringList('mediaStatuses');
+    final List<String> savedMediaStatusExcludes = savedStringList(
+      'mediaStatuses.excluded',
+    );
+    final List<String> savedSources = savedStringList('sources');
+    final List<String> savedSourceExcludes = savedStringList(
+      'sources.excluded',
+    );
+    final List<String> savedTags = savedStringList('tags');
+    final List<String> savedTagExcludes = savedStringList('tags.excluded');
+    final List<String> savedFlags = savedStringList('flags');
+    final List<String> savedFlagExcludes = savedStringList('flags.excluded');
     final bool? savedAdultFilter = _boolFilterFromPref(
       savedValue<String>('adultFilter'),
     );
@@ -1266,7 +1319,7 @@ class _FolderViewState extends ConsumerState<_FolderView>
     );
     final double savedMinScore = savedValue<double>('minScore') ?? 0;
     final bool savedGrid = savedValue<bool>('grid') ?? _isGrid;
-    if (!mounted) return;
+    if (!mounted || generation != _preferenceLoadGeneration) return;
     setState(() {
       _sort = savedSort;
       _isGrid = savedGrid;
@@ -1327,59 +1380,52 @@ class _FolderViewState extends ConsumerState<_FolderView>
   }
 
   Future<void> _savePreferences() async {
-    final SharedPreferences prefs = await SharedPreferences.getInstance();
     final String prefix = _preferencesPrefix;
-    await prefs.setString('$prefix.sort', _sort.name);
-    await prefs.setBool('$prefix.grid', _isGrid);
-    await prefs.setStringList(
-      '$prefix.statuses',
-      _statuses.map((AniListListStatus status) => status.name).toList()..sort(),
+    final DrivePreferencesRevision revision = ref.read(
+      drivePreferencesRevisionProvider.notifier,
     );
-    await prefs.setStringList(
-      '$prefix.statuses.excluded',
-      _statusExcludes.map((AniListListStatus status) => status.name).toList()
+    final Map<String, Object?> snapshot = <String, Object?>{
+      '$prefix.sort': _sort.name,
+      '$prefix.grid': _isGrid,
+      '$prefix.statuses':
+          _statuses.map((AniListListStatus value) => value.name).toList()
+            ..sort(),
+      '$prefix.statuses.excluded':
+          _statusExcludes.map((AniListListStatus value) => value.name).toList()
+            ..sort(),
+      '$prefix.mediaStatuses': _mediaStatuses.toList()..sort(),
+      '$prefix.mediaStatuses.excluded': _mediaStatusExcludes.toList()..sort(),
+      '$prefix.genres': _genres.toList()..sort(),
+      '$prefix.genres.excluded': _genreExcludes.toList()..sort(),
+      '$prefix.formats': _formats.toList()..sort(),
+      '$prefix.formats.excluded': _formatExcludes.toList()..sort(),
+      '$prefix.sources': _sources.toList()..sort(),
+      '$prefix.sources.excluded': _sourceExcludes.toList()..sort(),
+      '$prefix.tags': _tags.toList()..sort(),
+      '$prefix.tags.excluded': _tagExcludes.toList()..sort(),
+      '$prefix.flags': _flags.map((_LibraryFlag value) => value.name).toList()
         ..sort(),
-    );
-    await prefs.setStringList(
-      '$prefix.mediaStatuses',
-      _mediaStatuses.toList()..sort(),
-    );
-    await prefs.setStringList(
-      '$prefix.mediaStatuses.excluded',
-      _mediaStatusExcludes.toList()..sort(),
-    );
-    await prefs.setStringList('$prefix.genres', _genres.toList()..sort());
-    await prefs.setStringList(
-      '$prefix.genres.excluded',
-      _genreExcludes.toList()..sort(),
-    );
-    await prefs.setStringList('$prefix.formats', _formats.toList()..sort());
-    await prefs.setStringList(
-      '$prefix.formats.excluded',
-      _formatExcludes.toList()..sort(),
-    );
-    await prefs.setStringList('$prefix.sources', _sources.toList()..sort());
-    await prefs.setStringList(
-      '$prefix.sources.excluded',
-      _sourceExcludes.toList()..sort(),
-    );
-    await prefs.setStringList('$prefix.tags', _tags.toList()..sort());
-    await prefs.setStringList(
-      '$prefix.tags.excluded',
-      _tagExcludes.toList()..sort(),
-    );
-    await prefs.setStringList(
-      '$prefix.flags',
-      _flags.map((_LibraryFlag flag) => flag.name).toList()..sort(),
-    );
-    await prefs.setStringList(
-      '$prefix.flags.excluded',
-      _flagExcludes.map((_LibraryFlag flag) => flag.name).toList()..sort(),
-    );
-    await _saveBoolFilter(prefs, '$prefix.adultFilter', _adultFilter);
-    await _saveBoolFilter(prefs, '$prefix.licensedFilter', _licensedFilter);
-    await prefs.setDouble('$prefix.minScore', _minScore);
-    ref.read(drivePreferencesRevisionProvider.notifier).changed();
+      '$prefix.flags.excluded':
+          _flagExcludes.map((_LibraryFlag value) => value.name).toList()
+            ..sort(),
+      '$prefix.adultFilter': _adultFilter == null
+          ? null
+          : (_adultFilter! ? 'include' : 'exclude'),
+      '$prefix.licensedFilter': _licensedFilter == null
+          ? null
+          : (_licensedFilter! ? 'include' : 'exclude'),
+      '$prefix.minScore': _DoublePreferenceValue(_minScore),
+    };
+    _preferenceWriteTail = _preferenceWriteTail
+        .then((_) async {
+          final SharedPreferences prefs = await SharedPreferences.getInstance();
+          await _writePreferenceSnapshot(prefs, snapshot);
+          if (mounted) revision.changed();
+        })
+        .onError((Object error, StackTrace stackTrace) {
+          debugPrint('Could not save Library page preferences: $error');
+        });
+    await _preferenceWriteTail;
   }
 
   List<AniListAnimeListEntry> get _filtered {
@@ -2269,43 +2315,43 @@ class _FolderViewState extends ConsumerState<_FolderView>
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    ref.listen<int>(drivePreferencesRevisionProvider, (
+      int? previous,
+      int next,
+    ) {
+      if (previous == null || previous == next) return;
+      unawaited(_loadSavedPreferences());
+    });
     final AppThemeExtension palette = AppThemeExtension.of(context);
     final List<AniListAnimeListEntry> entries = _filtered;
     final int activeFilterCount = _activeFilterCount;
     final bool filterActive = activeFilterCount > 0;
     final List<AniListAnimeListEntry> upcoming = _upcomingEntries(entries);
 
-    return RefreshIndicator(
-      onRefresh: () => refreshAniListLibraryForMediaType(
-        ProviderScope.containerOf(context, listen: false),
-        mediaType: widget.mediaType,
-      ),
-      child: CustomScrollView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        slivers: <Widget>[
-          SliverToBoxAdapter(
-            child: _buildActionBar(
-              context,
-              palette: palette,
-              activeFilterCount: activeFilterCount,
-              filterActive: filterActive,
-            ),
+    return CustomScrollView(
+      slivers: <Widget>[
+        SliverToBoxAdapter(
+          child: _buildActionBar(
+            context,
+            palette: palette,
+            activeFilterCount: activeFilterCount,
+            filterActive: filterActive,
           ),
-          // _LibrarySummaryBar(
-          //   entries: entries,
-          //   totalCount: widget.folder.entries.length,
-          // ),
-          if (upcoming.isNotEmpty)
-            SliverToBoxAdapter(child: _AiringSoonStrip(entries: upcoming)),
-          // Entry list / grid
-          if (entries.isEmpty)
-            _buildEmptySliver(context, palette, filterActive)
-          else if (_isGrid)
-            _buildGrid(entries)
-          else
-            _buildList(entries),
-        ],
-      ),
+        ),
+        // _LibrarySummaryBar(
+        //   entries: entries,
+        //   totalCount: widget.folder.entries.length,
+        // ),
+        if (upcoming.isNotEmpty)
+          SliverToBoxAdapter(child: _AiringSoonStrip(entries: upcoming)),
+        // Entry list / grid
+        if (entries.isEmpty)
+          _buildEmptySliver(context, palette, filterActive)
+        else if (_isGrid)
+          _buildGrid(entries)
+        else
+          _buildList(entries),
+      ],
     );
   }
 
@@ -3275,16 +3321,32 @@ bool? _boolFilterFromPref(String? value) {
   };
 }
 
-Future<void> _saveBoolFilter(
+Future<void> _writePreferenceSnapshot(
   SharedPreferences prefs,
-  String key,
-  bool? value,
+  Map<String, Object?> values,
 ) async {
-  if (value == null) {
-    await prefs.remove(key);
-  } else {
-    await prefs.setString(key, value ? 'include' : 'exclude');
+  for (final MapEntry<String, Object?> entry in values.entries) {
+    final Object? value = entry.value;
+    if (value == null) {
+      await prefs.remove(entry.key);
+    } else if (value is String) {
+      await prefs.setString(entry.key, value);
+    } else if (value is bool) {
+      await prefs.setBool(entry.key, value);
+    } else if (value is _DoublePreferenceValue) {
+      await prefs.setDouble(entry.key, value.value);
+    } else if (value is List<String>) {
+      await prefs.setStringList(entry.key, value);
+    } else {
+      throw ArgumentError.value(value, entry.key, 'Unsupported preference');
+    }
   }
+}
+
+class _DoublePreferenceValue {
+  const _DoublePreferenceValue(this.value);
+
+  final double value;
 }
 
 IncludeExcludeState _boolIncludeExcludeState(bool? value) {
@@ -4014,6 +4076,8 @@ class _LocalLibraryViewState extends ConsumerState<_LocalLibraryView> {
   double _minRating = 0;
   bool _showDownloads = false;
   bool _isGrid = false;
+  int _preferenceLoadGeneration = 0;
+  Future<void> _preferenceWriteTail = Future<void>.value();
 
   @override
   void initState() {
@@ -4028,15 +4092,27 @@ class _LocalLibraryViewState extends ConsumerState<_LocalLibraryView> {
   }
 
   Future<void> _loadSavedPreferences() async {
-    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    final int generation = ++_preferenceLoadGeneration;
+    final String prefix = _preferencesPrefix;
     const String legacyPrefix = 'library.local';
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    if (!mounted || generation != _preferenceLoadGeneration) return;
     T? savedValue<T>(String suffix) {
-      final String scopedKey = '$_preferencesPrefix.$suffix';
+      final String scopedKey = '$prefix.$suffix';
       final String legacyKey = '$legacyPrefix.$suffix';
       final Object? value = prefs.containsKey(scopedKey)
           ? prefs.get(scopedKey)
           : prefs.get(legacyKey);
       return value is T ? value : null;
+    }
+
+    List<String> savedStringList(String suffix) {
+      final String scopedKey = '$prefix.$suffix';
+      final String legacyKey = '$legacyPrefix.$suffix';
+      return prefs.getStringList(
+            prefs.containsKey(scopedKey) ? scopedKey : legacyKey,
+          ) ??
+          const <String>[];
     }
 
     final String? sortName = savedValue<String>('sort');
@@ -4045,24 +4121,20 @@ class _LocalLibraryViewState extends ConsumerState<_LocalLibraryView> {
       orElse: () => _sort,
     );
     final bool savedGrid = savedValue<bool>('grid') ?? false;
-    final List<String> savedStatuses =
-        savedValue<List<String>>('statuses') ?? const <String>[];
-    final List<String> savedStatusExcludes =
-        savedValue<List<String>>('statuses.excluded') ?? const <String>[];
-    final List<String> savedTypes =
-        savedValue<List<String>>('types') ?? const <String>[];
-    final List<String> savedTypeExcludes =
-        savedValue<List<String>>('types.excluded') ?? const <String>[];
-    final List<String> savedProviders =
-        savedValue<List<String>>('providers') ?? const <String>[];
-    final List<String> savedProviderExcludes =
-        savedValue<List<String>>('providers.excluded') ?? const <String>[];
-    final List<String> savedGenres =
-        savedValue<List<String>>('genres') ?? const <String>[];
-    final List<String> savedGenreExcludes =
-        savedValue<List<String>>('genres.excluded') ?? const <String>[];
+    final List<String> savedStatuses = savedStringList('statuses');
+    final List<String> savedStatusExcludes = savedStringList(
+      'statuses.excluded',
+    );
+    final List<String> savedTypes = savedStringList('types');
+    final List<String> savedTypeExcludes = savedStringList('types.excluded');
+    final List<String> savedProviders = savedStringList('providers');
+    final List<String> savedProviderExcludes = savedStringList(
+      'providers.excluded',
+    );
+    final List<String> savedGenres = savedStringList('genres');
+    final List<String> savedGenreExcludes = savedStringList('genres.excluded');
     final double savedMinRating = savedValue<double>('minRating') ?? 0;
-    if (!mounted) return;
+    if (!mounted || generation != _preferenceLoadGeneration) return;
     setState(() {
       _sort = savedSort;
       _isGrid = savedGrid;
@@ -4101,45 +4173,37 @@ class _LocalLibraryViewState extends ConsumerState<_LocalLibraryView> {
   }
 
   Future<void> _savePreferences() async {
-    final SharedPreferences prefs = await SharedPreferences.getInstance();
-    await prefs.setString('$_preferencesPrefix.sort', _sort.name);
-    await prefs.setBool('$_preferencesPrefix.grid', _isGrid);
-    await prefs.setStringList(
-      '$_preferencesPrefix.statuses',
-      _statusFilters.map((LibraryStatus status) => status.name).toList()
-        ..sort(),
+    final String prefix = _preferencesPrefix;
+    final DrivePreferencesRevision revision = ref.read(
+      drivePreferencesRevisionProvider.notifier,
     );
-    await prefs.setStringList(
-      '$_preferencesPrefix.statuses.excluded',
-      _statusExcludes.map((LibraryStatus status) => status.name).toList()
-        ..sort(),
-    );
-    await prefs.setStringList(
-      '$_preferencesPrefix.types',
-      _typeFilters.toList()..sort(),
-    );
-    await prefs.setStringList(
-      '$_preferencesPrefix.types.excluded',
-      _typeExcludes.toList()..sort(),
-    );
-    await prefs.setStringList(
-      '$_preferencesPrefix.providers',
-      _providerFilters.toList()..sort(),
-    );
-    await prefs.setStringList(
-      '$_preferencesPrefix.providers.excluded',
-      _providerExcludes.toList()..sort(),
-    );
-    await prefs.setStringList(
-      '$_preferencesPrefix.genres',
-      _genreFilters.toList()..sort(),
-    );
-    await prefs.setStringList(
-      '$_preferencesPrefix.genres.excluded',
-      _genreExcludes.toList()..sort(),
-    );
-    await prefs.setDouble('$_preferencesPrefix.minRating', _minRating);
-    ref.read(drivePreferencesRevisionProvider.notifier).changed();
+    final Map<String, Object?> snapshot = <String, Object?>{
+      '$prefix.sort': _sort.name,
+      '$prefix.grid': _isGrid,
+      '$prefix.statuses':
+          _statusFilters.map((LibraryStatus value) => value.name).toList()
+            ..sort(),
+      '$prefix.statuses.excluded':
+          _statusExcludes.map((LibraryStatus value) => value.name).toList()
+            ..sort(),
+      '$prefix.types': _typeFilters.toList()..sort(),
+      '$prefix.types.excluded': _typeExcludes.toList()..sort(),
+      '$prefix.providers': _providerFilters.toList()..sort(),
+      '$prefix.providers.excluded': _providerExcludes.toList()..sort(),
+      '$prefix.genres': _genreFilters.toList()..sort(),
+      '$prefix.genres.excluded': _genreExcludes.toList()..sort(),
+      '$prefix.minRating': _DoublePreferenceValue(_minRating),
+    };
+    _preferenceWriteTail = _preferenceWriteTail
+        .then((_) async {
+          final SharedPreferences prefs = await SharedPreferences.getInstance();
+          await _writePreferenceSnapshot(prefs, snapshot);
+          if (mounted) revision.changed();
+        })
+        .onError((Object error, StackTrace stackTrace) {
+          debugPrint('Could not save local Library preferences: $error');
+        });
+    await _preferenceWriteTail;
   }
 
   List<LibraryStatus> get _presentStatuses {
@@ -4620,6 +4684,13 @@ class _LocalLibraryViewState extends ConsumerState<_LocalLibraryView> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<int>(drivePreferencesRevisionProvider, (
+      int? previous,
+      int next,
+    ) {
+      if (previous == null || previous == next) return;
+      unawaited(_loadSavedPreferences());
+    });
     final AppThemeExtension palette = AppThemeExtension.of(context);
 
     ref.watch(downloadsProvider);

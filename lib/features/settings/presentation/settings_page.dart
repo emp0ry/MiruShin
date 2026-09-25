@@ -32,6 +32,7 @@ import '../../calendar/application/calendar_items_provider.dart';
 import '../../catalog/application/catalog_mode.dart';
 import '../../downloads/application/download_settings.dart';
 import '../../downloads/application/downloads_provider.dart';
+import '../../library/application/canonical_library_repository.dart';
 import '../../library/application/google_drive_sync_controller.dart';
 import '../../library/application/local_library_provider.dart';
 import '../../library/data/google_drive_account_client.dart';
@@ -532,10 +533,12 @@ class _GoogleDriveSyncSectionState
       googleDriveSyncControllerProvider,
     );
     final GoogleDriveSyncState? state = asyncState.value;
+    final int pendingDriveChanges =
+        ref.watch(pendingDriveDeliveryCountProvider).value ?? 0;
     final bool connected = state?.connected == true;
     final bool configured = state?.configured == true;
     final bool syncing = state?.syncing == true;
-    final String status = !configured
+    String status = !configured
         ? context.t(
             'Google OAuth is not configured in this build. Local Library and tracker sync continue normally.',
           )
@@ -546,6 +549,11 @@ class _GoogleDriveSyncSectionState
         : context.t(
             'Connect Google Drive to keep your MiruShin data up to date across your devices.',
           );
+    if (connected && pendingDriveChanges > 0) {
+      status =
+          '$status • ${context.t('Waiting to sync')}: '
+          '$pendingDriveChanges';
+    }
 
     return SettingsSection(
       title: context.t('Google Drive Sync'),
@@ -556,6 +564,14 @@ class _GoogleDriveSyncSectionState
             account: state?.account,
             status: status,
             syncing: syncing,
+            syncStage: state?.syncStage,
+            progress: state?.progress,
+            transferredBytes: state?.transferredBytes ?? 0,
+            totalBytes: state?.totalBytes ?? 0,
+            processedItems: state?.processedItems ?? 0,
+            totalItems: state?.totalItems ?? 0,
+            driveUsageBytes: state?.driveUsageBytes,
+            cloudEntryCount: state?.cloudEntryCount,
             busy: _busy,
             onSync: _syncNow,
             onDisconnect: _disconnect,
@@ -646,6 +662,14 @@ class _GoogleDriveAccountCard extends StatelessWidget {
     required this.account,
     required this.status,
     required this.syncing,
+    required this.syncStage,
+    required this.progress,
+    required this.transferredBytes,
+    required this.totalBytes,
+    required this.processedItems,
+    required this.totalItems,
+    required this.driveUsageBytes,
+    required this.cloudEntryCount,
     required this.busy,
     required this.onSync,
     required this.onDisconnect,
@@ -654,6 +678,14 @@ class _GoogleDriveAccountCard extends StatelessWidget {
   final GoogleDriveAccountProfile? account;
   final String status;
   final bool syncing;
+  final String? syncStage;
+  final double? progress;
+  final int transferredBytes;
+  final int totalBytes;
+  final int processedItems;
+  final int totalItems;
+  final int? driveUsageBytes;
+  final int? cloudEntryCount;
   final bool busy;
   final VoidCallback onSync;
   final VoidCallback onDisconnect;
@@ -699,6 +731,19 @@ class _GoogleDriveAccountCard extends StatelessWidget {
                   context,
                 ).textTheme.bodySmall?.copyWith(color: AppColors.success),
               ),
+              if (driveUsageBytes != null) ...<Widget>[
+                const SizedBox(height: AppSpacing.xs),
+                Text(
+                  context.tf(
+                    'MiruShin data in Drive: {size} · {count} library entries',
+                    <String, Object?>{
+                      'size': _formatStorageSize(driveUsageBytes!),
+                      'count': cloudEntryCount ?? 0,
+                    },
+                  ),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
             ],
           ),
         ),
@@ -727,36 +772,77 @@ class _GoogleDriveAccountCard extends StatelessWidget {
     );
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
-      child: LayoutBuilder(
-        builder: (BuildContext context, BoxConstraints constraints) {
-          if (constraints.maxWidth < 720) {
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                identity,
-                const SizedBox(height: AppSpacing.md),
-                actions,
-              ],
-            );
-          }
-          return Row(
-            children: <Widget>[
-              Expanded(child: identity),
-              const SizedBox(width: AppSpacing.lg),
-              actions,
-            ],
-          );
-        },
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          LayoutBuilder(
+            builder: (BuildContext context, BoxConstraints constraints) {
+              if (constraints.maxWidth < 720) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    identity,
+                    const SizedBox(height: AppSpacing.md),
+                    actions,
+                  ],
+                );
+              }
+              return Row(
+                children: <Widget>[
+                  Expanded(child: identity),
+                  const SizedBox(width: AppSpacing.lg),
+                  actions,
+                ],
+              );
+            },
+          ),
+          if (syncing) ...<Widget>[
+            const SizedBox(height: AppSpacing.md),
+            LinearProgressIndicator(value: progress),
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              _driveProgressLabel(context),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+        ],
       ),
     );
   }
+
+  String _driveProgressLabel(BuildContext context) {
+    final String stage = context.t(syncStage ?? 'Syncing…');
+    if (totalBytes > 0) {
+      return '$stage ${_formatStorageSize(transferredBytes)} / '
+          '${_formatStorageSize(totalBytes)}';
+    }
+    if (totalItems > 0) return '$stage $processedItems / $totalItems';
+    return stage;
+  }
+}
+
+String _formatStorageSize(int bytes) {
+  if (bytes < 1024) return '$bytes B';
+  const List<String> units = <String>['KB', 'MB', 'GB', 'TB'];
+  double value = bytes / 1024;
+  int index = 0;
+  while (value >= 1024 && index < units.length - 1) {
+    value /= 1024;
+    index += 1;
+  }
+  final int decimals = value >= 100
+      ? 0
+      : value >= 10
+      ? 1
+      : 2;
+  return '${value.toStringAsFixed(decimals)} ${units[index]}';
 }
 
 String _formatDriveTime(DateTime value) {
   final DateTime local = value.toLocal();
   String two(int number) => number.toString().padLeft(2, '0');
   return '${local.year}-${two(local.month)}-${two(local.day)} '
-      '${two(local.hour)}:${two(local.minute)}';
+      '${two(local.hour)}:${two(local.minute)}:${two(local.second)}';
 }
 
 class _DiscordRpcSection extends StatelessWidget {

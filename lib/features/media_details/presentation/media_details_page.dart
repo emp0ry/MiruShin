@@ -378,7 +378,10 @@ String _formatMediaFormat(String raw) {
 
 String _mediaKindLabel(MediaItem item, {String? fallbackFormat}) {
   final String format = _formatMediaFormat(
-    item.externalIds['anilist_format'] ?? fallbackFormat ?? '',
+    item.externalIds['anilist_format'] ??
+        item.externalIds['mal_media_type'] ??
+        fallbackFormat ??
+        '',
   );
   final String relation = _formatRelationType(
     item.externalIds['anilist_relation_type'] ?? '',
@@ -553,6 +556,12 @@ class _AniListInfoPanelState extends State<_AniListInfoPanel> {
     final TextTheme tt = Theme.of(context).textTheme;
     final Color spoilerTextColor = Colors.red.shade200;
     final String episodeLabel = _episodeCountLabel(widget.item);
+    final String? source = _ext['anilist_source'] ?? _ext['mal_source'];
+    final String? startDate =
+        _ext['anilist_start_date'] ?? _ext['mal_start_date'];
+    final String? endDate = _ext['anilist_end_date'] ?? _ext['mal_end_date'];
+    final String? popularity =
+        _ext['anilist_popularity'] ?? _ext['mal_num_list_users'];
 
     // Info rows
     final List<({IconData icon, String label, String value})> infoRows =
@@ -569,11 +578,11 @@ class _AniListInfoPanelState extends State<_AniListInfoPanel> {
               label: 'Origin',
               value: _fmtCountry(_ext['anilist_country']!),
             ),
-          if (_ext['anilist_source'] != null)
+          if (source != null)
             (
               icon: Icons.auto_stories_outlined,
               label: 'Source',
-              value: _fmtSource(_ext['anilist_source']!),
+              value: _fmtSource(source),
             ),
           if (_ext['anilist_season'] != null)
             (
@@ -592,17 +601,17 @@ class _AniListInfoPanelState extends State<_AniListInfoPanel> {
               label: 'Status',
               value: _fmtStatus(widget.item.statusLabel),
             ),
-          if (_ext['anilist_start_date'] != null)
+          if (startDate != null)
             (
               icon: Icons.calendar_month_outlined,
               label: 'Released',
-              value: _ext['anilist_start_date']!,
+              value: startDate,
             ),
-          if (_ext['anilist_end_date'] != null)
+          if (endDate != null)
             (
               icon: Icons.event_available_outlined,
               label: 'Ended',
-              value: _ext['anilist_end_date']!,
+              value: endDate,
             ),
         ];
 
@@ -666,18 +675,18 @@ class _AniListInfoPanelState extends State<_AniListInfoPanel> {
           SectionHeader(title: context.t('Details')),
 
           // Stats row: popularity + favorites
-          if (_ext['anilist_popularity'] != null ||
+          if (popularity != null ||
               _ext['anilist_favourites'] != null) ...<Widget>[
             Wrap(
               spacing: AppSpacing.lg,
               runSpacing: AppSpacing.sm,
               crossAxisAlignment: WrapCrossAlignment.center,
               children: <Widget>[
-                if (_ext['anilist_popularity'] != null)
+                if (popularity != null)
                   _AniListStat(
                     Icons.people_outline_rounded,
                     iconColor: cs.primary,
-                    value: _fmtNum(_ext['anilist_popularity']!),
+                    value: _fmtNum(popularity),
                     label: context.t('watching'),
                   ),
                 if (_ext['anilist_favourites'] != null)

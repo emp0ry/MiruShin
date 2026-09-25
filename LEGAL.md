@@ -46,7 +46,7 @@ Use of those services is subject to their own terms, policies, and availability.
 
 ## Optional Cloud Sync and Account Credentials
 
-Google Drive Sync is optional. When enabled, MiruShin may store Local Library data, addons, tracker account profiles and sessions, user-provided API credentials, persistent relay preferences, and Library/app settings in the private `appDataFolder` of the Google account selected by the user. Each AniList account uses an isolated library workspace, its own MAL/Shikimori connections, and its own Library preferences.
+Google Drive Sync is optional. When enabled, MiruShin may store complete Local Library checkpoints, cached presentation metadata and artwork URLs, playback data, addons, tracker account profiles and sessions, user-provided API credentials, persistent relay preferences, and Library/app settings in the private `appDataFolder` of the Google account selected by the user. Each AniList account uses an isolated library workspace, its own MAL/Shikimori connections, and its own Library preferences.
 
 You are responsible for choosing and securing the Google account and devices used for synchronization. Restored third-party sessions remain subject to the provider's terms and can expire, be revoked, or stop working. MiruShin does not guarantee uninterrupted synchronization or continued validity of third-party credentials. Google Drive OAuth credentials, MiruShin-operated OAuth client secrets, and temporary Watch with Friends room credentials are not included in the synced records.
 

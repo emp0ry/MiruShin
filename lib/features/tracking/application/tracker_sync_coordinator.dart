@@ -145,7 +145,11 @@ class TrackerSyncCoordinator {
   TrackerSyncCoordinator(this._ref);
 
   final Ref _ref;
-  Future<void> _tail = Future<void>.value();
+  // User mutations and remote work deliberately have separate lanes. A slow
+  // tracker refresh/flush must never keep Add/Edit/Delete waiting before its
+  // canonical SQLite transaction can commit.
+  Future<void> _mutationTail = Future<void>.value();
+  Future<void> _networkTail = Future<void>.value();
 
   SettingsState get _settings => _ref.read(settingsProvider);
   SettingsController get _controller => _ref.read(settingsProvider.notifier);
@@ -232,7 +236,7 @@ class TrackerSyncCoordinator {
     Set<TrackerSource>? targets,
     Map<TrackerSource, int> providerEntryIds = const <TrackerSource, int>{},
     TrackingEpisodeCheckpoint? episodeCheckpoint,
-  }) => _serial<SyncDispatchResult>(() async {
+  }) => _serialMutation<SyncDispatchResult>(() async {
     final MediaIdentity identity = MediaIdentity.fromExternalIds(
       externalIds,
       mediaId: mediaId,
@@ -243,7 +247,7 @@ class TrackerSyncCoordinator {
     final int? safeProgress = progress == null
         ? null
         : canonicalEpisodeProgress(progress, canonicalTotal);
-    final LocalFirstSyncEngine engine = await _engine();
+    final LocalFirstSyncEngine engine = _localEngine();
     final SyncDispatchResult result = await engine.recordMutation(
       identity: identity,
       patch: UserMediaPatch(
@@ -281,7 +285,7 @@ class TrackerSyncCoordinator {
   Future<SyncDispatchResult> pushFavorite({
     required MediaItem mediaItem,
     required bool favorite,
-  }) => _serial<SyncDispatchResult>(() async {
+  }) => _serialMutation<SyncDispatchResult>(() async {
     final MediaIdentity identity = MediaIdentity.fromExternalIds(
       mediaItem.externalIds,
       mediaId: mediaItem.id,
@@ -289,7 +293,7 @@ class TrackerSyncCoordinator {
     final bool canSyncAniList =
         (identity.anilistId != null || identity.malId != null) &&
         _settings.anilistAccessToken.trim().isNotEmpty;
-    final LocalFirstSyncEngine engine = await _engine();
+    final LocalFirstSyncEngine engine = _localEngine();
     final SyncDispatchResult result = await engine.recordMutation(
       identity: identity,
       patch: UserMediaPatch(favorite: favorite),
@@ -309,12 +313,12 @@ class TrackerSyncCoordinator {
     String? mediaTitle,
     Set<TrackerSource>? targets,
     Map<TrackerSource, int> providerEntryIds = const <TrackerSource, int>{},
-  }) => _serial<SyncDispatchResult>(() async {
+  }) => _serialMutation<SyncDispatchResult>(() async {
     final MediaIdentity identity = MediaIdentity.fromExternalIds(
       externalIds,
       mediaId: mediaId,
     );
-    final LocalFirstSyncEngine engine = await _engine();
+    final LocalFirstSyncEngine engine = _localEngine();
     final SyncDispatchResult result = await engine.recordMutation(
       identity: identity,
       patch: UserMediaPatch(delete: true),
@@ -328,7 +332,7 @@ class TrackerSyncCoordinator {
     return result;
   });
 
-  Future<void> flushPending() => _serial<void>(() async {
+  Future<void> flushPending() => _serialNetwork<void>(() async {
     final LocalFirstSyncEngine engine = await _engine();
     await engine.flush();
     _invalidateHealth();
@@ -337,7 +341,7 @@ class TrackerSyncCoordinator {
   Future<TrackerLibrarySnapshot> refreshAnimeLibrary({
     required TrackerSource preferred,
     Set<TrackerSource> excluded = const <TrackerSource>{},
-  }) => _serial<TrackerLibrarySnapshot>(() async {
+  }) => _serialNetwork<TrackerLibrarySnapshot>(() async {
     final LocalFirstSyncEngine engine = await _engine();
     final List<TrackerSource> order =
         <TrackerSource>[
@@ -364,7 +368,7 @@ class TrackerSyncCoordinator {
   Future<TrackerLibrarySnapshot> refreshMangaLibrary({
     required TrackerSource preferred,
     Set<TrackerSource> excluded = const <TrackerSource>{},
-  }) => _serial<TrackerLibrarySnapshot>(() async {
+  }) => _serialNetwork<TrackerLibrarySnapshot>(() async {
     final LocalFirstSyncEngine engine = await _engine();
     final List<TrackerSource> order =
         <TrackerSource>[
@@ -400,7 +404,7 @@ class TrackerSyncCoordinator {
   Future<TrackerLibrarySnapshot> refreshAllConnectedLibraries({
     String mediaKind = 'anime',
     Set<TrackerSource> excluded = const <TrackerSource>{},
-  }) => _serial<TrackerLibrarySnapshot>(() async {
+  }) => _serialNetwork<TrackerLibrarySnapshot>(() async {
     final LocalFirstSyncEngine engine = await _engine();
     final List<TrackerSource> order =
         <TrackerSource>[
@@ -433,7 +437,7 @@ class TrackerSyncCoordinator {
     required bool liveSnapshot,
     required bool completeSnapshot,
     String mediaKind = 'anime',
-  }) => _serial<List<AniListAnimeListFolder>>(() async {
+  }) => _serialNetwork<List<AniListAnimeListFolder>>(() async {
     final List<UserMediaState> remote = userMediaStatesFromFolders(
       folders,
       source: source,
@@ -503,7 +507,7 @@ class TrackerSyncCoordinator {
   }
 
   Future<void> recordProviderFailure(TrackerSource source, Object error) =>
-      _serial<void>(() async {
+      _serialNetwork<void>(() async {
         final LocalFirstSyncEngine engine = LocalFirstSyncEngine(
           store: _store,
           adapters: const <TrackerSource, TrackerProviderAdapter>{},
@@ -514,7 +518,7 @@ class TrackerSyncCoordinator {
       });
 
   Future<void> recordProviderSuccess(TrackerSource source) =>
-      _serial<void>(() async {
+      _serialNetwork<void>(() async {
         final LocalFirstSyncEngine engine = LocalFirstSyncEngine(
           store: _store,
           adapters: const <TrackerSource, TrackerProviderAdapter>{},
@@ -542,6 +546,12 @@ class TrackerSyncCoordinator {
       primary: _settings.effectivePrimaryTrackerSource,
     );
   }
+
+  LocalFirstSyncEngine _localEngine() => LocalFirstSyncEngine(
+    store: _store,
+    adapters: const <TrackerSource, TrackerProviderAdapter>{},
+    primary: _settings.effectivePrimaryTrackerSource,
+  );
 
   Future<Map<TrackerSource, TrackerProviderAdapter>> _adapters() async {
     final SettingsState settings = _settings;
@@ -613,10 +623,23 @@ class TrackerSyncCoordinator {
     _ref.invalidate(trackerProviderHealthProvider);
   }
 
-  Future<T> _serial<T>(Future<T> Function() action) {
+  Future<T> _serialMutation<T>(Future<T> Function() action) =>
+      _serialOn<T>(action, mutation: true);
+
+  Future<T> _serialNetwork<T>(Future<T> Function() action) =>
+      _serialOn<T>(action, mutation: false);
+
+  Future<T> _serialOn<T>(
+    Future<T> Function() action, {
+    required bool mutation,
+  }) {
     final Completer<void> release = Completer<void>();
-    final Future<void> previous = _tail;
-    _tail = release.future;
+    final Future<void> previous = mutation ? _mutationTail : _networkTail;
+    if (mutation) {
+      _mutationTail = release.future;
+    } else {
+      _networkTail = release.future;
+    }
     return previous.then((_) => action()).whenComplete(release.complete);
   }
 }

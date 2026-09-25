@@ -32,13 +32,14 @@ class MalApiClient {
 
   static const String _listFields =
       'list_status,num_episodes,media_type,main_picture,alternative_titles,'
-      'start_season,mean,genres,status,source,nsfw,'
-      'average_episode_duration';
+      'start_season,start_date,end_date,mean,synopsis,genres,status,source,'
+      'nsfw,average_episode_duration,pictures,num_chapters,num_volumes,'
+      'rank,popularity,num_list_users,num_scoring_users';
   static const String _catalogFields =
       'num_episodes,media_type,main_picture,alternative_titles,start_season,'
-      'start_date,mean,synopsis,genres,status,source,nsfw,'
-      'average_episode_duration,'
-      'pictures';
+      'start_date,end_date,mean,synopsis,genres,status,source,nsfw,'
+      'average_episode_duration,pictures,num_chapters,num_volumes,'
+      'rank,popularity,num_list_users,num_scoring_users';
 
   Future<TrackerViewer> fetchViewer() async {
     final Response<dynamic> response = await _get(
@@ -414,6 +415,11 @@ class MalApiClient {
     final String nsfw = _string(node['nsfw']).toLowerCase();
     final String mediaType = _string(node['media_type']).toUpperCase();
     final String startDate = _string(node['start_date']);
+    final String endDate = _string(node['end_date']);
+    final int rank = _int(node['rank']);
+    final int popularity = _int(node['popularity']);
+    final int listUsers = _int(node['num_list_users']);
+    final int scoringUsers = _int(node['num_scoring_users']);
     return MediaItem(
       id: manga ? 'mal:manga:$malId' : 'mal:$malId',
       title: _string(node['title']),
@@ -433,6 +439,12 @@ class MalApiClient {
         if (nsfw.isNotEmpty) 'mal_nsfw': nsfw,
         if (mediaType.isNotEmpty) 'mal_media_type': mediaType,
         if (startDate.isNotEmpty) 'mal_start_date': startDate,
+        if (endDate.isNotEmpty) 'mal_end_date': endDate,
+        if (rank > 0) 'mal_rank': '$rank',
+        if (popularity > 0) 'mal_popularity': '$popularity',
+        if (listUsers > 0) 'mal_num_list_users': '$listUsers',
+        if (scoringUsers > 0) 'mal_num_scoring_users': '$scoringUsers',
+        'mirushin_mal_metadata': 'rich_v2',
       },
       runtimeMinutes: durationSeconds > 0
           ? (durationSeconds / 60).round()

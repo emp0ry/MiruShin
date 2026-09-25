@@ -101,8 +101,9 @@ affect Local Library or tracker synchronization.
 
 Google Drive Sync stores these app-private, cross-platform records:
 
-- canonical anime and manga library operations and tombstones;
-- media/provider bindings needed by those library records;
+- complete checksummed anime and manga Library checkpoints for fast, atomic restore;
+- canonical library operations and tombstones applied after each checkpoint;
+- render/filter metadata and media/provider bindings needed by those library records;
 - episode playback position, duration, completion, and watch cycle;
 - preferred addon/source, server, voiceover, and quality;
 - tracker delivery ledger and the short cross-device delivery lease;
@@ -122,8 +123,8 @@ corrupt segment is rejected before it changes the local registry.
 Google Drive OAuth access/refresh tokens, MiruShin-operated OAuth client
 secrets, source cookies, downloaded video files, and temporary caches remain
 device-local. Tracker tokens are synced only after the user enables Google
-Drive Sync, inside that user's private `appDataFolder`. General app settings
-and the legacy TMDB library are not currently part of Google Drive Sync.
+Drive Sync, inside that user's private `appDataFolder`. Selected app and
+per-workspace Library settings are included; the legacy TMDB library is not.
 
 Library segments use a deterministic AniList-account namespace. Switching the
 active AniList account therefore switches its Local Library, provider

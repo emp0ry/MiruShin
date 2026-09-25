@@ -48,6 +48,99 @@ class GoogleDriveCloudReplica
         name.endsWith('.json');
   }
 
+  Future<DriveLibrarySnapshot?> pullLibrarySnapshot({
+    void Function(int received, int total)? onProgress,
+  }) async {
+    final _ManifestRead manifest = await _readManifest();
+    final String fileName =
+        manifest.value.snapshotFileName ??
+        (replicaNamespace == 'legacy'
+            ? 'mirushin.library.snapshot.v2.json'
+            : 'mirushin.$replicaNamespace.library.snapshot.v2.json');
+    final CloudReplicaFile? file = await _findByName(fileName);
+    if (file == null) return null;
+    final String body = await _download(file.id, onProgress: onProgress);
+    final Object? decoded = jsonDecode(body);
+    if (decoded is! Map<String, dynamic>) {
+      throw const FormatException('Invalid Google Drive library snapshot.');
+    }
+    final DriveLibrarySnapshot snapshot = DriveLibrarySnapshot.fromJson(
+      decoded,
+    );
+    if (snapshot.replicaNamespace != replicaNamespace &&
+        !(includeLegacyLibrary && snapshot.replicaNamespace == 'legacy')) {
+      throw StateError('Google Drive library snapshot workspace mismatch.');
+    }
+    final String? expectedChecksum = manifest.value.snapshotChecksum;
+    if (expectedChecksum != null &&
+        expectedChecksum.isNotEmpty &&
+        expectedChecksum != snapshot.checksum &&
+        expectedChecksum != snapshot.legacyEnvelopeChecksum) {
+      throw StateError('Google Drive library snapshot checksum mismatch.');
+    }
+    final int? expectedCount = manifest.value.snapshotEntryCount;
+    if (expectedCount != null && expectedCount != snapshot.entryCount) {
+      throw StateError('Google Drive library snapshot entry count mismatch.');
+    }
+    return snapshot;
+  }
+
+  Future<CloudReplicaFile> pushLibrarySnapshot(
+    DriveLibrarySnapshot snapshot, {
+    void Function(int sent, int total)? onProgress,
+  }) async {
+    if (snapshot.replicaNamespace != replicaNamespace) {
+      throw StateError('Google Drive library snapshot workspace mismatch.');
+    }
+    final String body = snapshot.encode();
+    final _ManifestRead current = await _readManifest();
+    if (current.value.snapshotChecksum == snapshot.checksum) {
+      final CloudReplicaFile? existing = await _findByName(snapshot.fileName);
+      if (existing != null) return existing;
+    }
+    final CloudReplicaFile? existing = await _findByName(snapshot.fileName);
+    final CloudReplicaFile uploaded = existing == null
+        ? await _createJsonFile(snapshot.fileName, body, onProgress: onProgress)
+        : await _updateJsonFile(existing, body, onProgress: onProgress);
+    await _updateManifest((DriveReplicaManifest manifest) {
+      return _copyManifest(
+        manifest,
+        revision: manifest.revision + 1,
+        snapshotFileName: snapshot.fileName,
+        snapshotChecksum: snapshot.checksum,
+        snapshotEntryCount: snapshot.entryCount,
+        snapshotSizeBytes: snapshot.encodedSizeBytes,
+        snapshotCreatedAt: snapshot.createdAt,
+      );
+    });
+    return CloudReplicaFile(
+      id: uploaded.id,
+      name: uploaded.name,
+      checksum: uploaded.checksum,
+      etag: uploaded.etag,
+      sizeBytes: snapshot.encodedSizeBytes,
+    );
+  }
+
+  Future<DriveReplicaUsage> readUsage() async {
+    final List<CloudReplicaFile> files = await _listFiles();
+    final int total = files.fold<int>(
+      0,
+      (int sum, CloudReplicaFile file) => sum + (file.sizeBytes ?? 0),
+    );
+    final int snapshots = files
+        .where((CloudReplicaFile file) => file.name.contains('.snapshot.'))
+        .fold<int>(
+          0,
+          (int sum, CloudReplicaFile file) => sum + (file.sizeBytes ?? 0),
+        );
+    return DriveReplicaUsage(
+      totalBytes: total,
+      fileCount: files.length,
+      snapshotBytes: snapshots,
+    );
+  }
+
   @override
   Future<void> pushAccountSegment(AccountReplicaSegment segment) async {
     if (await _findByName(segment.fileName) != null) return;
@@ -185,6 +278,11 @@ class GoogleDriveCloudReplica
         deliveryLedger: manifest.deliveryLedger,
         leaseOwner: manifest.leaseOwner,
         leaseExpiresAt: manifest.leaseExpiresAt,
+        snapshotFileName: manifest.snapshotFileName,
+        snapshotChecksum: manifest.snapshotChecksum,
+        snapshotEntryCount: manifest.snapshotEntryCount,
+        snapshotSizeBytes: manifest.snapshotSizeBytes,
+        snapshotCreatedAt: manifest.snapshotCreatedAt,
       );
     });
     return uploaded;
@@ -250,6 +348,11 @@ class GoogleDriveCloudReplica
         deliveryLedger: merged,
         leaseOwner: manifest.leaseOwner,
         leaseExpiresAt: manifest.leaseExpiresAt,
+        snapshotFileName: manifest.snapshotFileName,
+        snapshotChecksum: manifest.snapshotChecksum,
+        snapshotEntryCount: manifest.snapshotEntryCount,
+        snapshotSizeBytes: manifest.snapshotSizeBytes,
+        snapshotCreatedAt: manifest.snapshotCreatedAt,
       );
     });
   }
@@ -276,6 +379,11 @@ class GoogleDriveCloudReplica
         deliveryLedger: manifest.deliveryLedger,
         leaseOwner: deviceId,
         leaseExpiresAt: now.add(duration),
+        snapshotFileName: manifest.snapshotFileName,
+        snapshotChecksum: manifest.snapshotChecksum,
+        snapshotEntryCount: manifest.snapshotEntryCount,
+        snapshotSizeBytes: manifest.snapshotSizeBytes,
+        snapshotCreatedAt: manifest.snapshotCreatedAt,
       );
     });
     return acquired;
@@ -290,6 +398,11 @@ class GoogleDriveCloudReplica
         segments: manifest.segments,
         processedByDevice: manifest.processedByDevice,
         deliveryLedger: manifest.deliveryLedger,
+        snapshotFileName: manifest.snapshotFileName,
+        snapshotChecksum: manifest.snapshotChecksum,
+        snapshotEntryCount: manifest.snapshotEntryCount,
+        snapshotSizeBytes: manifest.snapshotSizeBytes,
+        snapshotCreatedAt: manifest.snapshotCreatedAt,
       );
     });
   }
@@ -303,7 +416,7 @@ class GoogleDriveCloudReplica
         queryParameters: <String, dynamic>{
           'spaces': 'appDataFolder',
           'q': 'trashed = false',
-          'fields': 'nextPageToken,files(id,name,md5Checksum)',
+          'fields': 'nextPageToken,files(id,name,md5Checksum,size)',
           'pageSize': 1000,
           'pageToken': ?pageToken,
         },
@@ -319,6 +432,7 @@ class GoogleDriveCloudReplica
               id: '${file['id'] ?? ''}',
               name: '${file['name'] ?? ''}',
               checksum: file['md5Checksum']?.toString(),
+              sizeBytes: int.tryParse('${file['size'] ?? ''}'),
             ),
           ),
         );
@@ -335,7 +449,7 @@ class GoogleDriveCloudReplica
       queryParameters: <String, dynamic>{
         'spaces': 'appDataFolder',
         'q': "name = '$escaped' and trashed = false",
-        'fields': 'files(id,name,md5Checksum)',
+        'fields': 'files(id,name,md5Checksum,size)',
         'pageSize': 2,
       },
       options: _options(),
@@ -354,19 +468,28 @@ class GoogleDriveCloudReplica
       id: '${first['id'] ?? ''}',
       name: '${first['name'] ?? name}',
       checksum: first['md5Checksum']?.toString(),
+      sizeBytes: int.tryParse('${first['size'] ?? ''}'),
     );
   }
 
-  Future<String> _download(String fileId) async {
+  Future<String> _download(
+    String fileId, {
+    void Function(int received, int total)? onProgress,
+  }) async {
     final Response<String> response = await _dio.get<String>(
       '${AppConstants.googleDriveApiBaseUrl}/files/$fileId',
       queryParameters: const <String, String>{'alt': 'media'},
       options: _options(),
+      onReceiveProgress: onProgress,
     );
     return response.data ?? '';
   }
 
-  Future<CloudReplicaFile> _createJsonFile(String name, String content) async {
+  Future<CloudReplicaFile> _createJsonFile(
+    String name,
+    String content, {
+    void Function(int sent, int total)? onProgress,
+  }) async {
     final String boundary =
         'mirushin-${DateTime.now().microsecondsSinceEpoch}-${Random.secure().nextInt(1 << 30)}';
     final String body =
@@ -392,6 +515,7 @@ class GoogleDriveCloudReplica
           'Content-Type': 'multipart/related; boundary=$boundary',
         },
       ),
+      onSendProgress: onProgress,
     );
     final Object? data = response.data;
     if (data is! Map<String, dynamic>) {
@@ -401,6 +525,7 @@ class GoogleDriveCloudReplica
       id: '${data['id'] ?? ''}',
       name: '${data['name'] ?? name}',
       checksum: data['md5Checksum']?.toString(),
+      sizeBytes: utf8.encode(content).length,
     );
   }
 
@@ -408,6 +533,7 @@ class GoogleDriveCloudReplica
     CloudReplicaFile file,
     String content, {
     String? etag,
+    void Function(int sent, int total)? onProgress,
   }) async {
     final Response<dynamic> response = await _dio.patch<dynamic>(
       '${AppConstants.googleDriveUploadBaseUrl}/files/${file.id}',
@@ -422,6 +548,7 @@ class GoogleDriveCloudReplica
           if (etag != null && etag.isNotEmpty) 'If-Match': etag,
         },
       ),
+      onSendProgress: onProgress,
     );
     final Object? data = response.data;
     if (data is! Map<String, dynamic>) {
@@ -431,6 +558,7 @@ class GoogleDriveCloudReplica
       id: '${data['id'] ?? file.id}',
       name: '${data['name'] ?? file.name}',
       checksum: data['md5Checksum']?.toString(),
+      sizeBytes: utf8.encode(content).length,
     );
   }
 
@@ -486,6 +614,28 @@ class GoogleDriveCloudReplica
     }
   }
 }
+
+DriveReplicaManifest _copyManifest(
+  DriveReplicaManifest manifest, {
+  required int revision,
+  String? snapshotFileName,
+  String? snapshotChecksum,
+  int? snapshotEntryCount,
+  int? snapshotSizeBytes,
+  DateTime? snapshotCreatedAt,
+}) => DriveReplicaManifest(
+  revision: revision,
+  segments: manifest.segments,
+  processedByDevice: manifest.processedByDevice,
+  deliveryLedger: manifest.deliveryLedger,
+  leaseOwner: manifest.leaseOwner,
+  leaseExpiresAt: manifest.leaseExpiresAt,
+  snapshotFileName: snapshotFileName ?? manifest.snapshotFileName,
+  snapshotChecksum: snapshotChecksum ?? manifest.snapshotChecksum,
+  snapshotEntryCount: snapshotEntryCount ?? manifest.snapshotEntryCount,
+  snapshotSizeBytes: snapshotSizeBytes ?? manifest.snapshotSizeBytes,
+  snapshotCreatedAt: snapshotCreatedAt ?? manifest.snapshotCreatedAt,
+);
 
 class _ManifestRead {
   const _ManifestRead({required this.value, required this.exists, this.file});

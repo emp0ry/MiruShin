@@ -956,7 +956,7 @@ Future<AniListEntrySaveResult> saveAniListEntryEdit({
     if (showSuccessSnack && context.mounted) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text(context.t('AniList entry saved'))));
+      ).showSnackBar(SnackBar(content: Text(context.t('Saved to Library'))));
     }
     return AniListEntrySaveResult.saved;
   }
@@ -1090,13 +1090,9 @@ Future<AniListEntrySaveResult> saveAniListEntryEdit({
   container.invalidate(trackerLocalAnimeLibraryProvider);
   final bool queued = result.pendingTargets.isNotEmpty;
   if (showSuccessSnack && context.mounted) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          context.t(queued ? 'AniList edit queued' : 'AniList entry saved'),
-        ),
-      ),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(context.t('Saved to Library'))));
   }
   return queued ? AniListEntrySaveResult.queued : AniListEntrySaveResult.saved;
 }
@@ -1134,9 +1130,8 @@ Future<void> deleteAniListEntry({
     }
   }
 
-  late final SyncDispatchResult result;
   try {
-    result = await sync.deleteEntry(
+    await sync.deleteEntry(
       externalIds: entry.mediaItem.externalIds,
       mediaId: entry.mediaItem.id,
       mediaTitle: entry.mediaItem.title,
@@ -1156,17 +1151,9 @@ Future<void> deleteAniListEntry({
   applyLocalDelete();
   container.invalidate(trackerLocalAnimeLibraryProvider);
   if (context.mounted) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          context.t(
-            result.pendingTargets.isEmpty
-                ? 'Removed from AniList'
-                : 'AniList removal queued',
-          ),
-        ),
-      ),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(context.t('Removed from Library'))));
   }
 }
 

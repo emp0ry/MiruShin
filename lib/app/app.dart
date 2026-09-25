@@ -47,6 +47,7 @@ class _MiruShinAppState extends ConsumerState<MiruShinApp> {
   late final AppLifecycleListener _lifecycleListener;
   late final PlaybackController _playbackController;
   late final SoraJsRuntime _soraRuntime;
+  late final GoogleDriveSyncController _googleDriveSyncController;
   Future<void>? _exitCleanup;
 
   @override
@@ -54,6 +55,9 @@ class _MiruShinAppState extends ConsumerState<MiruShinApp> {
     super.initState();
     _playbackController = ref.read(playbackControllerProvider.notifier);
     _soraRuntime = ref.read(soraJsRuntimeProvider);
+    _googleDriveSyncController = ref.read(
+      googleDriveSyncControllerProvider.notifier,
+    );
     _router = buildAppRouter(widget.initialRoute);
     MiruShinDeepLinkService.instance.attachRouter(
       _router,
@@ -91,6 +95,7 @@ class _MiruShinAppState extends ConsumerState<MiruShinApp> {
     if (cleanup != null) return cleanup;
 
     return _exitCleanup = Future.wait<void>(<Future<void>>[
+      _googleDriveSyncController.prepareForExit(),
       _playbackController
           .stop()
           .timeout(_exitPlaybackCleanupTimeout)

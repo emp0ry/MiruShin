@@ -57,8 +57,38 @@ void main() {
         ]),
         workspacePreferenceKey('anilist:1', SettingsPreferences.appLanguageKey):
             'ru',
+        workspacePreferenceKey(
+          'anilist:1',
+          WorkspacePreferencesStore.airingScopeKey,
+        ): 'watching',
         workspacePreferenceKey('anilist:1', 'library.anilist.ANIME.All.sort'):
             'scoreHighest',
+        workspacePreferenceKey('anilist:1', 'library.anilist.ANIME.All.genres'):
+            <String>['Action', 'Drama'],
+        workspacePreferenceKey(
+          'anilist:1',
+          'library.anilist.ANIME.All.genres.excluded',
+        ): <String>[
+          'Horror',
+        ],
+        workspacePreferenceKey(
+          'anilist:1',
+          'library.anilist.ANIME.current.flags',
+        ): <String>[
+          'behind',
+        ],
+        workspacePreferenceKey(
+          'anilist:1',
+          'library.anilist.MANGA.completed.grid',
+        ): true,
+        workspacePreferenceKey(
+          'anilist:1',
+          'library.anilist.MANGA.completed.minScore',
+        ): 7.5,
+        workspacePreferenceKey('anilist:1', 'library.local.providers'):
+            <String>['TMDB'],
+        workspacePreferenceKey('anilist:1', 'library.local.providers.excluded'):
+            <String>['AniList'],
       });
       final SharedPreferences preferencesA =
           await SharedPreferences.getInstance();
@@ -80,7 +110,12 @@ void main() {
           if (preferencesA.get(key) case final Object value) key: value,
       };
 
-      SharedPreferences.setMockInitialValues(<String, Object>{});
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        workspacePreferenceKey(
+          'anilist:1',
+          WorkspacePreferencesStore.airingScopeKey,
+        ): 'all',
+      });
       final SharedPreferences preferencesB =
           await SharedPreferences.getInstance();
       final PreferenceDriveSyncResult restored =
@@ -103,8 +138,77 @@ void main() {
         'ru',
       );
       expect(
+        preferencesB.getString(
+          workspacePreferenceKey(
+            'anilist:1',
+            WorkspacePreferencesStore.airingScopeKey,
+          ),
+        ),
+        'watching',
+      );
+      expect(
         preferencesB.getString(PreferenceDriveSyncService.watchConnectionKey),
         contains('relay.example'),
+      );
+      expect(
+        preferencesB.getStringList(
+          workspacePreferenceKey(
+            'anilist:1',
+            'library.anilist.ANIME.All.genres',
+          ),
+        ),
+        <String>['Action', 'Drama'],
+      );
+      expect(
+        preferencesB.getStringList(
+          workspacePreferenceKey(
+            'anilist:1',
+            'library.anilist.ANIME.All.genres.excluded',
+          ),
+        ),
+        <String>['Horror'],
+      );
+      expect(
+        preferencesB.getStringList(
+          workspacePreferenceKey(
+            'anilist:1',
+            'library.anilist.ANIME.current.flags',
+          ),
+        ),
+        <String>['behind'],
+      );
+      expect(
+        preferencesB.getBool(
+          workspacePreferenceKey(
+            'anilist:1',
+            'library.anilist.MANGA.completed.grid',
+          ),
+        ),
+        isTrue,
+      );
+      expect(
+        preferencesB.getDouble(
+          workspacePreferenceKey(
+            'anilist:1',
+            'library.anilist.MANGA.completed.minScore',
+          ),
+        ),
+        7.5,
+      );
+      expect(
+        preferencesB.getStringList(
+          workspacePreferenceKey('anilist:1', 'library.local.providers'),
+        ),
+        <String>['TMDB'],
+      );
+      expect(
+        preferencesB.getStringList(
+          workspacePreferenceKey(
+            'anilist:1',
+            'library.local.providers.excluded',
+          ),
+        ),
+        <String>['AniList'],
       );
       const AppSecureStorage secureB = AppSecureStorage();
       expect(await secureB.readFanartTvApiKey(), 'fanart-secret');

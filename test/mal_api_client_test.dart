@@ -27,6 +27,10 @@ void main() {
     expect(details?.externalIds['mal_source'], 'MANGA');
     expect(details?.externalIds['mal_nsfw'], 'white');
     expect(details?.externalIds['mal_start_date'], '2009-04-05');
+    expect(details?.externalIds['mal_end_date'], '2010-07-04');
+    expect(details?.externalIds['mal_num_list_users'], '3500000');
+    expect(details?.externalIds['mirushin_mal_metadata'], 'rich_v2');
+    expect(details?.backdropUrl, contains('backdrop.jpg'));
     expect(adapter.authorizationHeaders, everyElement('Bearer token'));
   });
 
@@ -127,6 +131,11 @@ class _FakeMalAdapter implements HttpClientAdapter {
     },
     'start_season': <String, dynamic>{'year': 2009, 'season': 'spring'},
     'start_date': '2009-04-05',
+    'end_date': '2010-07-04',
+    'rank': 1,
+    'popularity': 3,
+    'num_list_users': 3500000,
+    'num_scoring_users': 2100000,
     'mean': 9.1,
     'media_type': 'tv',
     'source': 'manga',
