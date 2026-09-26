@@ -19,13 +19,16 @@ class GoogleDriveCloudReplica
     required String accessToken,
     this.replicaNamespace = 'legacy',
     this.includeLegacyLibrary = false,
+    CancelToken? cancelToken,
     Dio? dio,
   }) : _dio = dio ?? Dio(),
+       _cancelToken = cancelToken,
        _accessToken = accessToken;
 
   static const String manifestName = 'mirushin.manifest.v1.json';
 
   final Dio _dio;
+  final CancelToken? _cancelToken;
   final String _accessToken;
   final String replicaNamespace;
   final bool includeLegacyLibrary;
@@ -139,6 +142,27 @@ class GoogleDriveCloudReplica
       fileCount: files.length,
       snapshotBytes: snapshots,
     );
+  }
+
+  /// Deletes only MiruShin-owned files from the private appDataFolder.
+  /// Other Drive files are outside this OAuth scope and are never visible.
+  Future<int> deleteAllMiruShinData({
+    void Function(int completed, int total)? onProgress,
+  }) async {
+    final List<CloudReplicaFile> files = (await _listFiles())
+        .where((CloudReplicaFile file) => file.name.startsWith('mirushin.'))
+        .toList(growable: false);
+    var completed = 0;
+    for (final CloudReplicaFile file in files) {
+      await _dio.delete<void>(
+        '${AppConstants.googleDriveApiBaseUrl}/files/${file.id}',
+        options: _options(),
+        cancelToken: _cancelToken,
+      );
+      completed += 1;
+      onProgress?.call(completed, files.length);
+    }
+    return completed;
   }
 
   @override
@@ -421,6 +445,7 @@ class GoogleDriveCloudReplica
           'pageToken': ?pageToken,
         },
         options: _options(),
+        cancelToken: _cancelToken,
       );
       final Object? data = response.data;
       if (data is! Map<String, dynamic>) break;
@@ -453,6 +478,7 @@ class GoogleDriveCloudReplica
         'pageSize': 2,
       },
       options: _options(),
+      cancelToken: _cancelToken,
     );
     final Object? data = response.data;
     final Object? files = data is Map<String, dynamic> ? data['files'] : null;
@@ -481,6 +507,7 @@ class GoogleDriveCloudReplica
       queryParameters: const <String, String>{'alt': 'media'},
       options: _options(),
       onReceiveProgress: onProgress,
+      cancelToken: _cancelToken,
     );
     return response.data ?? '';
   }
@@ -516,6 +543,7 @@ class GoogleDriveCloudReplica
         },
       ),
       onSendProgress: onProgress,
+      cancelToken: _cancelToken,
     );
     final Object? data = response.data;
     if (data is! Map<String, dynamic>) {
@@ -549,6 +577,7 @@ class GoogleDriveCloudReplica
         },
       ),
       onSendProgress: onProgress,
+      cancelToken: _cancelToken,
     );
     final Object? data = response.data;
     if (data is! Map<String, dynamic>) {
@@ -571,6 +600,7 @@ class GoogleDriveCloudReplica
       '${AppConstants.googleDriveApiBaseUrl}/files/${file.id}',
       queryParameters: const <String, String>{'alt': 'media'},
       options: _options(),
+      cancelToken: _cancelToken,
     );
     final Object? decoded = jsonDecode(response.data ?? '{}');
     return _ManifestRead(

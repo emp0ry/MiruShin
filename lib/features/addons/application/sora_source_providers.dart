@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../../features/settings/application/settings_state.dart';
 import '../../../shared/models/media_item.dart';
 import '../../catalog/application/catalog_mode.dart';
+import '../../library/application/canonical_library_repository.dart';
 import '../../watch/domain/normalized_models.dart';
 import '../data/anime_titles_service.dart';
 import '../data/sora_js_runtime.dart';
@@ -548,11 +549,13 @@ bool _sameStringList(List<String> a, List<String> b) {
 }
 
 class SoraEpisodeProgressController extends Notifier<Set<String>> {
-  static const String _key = 'sora.watchedEpisodes';
+  static const String _baseKey = 'sora.watchedEpisodes';
+  late LibraryWorkspaceScope _workspace;
 
   @override
   Set<String> build() {
-    unawaited(_load());
+    _workspace = ref.watch(libraryWorkspaceScopeProvider);
+    unawaited(_load(_workspace));
     return <String>{};
   }
 
@@ -564,9 +567,21 @@ class SoraEpisodeProgressController extends Notifier<Set<String>> {
     return '$mediaId|${result.addonId}|${result.href}|${episode.href}';
   }
 
-  Future<void> _load() async {
+  Future<void> _load(LibraryWorkspaceScope workspace) async {
+    final String key = '$_baseKey.${workspace.replicaNamespace}';
     final SharedPreferences preferences = await SharedPreferences.getInstance();
-    state = (preferences.getStringList(_key) ?? const <String>[]).toSet();
+    final List<String>? scoped = preferences.getStringList(key);
+    final List<String> loaded =
+        scoped ??
+        (workspace.importsLegacyData
+            ? preferences.getStringList(_baseKey)
+            : null) ??
+        const <String>[];
+    if (scoped == null && loaded.isNotEmpty) {
+      await preferences.setStringList(key, loaded);
+    }
+    if (!ref.mounted || _workspace.workspaceId != workspace.workspaceId) return;
+    state = loaded.toSet();
   }
 }
 

@@ -66,10 +66,13 @@ final trackerReconciliationLifecycleProvider = Provider<void>((Ref ref) {
     }
   }
 
-  void schedule({bool force = false}) {
+  void schedule({
+    bool force = false,
+    Duration delay = const Duration(seconds: 1),
+  }) {
     if (disposed) return;
     debounce?.cancel();
-    debounce = Timer(const Duration(seconds: 1), () {
+    debounce = Timer(delay, () {
       if (disposed) return;
       unawaited(reconcile(force: force));
     });
@@ -78,7 +81,9 @@ final trackerReconciliationLifecycleProvider = Provider<void>((Ref ref) {
   unawaited(() async {
     await ref.read(settingsProvider.notifier).ready;
     if (disposed) return;
-    schedule(force: true);
+    // Reconciliation stays automatic, but does not compete with the first UI
+    // frame, cached Board and local-library open on slower mobile devices.
+    schedule(force: true, delay: const Duration(seconds: 3));
   }());
 
   ref.listen(

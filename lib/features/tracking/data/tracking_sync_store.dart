@@ -108,6 +108,17 @@ class SharedPreferencesTrackingSyncStore implements TrackingSyncStore {
   static const String healthKey = 'tracking.providerHealth.v1';
   static const String _migrationKey = 'tracking.syncJournal.v1.migrated';
 
+  /// Removes only the legacy bulk payload after the canonical SQLite import
+  /// has been transactionally verified. This prevents NSUserDefaults from
+  /// retaining megabytes of duplicate library data forever.
+  Future<void> clearMigratedData() async {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    await prefs.remove(statesKey);
+    await prefs.remove(journalKey);
+    await prefs.remove(favoritesKey);
+    await prefs.remove(healthKey);
+  }
+
   @override
   Future<List<UserMediaState>> loadStates() async {
     final SharedPreferences prefs = await SharedPreferences.getInstance();

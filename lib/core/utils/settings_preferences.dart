@@ -39,6 +39,8 @@ class SettingsPreferences {
   static const String anilistSavedAccountsKey = 'settings.anilistSavedAccounts';
   static const String canonicalLibraryOwnerAniListIdKey =
       'settings.canonicalLibraryOwnerAniListId';
+  static const String selectedLibraryAniListIdKey =
+      'settings.selectedLibraryAniListId';
   static const String anilistScoreFormatKey = 'settings.anilistScoreFormat';
   static const String anilistUserSettingsCacheKey =
       'settings.anilistUserSettingsCache';
@@ -150,6 +152,9 @@ class SettingsPreferences {
   int? readCanonicalLibraryOwnerAniListId() =>
       _preferences.getInt(canonicalLibraryOwnerAniListIdKey);
 
+  int? readSelectedLibraryAniListId() =>
+      _preferences.getInt(selectedLibraryAniListIdKey);
+
   String readAniListScoreFormat() {
     final String value =
         _preferences.getString(anilistScoreFormatKey) ?? 'POINT_10_DECIMAL';
@@ -255,6 +260,9 @@ class SettingsPreferences {
 
   Future<void> saveCanonicalLibraryOwnerAniListId(int viewerId) =>
       _preferences.setInt(canonicalLibraryOwnerAniListIdKey, viewerId);
+
+  Future<void> saveSelectedLibraryAniListId(int viewerId) =>
+      _preferences.setInt(selectedLibraryAniListIdKey, viewerId);
 
   Future<void> saveAniListScoreFormat(String value) => _preferences.setString(
     anilistScoreFormatKey,

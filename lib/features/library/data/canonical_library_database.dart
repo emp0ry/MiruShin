@@ -1,6 +1,8 @@
 import 'package:drift/drift.dart';
 import 'package:drift_flutter/drift_flutter.dart';
 
+import 'canonical_library_database_path.dart';
+
 part 'canonical_library_database.g.dart';
 
 class CanonicalMediaRecords extends Table {
@@ -249,7 +251,14 @@ class CanonicalLibraryDatabase extends _$CanonicalLibraryDatabase {
   CanonicalLibraryDatabase([
     QueryExecutor? executor,
     String databaseName = 'mirushin_canonical_library_v1',
-  ]) : super(executor ?? _openDatabase(databaseName));
+    String? legacyDatabaseName,
+  ]) : super(
+         executor ??
+             _openDatabase(
+               databaseName,
+               legacyDatabaseName: legacyDatabaseName,
+             ),
+       );
 
   @override
   int get schemaVersion => 1;
@@ -264,9 +273,17 @@ class CanonicalLibraryDatabase extends _$CanonicalLibraryDatabase {
   );
 }
 
-QueryExecutor _openDatabase(String databaseName) => driftDatabase(
+QueryExecutor _openDatabase(
+  String databaseName, {
+  String? legacyDatabaseName,
+}) => driftDatabase(
   name: databaseName,
-  native: const DriftNativeOptions(shareAcrossIsolates: true),
+  native: DriftNativeOptions(
+    databaseDirectory: () => canonicalLibraryDatabaseDirectory(
+      databaseName: databaseName,
+      legacyDatabaseName: legacyDatabaseName,
+    ),
+  ),
   web: DriftWebOptions(
     sqlite3Wasm: Uri.parse('sqlite3.wasm'),
     driftWorker: Uri.parse('drift_worker.js'),

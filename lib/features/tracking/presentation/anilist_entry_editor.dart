@@ -97,6 +97,81 @@ enum AniListEntrySaveResult { saved, queued, failed }
 
 const String _aniListStatusNoneKey = '__none__';
 
+class _AniListEntryEditorControllers {
+  _AniListEntryEditorControllers({
+    required String progress,
+    required String notes,
+    required String repeat,
+    required String volumes,
+    required String malTags,
+  }) : progress = TextEditingController(text: progress),
+       notes = TextEditingController(text: notes),
+       repeat = TextEditingController(text: repeat),
+       volumes = TextEditingController(text: volumes),
+       malTags = TextEditingController(text: malTags);
+
+  final TextEditingController progress;
+  final TextEditingController notes;
+  final TextEditingController repeat;
+  final TextEditingController volumes;
+  final TextEditingController malTags;
+
+  void dispose() {
+    progress.dispose();
+    notes.dispose();
+    repeat.dispose();
+    volumes.dispose();
+    malTags.dispose();
+  }
+}
+
+class _AniListEntryEditorControllerScope extends StatefulWidget {
+  const _AniListEntryEditorControllerScope({
+    required this.initialProgress,
+    required this.initialNotes,
+    required this.initialRepeat,
+    required this.initialVolumes,
+    required this.initialMalTags,
+    required this.builder,
+  });
+
+  final String initialProgress;
+  final String initialNotes;
+  final String initialRepeat;
+  final String initialVolumes;
+  final String initialMalTags;
+  final Widget Function(
+    BuildContext context,
+    _AniListEntryEditorControllers controllers,
+  )
+  builder;
+
+  @override
+  State<_AniListEntryEditorControllerScope> createState() =>
+      _AniListEntryEditorControllerScopeState();
+}
+
+class _AniListEntryEditorControllerScopeState
+    extends State<_AniListEntryEditorControllerScope> {
+  late final _AniListEntryEditorControllers _controllers =
+      _AniListEntryEditorControllers(
+        progress: widget.initialProgress,
+        notes: widget.initialNotes,
+        repeat: widget.initialRepeat,
+        volumes: widget.initialVolumes,
+        malTags: widget.initialMalTags,
+      );
+
+  @override
+  void dispose() {
+    _controllers.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.builder(context, _controllers);
+}
+
 AniListListStatus? _statusFromEditorKey(String key) {
   if (key == _aniListStatusNoneKey) return null;
   for (final AniListListStatus status in AniListListStatus.values) {
@@ -236,266 +311,180 @@ Future<AniListEntryEditDraft?> showAniListEntryEditor(
             .where((String value) => value.isNotEmpty)
             .toList(growable: false)
       : const <String>[];
-  final TextEditingController progressController = TextEditingController(
-    text: progress.toString(),
-  );
-  final TextEditingController notesController = TextEditingController(
-    text: notes,
-  );
-  final TextEditingController repeatController = TextEditingController(
-    text: repeat.toString(),
-  );
-  final TextEditingController volumesController = TextEditingController(
-    text: draftProgressVolumes.toString(),
-  );
-  final TextEditingController malTagsController = TextEditingController(
-    text: initialMalTags.join(', '),
-  );
 
   int clampProgress(int value) {
     final int max = total == null || total <= 0 ? 100000 : total;
     return value.clamp(0, max).toInt();
   }
 
-  try {
-    return await showModalBottomSheet<AniListEntryEditDraft>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      barrierColor: Colors.black.withValues(alpha: 0.62),
-      builder: (BuildContext sheetContext) {
-        return StatefulBuilder(
-          builder: (BuildContext sheetContext, StateSetter setSheetState) {
-            void setProgress(int value) {
-              draftProgress = clampProgress(value);
-              progressController.text = draftProgress.toString();
-            }
+  return showModalBottomSheet<AniListEntryEditDraft>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    barrierColor: Colors.black.withValues(alpha: 0.62),
+    builder: (BuildContext sheetContext) {
+      return _AniListEntryEditorControllerScope(
+        initialProgress: progress.toString(),
+        initialNotes: notes,
+        initialRepeat: repeat.toString(),
+        initialVolumes: draftProgressVolumes.toString(),
+        initialMalTags: initialMalTags.join(', '),
+        builder: (BuildContext sheetContext, _AniListEntryEditorControllers controllers) {
+          final TextEditingController progressController = controllers.progress;
+          final TextEditingController notesController = controllers.notes;
+          final TextEditingController repeatController = controllers.repeat;
+          final TextEditingController volumesController = controllers.volumes;
+          final TextEditingController malTagsController = controllers.malTags;
+          return StatefulBuilder(
+            builder: (BuildContext sheetContext, StateSetter setSheetState) {
+              void setProgress(int value) {
+                draftProgress = clampProgress(value);
+                progressController.text = draftProgress.toString();
+              }
 
-            void setRepeat(int value) {
-              draftRepeat = value.clamp(0, 999).toInt();
-              repeatController.text = draftRepeat.toString();
-            }
+              void setRepeat(int value) {
+                draftRepeat = value.clamp(0, 999).toInt();
+                repeatController.text = draftRepeat.toString();
+              }
 
-            void setVolumes(int value) {
-              draftProgressVolumes = value.clamp(0, 100000).toInt();
-              volumesController.text = draftProgressVolumes.toString();
-            }
+              void setVolumes(int value) {
+                draftProgressVolumes = value.clamp(0, 100000).toInt();
+                volumesController.text = draftProgressVolumes.toString();
+              }
 
-            Future<void> pickDate({required bool started}) async {
-              final DateTime now = DateTime.now();
-              final DateTime? current = started
-                  ? draftStartedAt
-                  : draftCompletedAt;
-              final DateTime? selected = await showDatePicker(
-                context: sheetContext,
-                initialDate: current ?? now,
-                firstDate: DateTime(1900),
-                lastDate: DateTime(now.year + 2, 12, 31),
-              );
-              if (selected == null || !sheetContext.mounted) return;
-              setSheetState(() {
-                if (started) {
-                  draftStartedAt = selected;
-                } else {
-                  draftCompletedAt = selected;
-                }
-              });
-            }
+              Future<void> pickDate({required bool started}) async {
+                final DateTime now = DateTime.now();
+                final DateTime? current = started
+                    ? draftStartedAt
+                    : draftCompletedAt;
+                final DateTime? selected = await showDatePicker(
+                  context: sheetContext,
+                  initialDate: current ?? now,
+                  firstDate: DateTime(1900),
+                  lastDate: DateTime(now.year + 2, 12, 31),
+                );
+                if (selected == null || !sheetContext.mounted) return;
+                setSheetState(() {
+                  if (started) {
+                    draftStartedAt = selected;
+                  } else {
+                    draftCompletedAt = selected;
+                  }
+                });
+              }
 
-            Widget dateTile({
-              required String label,
-              required DateTime? value,
-              required bool started,
-            }) {
-              return ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: Icon(
-                  started
-                      ? Icons.play_circle_outline_rounded
-                      : Icons.flag_outlined,
-                ),
-                title: Text(label),
-                subtitle: Text(
-                  value == null
-                      ? sheetContext.t('Not set')
-                      : MaterialLocalizations.of(
-                          sheetContext,
-                        ).formatCompactDate(value),
-                ),
-                onTap: () => pickDate(started: started),
-                trailing: value == null
-                    ? const Icon(Icons.calendar_month_outlined)
-                    : IconButton(
-                        tooltip: sheetContext.t('Clear'),
-                        onPressed: () => setSheetState(() {
-                          if (started) {
-                            draftStartedAt = null;
-                          } else {
-                            draftCompletedAt = null;
-                          }
-                        }),
-                        icon: const Icon(Icons.close_rounded),
-                      ),
-              );
-            }
-
-            final String progressLimit = total == null ? '?' : total.toString();
-
-            return AniListSheetSurface(
-              child: SafeArea(
-                child: Padding(
-                  padding: EdgeInsets.only(
-                    left: AppSpacing.lg,
-                    right: AppSpacing.lg,
-                    top: AppSpacing.md,
-                    bottom:
-                        MediaQuery.viewInsetsOf(sheetContext).bottom +
-                        AppSpacing.lg,
+              Widget dateTile({
+                required String label,
+                required DateTime? value,
+                required bool started,
+              }) {
+                return ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(
+                    started
+                        ? Icons.play_circle_outline_rounded
+                        : Icons.flag_outlined,
                   ),
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.86,
+                  title: Text(label),
+                  subtitle: Text(
+                    value == null
+                        ? sheetContext.t('Not set')
+                        : MaterialLocalizations.of(
+                            sheetContext,
+                          ).formatCompactDate(value),
+                  ),
+                  onTap: () => pickDate(started: started),
+                  trailing: value == null
+                      ? const Icon(Icons.calendar_month_outlined)
+                      : IconButton(
+                          tooltip: sheetContext.t('Clear'),
+                          onPressed: () => setSheetState(() {
+                            if (started) {
+                              draftStartedAt = null;
+                            } else {
+                              draftCompletedAt = null;
+                            }
+                          }),
+                          icon: const Icon(Icons.close_rounded),
+                        ),
+                );
+              }
+
+              final String progressLimit = total == null
+                  ? '?'
+                  : total.toString();
+
+              return AniListSheetSurface(
+                child: SafeArea(
+                  child: Padding(
+                    padding: EdgeInsets.only(
+                      left: AppSpacing.lg,
+                      right: AppSpacing.lg,
+                      top: AppSpacing.md,
+                      bottom:
+                          MediaQuery.viewInsetsOf(sheetContext).bottom +
+                          AppSpacing.lg,
                     ),
-                    child: ListView(
-                      shrinkWrap: true,
-                      children: <Widget>[
-                        Center(
-                          child: Container(
-                            width: 42,
-                            height: 4,
-                            decoration: BoxDecoration(
-                              color: AppThemeExtension.of(
-                                context,
-                              ).textMutedColor.withValues(alpha: 0.7),
-                              borderRadius: AppRadius.all(2),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: AppSpacing.md),
-                        Row(
-                          children: <Widget>[
-                            Expanded(
-                              child: Text(
-                                entry.mediaItem.title,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: Theme.of(context).textTheme.titleMedium
-                                    ?.copyWith(fontWeight: FontWeight.w700),
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxHeight:
+                            MediaQuery.sizeOf(sheetContext).height * 0.86,
+                      ),
+                      child: ListView(
+                        shrinkWrap: true,
+                        children: <Widget>[
+                          Center(
+                            child: Container(
+                              width: 42,
+                              height: 4,
+                              decoration: BoxDecoration(
+                                color: AppThemeExtension.of(
+                                  context,
+                                ).textMutedColor.withValues(alpha: 0.7),
+                                borderRadius: AppRadius.all(2),
                               ),
                             ),
-                            AniListFavoriteButton(item: entry.mediaItem),
-                          ],
-                        ),
-                        const SizedBox(height: AppSpacing.md),
-                        DropdownButtonFormField<String>(
-                          initialValue: draftStatusKey,
-                          decoration: InputDecoration(
-                            labelText: sheetContext.t('Status'),
-                            border: const OutlineInputBorder(),
                           ),
-                          items: <DropdownMenuItem<String>>[
-                            DropdownMenuItem<String>(
-                              value: _aniListStatusNoneKey,
-                              child: Text(sheetContext.t('Not chosen')),
+                          const SizedBox(height: AppSpacing.md),
+                          Row(
+                            children: <Widget>[
+                              Expanded(
+                                child: Text(
+                                  entry.mediaItem.title,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Theme.of(context).textTheme.titleMedium
+                                      ?.copyWith(fontWeight: FontWeight.w700),
+                                ),
+                              ),
+                              AniListFavoriteButton(item: entry.mediaItem),
+                            ],
+                          ),
+                          const SizedBox(height: AppSpacing.md),
+                          DropdownButtonFormField<String>(
+                            initialValue: draftStatusKey,
+                            decoration: InputDecoration(
+                              labelText: sheetContext.t('Status'),
+                              border: const OutlineInputBorder(),
                             ),
-                            ...AniListListStatus.values.map(
-                              (AniListListStatus value) =>
-                                  DropdownMenuItem<String>(
-                                    value: value.graphQlValue,
-                                    child: Text(sheetContext.t(value.label)),
-                                  ),
-                            ),
-                          ],
-                          onChanged: (String? value) {
-                            if (value == null) return;
-                            setSheetState(() => draftStatusKey = value);
-                          },
-                        ),
-                        const SizedBox(height: AppSpacing.md),
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: <Widget>[
-                            Expanded(
-                              child: TvTextFieldFocus(
-                                child: TextField(
-                                  controller: progressController,
-                                  decoration: InputDecoration(
-                                    labelText: sheetContext.t('Progress'),
-                                    helperText: sheetContext.tf(
-                                      'of {total}',
-                                      <String, Object?>{'total': progressLimit},
+                            items: <DropdownMenuItem<String>>[
+                              DropdownMenuItem<String>(
+                                value: _aniListStatusNoneKey,
+                                child: Text(sheetContext.t('Not chosen')),
+                              ),
+                              ...AniListListStatus.values.map(
+                                (AniListListStatus value) =>
+                                    DropdownMenuItem<String>(
+                                      value: value.graphQlValue,
+                                      child: Text(sheetContext.t(value.label)),
                                     ),
-                                    border: const OutlineInputBorder(),
-                                  ),
-                                  keyboardType: TextInputType.number,
-                                  inputFormatters: <TextInputFormatter>[
-                                    FilteringTextInputFormatter.digitsOnly,
-                                  ],
-                                  onChanged: (String value) {
-                                    draftProgress = clampProgress(
-                                      int.tryParse(value) ?? 0,
-                                    );
-                                  },
-                                ),
                               ),
-                            ),
-                            const SizedBox(width: AppSpacing.sm),
-                            Padding(
-                              padding: const EdgeInsets.only(top: 4),
-                              child: AniListStepperButtons(
-                                onMinus: () => setSheetState(
-                                  () => setProgress(draftProgress - 1),
-                                ),
-                                onPlus: () => setSheetState(
-                                  () => setProgress(draftProgress + 1),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: AppSpacing.md),
-                        AniListScoreEditor(
-                          score: draftScore,
-                          format: scoreFormat,
-                          onChanged: (double value) {
-                            setSheetState(() => draftScore = value);
-                          },
-                        ),
-                        const SizedBox(height: AppSpacing.sm),
-                        Row(
-                          children: <Widget>[
-                            Expanded(
-                              child: TvTextFieldFocus(
-                                child: TextField(
-                                  controller: repeatController,
-                                  decoration: InputDecoration(
-                                    labelText: sheetContext.t('Repeat count'),
-                                    border: const OutlineInputBorder(),
-                                  ),
-                                  keyboardType: TextInputType.number,
-                                  inputFormatters: <TextInputFormatter>[
-                                    FilteringTextInputFormatter.digitsOnly,
-                                  ],
-                                  onChanged: (String value) {
-                                    draftRepeat = (int.tryParse(value) ?? 0)
-                                        .clamp(0, 999)
-                                        .toInt();
-                                  },
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: AppSpacing.sm),
-                            AniListStepperButtons(
-                              onMinus: () => setSheetState(
-                                () => setRepeat(draftRepeat - 1),
-                              ),
-                              onPlus: () => setSheetState(
-                                () => setRepeat(draftRepeat + 1),
-                              ),
-                            ),
-                          ],
-                        ),
-                        if (isManga) ...<Widget>[
+                            ],
+                            onChanged: (String? value) {
+                              if (value == null) return;
+                              setSheetState(() => draftStatusKey = value);
+                            },
+                          ),
                           const SizedBox(height: AppSpacing.md),
                           Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -503,9 +492,15 @@ Future<AniListEntryEditDraft?> showAniListEntryEditor(
                               Expanded(
                                 child: TvTextFieldFocus(
                                   child: TextField(
-                                    controller: volumesController,
+                                    controller: progressController,
                                     decoration: InputDecoration(
-                                      labelText: sheetContext.t('Volumes read'),
+                                      labelText: sheetContext.t('Progress'),
+                                      helperText: sheetContext.tf(
+                                        'of {total}',
+                                        <String, Object?>{
+                                          'total': progressLimit,
+                                        },
+                                      ),
                                       border: const OutlineInputBorder(),
                                     ),
                                     keyboardType: TextInputType.number,
@@ -513,10 +508,9 @@ Future<AniListEntryEditDraft?> showAniListEntryEditor(
                                       FilteringTextInputFormatter.digitsOnly,
                                     ],
                                     onChanged: (String value) {
-                                      draftProgressVolumes =
-                                          (int.tryParse(value) ?? 0)
-                                              .clamp(0, 100000)
-                                              .toInt();
+                                      draftProgress = clampProgress(
+                                        int.tryParse(value) ?? 0,
+                                      );
                                     },
                                   ),
                                 ),
@@ -526,340 +520,436 @@ Future<AniListEntryEditDraft?> showAniListEntryEditor(
                                 padding: const EdgeInsets.only(top: 4),
                                 child: AniListStepperButtons(
                                   onMinus: () => setSheetState(
-                                    () => setVolumes(draftProgressVolumes - 1),
+                                    () => setProgress(draftProgress - 1),
                                   ),
                                   onPlus: () => setSheetState(
-                                    () => setVolumes(draftProgressVolumes + 1),
+                                    () => setProgress(draftProgress + 1),
                                   ),
                                 ),
                               ),
                             ],
                           ),
-                        ],
-                        const SizedBox(height: AppSpacing.sm),
-                        ExpansionTile(
-                          tilePadding: EdgeInsets.zero,
-                          childrenPadding: EdgeInsets.zero,
-                          leading: const Icon(Icons.event_note_outlined),
-                          title: Text(sheetContext.t('Dates')),
-                          children: <Widget>[
-                            dateTile(
-                              label: sheetContext.t('Start date'),
-                              value: draftStartedAt,
-                              started: true,
-                            ),
-                            dateTile(
-                              label: sheetContext.t('Finish date'),
-                              value: draftCompletedAt,
-                              started: false,
-                            ),
-                          ],
-                        ),
-                        ExpansionTile(
-                          tilePadding: EdgeInsets.zero,
-                          childrenPadding: const EdgeInsets.only(
-                            bottom: AppSpacing.sm,
+                          const SizedBox(height: AppSpacing.md),
+                          AniListScoreEditor(
+                            score: draftScore,
+                            format: scoreFormat,
+                            onChanged: (double value) {
+                              setSheetState(() => draftScore = value);
+                            },
                           ),
-                          leading: const Icon(Icons.tune_rounded),
-                          title: Text(sheetContext.t('AniList options')),
-                          subtitle: Text(
-                            sheetContext.t(
-                              'These fields sync only where supported.',
-                            ),
-                          ),
-                          children: <Widget>[
-                            ListTile(
-                              contentPadding: EdgeInsets.zero,
-                              title: Text(sheetContext.t('Priority')),
-                              subtitle: Slider(
-                                value: draftPriority.toDouble(),
-                                min: 0,
-                                max: 100,
-                                divisions: 100,
-                                label: '$draftPriority',
-                                onChanged: (double value) => setSheetState(
-                                  () => draftPriority = value.round(),
-                                ),
-                              ),
-                              trailing: Text('$draftPriority'),
-                            ),
-                            SwitchListTile.adaptive(
-                              contentPadding: EdgeInsets.zero,
-                              title: Text(sheetContext.t('Private entry')),
-                              value: draftPrivate,
-                              onChanged: (bool value) =>
-                                  setSheetState(() => draftPrivate = value),
-                            ),
-                            SwitchListTile.adaptive(
-                              contentPadding: EdgeInsets.zero,
-                              title: Text(
-                                sheetContext.t('Hide from status lists'),
-                              ),
-                              value: draftHiddenFromStatusLists,
-                              onChanged: (bool value) => setSheetState(
-                                () => draftHiddenFromStatusLists = value,
-                              ),
-                            ),
-                            if (customListNames.isNotEmpty) ...<Widget>[
-                              Align(
-                                alignment: AlignmentDirectional.centerStart,
-                                child: Padding(
-                                  padding: const EdgeInsets.only(
-                                    top: AppSpacing.sm,
-                                    bottom: AppSpacing.xs,
-                                  ),
-                                  child: Text(
-                                    sheetContext.t('Custom lists'),
-                                    style: Theme.of(
-                                      sheetContext,
-                                    ).textTheme.titleSmall,
+                          const SizedBox(height: AppSpacing.sm),
+                          Row(
+                            children: <Widget>[
+                              Expanded(
+                                child: TvTextFieldFocus(
+                                  child: TextField(
+                                    controller: repeatController,
+                                    decoration: InputDecoration(
+                                      labelText: sheetContext.t('Repeat count'),
+                                      border: const OutlineInputBorder(),
+                                    ),
+                                    keyboardType: TextInputType.number,
+                                    inputFormatters: <TextInputFormatter>[
+                                      FilteringTextInputFormatter.digitsOnly,
+                                    ],
+                                    onChanged: (String value) {
+                                      draftRepeat = (int.tryParse(value) ?? 0)
+                                          .clamp(0, 999)
+                                          .toInt();
+                                    },
                                   ),
                                 ),
                               ),
-                              for (final String name in customListNames)
-                                CheckboxListTile(
-                                  contentPadding: EdgeInsets.zero,
-                                  dense: true,
-                                  title: Text(name),
-                                  value: draftCustomLists[name] == true,
-                                  onChanged: (bool? value) => setSheetState(
-                                    () =>
-                                        draftCustomLists[name] = value == true,
-                                  ),
+                              const SizedBox(width: AppSpacing.sm),
+                              AniListStepperButtons(
+                                onMinus: () => setSheetState(
+                                  () => setRepeat(draftRepeat - 1),
                                 ),
+                                onPlus: () => setSheetState(
+                                  () => setRepeat(draftRepeat + 1),
+                                ),
+                              ),
                             ],
-                            if (advancedScoreNames.isNotEmpty) ...<Widget>[
-                              Align(
-                                alignment: AlignmentDirectional.centerStart,
-                                child: Padding(
-                                  padding: const EdgeInsets.only(
-                                    top: AppSpacing.sm,
-                                    bottom: AppSpacing.xs,
-                                  ),
-                                  child: Text(
-                                    sheetContext.t('Advanced scores'),
-                                    style: Theme.of(
-                                      sheetContext,
-                                    ).textTheme.titleSmall,
-                                  ),
-                                ),
-                              ),
-                              for (final String name in advancedScoreNames)
-                                ListTile(
-                                  contentPadding: EdgeInsets.zero,
-                                  title: Text(name),
-                                  subtitle: Slider(
-                                    value: draftAdvancedScores[name] ?? 0,
-                                    min: 0,
-                                    max: 100,
-                                    divisions: 100,
-                                    label:
-                                        '${(draftAdvancedScores[name] ?? 0).round()}',
-                                    onChanged: (double value) => setSheetState(
-                                      () => draftAdvancedScores[name] = value,
+                          ),
+                          if (isManga) ...<Widget>[
+                            const SizedBox(height: AppSpacing.md),
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: <Widget>[
+                                Expanded(
+                                  child: TvTextFieldFocus(
+                                    child: TextField(
+                                      controller: volumesController,
+                                      decoration: InputDecoration(
+                                        labelText: sheetContext.t(
+                                          'Volumes read',
+                                        ),
+                                        border: const OutlineInputBorder(),
+                                      ),
+                                      keyboardType: TextInputType.number,
+                                      inputFormatters: <TextInputFormatter>[
+                                        FilteringTextInputFormatter.digitsOnly,
+                                      ],
+                                      onChanged: (String value) {
+                                        draftProgressVolumes =
+                                            (int.tryParse(value) ?? 0)
+                                                .clamp(0, 100000)
+                                                .toInt();
+                                      },
                                     ),
                                   ),
-                                  trailing: Text(
-                                    '${(draftAdvancedScores[name] ?? 0).round()}',
+                                ),
+                                const SizedBox(width: AppSpacing.sm),
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 4),
+                                  child: AniListStepperButtons(
+                                    onMinus: () => setSheetState(
+                                      () =>
+                                          setVolumes(draftProgressVolumes - 1),
+                                    ),
+                                    onPlus: () => setSheetState(
+                                      () =>
+                                          setVolumes(draftProgressVolumes + 1),
+                                    ),
                                   ),
                                 ),
-                            ],
+                              ],
+                            ),
                           ],
-                        ),
-                        if (entry.mediaItem.externalIds['mal'] != null ||
-                            malData.isNotEmpty)
+                          const SizedBox(height: AppSpacing.sm),
+                          ExpansionTile(
+                            tilePadding: EdgeInsets.zero,
+                            childrenPadding: EdgeInsets.zero,
+                            leading: const Icon(Icons.event_note_outlined),
+                            title: Text(sheetContext.t('Dates')),
+                            children: <Widget>[
+                              dateTile(
+                                label: sheetContext.t('Start date'),
+                                value: draftStartedAt,
+                                started: true,
+                              ),
+                              dateTile(
+                                label: sheetContext.t('Finish date'),
+                                value: draftCompletedAt,
+                                started: false,
+                              ),
+                            ],
+                          ),
                           ExpansionTile(
                             tilePadding: EdgeInsets.zero,
                             childrenPadding: const EdgeInsets.only(
                               bottom: AppSpacing.sm,
                             ),
-                            leading: const Icon(Icons.extension_outlined),
-                            title: Text(sheetContext.t('MyAnimeList options')),
+                            leading: const Icon(Icons.tune_rounded),
+                            title: Text(sheetContext.t('AniList options')),
+                            subtitle: Text(
+                              sheetContext.t(
+                                'These fields sync only where supported.',
+                              ),
+                            ),
                             children: <Widget>[
-                              DropdownButtonFormField<int>(
-                                initialValue: draftMalPriority,
-                                decoration: InputDecoration(
-                                  labelText: sheetContext.t('MAL priority'),
-                                  border: const OutlineInputBorder(),
+                              ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                title: Text(sheetContext.t('Priority')),
+                                subtitle: Slider(
+                                  value: draftPriority.toDouble(),
+                                  min: 0,
+                                  max: 100,
+                                  divisions: 100,
+                                  label: '$draftPriority',
+                                  onChanged: (double value) => setSheetState(
+                                    () => draftPriority = value.round(),
+                                  ),
                                 ),
-                                items: <DropdownMenuItem<int>>[
-                                  DropdownMenuItem<int>(
-                                    value: 0,
-                                    child: Text(sheetContext.t('Low')),
-                                  ),
-                                  DropdownMenuItem<int>(
-                                    value: 1,
-                                    child: Text(sheetContext.t('Medium')),
-                                  ),
-                                  DropdownMenuItem<int>(
-                                    value: 2,
-                                    child: Text(sheetContext.t('High')),
-                                  ),
-                                ],
-                                onChanged: (int? value) {
-                                  if (value == null) return;
-                                  setSheetState(() => draftMalPriority = value);
-                                },
+                                trailing: Text('$draftPriority'),
                               ),
-                              const SizedBox(height: AppSpacing.md),
-                              DropdownButtonFormField<int>(
-                                initialValue: draftMalRewatchValue,
-                                decoration: InputDecoration(
-                                  labelText: sheetContext.t(
-                                    isManga ? 'Reread value' : 'Rewatch value',
-                                  ),
-                                  border: const OutlineInputBorder(),
+                              SwitchListTile.adaptive(
+                                contentPadding: EdgeInsets.zero,
+                                title: Text(sheetContext.t('Private entry')),
+                                value: draftPrivate,
+                                onChanged: (bool value) =>
+                                    setSheetState(() => draftPrivate = value),
+                              ),
+                              SwitchListTile.adaptive(
+                                contentPadding: EdgeInsets.zero,
+                                title: Text(
+                                  sheetContext.t('Hide from status lists'),
                                 ),
-                                items: <DropdownMenuItem<int>>[
-                                  for (int value = 0; value <= 5; value += 1)
-                                    DropdownMenuItem<int>(
-                                      value: value,
-                                      child: Text('$value'),
+                                value: draftHiddenFromStatusLists,
+                                onChanged: (bool value) => setSheetState(
+                                  () => draftHiddenFromStatusLists = value,
+                                ),
+                              ),
+                              if (customListNames.isNotEmpty) ...<Widget>[
+                                Align(
+                                  alignment: AlignmentDirectional.centerStart,
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(
+                                      top: AppSpacing.sm,
+                                      bottom: AppSpacing.xs,
                                     ),
-                                ],
-                                onChanged: (int? value) {
-                                  if (value == null) return;
-                                  setSheetState(
-                                    () => draftMalRewatchValue = value,
-                                  );
-                                },
+                                    child: Text(
+                                      sheetContext.t('Custom lists'),
+                                      style: Theme.of(
+                                        sheetContext,
+                                      ).textTheme.titleSmall,
+                                    ),
+                                  ),
+                                ),
+                                for (final String name in customListNames)
+                                  CheckboxListTile(
+                                    contentPadding: EdgeInsets.zero,
+                                    dense: true,
+                                    title: Text(name),
+                                    value: draftCustomLists[name] == true,
+                                    onChanged: (bool? value) => setSheetState(
+                                      () => draftCustomLists[name] =
+                                          value == true,
+                                    ),
+                                  ),
+                              ],
+                              if (advancedScoreNames.isNotEmpty) ...<Widget>[
+                                Align(
+                                  alignment: AlignmentDirectional.centerStart,
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(
+                                      top: AppSpacing.sm,
+                                      bottom: AppSpacing.xs,
+                                    ),
+                                    child: Text(
+                                      sheetContext.t('Advanced scores'),
+                                      style: Theme.of(
+                                        sheetContext,
+                                      ).textTheme.titleSmall,
+                                    ),
+                                  ),
+                                ),
+                                for (final String name in advancedScoreNames)
+                                  ListTile(
+                                    contentPadding: EdgeInsets.zero,
+                                    title: Text(name),
+                                    subtitle: Slider(
+                                      value: draftAdvancedScores[name] ?? 0,
+                                      min: 0,
+                                      max: 100,
+                                      divisions: 100,
+                                      label:
+                                          '${(draftAdvancedScores[name] ?? 0).round()}',
+                                      onChanged: (double value) =>
+                                          setSheetState(
+                                            () => draftAdvancedScores[name] =
+                                                value,
+                                          ),
+                                    ),
+                                    trailing: Text(
+                                      '${(draftAdvancedScores[name] ?? 0).round()}',
+                                    ),
+                                  ),
+                              ],
+                            ],
+                          ),
+                          if (entry.mediaItem.externalIds['mal'] != null ||
+                              malData.isNotEmpty)
+                            ExpansionTile(
+                              tilePadding: EdgeInsets.zero,
+                              childrenPadding: const EdgeInsets.only(
+                                bottom: AppSpacing.sm,
                               ),
-                              const SizedBox(height: AppSpacing.md),
-                              TvTextFieldFocus(
-                                child: TextField(
-                                  controller: malTagsController,
+                              leading: const Icon(Icons.extension_outlined),
+                              title: Text(
+                                sheetContext.t('MyAnimeList options'),
+                              ),
+                              children: <Widget>[
+                                DropdownButtonFormField<int>(
+                                  initialValue: draftMalPriority,
                                   decoration: InputDecoration(
-                                    labelText: sheetContext.t('MAL tags'),
-                                    helperText: sheetContext.t(
-                                      'Separate tags with commas.',
+                                    labelText: sheetContext.t('MAL priority'),
+                                    border: const OutlineInputBorder(),
+                                  ),
+                                  items: <DropdownMenuItem<int>>[
+                                    DropdownMenuItem<int>(
+                                      value: 0,
+                                      child: Text(sheetContext.t('Low')),
+                                    ),
+                                    DropdownMenuItem<int>(
+                                      value: 1,
+                                      child: Text(sheetContext.t('Medium')),
+                                    ),
+                                    DropdownMenuItem<int>(
+                                      value: 2,
+                                      child: Text(sheetContext.t('High')),
+                                    ),
+                                  ],
+                                  onChanged: (int? value) {
+                                    if (value == null) return;
+                                    setSheetState(
+                                      () => draftMalPriority = value,
+                                    );
+                                  },
+                                ),
+                                const SizedBox(height: AppSpacing.md),
+                                DropdownButtonFormField<int>(
+                                  initialValue: draftMalRewatchValue,
+                                  decoration: InputDecoration(
+                                    labelText: sheetContext.t(
+                                      isManga
+                                          ? 'Reread value'
+                                          : 'Rewatch value',
                                     ),
                                     border: const OutlineInputBorder(),
                                   ),
+                                  items: <DropdownMenuItem<int>>[
+                                    for (int value = 0; value <= 5; value += 1)
+                                      DropdownMenuItem<int>(
+                                        value: value,
+                                        child: Text('$value'),
+                                      ),
+                                  ],
+                                  onChanged: (int? value) {
+                                    if (value == null) return;
+                                    setSheetState(
+                                      () => draftMalRewatchValue = value,
+                                    );
+                                  },
                                 ),
-                              ),
-                            ],
-                          ),
-                        if (entry.mediaItem.externalIds['shikimori'] != null ||
-                            providerSnapshots['shikimori'] != null)
-                          ExpansionTile(
-                            tilePadding: EdgeInsets.zero,
-                            leading: const Icon(Icons.sync_alt_rounded),
-                            title: Text(sheetContext.t('Shikimori options')),
-                            subtitle: Text(
-                              sheetContext.t(
-                                'Progress, score, rewatches and notes use the common fields above.',
-                              ),
-                            ),
-                          ),
-                        const SizedBox(height: AppSpacing.md),
-                        TextField(
-                          controller: notesController,
-                          minLines: 3,
-                          maxLines: 5,
-                          decoration: InputDecoration(
-                            labelText: sheetContext.t('Notes'),
-                            alignLabelWithHint: true,
-                            border: const OutlineInputBorder(),
-                          ),
-                        ),
-                        const SizedBox(height: AppSpacing.lg),
-                        Row(
-                          children: <Widget>[
-                            if (allowRemove) ...<Widget>[
-                              TextButton.icon(
-                                onPressed: () => Navigator.pop(
-                                  sheetContext,
-                                  const AniListEntryEditDraft.remove(),
-                                ),
-                                style: TextButton.styleFrom(
-                                  foregroundColor: AppColors.danger,
-                                ),
-                                icon: const Icon(Icons.delete_outline_rounded),
-                                label: Text(sheetContext.t('Remove')),
-                              ),
-                              const SizedBox(width: AppSpacing.sm),
-                            ],
-                            TextButton(
-                              onPressed: () => Navigator.pop(sheetContext),
-                              child: Text(sheetContext.t('Cancel')),
-                            ),
-                            const Spacer(),
-                            FilledButton.icon(
-                              onPressed: () {
-                                final int parsedProgress =
-                                    int.tryParse(
-                                      progressController.text.trim(),
-                                    ) ??
-                                    draftProgress;
-                                final int parsedRepeat =
-                                    int.tryParse(
-                                      repeatController.text.trim(),
-                                    ) ??
-                                    draftRepeat;
-                                Navigator.pop(
-                                  sheetContext,
-                                  AniListEntryEditDraft(
-                                    status: _statusFromEditorKey(
-                                      draftStatusKey,
+                                const SizedBox(height: AppSpacing.md),
+                                TvTextFieldFocus(
+                                  child: TextField(
+                                    controller: malTagsController,
+                                    decoration: InputDecoration(
+                                      labelText: sheetContext.t('MAL tags'),
+                                      helperText: sheetContext.t(
+                                        'Separate tags with commas.',
+                                      ),
+                                      border: const OutlineInputBorder(),
                                     ),
-                                    progress: clampProgress(parsedProgress),
-                                    score: draftScore <= 0 ? null : draftScore,
-                                    notes: notesController.text.trim(),
-                                    repeat: parsedRepeat.clamp(0, 999).toInt(),
-                                    progressVolumes:
-                                        int.tryParse(
-                                          volumesController.text.trim(),
-                                        ) ??
-                                        draftProgressVolumes,
-                                    startedAt: draftStartedAt,
-                                    completedAt: draftCompletedAt,
-                                    priority: draftPriority,
-                                    private: draftPrivate,
-                                    hiddenFromStatusLists:
-                                        draftHiddenFromStatusLists,
-                                    customLists: Map<String, bool>.from(
-                                      draftCustomLists,
-                                    ),
-                                    advancedScores: Map<String, double>.from(
-                                      draftAdvancedScores,
-                                    ),
-                                    scoreFormat: scoreFormat,
-                                    malPriority: draftMalPriority,
-                                    malRewatchValue: draftMalRewatchValue,
-                                    malTags: malTagsController.text
-                                        .split(',')
-                                        .map((String value) => value.trim())
-                                        .where(
-                                          (String value) => value.isNotEmpty,
-                                        )
-                                        .toSet()
-                                        .toList(growable: false),
-                                    extendedFieldsProvided: true,
                                   ),
-                                );
-                              },
-                              icon: const Icon(Icons.check_rounded),
-                              label: Text(sheetContext.t('Save')),
+                                ),
+                              ],
                             ),
-                          ],
-                        ),
-                      ],
+                          if (entry.mediaItem.externalIds['shikimori'] !=
+                                  null ||
+                              providerSnapshots['shikimori'] != null)
+                            ExpansionTile(
+                              tilePadding: EdgeInsets.zero,
+                              leading: const Icon(Icons.sync_alt_rounded),
+                              title: Text(sheetContext.t('Shikimori options')),
+                              subtitle: Text(
+                                sheetContext.t(
+                                  'Progress, score, rewatches and notes use the common fields above.',
+                                ),
+                              ),
+                            ),
+                          const SizedBox(height: AppSpacing.md),
+                          TextField(
+                            controller: notesController,
+                            minLines: 3,
+                            maxLines: 5,
+                            decoration: InputDecoration(
+                              labelText: sheetContext.t('Notes'),
+                              alignLabelWithHint: true,
+                              border: const OutlineInputBorder(),
+                            ),
+                          ),
+                          const SizedBox(height: AppSpacing.lg),
+                          Row(
+                            children: <Widget>[
+                              if (allowRemove) ...<Widget>[
+                                TextButton.icon(
+                                  onPressed: () => Navigator.pop(
+                                    sheetContext,
+                                    const AniListEntryEditDraft.remove(),
+                                  ),
+                                  style: TextButton.styleFrom(
+                                    foregroundColor: AppColors.danger,
+                                  ),
+                                  icon: const Icon(
+                                    Icons.delete_outline_rounded,
+                                  ),
+                                  label: Text(sheetContext.t('Remove')),
+                                ),
+                                const SizedBox(width: AppSpacing.sm),
+                              ],
+                              TextButton(
+                                onPressed: () => Navigator.pop(sheetContext),
+                                child: Text(sheetContext.t('Cancel')),
+                              ),
+                              const Spacer(),
+                              FilledButton.icon(
+                                onPressed: () {
+                                  final int parsedProgress =
+                                      int.tryParse(
+                                        progressController.text.trim(),
+                                      ) ??
+                                      draftProgress;
+                                  final int parsedRepeat =
+                                      int.tryParse(
+                                        repeatController.text.trim(),
+                                      ) ??
+                                      draftRepeat;
+                                  Navigator.pop(
+                                    sheetContext,
+                                    AniListEntryEditDraft(
+                                      status: _statusFromEditorKey(
+                                        draftStatusKey,
+                                      ),
+                                      progress: clampProgress(parsedProgress),
+                                      score: draftScore <= 0
+                                          ? null
+                                          : draftScore,
+                                      notes: notesController.text.trim(),
+                                      repeat: parsedRepeat
+                                          .clamp(0, 999)
+                                          .toInt(),
+                                      progressVolumes:
+                                          int.tryParse(
+                                            volumesController.text.trim(),
+                                          ) ??
+                                          draftProgressVolumes,
+                                      startedAt: draftStartedAt,
+                                      completedAt: draftCompletedAt,
+                                      priority: draftPriority,
+                                      private: draftPrivate,
+                                      hiddenFromStatusLists:
+                                          draftHiddenFromStatusLists,
+                                      customLists: Map<String, bool>.from(
+                                        draftCustomLists,
+                                      ),
+                                      advancedScores: Map<String, double>.from(
+                                        draftAdvancedScores,
+                                      ),
+                                      scoreFormat: scoreFormat,
+                                      malPriority: draftMalPriority,
+                                      malRewatchValue: draftMalRewatchValue,
+                                      malTags: malTagsController.text
+                                          .split(',')
+                                          .map((String value) => value.trim())
+                                          .where(
+                                            (String value) => value.isNotEmpty,
+                                          )
+                                          .toSet()
+                                          .toList(growable: false),
+                                      extendedFieldsProvided: true,
+                                    ),
+                                  );
+                                },
+                                icon: const Icon(Icons.check_rounded),
+                                label: Text(sheetContext.t('Save')),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
-              ),
-            );
-          },
-        );
-      },
-    );
-  } finally {
-    progressController.dispose();
-    notesController.dispose();
-    repeatController.dispose();
-    volumesController.dispose();
-    malTagsController.dispose();
-  }
+              );
+            },
+          );
+        },
+      );
+    },
+  );
 }
 
 // Save / delete

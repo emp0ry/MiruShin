@@ -34,7 +34,6 @@ import '../../tracking/application/anilist_library_provider.dart';
 import '../../tracking/application/tracker_library_provider.dart';
 import '../../tracking/domain/tracking_sync_models.dart';
 import '../../tracking/presentation/anilist_entry_editor.dart';
-import '../../tracking/presentation/anilist_login_flow.dart';
 import '../application/canonical_library_repository.dart';
 import '../application/local_library_provider.dart';
 import 'local_library_editor.dart';
@@ -283,24 +282,20 @@ class _LibraryPageState extends ConsumerState<LibraryPage>
               controller: _mainTab,
               children: <Widget>[
                 _AniListDataTab(
-                  key: ValueKey<String>(
-                    'anime-library:${settings.anilistViewerId ?? 'local'}',
-                  ),
+                  key: ValueKey<String>('anime-library:$workspaceId'),
                   connected: animeConnected,
                   mediaType: 'ANIME',
                   defaultPage: settings.anilistLibraryDefaultPage,
                   emptyMessage:
-                      'Add anime to your AniList account to see them here.',
+                      'Add anime to your MiruShin Library to see it here.',
                 ),
                 _AniListDataTab(
-                  key: ValueKey<String>(
-                    'manga-library:${settings.anilistViewerId ?? 'local'}',
-                  ),
+                  key: ValueKey<String>('manga-library:$workspaceId'),
                   connected: mangaConnected,
                   mediaType: 'MANGA',
                   defaultPage: settings.anilistLibraryDefaultPage,
                   emptyMessage:
-                      'Add manga to your AniList account to see them here.',
+                      'Add manga to your MiruShin Library to see it here.',
                 ),
               ],
             ),
@@ -398,6 +393,8 @@ class _AniListDataTabState extends ConsumerState<_AniListDataTab>
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    // Library rendering is local-first and never requires an AniList session.
+    // Provider APIs only reconcile changes into this canonical SQLite view.
     if (!widget.connected) {
       final AsyncValue<TrackerLocalAnimeLibrary> local = ref.watch(
         widget.mediaType == 'MANGA'
@@ -410,7 +407,6 @@ class _AniListDataTabState extends ConsumerState<_AniListDataTab>
           : ref.watch(trackerLibraryOptimisticMutationsProvider);
       return local.when(
         loading: () => _AniListTabContent(
-          connected: true,
           state: const _AniListTabViewState(
             phase: _AniListTabPhase.loading,
             loadingTitle: 'Loading your MiruShin Library...',
@@ -421,7 +417,6 @@ class _AniListDataTabState extends ConsumerState<_AniListDataTab>
           emptyMessage: widget.emptyMessage,
         ),
         error: (Object error, StackTrace stackTrace) => _AniListTabContent(
-          connected: true,
           state: _AniListTabViewState(
             phase: _AniListTabPhase.offline,
             offlineTitle: 'Local Library is unavailable',
@@ -454,7 +449,6 @@ class _AniListDataTabState extends ConsumerState<_AniListDataTab>
                   ),
                 );
           return _AniListTabContent(
-            connected: true,
             state: _AniListTabViewState(
               phase: filtered.folders.isEmpty
                   ? _AniListTabPhase.empty
@@ -710,7 +704,6 @@ class _AniListDataTabState extends ConsumerState<_AniListDataTab>
     }
 
     return _AniListTabContent(
-      connected: true,
       state: state,
       mediaType: widget.mediaType,
       defaultPage: widget.defaultPage,
@@ -721,40 +714,25 @@ class _AniListDataTabState extends ConsumerState<_AniListDataTab>
 
 // AniList tab content
 
-class _AniListTabContent extends ConsumerWidget {
+class _AniListTabContent extends StatelessWidget {
   const _AniListTabContent({
-    required this.connected,
     required this.state,
     required this.mediaType,
     required this.defaultPage,
     required this.emptyMessage,
   });
 
-  final bool connected;
   final _AniListTabViewState state;
   final String mediaType;
   final AniListLibraryDefaultPage defaultPage;
   final String emptyMessage;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     if (state.phase == _AniListTabPhase.loading) {
       return _AniListLoadingState(
         title: state.loadingTitle!,
         message: state.loadingMessage,
-      );
-    }
-    if (!connected) {
-      return NeutralPlaceholder(
-        title: 'AniList not connected',
-        message: 'Sign in to sync your anime library with AniList.',
-        icon: Icons.link_off_rounded,
-        height: 300,
-        action: FilledButton.icon(
-          onPressed: () => loginAniList(context, ref),
-          icon: const Icon(Icons.login_rounded),
-          label: Text(context.t('Sign in with AniList')),
-        ),
       );
     }
     if (state.phase == _AniListTabPhase.offline &&
@@ -794,7 +772,7 @@ class _AniListTabContent extends ConsumerWidget {
     }
     if (state.phase == _AniListTabPhase.empty) {
       return NeutralPlaceholder(
-        title: 'AniList library is empty',
+        title: 'Library is empty',
         message: emptyMessage,
         icon: Icons.video_library_rounded,
         height: 300,

@@ -123,7 +123,21 @@ final catalogRepositoryProvider = Provider.family<CatalogRepository?, CatalogMod
       null => null,
     },
     CatalogMode.anilist => AniListCatalogRepository(
-      client: ref.watch(anilistApiClientProvider),
+      // Catalog reads are latency-sensitive. Mutations and reconciliation keep
+      // the conservative client above, while Board/Discovery fail over to MAL
+      // after one bounded probe instead of waiting through two 30-second
+      // AniList timeouts.
+      client: AniListApiClient(
+        accessToken: settings.anilistAccessToken.trim().isEmpty
+            ? null
+            : settings.anilistAccessToken.trim(),
+        connectTimeout: const Duration(seconds: 4),
+        receiveTimeout: const Duration(seconds: 6),
+        retryTimeoutReads: false,
+        titleLanguage: aniListTitleLanguage,
+        showAdultContent: aniListAdultContent,
+        shikimori: ref.watch(shikimoriClientProvider),
+      ),
       cache: cache,
       cacheScope:
           'anilist.$aniListTitleLanguage.${aniListAdultContent ? 'adult' : 'safe'}',
@@ -169,6 +183,20 @@ final catalogRepositoryProvider = Provider.family<CatalogRepository?, CatalogMod
           error: error,
           fallbackSourceName: sourceName,
         );
+      },
+      shouldTryPrimary: () async {
+        final Map<TrackerSource, TrackerProviderHealth> health = await ref
+            .read(trackingSyncStoreProvider)
+            .loadHealth();
+        final TrackerProviderHealth? aniList = health[TrackerSource.anilist];
+        final DateTime? failedAt = aniList?.lastFailureAt;
+        if (aniList?.availability == TrackerProviderAvailability.unavailable &&
+            failedAt != null &&
+            DateTime.now().toUtc().difference(failedAt) <
+                const Duration(seconds: 45)) {
+          return false;
+        }
+        return true;
       },
       onOffline: offlineCallback(CatalogMode.anilist, 'AniList'),
     ),

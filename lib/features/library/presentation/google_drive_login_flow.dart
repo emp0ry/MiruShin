@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -19,23 +20,50 @@ import '../data/google_drive_oauth_service.dart';
 
 Future<void> loginGoogleDrive(BuildContext context, WidgetRef ref) async {
   if (TvPlatform.isAndroidTv) {
-    await _loginGoogleDriveTv(context, ref);
+    await _loginGoogleDriveDevice(context, ref);
     return;
   }
   if (!AppConstants.googleOAuthConfigured) {
     throw StateError('Google OAuth is not configured for this platform.');
   }
-  if (GoogleDriveNativeAuthService.isSupported) {
-    final String accessToken = await const GoogleDriveNativeAuthService()
-        .signIn();
-    final GoogleDriveTokenBundle tokens = GoogleDriveTokenBundle(
-      accessToken: accessToken,
-      refreshToken: '',
-      expiresAt: DateTime.now().toUtc().add(const Duration(minutes: 50)),
-    );
-    await ref.read(googleDriveSyncControllerProvider.notifier).connect(tokens);
-    await ref.read(googleDriveSyncControllerProvider.notifier).syncNow();
+  if (!kIsWeb && GoogleDriveNativeAuthService.isSupported) {
+    // Use the Worker-backed device/PKCE handoff on mobile. It has no embedded
+    // secret and does not depend on the final package signature or bundle id,
+    // so App Store, privately signed, LiveContainer, TrollStore and jailbreak
+    // installs follow the same OAuth path.
+    await _loginGoogleDriveDevice(context, ref);
     return;
+  }
+  if (GoogleDriveNativeAuthService.isSupported) {
+    try {
+      final String accessToken = await const GoogleDriveNativeAuthService()
+          .signIn();
+      final GoogleDriveTokenBundle tokens = GoogleDriveTokenBundle(
+        accessToken: accessToken,
+        refreshToken: '',
+        expiresAt: DateTime.now().toUtc().add(const Duration(minutes: 50)),
+      );
+      await ref
+          .read(googleDriveSyncControllerProvider.notifier)
+          .connect(tokens);
+      await ref.read(googleDriveSyncControllerProvider.notifier).syncNow();
+      return;
+    } on GoogleSignInException catch (error) {
+      if (error.code == GoogleSignInExceptionCode.canceled) rethrow;
+      // Native OAuth is tied to a package/bundle signature. Re-signed iOS and
+      // Android installs use the Worker-backed device flow instead.
+      if (!context.mounted) return;
+      await _loginGoogleDriveDevice(context, ref);
+      return;
+    } on PlatformException {
+      if (!context.mounted) return;
+      await _loginGoogleDriveDevice(context, ref);
+      return;
+    } on MissingPluginException {
+      if (!context.mounted) return;
+      await _loginGoogleDriveDevice(context, ref);
+      return;
+    }
   }
   final String clientId = AppConstants.googleOAuthClientId.trim();
   if (clientId.isEmpty) {
@@ -74,7 +102,10 @@ Future<void> loginGoogleDrive(BuildContext context, WidgetRef ref) async {
   await ref.read(googleDriveSyncControllerProvider.notifier).syncNow();
 }
 
-Future<void> _loginGoogleDriveTv(BuildContext context, WidgetRef ref) async {
+Future<void> _loginGoogleDriveDevice(
+  BuildContext context,
+  WidgetRef ref,
+) async {
   if (!AppConstants.googleOAuthTvConfigured) {
     throw StateError('Google TV OAuth is not configured in this build.');
   }

@@ -6,6 +6,27 @@ import 'package:mirushin/features/watch/domain/normalized_models.dart';
 import 'package:mirushin/shared/models/media_item.dart';
 
 void main() {
+  test('episode progress identity stays bounded and migrates legacy ids', () {
+    final String hugeHref = Uri.encodeComponent(
+      '{"kind":"episode","payload":"${List<String>.filled(20000, 'x').join()}"}',
+    );
+    final String current = soraEpisodeProgressMediaId(
+      addonId: 'demo-addon',
+      episodeHref: hugeHref,
+    )!;
+    expect(current.length, lessThan(100));
+    expect(
+      current,
+      soraEpisodeProgressMediaId(addonId: 'demo-addon', episodeHref: hugeHref),
+    );
+
+    final String legacy =
+        'sora:${Uri.encodeComponent('demo-addon')}:'
+        '${Uri.encodeComponent(hugeHref)}';
+    expect(compactSoraEpisodeProgressMediaId(legacy), current);
+    expect(compactSoraEpisodeProgressMediaId(current), current);
+  });
+
   test('stream request identity separates episode numbers and seasons', () {
     SoraEpisode episode(double number, int season) => SoraEpisode(
       number: number,

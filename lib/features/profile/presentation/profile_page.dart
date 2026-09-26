@@ -1743,9 +1743,10 @@ class _ProfileAniListSettingsPageState
                 icon: Icons.tune_rounded,
                 children: <Widget>[
                   SettingsRow(
-                    title: 'Auto track progress',
-                    subtitle:
-                        'Update AniList when 85% of an episode is watched.',
+                    title: context.t('Auto Progress'),
+                    subtitle: context.t(
+                      'Mark an episode watched at 85% and sync it to your connected trackers.',
+                    ),
                     trailing: Switch(
                       value: _autoTrackProgress,
                       onChanged: (bool value) {

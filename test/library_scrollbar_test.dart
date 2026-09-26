@@ -1147,6 +1147,55 @@ void main() {
       await tester.pumpAndSettle();
     },
   );
+
+  testWidgets(
+    'entry editor keeps text controllers alive through remove animation',
+    (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(1280, 1000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      AniListEntryEditDraft? result;
+      final AniListAnimeListEntry entry = _newEntry(137683, 'Remove safely');
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(
+            locale: const Locale('en'),
+            theme: AppTheme.dark().copyWith(platform: TargetPlatform.macOS),
+            supportedLocales: AppLocalizations.supportedLocales,
+            localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
+              AppLocalizations.delegate,
+              GlobalMaterialLocalizations.delegate,
+              GlobalWidgetsLocalizations.delegate,
+              GlobalCupertinoLocalizations.delegate,
+            ],
+            home: Scaffold(
+              body: _EntryEditorHarness(
+                entry: entry,
+                onResult: (AniListEntryEditDraft? value) => result = value,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const ValueKey<String>('open-entry-editor')));
+      await tester.pumpAndSettle();
+      expect(find.text('Remove'), findsOneWidget);
+
+      await tester.tap(find.text('Remove'));
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(tester.takeException(), isNull);
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(result?.remove, isTrue);
+    },
+  );
 }
 
 AniListAnimeListEntry _newEntry(int mediaId, String title) {
@@ -1249,6 +1298,36 @@ class _LibraryDeleteHarness extends ConsumerWidget {
         ),
         const Expanded(child: LibraryPage()),
       ],
+    );
+  }
+}
+
+class _EntryEditorHarness extends ConsumerWidget {
+  const _EntryEditorHarness({required this.entry, required this.onResult});
+
+  final AniListAnimeListEntry entry;
+  final ValueChanged<AniListEntryEditDraft?> onResult;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return FilledButton(
+      key: const ValueKey<String>('open-entry-editor'),
+      onPressed: () async {
+        onResult(
+          await showAniListEntryEditor(
+            context,
+            ref: ref,
+            entry: entry,
+            status: entry.status,
+            progress: entry.progress,
+            score: entry.score,
+            notes: entry.notes,
+            repeat: entry.repeat,
+            scoreFormat: 'POINT_10_DECIMAL',
+          ),
+        );
+      },
+      child: const Text('Open editor'),
     );
   }
 }

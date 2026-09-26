@@ -28,9 +28,35 @@ final trackerProviderHealthProvider =
       return ref.watch(trackingSyncStoreProvider).loadHealth();
     });
 
-final trackerSyncCoordinatorProvider = Provider<TrackerSyncCoordinator>(
-  (Ref ref) => TrackerSyncCoordinator(ref),
-);
+final trackerSyncCoordinatorProvider = Provider<TrackerSyncCoordinator>((
+  Ref ref,
+) {
+  // Give every AniList workspace its own mutation/network queues and pin all
+  // storage dependencies to that workspace. An operation started for account
+  // A must never resume after a switch and resolve its store as account B.
+  ref.watch(
+    settingsProvider.select(
+      (SettingsState settings) => (
+        anilistViewerId: settings.anilistViewerId,
+        anilistAccessToken: settings.anilistAccessToken,
+        malViewerId: settings.malViewerId,
+        hasMalSession: settings.hasMalSession,
+        shikimoriViewerId: settings.shikimoriViewerId,
+        hasShikimoriSession: settings.hasShikimoriSession,
+        primary: settings.primaryTrackerSource,
+      ),
+    ),
+  );
+  final SettingsState settings = ref.read(settingsProvider);
+  return TrackerSyncCoordinator(
+    ref,
+    store: ref.watch(trackingSyncStoreProvider),
+    settings: settings,
+    settingsController: ref.read(settingsProvider.notifier),
+    repository: ref.watch(canonicalLibraryRepositoryProvider),
+    effectiveTitleLanguage: settings.anilistTitleLanguage,
+  );
+});
 
 class TrackerLibrarySnapshot {
   const TrackerLibrarySnapshot({
@@ -142,18 +168,38 @@ const Set<UserMediaField> _shikimoriEntryFields = <UserMediaField>{
 /// which authenticated adapters are available, while the engine owns local
 /// state, identity reconciliation, conflict policy and journal replay.
 class TrackerSyncCoordinator {
-  TrackerSyncCoordinator(this._ref);
+  TrackerSyncCoordinator(
+    this._ref, {
+    TrackingSyncStore? store,
+    SettingsState? settings,
+    SettingsController? settingsController,
+    CanonicalLibraryRepository? repository,
+    String? effectiveTitleLanguage,
+  }) : _boundStore = store,
+       _boundSettings = settings,
+       _boundSettingsController = settingsController,
+       _boundRepository = repository,
+       _boundTitleLanguage = effectiveTitleLanguage;
 
   final Ref _ref;
+  final TrackingSyncStore? _boundStore;
+  final SettingsState? _boundSettings;
+  final SettingsController? _boundSettingsController;
+  final CanonicalLibraryRepository? _boundRepository;
+  final String? _boundTitleLanguage;
   // User mutations and remote work deliberately have separate lanes. A slow
   // tracker refresh/flush must never keep Add/Edit/Delete waiting before its
   // canonical SQLite transaction can commit.
   Future<void> _mutationTail = Future<void>.value();
   Future<void> _networkTail = Future<void>.value();
 
-  SettingsState get _settings => _ref.read(settingsProvider);
-  SettingsController get _controller => _ref.read(settingsProvider.notifier);
-  TrackingSyncStore get _store => _ref.read(trackingSyncStoreProvider);
+  SettingsState get _settings => _boundSettings ?? _ref.read(settingsProvider);
+  SettingsController get _controller =>
+      _boundSettingsController ?? _ref.read(settingsProvider.notifier);
+  TrackingSyncStore get _store =>
+      _boundStore ?? _ref.read(trackingSyncStoreProvider);
+  CanonicalLibraryRepository get _repository =>
+      _boundRepository ?? _ref.read(canonicalLibraryRepositoryProvider);
 
   Future<SyncDispatchResult> pushEpisodeProgress({
     required Map<String, String> externalIds,
@@ -554,6 +600,12 @@ class TrackerSyncCoordinator {
   );
 
   Future<Map<TrackerSource, TrackerProviderAdapter>> _adapters() async {
+    if (_boundSettings != null && !_ref.mounted) {
+      // This coordinator belongs to an account that has been switched out.
+      // Keep its pending outbox in that account's database for a later retry;
+      // never deliver it with the newly active account's credentials.
+      return const <TrackerSource, TrackerProviderAdapter>{};
+    }
     final SettingsState settings = _settings;
     final Map<TrackerSource, TrackerProviderAdapter> adapters =
         <TrackerSource, TrackerProviderAdapter>{};
@@ -561,9 +613,11 @@ class TrackerSyncCoordinator {
 
     final String aniListToken = settings.anilistAccessToken.trim();
     if (aniListToken.isNotEmpty) {
-      final String titleLanguage = _ref
-          .read(aniListEffectiveTitleLanguageProvider)
-          .trim();
+      final String fallbackTitleLanguage = _ref.read(
+        aniListEffectiveTitleLanguageProvider,
+      );
+      final String titleLanguage =
+          (_boundTitleLanguage ?? fallbackTitleLanguage).trim();
       adapters[TrackerSource.anilist] = _AniListAdapter(
         client: AniListApiClient(
           accessToken: aniListToken,
@@ -575,10 +629,13 @@ class TrackerSyncCoordinator {
 
     if (settings.hasMalSession) {
       final String? token = await _controller.validMalAccessToken();
+      if (_boundSettings != null && !_ref.mounted) return adapters;
       if (token != null && token.trim().isNotEmpty) {
         malMetadataClient = MalApiClient(
           accessToken: token,
-          onRefreshToken: _controller.refreshMalToken,
+          onRefreshToken: () => _ref.mounted
+              ? _controller.refreshMalToken()
+              : Future<String?>.value(),
         );
         adapters[TrackerSource.mal] = _MalAdapter(
           malMetadataClient,
@@ -590,12 +647,15 @@ class TrackerSyncCoordinator {
     final int? shikimoriViewerId = settings.shikimoriViewerId;
     if (settings.hasShikimoriSession && shikimoriViewerId != null) {
       final String? token = await _controller.validShikimoriAccessToken();
+      if (_boundSettings != null && !_ref.mounted) return adapters;
       if (token != null && token.trim().isNotEmpty) {
         adapters[TrackerSource.shikimori] = _ShikimoriAdapter(
           ShikimoriApiClient(
             accessToken: token,
             userId: shikimoriViewerId,
-            onRefreshToken: _controller.refreshShikimoriToken,
+            onRefreshToken: () => _ref.mounted
+                ? _controller.refreshShikimoriToken()
+                : Future<String?>.value(),
           ),
           shikimoriViewerId,
           enrichFromMal: malMetadataClient == null
@@ -604,14 +664,12 @@ class TrackerSyncCoordinator {
                     ? malMetadataClient!.fetchMangaDetails(malId)
                     : malMetadataClient!.fetchAnimeDetails(malId),
           onResolvedIdentity: (MediaIdentity identity, int shikimoriId) {
-            return _ref
-                .read(canonicalLibraryRepositoryProvider)
-                .attachVerifiedProviderBinding(
-                  identity: identity,
-                  provider: TrackerSource.shikimori,
-                  externalMediaId: shikimoriId,
-                  evidence: 'exact_mal_id_lookup',
-                );
+            return _repository.attachVerifiedProviderBinding(
+              identity: identity,
+              provider: TrackerSource.shikimori,
+              externalMediaId: shikimoriId,
+              evidence: 'exact_mal_id_lookup',
+            );
           },
         );
       }
@@ -620,7 +678,9 @@ class TrackerSyncCoordinator {
   }
 
   void _invalidateHealth() {
-    _ref.invalidate(trackerProviderHealthProvider);
+    if (_ref.mounted) {
+      _ref.invalidate(trackerProviderHealthProvider);
+    }
   }
 
   Future<T> _serialMutation<T>(Future<T> Function() action) =>

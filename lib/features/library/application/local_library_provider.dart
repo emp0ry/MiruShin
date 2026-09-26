@@ -56,8 +56,7 @@ class LocalLibraryController extends Notifier<List<LibraryItem>> {
 
   String _scopedKey(String base) {
     final LibraryWorkspaceScope? workspace = _workspace;
-    if (workspace == null || workspace.importsLegacyData) return base;
-    return '$base.${workspace.replicaNamespace}';
+    return workspace == null ? base : '$base.${workspace.replicaNamespace}';
   }
 
   EpisodeProgress? episodeProgress(String mediaId, int season, double episode) {
@@ -69,16 +68,17 @@ class LocalLibraryController extends Notifier<List<LibraryItem>> {
     int season,
     double episode,
   ) async {
+    final CanonicalLibraryRepository repository = ref.read(
+      canonicalLibraryRepositoryProvider,
+    );
     await _ensureEpisodeProgressLoaded();
     CanonicalEpisodeProgress? canonical;
     try {
-      canonical = await ref
-          .read(canonicalLibraryRepositoryProvider)
-          .loadEpisodeProgress(
-            mediaId: mediaId,
-            season: season,
-            episode: episode,
-          );
+      canonical = await repository.loadEpisodeProgress(
+        mediaId: mediaId,
+        season: season,
+        episode: episode,
+      );
     } on Object {
       // A failed/opening migration must never block playback. The legacy
       // SharedPreferences checkpoint remains the safe-mode source.
@@ -104,29 +104,36 @@ class LocalLibraryController extends Notifier<List<LibraryItem>> {
     MediaItem? mediaItem,
     bool persistCanonical = true,
   }) async {
-    await _ensureEpisodeProgressLoaded();
+    // Capture the workspace repository before the first async gap. Reading
+    // through `ref` after playback/navigation has disposed this notifier is
+    // unsafe and used to surface as an unhandled Riverpod exception while the
+    // app was closing or switching accounts.
+    final CanonicalLibraryRepository repository = ref.read(
+      canonicalLibraryRepositoryProvider,
+    );
+    final int generation = _workspaceGeneration;
     final MediaItem? canonicalMedia = mediaItem ?? find(mediaId)?.mediaItem;
+    await _ensureEpisodeProgressLoaded();
     final bool canonical = canonicalMedia == null
         ? !mediaId.startsWith('tmdb:')
         : _isCanonicalMedia(canonicalMedia);
     if (persistCanonical && canonical) {
       try {
-        await ref
-            .read(canonicalLibraryRepositoryProvider)
-            .saveEpisodeProgress(
-              mediaId: mediaId,
-              season: season,
-              episode: episode,
-              positionSeconds: positionSeconds,
-              durationSeconds: durationSeconds,
-              completed: completed,
-              mediaItem: canonicalMedia,
-            );
+        await repository.saveEpisodeProgress(
+          mediaId: mediaId,
+          season: season,
+          episode: episode,
+          positionSeconds: positionSeconds,
+          durationSeconds: durationSeconds,
+          completed: completed,
+          mediaItem: canonicalMedia,
+        );
       } on Object {
         // Persist the legacy checkpoint below. A later app launch retries the
         // verified migration without losing the user's current position.
       }
     }
+    if (!ref.mounted || generation != _workspaceGeneration) return;
     final String key = _episodeKey(mediaId, season, episode);
     _episodeProgress = Map<String, EpisodeProgress>.from(_episodeProgress)
       ..[key] = EpisodeProgress(
@@ -135,7 +142,7 @@ class LocalLibraryController extends Notifier<List<LibraryItem>> {
         updatedAt: DateTime.now(),
         completed: completed,
       );
-    await _persistEpisodeProgress();
+    await _persistEpisodeProgress(repository);
   }
 
   String _episodeKey(String mediaId, int season, double episode) =>
@@ -151,22 +158,26 @@ class LocalLibraryController extends Notifier<List<LibraryItem>> {
   Future<void> _loadEpisodeProgress() async {
     final int generation = _workspaceGeneration;
     final String storageKey = _episodeProgressKey;
+    final bool importsLegacyData = _workspace?.importsLegacyData == true;
     final CanonicalLibraryRepository repository = ref.read(
       canonicalLibraryRepositoryProvider,
     );
     final SharedPreferences preferences = await _prefs();
-    final Map<String, EpisodeProgress> global = _decodeEpisodeProgress(
-      preferences.getString(_baseEpisodeProgressKey),
+    final Map<String, EpisodeProgress> persisted = _decodeEpisodeProgressValue(
+      await repository.loadLocalEpisodeProgress(),
     );
-    final Map<String, EpisodeProgress> loaded =
-        _workspace?.importsLegacyData == true
-        ? global
-        : <String, EpisodeProgress>{
-            for (final MapEntry<String, EpisodeProgress> entry
-                in global.entries)
-              if (!_isCanonicalEpisodeKey(entry.key)) entry.key: entry.value,
-            ..._decodeEpisodeProgress(preferences.getString(storageKey)),
-          };
+    final Map<String, EpisodeProgress> scoped = _decodeEpisodeProgressValue(
+      preferences.getString(storageKey),
+    );
+    final Map<String, EpisodeProgress> loaded = persisted.isNotEmpty
+        ? persisted
+        : scoped.isNotEmpty
+        ? scoped
+        : importsLegacyData
+        ? _decodeEpisodeProgressValue(
+            preferences.getString(_baseEpisodeProgressKey),
+          )
+        : <String, EpisodeProgress>{};
     if (loaded.isEmpty) {
       if (generation == _workspaceGeneration) _episodeProgressLoaded = true;
       return;
@@ -195,6 +206,13 @@ class LocalLibraryController extends Notifier<List<LibraryItem>> {
           recordActivity: false,
         );
       }
+      await repository.saveLocalEpisodeProgress(_episodeProgressJson(loaded));
+      await _removeMigratedPreferenceKeys(
+        preferences,
+        scopedKey: storageKey,
+        legacyKey: _baseEpisodeProgressKey,
+        removeLegacy: importsLegacyData,
+      );
     } catch (_) {
       // Ignore corrupt progress cache and start fresh instead of blocking playback.
     } finally {
@@ -202,76 +220,55 @@ class LocalLibraryController extends Notifier<List<LibraryItem>> {
     }
   }
 
-  Future<void> _persistEpisodeProgress() async {
-    final SharedPreferences preferences = await _prefs();
-    if (_workspace?.importsLegacyData == true) {
-      await _writeEpisodeProgress(
-        preferences,
-        _baseEpisodeProgressKey,
-        _episodeProgress,
+  Future<void> _persistEpisodeProgress(
+    CanonicalLibraryRepository repository,
+  ) async {
+    try {
+      await repository.saveLocalEpisodeProgress(
+        _episodeProgressJson(_episodeProgress),
       );
-      return;
+    } on Object {
+      // A container can close while a final playback checkpoint is in flight.
+      // The canonical checkpoint above already owns durable progress; teardown
+      // must never turn this best-effort compatibility cache into a crash.
     }
-    final Map<String, EpisodeProgress> existingGlobal = _decodeEpisodeProgress(
-      preferences.getString(_baseEpisodeProgressKey),
-    );
-    await _writeEpisodeProgress(
-      preferences,
-      _baseEpisodeProgressKey,
-      <String, EpisodeProgress>{
-        for (final MapEntry<String, EpisodeProgress> entry
-            in existingGlobal.entries)
-          if (_isCanonicalEpisodeKey(entry.key)) entry.key: entry.value,
-        for (final MapEntry<String, EpisodeProgress> entry
-            in _episodeProgress.entries)
-          if (!_isCanonicalEpisodeKey(entry.key)) entry.key: entry.value,
-      },
-    );
-    await _writeEpisodeProgress(
-      preferences,
-      _episodeProgressKey,
-      <String, EpisodeProgress>{
-        for (final MapEntry<String, EpisodeProgress> entry
-            in _episodeProgress.entries)
-          if (_isCanonicalEpisodeKey(entry.key)) entry.key: entry.value,
-      },
-    );
   }
 
-  Map<String, EpisodeProgress> _decodeEpisodeProgress(String? raw) {
-    if (raw == null || raw.isEmpty) return <String, EpisodeProgress>{};
+  Map<String, EpisodeProgress> _decodeEpisodeProgressValue(Object? raw) {
+    if (raw == null || raw == '') return <String, EpisodeProgress>{};
     try {
-      final Object? decoded = jsonDecode(raw);
+      final Object? decoded = raw is String ? jsonDecode(raw) : raw;
       if (decoded is! Map) return <String, EpisodeProgress>{};
-      return <String, EpisodeProgress>{
-        for (final MapEntry<dynamic, dynamic> entry in decoded.entries)
-          if (entry.key is String && entry.value is Map)
-            entry.key as String: EpisodeProgress.fromJson(
-              Map<String, dynamic>.from(entry.value as Map),
-            ),
-      };
+      final Map<String, EpisodeProgress> result = <String, EpisodeProgress>{};
+      for (final MapEntry<dynamic, dynamic> entry in decoded.entries) {
+        if (entry.key is! String || entry.value is! Map) continue;
+        final EpisodeProgress value = EpisodeProgress.fromJson(
+          Map<String, dynamic>.from(entry.value as Map),
+        );
+        final String key = _compactEpisodeProgressKey(entry.key as String);
+        final EpisodeProgress? existing = result[key];
+        if (existing == null || value.updatedAt.isAfter(existing.updatedAt)) {
+          result[key] = value;
+        }
+      }
+      return result;
     } on Object {
       return <String, EpisodeProgress>{};
     }
   }
 
-  Future<void> _writeEpisodeProgress(
-    SharedPreferences preferences,
-    String key,
+  Map<String, dynamic> _episodeProgressJson(
     Map<String, EpisodeProgress> values,
-  ) => preferences.setString(
-    key,
-    jsonEncode(
-      values.map(
-        (String itemKey, EpisodeProgress value) =>
-            MapEntry<String, dynamic>(itemKey, value.toJson()),
-      ),
-    ),
+  ) => values.map(
+    (String itemKey, EpisodeProgress value) =>
+        MapEntry<String, dynamic>(itemKey, value.toJson()),
   );
 
-  bool _isCanonicalEpisodeKey(String key) {
-    final RegExpMatch? match = RegExp(r'^(.*)\|S-?\d+E').firstMatch(key);
-    return match != null && _isMigratableEpisodeMediaId(match.group(1)!);
+  String _compactEpisodeProgressKey(String key) {
+    final RegExpMatch? match = RegExp(r'^(.*)\|S(-?\d+)E(.+)$').firstMatch(key);
+    if (match == null) return key;
+    final String mediaId = compactSoraEpisodeProgressMediaId(match.group(1)!);
+    return '$mediaId|S${match.group(2)}E${match.group(3)}';
   }
 
   LibraryItem? find(String mediaId) {
@@ -288,6 +285,13 @@ class LocalLibraryController extends Notifier<List<LibraryItem>> {
     LibraryStatus status = LibraryStatus.planned,
     double progress = 0,
   }) async {
+    final int generation = _workspaceGeneration;
+    final TrackerSyncCoordinator coordinator = ref.read(
+      trackerSyncCoordinatorProvider,
+    );
+    final CanonicalLibraryRepository repository = ref.read(
+      canonicalLibraryRepositoryProvider,
+    );
     final DateTime now = DateTime.now();
     final LibraryItem? existing = find(media.id);
     if (_isCanonicalMedia(media)) {
@@ -295,16 +299,15 @@ class LocalLibraryController extends Notifier<List<LibraryItem>> {
       final int canonicalProgress = total > 0
           ? (progress.clamp(0.0, 1.0) * total).round()
           : (progress >= 1 ? 1 : 0);
-      await ref
-          .read(trackerSyncCoordinatorProvider)
-          .pushEntryEdit(
-            externalIds: media.externalIds,
-            mediaId: media.id,
-            mediaTitle: media.title,
-            mediaItem: media,
-            status: _trackerStatus(status),
-            progress: canonicalProgress,
-          );
+      await coordinator.pushEntryEdit(
+        externalIds: media.externalIds,
+        mediaId: media.id,
+        mediaTitle: media.title,
+        mediaItem: media,
+        status: _trackerStatus(status),
+        progress: canonicalProgress,
+      );
+      if (!ref.mounted || generation != _workspaceGeneration) return;
       ref.invalidate(
         _isManga(media)
             ? trackerLocalMangaLibraryProvider
@@ -325,7 +328,7 @@ class LocalLibraryController extends Notifier<List<LibraryItem>> {
       item,
       ...state.where((LibraryItem current) => current.mediaItem.id != media.id),
     ];
-    await _persist();
+    await _persist(repository);
   }
 
   Future<void> markWatched(MediaItem media) {
@@ -343,6 +346,9 @@ class LocalLibraryController extends Notifier<List<LibraryItem>> {
     required double episodeNumber,
     double? positionFraction,
   }) async {
+    final CanonicalLibraryRepository repository = ref.read(
+      canonicalLibraryRepositoryProvider,
+    );
     final LibraryItem? existing = find(mediaId);
     if (existing == null) return;
 
@@ -368,7 +374,7 @@ class LocalLibraryController extends Notifier<List<LibraryItem>> {
       for (final LibraryItem item in state)
         if (item.mediaItem.id == mediaId) updated else item,
     ];
-    await _persist();
+    await _persist(repository);
   }
 
   double _furthestProgressFraction({
@@ -404,15 +410,21 @@ class LocalLibraryController extends Notifier<List<LibraryItem>> {
   }
 
   Future<void> remove(String mediaId) async {
+    final int generation = _workspaceGeneration;
+    final TrackerSyncCoordinator coordinator = ref.read(
+      trackerSyncCoordinatorProvider,
+    );
+    final CanonicalLibraryRepository repository = ref.read(
+      canonicalLibraryRepositoryProvider,
+    );
     final LibraryItem? existing = find(mediaId);
     if (existing != null && _isCanonicalMedia(existing.mediaItem)) {
-      await ref
-          .read(trackerSyncCoordinatorProvider)
-          .deleteEntry(
-            externalIds: existing.mediaItem.externalIds,
-            mediaId: existing.mediaItem.id,
-            mediaTitle: existing.mediaItem.title,
-          );
+      await coordinator.deleteEntry(
+        externalIds: existing.mediaItem.externalIds,
+        mediaId: existing.mediaItem.id,
+        mediaTitle: existing.mediaItem.title,
+      );
+      if (!ref.mounted || generation != _workspaceGeneration) return;
       ref.invalidate(
         _isManga(existing.mediaItem)
             ? trackerLocalMangaLibraryProvider
@@ -422,7 +434,7 @@ class LocalLibraryController extends Notifier<List<LibraryItem>> {
     state = state
         .where((LibraryItem item) => item.mediaItem.id != mediaId)
         .toList(growable: false);
-    await _persist();
+    await _persist(repository);
   }
 
   bool _isCanonicalMedia(MediaItem media) {
@@ -465,30 +477,37 @@ class LocalLibraryController extends Notifier<List<LibraryItem>> {
   Future<void> _load() async {
     final int generation = _workspaceGeneration;
     final String storageKey = _storageKey;
+    final bool importsLegacyData = _workspace?.importsLegacyData == true;
     final CanonicalLibraryRepository repository = ref.read(
       canonicalLibraryRepositoryProvider,
     );
     final SharedPreferences preferences = await _prefs();
-    final List<LibraryItem> global = _decodeLibraryItems(
-      preferences.getString(_baseStorageKey),
+    final List<LibraryItem> persisted = await repository
+        .loadLocalLibraryItems();
+    final List<LibraryItem> scoped = _decodeLibraryItems(
+      preferences.getString(storageKey),
     );
-    final List<LibraryItem> loaded = _workspace?.importsLegacyData == true
-        ? global
-        : <LibraryItem>[
-            ...global.where(
-              (LibraryItem item) => !_isCanonicalMedia(item.mediaItem),
-            ),
-            ..._decodeLibraryItems(
-              preferences.getString(storageKey),
-            ).where((LibraryItem item) => _isCanonicalMedia(item.mediaItem)),
-          ];
+    final List<LibraryItem> loaded = persisted.isNotEmpty
+        ? persisted
+        : scoped.isNotEmpty
+        ? scoped
+        : importsLegacyData
+        ? _decodeLibraryItems(preferences.getString(_baseStorageKey))
+        : const <LibraryItem>[];
     if (loaded.isEmpty) {
       return;
     }
 
     try {
       await repository.importLegacyLocalLibrary(loaded);
-      if (generation != _workspaceGeneration) return;
+      await repository.saveLocalLibraryItems(loaded);
+      await _removeMigratedPreferenceKeys(
+        preferences,
+        scopedKey: storageKey,
+        legacyKey: _baseStorageKey,
+        removeLegacy: importsLegacyData,
+      );
+      if (!ref.mounted || generation != _workspaceGeneration) return;
       if (state.isEmpty) {
         state = loaded;
         return;
@@ -503,35 +522,16 @@ class LocalLibraryController extends Notifier<List<LibraryItem>> {
           (LibraryItem item) => !currentIds.contains(item.mediaItem.id),
         ),
       ];
-      await _persist();
+      await _persist(repository);
     } catch (_) {
-      state = const <LibraryItem>[];
+      if (ref.mounted && generation == _workspaceGeneration) {
+        state = const <LibraryItem>[];
+      }
     }
   }
 
-  Future<void> _persist() async {
-    final SharedPreferences preferences = await _prefs();
-    if (_workspace?.importsLegacyData == true) {
-      await _writeLibraryItems(preferences, _baseStorageKey, state);
-      return;
-    }
-    final List<LibraryItem> existingGlobal = _decodeLibraryItems(
-      preferences.getString(_baseStorageKey),
-    );
-    await _writeLibraryItems(preferences, _baseStorageKey, <LibraryItem>[
-      ...existingGlobal.where(
-        (LibraryItem item) => _isCanonicalMedia(item.mediaItem),
-      ),
-      ...state.where((LibraryItem item) => !_isCanonicalMedia(item.mediaItem)),
-    ]);
-    await _writeLibraryItems(
-      preferences,
-      _storageKey,
-      state
-          .where((LibraryItem item) => _isCanonicalMedia(item.mediaItem))
-          .toList(growable: false),
-    );
-  }
+  Future<void> _persist(CanonicalLibraryRepository repository) =>
+      repository.saveLocalLibraryItems(state);
 
   List<LibraryItem> _decodeLibraryItems(String? raw) {
     if (raw == null || raw.isEmpty) return <LibraryItem>[];
@@ -551,14 +551,15 @@ class LocalLibraryController extends Notifier<List<LibraryItem>> {
     }
   }
 
-  Future<void> _writeLibraryItems(
-    SharedPreferences preferences,
-    String key,
-    List<LibraryItem> items,
-  ) => preferences.setString(
-    key,
-    jsonEncode(
-      items.map((LibraryItem item) => item.toJson()).toList(growable: false),
-    ),
-  );
+  Future<void> _removeMigratedPreferenceKeys(
+    SharedPreferences preferences, {
+    required String scopedKey,
+    required String legacyKey,
+    required bool removeLegacy,
+  }) async {
+    await preferences.remove(scopedKey);
+    if (removeLegacy && scopedKey != legacyKey) {
+      await preferences.remove(legacyKey);
+    }
+  }
 }

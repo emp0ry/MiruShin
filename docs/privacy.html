@@ -247,9 +247,10 @@
               checkpoints and immutable operation segments are synced instead of the live SQLite file.
             </p>
             <p>
-              Disconnecting Drive stops access on that device. Data already stored in
-              <code>appDataFolder</code> may remain until removed through the relevant Google account or
-              app-data controls.
+              Disconnect stops Drive Sync on that device and leaves the private backup intact. The
+              separate Delete account action removes only MiruShin-owned records from
+              <code>appDataFolder</code>, disconnects the device, and keeps the local library intact.
+              It does not delete the user's Google account.
             </p>
 
             <h2>Third-Party Services</h2>

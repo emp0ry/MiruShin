@@ -48,6 +48,7 @@ import '../../metadata/domain/tmdb_episode_metadata.dart';
 import '../../player/domain/player_models.dart';
 import '../../settings/application/settings_state.dart';
 import '../../tracking/application/anilist_library_provider.dart';
+import '../../tracking/application/tracker_library_provider.dart';
 import '../../tracking/domain/tracking_sync_models.dart';
 import '../application/stream_selection_preferences.dart';
 import '../application/watch_session.dart';
@@ -3609,18 +3610,19 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
         );
   }
 
-  int _trackerEpisodeProgress({
+  ({bool found, int progress}) _trackerEpisodeProgress({
     required bool useTrackerProgress,
     required MediaItem item,
   }) {
-    if (!useTrackerProgress) return 0;
+    if (!useTrackerProgress) return (found: false, progress: 0);
     final MediaIdentity identity = MediaIdentity.fromExternalIds(
       item.externalIds,
       mediaId: item.id,
     );
-    if (!identity.hasProviderId) return 0;
+    if (!identity.hasProviderId) return (found: false, progress: 0);
 
     int progress = 0;
+    bool found = false;
     void scanFolders(List<AniListAnimeListFolder> folders) {
       for (final AniListAnimeListFolder folder in folders) {
         for (final AniListAnimeListEntry entry in folder.entries) {
@@ -3628,18 +3630,26 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
             entry.mediaItem.externalIds,
             mediaId: entry.mediaItem.id,
           );
-          if (entryIdentity.matches(identity) && entry.progress > progress) {
-            progress = entry.progress;
+          if (entryIdentity.matches(identity)) {
+            found = true;
+            if (entry.progress > progress) progress = entry.progress;
           }
         }
       }
     }
 
-    ref.watch(anilistAnimeListProvider).whenData(scanFolders);
-    if (progress == 0) {
+    ref
+        .watch(trackerLocalAnimeLibraryProvider)
+        .whenData(
+          (TrackerLocalAnimeLibrary value) => scanFolders(value.folders),
+        );
+    if (!found) {
+      ref.watch(anilistAnimeListProvider).whenData(scanFolders);
+    }
+    if (!found) {
       ref.watch(anilistAnimePreviewListProvider).whenData(scanFolders);
     }
-    return progress;
+    return (found: found, progress: progress);
   }
 
   TmdbSeasonEpisodeMetadataBundle _tmdbEpisodeMetadata({
@@ -3847,10 +3857,11 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
                 );
               }
 
-              final int trackerProgress = _trackerEpisodeProgress(
-                useTrackerProgress: useAniListProgress,
-                item: widget.item,
-              );
+              final ({bool found, int progress}) trackerProgress =
+                  _trackerEpisodeProgress(
+                    useTrackerProgress: useAniListProgress,
+                    item: widget.item,
+                  );
 
               // Compute the max watched episode number from soraEpisodeProgress
               // as fallback when AniList is not connected.
@@ -3895,11 +3906,14 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
               // In tracker mode, use the provider-neutral local-first state.
               // It contains fresh remote data when available and queued local
               // progress while the primary provider is unavailable.
+              final int localProgress = maxLocalWatched > maxPositionWatched
+                  ? maxLocalWatched
+                  : maxPositionWatched;
               final int effectiveContinued = useAniListProgress
-                  ? trackerProgress
-                  : (maxLocalWatched > 0
-                        ? maxLocalWatched
-                        : maxPositionWatched);
+                  ? (trackerProgress.progress > localProgress
+                        ? trackerProgress.progress
+                        : localProgress)
+                  : localProgress;
 
               // Find the episode to continue from (next after last watched).
               SoraEpisode? continueEp;

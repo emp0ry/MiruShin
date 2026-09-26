@@ -246,6 +246,31 @@ void main() {
   });
 
   group('AniList MAL fallback', () {
+    test(
+      'known outage skips the AniList probe and opens MAL immediately',
+      () async {
+        final _FallbackMalClient mal = _FallbackMalClient();
+        final _FailingAniListClient aniList = _FailingAniListClient();
+        final AniListCatalogRepository repository = AniListCatalogRepository(
+          client: aniList,
+          malFallback: mal,
+          shouldTryPrimary: () async => false,
+          cache: _RecordingCacheStore(),
+          cacheScope: 'test.anilist.circuit-breaker',
+        );
+
+        final List<MediaItem> results = await repository.discover(
+          search: 'Fullmetal Alchemist',
+          type: MediaType.anime,
+          filter: 'Trending',
+          page: 1,
+        );
+
+        expect(results.single.id, 'mal:5114');
+        expect(aniList.callCount, 0);
+      },
+    );
+
     test('cold Board falls back to MAL rankings after AniList fails', () async {
       final _FallbackMalClient mal = _FallbackMalClient();
       final _FailingAniListClient aniList = _FailingAniListClient();

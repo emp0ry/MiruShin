@@ -155,6 +155,7 @@ class SettingsState {
     this.anilistLibraryDefaultPage = AniListLibraryDefaultPage.all,
     this.anilistSavedAccounts = const <AniListSavedAccount>[],
     this.canonicalLibraryOwnerAniListId,
+    this.selectedLibraryAniListId,
     this.anilistScoreFormat = 'POINT_10_DECIMAL',
     this.soraWebProxyUrl = const String.fromEnvironment('MIRUSHIN_WEB_PROXY'),
     this.startupPage = AppStartupPage.board,
@@ -213,6 +214,7 @@ class SettingsState {
   final AniListLibraryDefaultPage anilistLibraryDefaultPage;
   final List<AniListSavedAccount> anilistSavedAccounts;
   final int? canonicalLibraryOwnerAniListId;
+  final int? selectedLibraryAniListId;
   final String anilistScoreFormat;
   final String soraWebProxyUrl;
   final AppStartupPage startupPage;
@@ -385,6 +387,7 @@ class SettingsState {
     AniListLibraryDefaultPage? anilistLibraryDefaultPage,
     List<AniListSavedAccount>? anilistSavedAccounts,
     int? canonicalLibraryOwnerAniListId,
+    int? selectedLibraryAniListId,
     String? anilistScoreFormat,
     String? soraWebProxyUrl,
     AppStartupPage? startupPage,
@@ -462,6 +465,8 @@ class SettingsState {
       anilistSavedAccounts: anilistSavedAccounts ?? this.anilistSavedAccounts,
       canonicalLibraryOwnerAniListId:
           canonicalLibraryOwnerAniListId ?? this.canonicalLibraryOwnerAniListId,
+      selectedLibraryAniListId:
+          selectedLibraryAniListId ?? this.selectedLibraryAniListId,
       anilistScoreFormat: anilistScoreFormat ?? this.anilistScoreFormat,
       soraWebProxyUrl: soraWebProxyUrl ?? this.soraWebProxyUrl,
       startupPage: startupPage ?? this.startupPage,
@@ -669,6 +674,14 @@ class SettingsController extends Notifier<SettingsState> {
         canonicalLibraryOwnerAniListId = aniListViewerId;
         await preferences.saveCanonicalLibraryOwnerAniListId(aniListViewerId);
       }
+      int? selectedLibraryAniListId = preferences
+          .readSelectedLibraryAniListId();
+      final int? legacySelectedLibraryId =
+          aniListViewerId ?? canonicalLibraryOwnerAniListId;
+      if (selectedLibraryAniListId == null && legacySelectedLibraryId != null) {
+        selectedLibraryAniListId = legacySelectedLibraryId;
+        await preferences.saveSelectedLibraryAniListId(legacySelectedLibraryId);
+      }
       final String? malToken = await _secureStorage.readMalAccessToken();
       final String? malRefresh = await _secureStorage.readMalRefreshToken();
       final DateTime? malExpiresAt = await _secureStorage.readMalExpiresAt();
@@ -721,7 +734,9 @@ class SettingsController extends Notifier<SettingsState> {
           ?aniListViewerId,
         },
       );
-      final String workspaceId = _workspaceIdFor(aniListViewerId);
+      final String workspaceId = _workspaceIdFor(
+        aniListViewerId ?? selectedLibraryAniListId,
+      );
       appLanguage =
           workspaceStore.read(workspaceId, SettingsPreferences.appLanguageKey)
               as String? ??
@@ -788,6 +803,7 @@ class SettingsController extends Notifier<SettingsState> {
         ),
         anilistSavedAccounts: savedAniListAccounts,
         canonicalLibraryOwnerAniListId: canonicalLibraryOwnerAniListId,
+        selectedLibraryAniListId: selectedLibraryAniListId,
         anilistScoreFormat: preferences.readAniListScoreFormat(),
         soraWebProxyUrl: preferences.readSoraWebProxyUrl(),
         startupPage: AppStartupPage.fromName(preferences.readStartupPage()),
@@ -1177,7 +1193,6 @@ class SettingsController extends Notifier<SettingsState> {
     await preferences.saveMalCustomClientIdMobile('');
     await preferences.saveShikimoriUseCustomCredentials(false);
     await preferences.saveShikimoriCustomClientId('');
-    await _applyWorkspaceProfile('local');
   }
 
   List<AniListSavedAccount> driveAniListAccounts() {
@@ -1286,6 +1301,7 @@ class SettingsController extends Notifier<SettingsState> {
     if (state.canonicalLibraryOwnerAniListId == null) {
       await preferences.saveCanonicalLibraryOwnerAniListId(ownerId);
     }
+    await preferences.saveSelectedLibraryAniListId(account.viewerId);
     state = state.copyWith(
       anilistAccessToken: account.accessToken,
       anilistExpiresAt: account.expiresAt,
@@ -1314,6 +1330,7 @@ class SettingsController extends Notifier<SettingsState> {
       shikimoriCustomClientSecret: shikimori.clientSecret,
       primaryTrackerSource: primary,
       canonicalLibraryOwnerAniListId: ownerId,
+      selectedLibraryAniListId: account.viewerId,
     );
 
     await _secureStorage.writeAniListAccessToken(account.accessToken);

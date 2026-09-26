@@ -244,6 +244,7 @@ class GoogleDriveOAuthService {
   Future<GoogleDriveTokenBundle> refresh({
     required String refreshToken,
     bool television = false,
+    CancelToken? cancelToken,
   }) async {
     final Response<dynamic> response = await _postToken(
       operation: 'token refresh',
@@ -252,6 +253,7 @@ class GoogleDriveOAuthService {
         'refresh_token': refreshToken,
         'grant_type': 'refresh_token',
       },
+      cancelToken: cancelToken,
     );
     final Object? data = response.data;
     if (data is! Map<String, dynamic>) {
@@ -266,11 +268,13 @@ class GoogleDriveOAuthService {
   Future<Response<dynamic>> _postToken({
     required String operation,
     required Map<String, String> data,
+    CancelToken? cancelToken,
   }) {
     return _postWorker(
       url: AppConstants.googleOAuthProxyUrl,
       operation: operation,
       data: <String, String>{'provider': 'google', 'action': 'token', ...data},
+      cancelToken: cancelToken,
     );
   }
 
@@ -278,6 +282,7 @@ class GoogleDriveOAuthService {
     required String url,
     required String operation,
     required Map<String, String> data,
+    CancelToken? cancelToken,
   }) async {
     try {
       return await _dio.post<dynamic>(
@@ -287,6 +292,7 @@ class GoogleDriveOAuthService {
           contentType: Headers.jsonContentType,
           headers: AuthWorkerProof.headers(),
         ),
+        cancelToken: cancelToken,
       );
     } on DioException catch (error) {
       final Response<dynamic>? response = error.response;

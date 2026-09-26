@@ -32,6 +32,7 @@ class AniListApiClient {
     Duration connectTimeout = const Duration(seconds: 12),
     Duration receiveTimeout = defaultReceiveTimeout,
     Duration timeoutRetryDelay = defaultTimeoutRetryDelay,
+    this.retryTimeoutReads = true,
     this.titleLanguage = 'ENGLISH',
     this.showAdultContent = false,
     this.shikimori,
@@ -50,6 +51,7 @@ class AniListApiClient {
   final Dio _dio;
   final String? _accessToken;
   final Duration _timeoutRetryDelay;
+  final bool retryTimeoutReads;
   final String titleLanguage;
   final bool showAdultContent;
   final ShikimoriClient? shikimori;
@@ -2381,7 +2383,9 @@ class AniListApiClient {
       // A receive timeout can happen after AniList applied a mutation. Retrying
       // toggle-style writes could undo the first request, while read failures
       // are safe to retry before the catalog falls back to cache.
-      if (!_isTimeout(error) || _isMutation(query)) rethrow;
+      if (!retryTimeoutReads || !_isTimeout(error) || _isMutation(query)) {
+        rethrow;
+      }
       await Future<void>.delayed(_timeoutRetryDelay);
       response = await send();
     }

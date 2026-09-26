@@ -9,17 +9,17 @@ https://www.googleapis.com/auth/drive.appdata
 Enable the Google Drive API, then open Google Auth Platform → Data Access and
 add that exact scope.
 
-Android/iOS/Web use Google's supported native/browser SDKs directly. Desktop
-and Android TV send token/device requests through `auth.emp0ry.com`, which owns
-the Google client secrets. No client secret is compiled into MiruShin.
+Android, iOS, Desktop, and Android TV send token/device requests through
+`auth.emp0ry.com`, which owns the Google client secrets. Web uses Google's
+browser SDK. No client secret is compiled into MiruShin.
 
 ## Platform clients
 
 | Target | Google client type | Flow | Build-time configuration |
 | --- | --- | --- | --- |
-| Android phone/tablet | Android + Web | Native Google authorization | Android package/SHA in Google Cloud; the Web client id is used as `serverClientId` |
+| Android phone/tablet | Web | Browser/device handoff through Worker + PKCE | No build secret; works for official and re-signed packages |
 | Android TV | Web | QR authorization-code handoff through Worker + PKCE | No build secret |
-| iOS | iOS | Native Google authorization | `GIDClientID` and reversed client-id URL scheme in `ios/Runner/Info.plist` |
+| iOS | Web | Browser/device handoff through Worker + PKCE | No build secret; works for App Store, private signing, LiveContainer, TrollStore, and jailbreak installs |
 | macOS, Windows, Linux | Desktop | System browser + PKCE + loopback; token exchange through Worker | No build secret |
 | Web | Web application | Google Identity Services token model | Authorized JavaScript origins in Google Cloud |
 
@@ -82,7 +82,7 @@ Authorized redirect URIs
 https://auth.emp0ry.com/callback
 ```
 
-The redirect URI is used only by the Android TV QR handoff. MiruShin Web still
+The redirect URI is used by the mobile/TV browser handoff. MiruShin Web still
 uses the Google Identity Services popup/token model and does not redirect there.
 
 Origins contain scheme, host, and optional port only: no path and no trailing
@@ -130,3 +130,9 @@ Library segments use a deterministic AniList-account namespace. Switching the
 active AniList account therefore switches its Local Library, provider
 snapshots, outbox, playback state, and MAL/Shikimori connections without
 reading or overwriting another account's records.
+
+Settings offers two separate actions: **Disconnect** stops Drive Sync on the
+current device and leaves its private backup intact, while **Delete account**
+deletes only MiruShin-owned records from `appDataFolder`, disconnects the
+device, and leaves the local library on the device. It never deletes the
+user's Google account.

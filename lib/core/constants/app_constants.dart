@@ -59,10 +59,10 @@ abstract final class AppConstants {
         '77095881269-gpka49ipagksvge36o4qdqbudaduc6eg.apps.googleusercontent.com',
   );
 
-  // The existing PKCE + loopback implementation is used on desktop. Android
-  // and iOS use the native Google authorization SDK; Android's SDK requires
-  // the Web client id as its serverClientId while the Android client registered
-  // in Google Cloud validates this package name and signing certificate.
+  // The existing PKCE + loopback implementation is used on desktop. Mobile
+  // uses the Worker-backed device/PKCE handoff so re-signed and containerized
+  // builds do not depend on a particular package signature. The native ids
+  // remain configured to restore sessions made by older MiruShin releases.
   static String get googleOAuthClientId {
     if (_googleOAuthClientIdOverride.trim().isNotEmpty) {
       return _googleOAuthClientIdOverride.trim();

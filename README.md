@@ -132,6 +132,7 @@ Want more? Two optional steps unlock the rest:
 - **Add modules to watch** by opening the **Addons** page and pasting a trusted module manifest URL, then install and enable it. Need modules? Join the [Sora Discord](https://discord.gg/XR3SrmUbpd) to find them.
 - **Watch with friends** from Settings or the player. The host creates a short-lived room code/QR, guests join on their own device, and playback events sync after pairing.
 - **Connect Google Drive Sync** to restore a complete, render-ready Local Library checkpoint—including titles, artwork URLs, filters, airing metadata and progress—before trackers respond, together with per-account Library settings, playback preferences, addons, API connections, persistent Watch with Friends relay preferences, AniList accounts, and their MAL/Shikimori sessions. Tracker sessions and user-provided API credentials are stored in the selected Google account's private `appDataFolder`; Google Drive OAuth tokens, temporary Watch Party credentials, and MiruShin's own OAuth secrets stay out of those synced records.
+- **Disconnect** signs Drive Sync out only on this device and leaves the private backup intact. **Delete account** removes MiruShin's private Drive records and then disconnects the device; it never deletes the user's Google account or local library.
 
 > [!TIP]
 > Switch between TMDB and AniList anytime by tapping the top-left logo (or via **More** in compact mode).

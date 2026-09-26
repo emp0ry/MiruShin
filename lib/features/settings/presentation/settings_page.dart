@@ -575,6 +575,7 @@ class _GoogleDriveSyncSectionState
             busy: _busy,
             onSync: _syncNow,
             onDisconnect: _disconnect,
+            onDeleteCloudData: _deleteCloudAccount,
           )
         else
           SettingsRow(
@@ -655,6 +656,48 @@ class _GoogleDriveSyncSectionState
       if (mounted) setState(() => _busy = false);
     }
   }
+
+  Future<void> _deleteCloudAccount() async {
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext context) => AlertDialog(
+        title: Text(context.t('Delete account?')),
+        content: Text(
+          context.t(
+            'This deletes all MiruShin data from Google Drive and disconnects this device. Your Google account is not deleted, and your local library stays on this device.',
+          ),
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: Text(context.t('Cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text(context.t('Delete account')),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _busy = true);
+    try {
+      await ref
+          .read(googleDriveSyncControllerProvider.notifier)
+          .deleteCloudDataAndDisconnect();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              context.t('Drive account and synced data were deleted.'),
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 }
 
 class _GoogleDriveAccountCard extends StatelessWidget {
@@ -673,6 +716,7 @@ class _GoogleDriveAccountCard extends StatelessWidget {
     required this.busy,
     required this.onSync,
     required this.onDisconnect,
+    required this.onDeleteCloudData,
   });
 
   final GoogleDriveAccountProfile? account;
@@ -689,6 +733,7 @@ class _GoogleDriveAccountCard extends StatelessWidget {
   final bool busy;
   final VoidCallback onSync;
   final VoidCallback onDisconnect;
+  final VoidCallback onDeleteCloudData;
 
   @override
   Widget build(BuildContext context) {
@@ -754,7 +799,7 @@ class _GoogleDriveAccountCard extends StatelessWidget {
       runSpacing: AppSpacing.sm,
       children: <Widget>[
         FilledButton.icon(
-          onPressed: busy || syncing ? null : onSync,
+          onPressed: busy ? null : onSync,
           icon: syncing
               ? const SizedBox.square(
                   dimension: 16,
@@ -767,6 +812,15 @@ class _GoogleDriveAccountCard extends StatelessWidget {
           onPressed: busy ? null : onDisconnect,
           icon: const Icon(Icons.logout_rounded),
           label: Text(context.t('Disconnect')),
+        ),
+        FilledButton.icon(
+          onPressed: busy || syncing ? null : onDeleteCloudData,
+          style: FilledButton.styleFrom(
+            backgroundColor: Theme.of(context).colorScheme.error,
+            foregroundColor: Theme.of(context).colorScheme.onError,
+          ),
+          icon: const Icon(Icons.delete_forever_rounded),
+          label: Text(context.t('Delete account')),
         ),
       ],
     );

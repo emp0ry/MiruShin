@@ -81,8 +81,12 @@ void main() {
       );
       expect(await restarted.loadStates(), hasLength(1));
       expect(await restarted.loadJournal(), hasLength(1));
-      expect(await legacy.loadStates(), hasLength(1));
-      expect(await legacy.loadJournal(), hasLength(1));
+      expect(
+        await legacy.loadStates(),
+        isEmpty,
+        reason: 'Verified SQLite migration removes the duplicate bulk payload.',
+      );
+      expect(await legacy.loadJournal(), isEmpty);
     });
 
     test(
@@ -472,6 +476,7 @@ void main() {
         );
 
         expect(await repository.watchPendingDriveDeliveryCount().first, 1);
+        expect(await repository.pendingDriveDeliveryCount(), 1);
         expect((await repository.buildDriveSnapshot()).entryCount, 1);
         DriveReplicaSegment segment = (await repository
             .buildPendingDriveSegment())!;
@@ -480,6 +485,7 @@ void main() {
           remoteFileId: 'drive-file-1',
         );
         expect(await repository.watchPendingDriveDeliveryCount().first, 0);
+        expect(await repository.pendingDriveDeliveryCount(), 0);
 
         final UserMediaState edited = _state(progress: 7);
         await repository.commitTrackingMutation(

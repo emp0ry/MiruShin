@@ -1,3 +1,7 @@
+import 'dart:convert';
+
+import 'package:crypto/crypto.dart';
+
 import '../../addons/domain/sora_models.dart';
 
 String? soraEpisodeProgressMediaId({
@@ -8,7 +12,32 @@ String? soraEpisodeProgressMediaId({
   final String cleanHref = episodeHref.trim();
   if (cleanAddonId.isEmpty || cleanHref.isEmpty) return null;
   return 'sora:${Uri.encodeComponent(cleanAddonId)}:'
-      '${Uri.encodeComponent(cleanHref)}';
+      '${sha256.convert(utf8.encode(cleanHref))}';
+}
+
+/// Compacts the pre-2.9.2 progress identity which embedded an entire encoded
+/// addon payload or URL in every SharedPreferences key. Some source payloads
+/// are tens of kilobytes long, so fewer than a thousand checkpoints could make
+/// NSUserDefaults exceed its platform limit and stall the app.
+String compactSoraEpisodeProgressMediaId(String mediaId) {
+  final String value = mediaId.trim();
+  if (!value.startsWith('sora:')) return value;
+  final int separator = value.indexOf(':', 'sora:'.length);
+  if (separator <= 'sora:'.length || separator >= value.length - 1) {
+    return value;
+  }
+  final String encodedAddon = value.substring('sora:'.length, separator);
+  final String hrefOrHash = value.substring(separator + 1);
+  if (RegExp(r'^[0-9a-f]{64}$').hasMatch(hrefOrHash)) return value;
+  try {
+    return soraEpisodeProgressMediaId(
+          addonId: Uri.decodeComponent(encodedAddon),
+          episodeHref: Uri.decodeComponent(hrefOrHash),
+        ) ??
+        value;
+  } on FormatException {
+    return value;
+  }
 }
 
 class NormalizedServer {

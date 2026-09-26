@@ -65,7 +65,10 @@ class GoogleDriveAccountClient {
 
   final Dio _dio;
 
-  Future<GoogleDriveAccountProfile> fetchProfile(String accessToken) async {
+  Future<GoogleDriveAccountProfile> fetchProfile(
+    String accessToken, {
+    CancelToken? cancelToken,
+  }) async {
     final Response<dynamic> response = await _dio.get<dynamic>(
       '${AppConstants.googleDriveApiBaseUrl}/about',
       queryParameters: const <String, String>{
@@ -76,6 +79,7 @@ class GoogleDriveAccountClient {
           'Authorization': 'Bearer ${accessToken.trim()}',
         },
       ),
+      cancelToken: cancelToken,
     );
     final Object? body = response.data;
     final Map<String, dynamic> json = body is Map<String, dynamic>

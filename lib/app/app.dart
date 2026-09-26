@@ -17,12 +17,12 @@ import '../features/addons/application/sora_addons_provider.dart';
 import '../features/addons/data/sora_js_runtime.dart';
 import '../features/addons/presentation/cloudflare_challenge_page.dart';
 import '../features/catalog/application/catalog_mode.dart';
+import '../features/library/application/canonical_library_repository.dart';
 import '../features/library/application/google_drive_sync_controller.dart';
 import '../features/metadata/application/metadata_cache_provider.dart';
 import '../features/player/application/playback_controller.dart';
-import '../features/profile/application/anilist_user_settings_provider.dart';
 import '../features/settings/application/settings_state.dart';
-import '../features/tracking/application/anilist_library_provider.dart';
+import '../features/tracking/application/tracker_library_provider.dart';
 import '../features/tracking/application/tracker_reconciliation_lifecycle.dart';
 import '../features/watch/application/stream_selection_preferences.dart';
 import 'app_routes.dart';
@@ -48,6 +48,7 @@ class _MiruShinAppState extends ConsumerState<MiruShinApp> {
   late final PlaybackController _playbackController;
   late final SoraJsRuntime _soraRuntime;
   late final GoogleDriveSyncController _googleDriveSyncController;
+  late final CanonicalLibraryDatabaseRegistry _libraryDatabaseRegistry;
   Future<void>? _exitCleanup;
 
   @override
@@ -57,6 +58,9 @@ class _MiruShinAppState extends ConsumerState<MiruShinApp> {
     _soraRuntime = ref.read(soraJsRuntimeProvider);
     _googleDriveSyncController = ref.read(
       googleDriveSyncControllerProvider.notifier,
+    );
+    _libraryDatabaseRegistry = ref.read(
+      canonicalLibraryDatabaseRegistryProvider,
     );
     _router = buildAppRouter(widget.initialRoute);
     MiruShinDeepLinkService.instance.attachRouter(
@@ -94,20 +98,25 @@ class _MiruShinAppState extends ConsumerState<MiruShinApp> {
     final Future<void>? cleanup = _exitCleanup;
     if (cleanup != null) return cleanup;
 
-    return _exitCleanup = Future.wait<void>(<Future<void>>[
-      _googleDriveSyncController.prepareForExit(),
-      _playbackController
-          .stop()
-          .timeout(_exitPlaybackCleanupTimeout)
-          .catchError((_) {
-            // During process teardown the player may already be half gone.
-          }),
-      _soraRuntime.shutdown().timeout(_exitPlaybackCleanupTimeout).catchError((
-        _,
-      ) {
-        // Native WebView teardown is best-effort during process exit.
-      }),
-    ]);
+    return _exitCleanup = () async {
+      await Future.wait<void>(<Future<void>>[
+        _googleDriveSyncController.prepareForExit(),
+        _playbackController
+            .stop()
+            .timeout(_exitPlaybackCleanupTimeout)
+            .catchError((_) {
+              // During process teardown the player may already be half gone.
+            }),
+        _soraRuntime.shutdown().timeout(_exitPlaybackCleanupTimeout).catchError(
+          (_) {
+            // Native WebView teardown is best-effort during process exit.
+          },
+        ),
+      ]);
+      // This must be the final step: all sync/database users are stopped first,
+      // then Drift is closed and awaited before Flutter tears down the Dart VM.
+      await _libraryDatabaseRegistry.closeAll();
+    }();
   }
 
   @override
@@ -256,53 +265,13 @@ class _AniListLibraryWarmupState extends ConsumerState<_AniListLibraryWarmup> {
     } catch (_) {}
   }
 
-  Future<void> _warmMediaType(
-    int generation,
-    String key, {
-    required String mediaType,
-    required bool wantsRussianTitles,
-  }) async {
-    if (mediaType == 'MANGA') {
-      await _settle(ref.read(anilistMangaPreviewListProvider.future));
-      if (!_isActiveGeneration(generation, key)) return;
-      await _settle(ref.read(anilistMangaListProvider.future));
-      return;
-    }
-
-    await _settle(ref.read(anilistAnimePreviewListProvider.future));
-    if (!_isActiveGeneration(generation, key)) return;
-    final Future<void> fullList = _settle(
-      ref.read(anilistAnimeListProvider.future),
-    );
-    if (wantsRussianTitles) {
-      await Future.wait<void>(<Future<void>>[
-        _settle(ref.read(anilistAnimePreviewRussianListProvider.future)),
-        fullList,
-      ]);
-      if (!_isActiveGeneration(generation, key)) return;
-      unawaited(_settle(ref.read(anilistAnimeRussianListProvider.future)));
-      return;
-    }
-    await fullList;
-  }
-
-  void _scheduleWarmup(String key, bool wantsRussianTitles) {
+  void _scheduleWarmup(String key) {
     final int generation = ++_warmupGeneration;
     Future<void>.microtask(() async {
       if (!_isActiveGeneration(generation, key)) return;
       await Future.wait<void>(<Future<void>>[
-        _warmMediaType(
-          generation,
-          key,
-          mediaType: 'ANIME',
-          wantsRussianTitles: wantsRussianTitles,
-        ),
-        _warmMediaType(
-          generation,
-          key,
-          mediaType: 'MANGA',
-          wantsRussianTitles: false,
-        ),
+        _settle(ref.read(trackerLocalAnimeLibraryProvider.future)),
+        _settle(ref.read(trackerLocalMangaLibraryProvider.future)),
       ]);
     });
   }
@@ -310,19 +279,11 @@ class _AniListLibraryWarmupState extends ConsumerState<_AniListLibraryWarmup> {
   @override
   Widget build(BuildContext context) {
     final SettingsState settings = ref.watch(settingsProvider);
-    final bool wantsRussianTitles =
-        ref.watch(aniListEffectiveTitleLanguageProvider) == 'RUSSIAN';
-    if (!settings.hasAniListSession || settings.anilistViewerId == null) {
-      _warmupKey = null;
-      _warmupGeneration++;
-      return const SizedBox.shrink();
-    }
-
     final String nextKey =
-        '${settings.anilistViewerId}:${settings.anilistAccessToken.trim()}:${wantsRussianTitles ? 'RUSSIAN' : 'BASE'}';
+        '${settings.anilistViewerId ?? 'local'}:${settings.malViewerId ?? '-'}:${settings.shikimoriViewerId ?? '-'}';
     if (_warmupKey != nextKey) {
       _warmupKey = nextKey;
-      _scheduleWarmup(nextKey, wantsRussianTitles);
+      _scheduleWarmup(nextKey);
     }
 
     return const SizedBox.shrink();

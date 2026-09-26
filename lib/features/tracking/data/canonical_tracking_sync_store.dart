@@ -28,6 +28,9 @@ class CanonicalTrackingSyncStore
     try {
       await _repository.initialize();
       if (await _repository.hasMigration('tracking.shared_preferences.v1')) {
+        if (_repository.importsLegacyData) {
+          await _legacy.clearMigratedData();
+        }
         return;
       }
       if (!_repository.importsLegacyData) {
@@ -51,6 +54,7 @@ class CanonicalTrackingSyncStore
         favorites: favorites,
         health: health,
       );
+      await _legacy.clearMigratedData();
     } on Object {
       // The import transaction is rolled back by Drift. Keep all legacy keys
       // untouched and serve them read/write for this process, but expose safe

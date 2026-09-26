@@ -11,7 +11,6 @@ import '../../../app/localization/app_localizations.dart';
 import '../../../core/platform/tv_platform.dart';
 import '../../../core/utils/app_wakelock.dart';
 import '../../../core/widgets/tv_focusable.dart';
-import '../../catalog/application/catalog_mode.dart';
 import '../../watch_party/application/watch_party_controller.dart';
 import '../../watch_party/domain/watch_party_models.dart';
 import '../application/playback_controller.dart';
@@ -4913,18 +4912,19 @@ class _PlayerSettingsTiles extends ConsumerWidget {
                 .read(playerSettingsProvider.notifier)
                 .setDiscordRpcEnabled(value),
           ),
-        if (ref.watch(catalogModeProvider) == CatalogMode.anilist)
-          SwitchListTile(
-            value: settings.autoAnilistSync,
-            secondary: const Icon(Icons.sync_rounded),
-            title: Text(context.t('Auto AniList progress')),
-            subtitle: Text(
-              context.t('Sync episode progress to AniList at 85%'),
+        SwitchListTile(
+          value: settings.autoAnilistSync,
+          secondary: const Icon(Icons.sync_rounded),
+          title: Text(context.t('Auto Progress')),
+          subtitle: Text(
+            context.t(
+              'Mark an episode watched at 85% and sync it to your connected trackers.',
             ),
-            onChanged: (bool value) => ref
-                .read(playerSettingsProvider.notifier)
-                .setAutoAnilistSync(value),
           ),
+          onChanged: (bool value) => ref
+              .read(playerSettingsProvider.notifier)
+              .setAutoAnilistSync(value),
+        ),
         SwitchListTile(
           value: settings.horizontalSwipeSeekEnabled,
           secondary: const Icon(Icons.swipe_rounded),

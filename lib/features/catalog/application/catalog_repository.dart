@@ -113,7 +113,7 @@ class TmdbCatalogRepository implements CatalogRepository {
     final String typeKey = type?.name ?? 'all';
     final String key =
         '$cacheScope.discovery.${_safe(normalizedSearch)}.$filter.$typeKey.$page.$pageSize';
-    return _networkFirst(
+    return _cachedThenRefresh(
       cache: cache,
       key: key,
       operation: 'discovery',
@@ -197,6 +197,7 @@ class AniListCatalogRepository implements CatalogRepository {
     this.onPrimaryFailure,
     this.onPrimarySuccess,
     this.onFallback,
+    this.shouldTryPrimary,
     this.onOffline,
     this.onOnline,
   });
@@ -212,6 +213,7 @@ class AniListCatalogRepository implements CatalogRepository {
   final void Function(Object error)? onPrimaryFailure;
   final void Function()? onPrimarySuccess;
   final void Function(Object error, String sourceName)? onFallback;
+  final Future<bool> Function()? shouldTryPrimary;
   final CatalogOfflineCallback? onOffline;
   final CatalogOnlineCallback? onOnline;
 
@@ -299,7 +301,7 @@ class AniListCatalogRepository implements CatalogRepository {
     final String normalizedSearch = search.trim();
     final String key =
         '$cacheScope.discovery.$kind.${_safe(normalizedSearch)}.$filter.$page.$pageSize';
-    return _networkFirst(
+    return _cachedThenRefresh(
       cache: cache,
       key: key,
       operation: 'discovery',
@@ -408,10 +410,21 @@ class AniListCatalogRepository implements CatalogRepository {
     Future<T> Function(MalApiClient mal) fallback, {
     bool enabled = true,
   }) async {
+    final MalApiClient? availableFallback = enabled ? malFallback : null;
+    if (availableFallback != null &&
+        shouldTryPrimary != null &&
+        !await shouldTryPrimary!()) {
+      final StateError skipped = StateError(
+        'AniList is temporarily unavailable.',
+      );
+      final T result = await fallback(availableFallback);
+      onFallback?.call(skipped, 'MyAnimeList');
+      return result;
+    }
     try {
       return await _primaryRead(primary);
     } catch (error) {
-      final MalApiClient? mal = enabled ? malFallback : null;
+      final MalApiClient? mal = availableFallback;
       if (mal == null) rethrow;
       final T result = await fallback(mal);
       onFallback?.call(error, 'MyAnimeList');

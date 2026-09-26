@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
 import 'package:drift/drift.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
@@ -22,12 +24,14 @@ class LibraryWorkspaceScope {
     required this.databaseName,
     required this.replicaNamespace,
     required this.importsLegacyData,
+    this.legacyDatabaseName,
   });
 
   final String workspaceId;
   final String databaseName;
   final String replicaNamespace;
   final bool importsLegacyData;
+  final String? legacyDatabaseName;
 
   @override
   bool operator ==(Object other) =>
@@ -36,7 +40,8 @@ class LibraryWorkspaceScope {
           workspaceId == other.workspaceId &&
           databaseName == other.databaseName &&
           replicaNamespace == other.replicaNamespace &&
-          importsLegacyData == other.importsLegacyData;
+          importsLegacyData == other.importsLegacyData &&
+          legacyDatabaseName == other.legacyDatabaseName;
 
   @override
   int get hashCode => Object.hash(
@@ -44,6 +49,7 @@ class LibraryWorkspaceScope {
     databaseName,
     replicaNamespace,
     importsLegacyData,
+    legacyDatabaseName,
   );
 }
 
@@ -65,14 +71,26 @@ final libraryWorkspaceScopeProvider = Provider<LibraryWorkspaceScope>((
   Ref ref,
 ) {
   final SettingsState settings = ref.watch(settingsProvider);
-  final int? activeId = settings.anilistViewerId;
-  final int? ownerId = settings.canonicalLibraryOwnerAniListId;
-  if (activeId != null && (ownerId == null || activeId == ownerId)) {
+  // Signing out disconnects providers, but the user's last selected Local
+  // Library must remain available offline. A fresh install with no selected
+  // account still receives the independent `local` workspace.
+  final int? activeId =
+      settings.anilistViewerId ?? settings.selectedLibraryAniListId;
+  final int? savedOwnerId = settings.canonicalLibraryOwnerAniListId;
+  final int? ownerId =
+      savedOwnerId ??
+      (settings.anilistSavedAccounts.isNotEmpty
+          ? settings.anilistSavedAccounts.first.viewerId
+          : activeId);
+  if (activeId != null && activeId == ownerId) {
     return LibraryWorkspaceScope(
       workspaceId: 'anilist:$activeId',
-      databaseName: 'mirushin_canonical_library_v1',
+      databaseName: kIsWeb
+          ? 'mirushin_canonical_library_v1'
+          : 'mirushin_canonical_library_anilist_${activeId}_v1',
       replicaNamespace: 'anilist-$activeId',
       importsLegacyData: true,
+      legacyDatabaseName: kIsWeb ? null : 'mirushin_canonical_library_v1',
     );
   }
   if (activeId != null) {
@@ -91,45 +109,92 @@ final libraryWorkspaceScopeProvider = Provider<LibraryWorkspaceScope>((
       importsLegacyData: false,
     );
   }
-  return const LibraryWorkspaceScope(
+  final bool canImportUnownedLegacyLibrary = ownerId == null;
+  return LibraryWorkspaceScope(
     workspaceId: 'local',
-    databaseName: 'mirushin_canonical_library_v1',
+    databaseName: kIsWeb
+        ? 'mirushin_canonical_library_v1'
+        : 'mirushin_canonical_library_local_v1',
     replicaNamespace: 'local',
-    importsLegacyData: true,
+    // If an AniList owner is known, the old unscoped database belongs to that
+    // account even while it is signed out. Opening the local workspace must
+    // never move or import another account's library.
+    importsLegacyData: canImportUnownedLegacyLibrary,
+    legacyDatabaseName: kIsWeb || !canImportUnownedLegacyLibrary
+        ? null
+        : 'mirushin_canonical_library_v1',
   );
 });
 
 typedef CanonicalLibraryDatabaseFactory =
-    CanonicalLibraryDatabase Function(String name);
+    CanonicalLibraryDatabase Function(String name, String? legacyName);
 
 final canonicalLibraryDatabaseFactoryProvider =
     Provider<CanonicalLibraryDatabaseFactory>(
       (Ref ref) =>
-          (String name) => CanonicalLibraryDatabase(null, name),
+          (String name, String? legacyName) =>
+              CanonicalLibraryDatabase(null, name, legacyName),
+    );
+
+/// Owns the shutdown of every workspace database opened during this process.
+///
+/// Riverpod disposal callbacks are synchronous, while Drift closes its native
+/// database isolate asynchronously. Awaiting this registry from the desktop
+/// exit handshake prevents the Dart VM from running sqlite statement
+/// finalizers after the native connection has already been torn down.
+class CanonicalLibraryDatabaseRegistry {
+  final Set<CanonicalLibraryDatabase> _databases = <CanonicalLibraryDatabase>{};
+  final Map<CanonicalLibraryDatabase, Future<void>> _closing =
+      <CanonicalLibraryDatabase, Future<void>>{};
+
+  void register(CanonicalLibraryDatabase database) {
+    _databases.add(database);
+  }
+
+  Future<void> close(CanonicalLibraryDatabase database) {
+    return _closing.putIfAbsent(database, () async {
+      _databases.remove(database);
+      await database.close();
+    });
+  }
+
+  Future<void> closeAll() async {
+    final List<CanonicalLibraryDatabase> databases = _databases.toList(
+      growable: false,
+    );
+    await Future.wait<void>(databases.map(close), eagerError: false);
+  }
+}
+
+final canonicalLibraryDatabaseRegistryProvider =
+    Provider<CanonicalLibraryDatabaseRegistry>(
+      (Ref ref) => CanonicalLibraryDatabaseRegistry(),
     );
 
 final _canonicalLibraryDatabaseByNameProvider =
-    Provider.family<CanonicalLibraryDatabase, String>((Ref ref, String name) {
+    Provider.family<CanonicalLibraryDatabase, LibraryWorkspaceScope>((
+      Ref ref,
+      LibraryWorkspaceScope scope,
+    ) {
       final CanonicalLibraryDatabase database = ref.watch(
         canonicalLibraryDatabaseFactoryProvider,
-      )(name);
-      ref.onDispose(database.close);
+      )(scope.databaseName, scope.legacyDatabaseName);
+      final CanonicalLibraryDatabaseRegistry registry = ref.watch(
+        canonicalLibraryDatabaseRegistryProvider,
+      )..register(database);
+      ref.onDispose(() => unawaited(registry.close(database)));
       return database;
     });
 
 final canonicalLibraryDatabaseProvider = Provider<CanonicalLibraryDatabase>((
   Ref ref,
 ) {
-  final String databaseName = ref.watch(
-    libraryWorkspaceScopeProvider.select(
-      (LibraryWorkspaceScope scope) => scope.databaseName,
-    ),
-  );
+  final LibraryWorkspaceScope scope = ref.watch(libraryWorkspaceScopeProvider);
   // Account switches can leave an in-flight Drive delivery using the previous
   // workspace for a few milliseconds. The per-name provider keeps that DB
   // alive until the root ProviderContainer shuts down instead of closing its
   // isolate channel underneath the operation.
-  return ref.watch(_canonicalLibraryDatabaseByNameProvider(databaseName));
+  return ref.watch(_canonicalLibraryDatabaseByNameProvider(scope));
 });
 
 final canonicalLibraryRepositoryProvider = Provider<CanonicalLibraryRepository>(
@@ -2365,6 +2430,44 @@ class CanonicalLibraryRepository {
     });
   }
 
+  /// Stores the compatibility/local catalog view in the same workspace SQLite
+  /// database as the canonical library. This replaces the old multi-megabyte
+  /// SharedPreferences payload while TMDB and other non-tracker items keep
+  /// their existing behavior.
+  Future<List<LibraryItem>> loadLocalLibraryItems() =>
+      _loadBucket('local.libraryItems.v2', LibraryItem.fromJson);
+
+  Future<void> saveLocalLibraryItems(List<LibraryItem> values) => _writeBucket(
+    'local.libraryItems.v2',
+    values.map((LibraryItem value) => value.toJson()).toList(growable: false),
+  );
+
+  /// Raw episode aliases that cannot yet be attached to an exact canonical
+  /// media id (for example a Sora source episode) also belong in SQLite, never
+  /// NSUserDefaults. Exact identities continue to use EpisodeStateRecords and
+  /// are included in Drive snapshots.
+  Future<Map<String, dynamic>> loadLocalEpisodeProgress() async {
+    await initialize();
+    final LegacyBucketRecord? row =
+        await (database.select(database.legacyBucketRecords)..where(
+              (LegacyBucketRecords table) =>
+                  table.bucket.equals('local.episodeProgress.v2'),
+            ))
+            .getSingleOrNull();
+    if (row == null || row.valueJson.isEmpty) return <String, dynamic>{};
+    try {
+      final Object? decoded = jsonDecode(row.valueJson);
+      return decoded is Map
+          ? Map<String, dynamic>.from(decoded)
+          : <String, dynamic>{};
+    } on Object {
+      return <String, dynamic>{};
+    }
+  }
+
+  Future<void> saveLocalEpisodeProgress(Map<String, dynamic> values) =>
+      _writeBucket('local.episodeProgress.v2', values);
+
   Future<void> _applyFavoritesLocked(
     List<LocalMediaFavoriteState> favorites,
     List<UserMediaState> states,
@@ -2628,6 +2731,24 @@ class CanonicalLibraryRepository {
         })
         .map((List<OutboxDeliveryRecord> rows) => rows.length)
         .distinct();
+  }
+
+  Future<int> pendingDriveDeliveryCount() async {
+    await initialize();
+    final Expression<int> count = database.outboxDeliveryRecords.deliveryId
+        .count();
+    final TypedResult row =
+        await (database.selectOnly(database.outboxDeliveryRecords)
+              ..addColumns(<Expression<Object>>[count])
+              ..where(
+                database.outboxDeliveryRecords.target.equals('drive') &
+                    database.outboxDeliveryRecords.state.isIn(const <String>[
+                      'pending',
+                      'retry',
+                    ]),
+              ))
+            .getSingle();
+    return row.read(count) ?? 0;
   }
 
   Future<DriveReplicaSegment?> buildPendingDriveSegment({

@@ -9,8 +9,10 @@ import 'package:mirushin/features/library/data/canonical_library_database.dart';
 import 'package:mirushin/features/settings/application/settings_state.dart';
 import 'package:mirushin/features/settings/data/account_drive_sync_service.dart';
 import 'package:mirushin/features/settings/domain/account_sync_models.dart';
+import 'package:mirushin/features/tracking/application/tracker_sync_coordinator.dart';
 import 'package:mirushin/features/tracking/data/oauth_token_bundle.dart';
 import 'package:mirushin/features/tracking/domain/tracker_models.dart';
+import 'package:mirushin/features/tracking/domain/tracking_sync_models.dart';
 import 'package:mirushin/shared/models/anilist_models.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -126,7 +128,7 @@ void main() {
       final ProviderContainer container = ProviderContainer(
         overrides: [
           canonicalLibraryDatabaseFactoryProvider.overrideWithValue(
-            (String name) =>
+            (String name, String? legacyName) =>
                 CanonicalLibraryDatabase(NativeDatabase.memory(), name),
           ),
         ],
@@ -146,7 +148,7 @@ void main() {
       );
       expect(
         container.read(libraryWorkspaceScopeProvider).databaseName,
-        'mirushin_canonical_library_v1',
+        'mirushin_canonical_library_anilist_1_v1',
       );
       expect(
         container.read(libraryWorkspaceScopeProvider).replicaNamespace,
@@ -156,6 +158,16 @@ void main() {
         canonicalLibraryRepositoryProvider,
       );
       await aliceRepository.initialize();
+      final TrackerSyncCoordinator aliceCoordinator = container.read(
+        trackerSyncCoordinatorProvider,
+      );
+      await aliceCoordinator.pushEntryEdit(
+        externalIds: const <String, String>{'anilist': '1001'},
+        mediaId: 'anilist:anime:1001',
+        mediaTitle: 'Alice only',
+        status: AniListListStatus.current,
+        targets: const <TrackerSource>{},
+      );
       final LibraryWorkspaceScope aliceScopeBeforeConnections = container.read(
         libraryWorkspaceScopeProvider,
       );
@@ -199,6 +211,29 @@ void main() {
         canonicalLibraryRepositoryProvider,
       );
       await bobRepository.initialize();
+      final TrackerSyncCoordinator bobCoordinator = container.read(
+        trackerSyncCoordinatorProvider,
+      );
+      expect(bobCoordinator, isNot(same(aliceCoordinator)));
+      await bobCoordinator.pushEntryEdit(
+        externalIds: const <String, String>{'anilist': '2002'},
+        mediaId: 'anilist:anime:2002',
+        mediaTitle: 'Bob only',
+        status: AniListListStatus.current,
+        targets: const <TrackerSource>{},
+      );
+      expect(
+        (await aliceRepository.loadTrackingStates()).map(
+          (UserMediaState state) => state.identity.anilistId,
+        ),
+        <int?>[1001],
+      );
+      expect(
+        (await bobRepository.loadTrackingStates()).map(
+          (UserMediaState state) => state.identity.anilistId,
+        ),
+        <int?>[2002],
+      );
       expect(bobRepository.database, isNot(same(aliceRepository.database)));
       expect(
         await aliceRepository.processedDriveSegmentNames(),
@@ -251,7 +286,7 @@ void main() {
       );
       expect(
         container.read(libraryWorkspaceScopeProvider).databaseName,
-        'mirushin_canonical_library_v1',
+        'mirushin_canonical_library_anilist_1_v1',
       );
       final CanonicalLibraryRepository restoredAliceRepository = container.read(
         canonicalLibraryRepositoryProvider,
@@ -273,6 +308,37 @@ void main() {
       expect(
         preferences.containsKey(SettingsPreferences.anilistSavedAccountsKey),
         isFalse,
+      );
+
+      final LibraryWorkspaceScope aliceScopeBeforeDisconnect = container.read(
+        libraryWorkspaceScopeProvider,
+      );
+      await controller.disconnectAniList();
+      expect(container.read(settingsProvider).hasAniListSession, isFalse);
+      expect(container.read(settingsProvider).anilistViewerId, isNull);
+      expect(container.read(settingsProvider).selectedLibraryAniListId, 1);
+      expect(
+        container.read(libraryWorkspaceScopeProvider),
+        aliceScopeBeforeDisconnect,
+        reason:
+            'Signing out must disconnect providers without hiding the selected Local Library.',
+      );
+      final CanonicalLibraryRepository signedOutRepository = container.read(
+        canonicalLibraryRepositoryProvider,
+      );
+      expect(
+        signedOutRepository.database,
+        same(restoredAliceRepository.database),
+      );
+      expect(
+        (await signedOutRepository.loadTrackingStates()).map(
+          (UserMediaState state) => state.identity.anilistId,
+        ),
+        <int?>[1001],
+      );
+      expect(
+        preferences.getInt(SettingsPreferences.selectedLibraryAniListIdKey),
+        1,
       );
     },
   );
