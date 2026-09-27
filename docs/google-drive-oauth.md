@@ -9,24 +9,26 @@ https://www.googleapis.com/auth/drive.appdata
 Enable the Google Drive API, then open Google Auth Platform → Data Access and
 add that exact scope.
 
-Android, iOS, Desktop, and Android TV send token/device requests through
-`auth.emp0ry.com`, which owns the Google client secrets. Web uses Google's
-browser SDK. No client secret is compiled into MiruShin.
+Android phones/tablets and iPhone/iPad use Google's native sign-in SDK as the
+normal path. Android TV and the mobile fallback use the browser handoff through
+`auth.emp0ry.com`; desktop exchanges its PKCE code through the Worker. Web uses
+Google's browser SDK. No Google client secret is compiled into MiruShin.
 
 ## Platform clients
 
 | Target | Google client type | Flow | Build-time configuration |
 | --- | --- | --- | --- |
-| Android phone/tablet | Web | Browser/device handoff through Worker + PKCE | No build secret; works for official and re-signed packages |
+| Android phone/tablet | Android + Web server id | Native Google Sign-In; Worker browser fallback if native auth is unavailable | Public client ids only; no build secret |
 | Android TV | Web | QR authorization-code handoff through Worker + PKCE | No build secret |
-| iOS | Web | Browser/device handoff through Worker + PKCE | No build secret; works for App Store, private signing, LiveContainer, TrollStore, and jailbreak installs |
+| iOS | iOS | Native Google Sign-In; Worker browser fallback for re-signed or containerized installs | Public client id and reversed URL scheme only; no build secret |
 | macOS, Windows, Linux | Desktop | System browser + PKCE + loopback; token exchange through Worker | No build secret |
 | Web | Web application | Google Identity Services token model | Authorized JavaScript origins in Google Cloud |
 
 OAuth client ids are public identifiers and are present in the application.
 Desktop and Web client secrets exist only as encrypted Cloudflare Worker secrets.
-PKCE and OAuth `state` protect each desktop authorization attempt, while the
-Worker hardcodes the allowed clients, grant types, scope, and callback.
+PKCE and OAuth `state` protect each desktop/browser-fallback authorization
+attempt, while the Worker hardcodes the allowed clients, grant types, scope,
+and callback.
 
 Google's live TV/Limited Input endpoint currently rejects `drive.appdata` with
 `invalid_scope` even though Google's documentation still lists it as allowed.
@@ -82,8 +84,9 @@ Authorized redirect URIs
 https://auth.emp0ry.com/callback
 ```
 
-The redirect URI is used by the mobile/TV browser handoff. MiruShin Web still
-uses the Google Identity Services popup/token model and does not redirect there.
+The redirect URI is used by Android TV and the mobile browser fallback. Normal
+iOS/Android native sign-in does not use it. MiruShin Web still uses the Google
+Identity Services popup/token model and does not redirect there.
 
 Origins contain scheme, host, and optional port only: no path and no trailing
 slash. Run local Web builds on the matching fixed port:

@@ -18,23 +18,31 @@ import '../application/google_drive_sync_controller.dart';
 import '../data/google_drive_native_auth.dart';
 import '../data/google_drive_oauth_service.dart';
 
+enum GoogleDriveLoginRoute { device, native, desktop }
+
+@visibleForTesting
+GoogleDriveLoginRoute chooseGoogleDriveLoginRoute({
+  required bool isAndroidTv,
+  required bool nativeSupported,
+}) {
+  if (isAndroidTv) return GoogleDriveLoginRoute.device;
+  if (nativeSupported) return GoogleDriveLoginRoute.native;
+  return GoogleDriveLoginRoute.desktop;
+}
+
 Future<void> loginGoogleDrive(BuildContext context, WidgetRef ref) async {
-  if (TvPlatform.isAndroidTv) {
+  final GoogleDriveLoginRoute route = chooseGoogleDriveLoginRoute(
+    isAndroidTv: TvPlatform.isAndroidTv,
+    nativeSupported: GoogleDriveNativeAuthService.isSupported,
+  );
+  if (route == GoogleDriveLoginRoute.device) {
     await _loginGoogleDriveDevice(context, ref);
     return;
   }
   if (!AppConstants.googleOAuthConfigured) {
     throw StateError('Google OAuth is not configured for this platform.');
   }
-  if (!kIsWeb && GoogleDriveNativeAuthService.isSupported) {
-    // Use the Worker-backed device/PKCE handoff on mobile. It has no embedded
-    // secret and does not depend on the final package signature or bundle id,
-    // so App Store, privately signed, LiveContainer, TrollStore and jailbreak
-    // installs follow the same OAuth path.
-    await _loginGoogleDriveDevice(context, ref);
-    return;
-  }
-  if (GoogleDriveNativeAuthService.isSupported) {
+  if (route == GoogleDriveLoginRoute.native) {
     try {
       final String accessToken = await const GoogleDriveNativeAuthService()
           .signIn();
@@ -50,8 +58,9 @@ Future<void> loginGoogleDrive(BuildContext context, WidgetRef ref) async {
       return;
     } on GoogleSignInException catch (error) {
       if (error.code == GoogleSignInExceptionCode.canceled) rethrow;
-      // Native OAuth is tied to a package/bundle signature. Re-signed iOS and
-      // Android installs use the Worker-backed device flow instead.
+      // Native sign-in is the normal iOS/Android path. If a private or
+      // containerized install cannot use its registered bundle/signature, the
+      // Worker-backed browser handoff remains available as a fallback.
       if (!context.mounted) return;
       await _loginGoogleDriveDevice(context, ref);
       return;
