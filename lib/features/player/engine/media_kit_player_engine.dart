@@ -471,12 +471,11 @@ class MediaKitPlayerEngine extends PlayerEngine {
       ('demuxer-max-bytes', '$maxBytes'),
       ('demuxer-readahead-secs', '$readaheadSecs'),
 
-      // Seek / frame-drop policy
+      // Seek policy. Frame dropping and A/V synchronization intentionally use
+      // mpv's platform-tested defaults (`framedrop=vo`, `video-sync=audio`).
+      // Forcing `framedrop=no` can leave the last video frame on screen while
+      // the audio clock continues when decoding or rendering falls behind.
       ('hr-seek-framedrop', 'no'),
-      ('framedrop', 'no'),
-
-      // A/V sync
-      ('video-sync', 'audio'),
 
       // Hardware decoding
       ('hwdec', Platform.isWindows ? 'no' : 'auto-safe'),
