@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.9.5",
+          "date": "2026-09-27",
+          "localizedDescription": "- Fixed video freezing while audio continued by restoring MediaKit/mpv platform-tested frame-dropping and A/V-sync defaults.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.5/MiruShin-ios-v2.9.5.ipa",
+          "size": 31640801,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.9.4",
           "date": "2026-09-27",
           "localizedDescription": "- Restored native Google Drive sign-in on iPhone, iPad, and Android phones/tablets.\n- Kept the secure Cloudflare Worker browser flow as a fallback for re-signed, LiveContainer, TrollStore, jailbreak, and Android TV installations.\n- Added regression tests for platform-specific Google Drive login routing.\n- Removed the legacy web release workflow so releases use Release No Web only.",
@@ -703,11 +711,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.9.4",
+      "version": "2.9.5",
       "versionDate": "2026-09-27",
-      "versionDescription": "- Restored native Google Drive sign-in on iPhone, iPad, and Android phones/tablets.\n- Kept the secure Cloudflare Worker browser flow as a fallback for re-signed, LiveContainer, TrollStore, jailbreak, and Android TV installations.\n- Added regression tests for platform-specific Google Drive login routing.\n- Removed the legacy web release workflow so releases use Release No Web only.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.4/MiruShin-ios-v2.9.4.ipa",
-      "size": 31642019,
+      "versionDescription": "- Fixed video freezing while audio continued by restoring MediaKit/mpv platform-tested frame-dropping and A/V-sync defaults.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.5/MiruShin-ios-v2.9.5.ipa",
+      "size": 31640801,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
