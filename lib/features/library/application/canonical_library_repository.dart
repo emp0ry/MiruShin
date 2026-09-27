@@ -58,12 +58,14 @@ class DriveSnapshotApplyResult {
     required this.cloudEntryCount,
     required this.localEntryCount,
     required this.restoredEntries,
+    required this.recoveredOperations,
     required this.freshBootstrap,
   });
 
   final int cloudEntryCount;
   final int localEntryCount;
   final int restoredEntries;
+  final int recoveredOperations;
   final bool freshBootstrap;
 }
 
@@ -2883,16 +2885,20 @@ class CanonicalLibraryRepository {
     );
   }
 
-  Future<bool> hasAppliedDriveSnapshot(String checksum) async {
+  Future<String?> appliedDriveSnapshotChecksum() async {
     await initialize();
     final SyncCursorRecord? cursor =
         await (database.select(database.syncCursorRecords)..where(
-              (SyncCursorRecords table) =>
-                  table.scope.equals('drive.snapshot:$replicaNamespace'),
+              (SyncCursorRecords table) => table.scope.equals(
+                'drive.snapshot.reconciled.v2:$replicaNamespace',
+              ),
             ))
             .getSingleOrNull();
-    return cursor?.cursor == checksum;
+    return cursor?.cursor;
   }
+
+  Future<bool> hasAppliedDriveSnapshot(String checksum) async =>
+      await appliedDriveSnapshotChecksum() == checksum;
 
   /// Atomically merges a complete Drive checkpoint into the current
   /// workspace. A fresh device must end with exactly the advertised number of
@@ -2900,6 +2906,7 @@ class CanonicalLibraryRepository {
   Future<DriveSnapshotApplyResult> applyDriveSnapshot(
     DriveLibrarySnapshot snapshot, {
     void Function(int completed, int total)? onProgress,
+    Set<TrackerSource> trackerTargets = const <TrackerSource>{},
   }) async {
     await initialize();
     if (snapshot.replicaNamespace != replicaNamespace &&
@@ -2909,7 +2916,8 @@ class CanonicalLibraryRepository {
         '${snapshot.replicaNamespace} != $replicaNamespace',
       );
     }
-    return database.transaction(() async {
+    final DriveSnapshotApplyResult
+    baseResult = await database.transaction(() async {
       final int beforeCount =
           await (database.selectOnly(database.canonicalLibraryRecords)
                 ..addColumns(<Expression<Object>>[
@@ -2928,7 +2936,10 @@ class CanonicalLibraryRepository {
               .getSingle();
       final bool freshBootstrap = beforeCount == 0;
       final Map<String, String> translatedIds = <String, String>{};
-      final int total = snapshot.media.length + snapshot.libraryEntries.length;
+      // Progress is expressed in actual canonical titles. Media and entry rows
+      // are two halves of the same title and must not make a 375-title restore
+      // look like 750 separate uploads/downloads in the UI.
+      final int total = snapshot.libraryEntries.length;
       int completed = 0;
 
       for (final Map<String, dynamic> row in snapshot.media) {
@@ -2952,8 +2963,6 @@ class CanonicalLibraryRepository {
           ),
           mediaItem: media,
         );
-        completed += 1;
-        onProgress?.call(completed, total);
       }
 
       int restored = 0;
@@ -3147,9 +3156,77 @@ class CanonicalLibraryRepository {
         cloudEntryCount: snapshot.entryCount,
         localEntryCount: localCount,
         restoredEntries: restored,
+        recoveredOperations: 0,
         freshBootstrap: freshBootstrap,
       );
     });
+
+    // A checkpoint is also the durable repair path when an older client
+    // missed (or incorrectly skipped) one of the immutable segment files.
+    // Replay only operation IDs absent locally and let applyDriveSegment's
+    // per-field causal revision checks decide what is safe. This never turns
+    // the checkpoint into a whole-record latest-wins overwrite.
+    final List<Map<String, dynamic>> orderedOperations =
+        snapshot.operations.toList(growable: false)
+          ..sort((Map<String, dynamic> left, Map<String, dynamic> right) {
+            final DateTime leftAt =
+                DateTime.tryParse('${left['occurredAt'] ?? ''}') ??
+                DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+            final DateTime rightAt =
+                DateTime.tryParse('${right['occurredAt'] ?? ''}') ??
+                DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+            final int occurred = leftAt.compareTo(rightAt);
+            if (occurred != 0) return occurred;
+            return '${left['operationId'] ?? ''}'.compareTo(
+              '${right['operationId'] ?? ''}',
+            );
+          });
+    final int recovered = await applyDriveSegment(
+      DriveReplicaSegment(
+        segmentId: 'snapshot-recovery-v2-${snapshot.checksum}',
+        deviceId: snapshot.deviceId,
+        createdAt: snapshot.createdAt,
+        operations: orderedOperations,
+        media: snapshot.media,
+        libraryEntries: snapshot.libraryEntries,
+        episodeStates: snapshot.episodeStates,
+        streamPreferences: snapshot.streamPreferences,
+        replicaNamespace: snapshot.replicaNamespace,
+      ),
+      trackerTargets: trackerTargets,
+    );
+    final int now = DateTime.now().toUtc().millisecondsSinceEpoch;
+    await database
+        .into(database.syncCursorRecords)
+        .insertOnConflictUpdate(
+          SyncCursorRecordsCompanion.insert(
+            scope: 'drive.snapshot.reconciled.v2:${snapshot.replicaNamespace}',
+            cursor: snapshot.checksum,
+            metadataJson: Value<String>(
+              jsonEncode(<String, dynamic>{
+                'snapshotId': snapshot.snapshotId,
+                'entryCount': snapshot.entryCount,
+                'recoveredOperations': recovered,
+              }),
+            ),
+            updatedAtMs: now,
+          ),
+        );
+    final Expression<int> activeCount = database.canonicalLibraryRecords.localId
+        .count();
+    final TypedResult countRow =
+        await (database.selectOnly(database.canonicalLibraryRecords)
+              ..addColumns(<Expression<Object>>[activeCount])
+              ..where(database.canonicalLibraryRecords.inLibrary.equals(true)))
+            .getSingle();
+    final int reconciledLocalCount = countRow.read(activeCount) ?? 0;
+    return DriveSnapshotApplyResult(
+      cloudEntryCount: baseResult.cloudEntryCount,
+      localEntryCount: reconciledLocalCount,
+      restoredEntries: baseResult.restoredEntries,
+      recoveredOperations: recovered,
+      freshBootstrap: baseResult.freshBootstrap,
+    );
   }
 
   Future<void> _importSnapshotOperations(

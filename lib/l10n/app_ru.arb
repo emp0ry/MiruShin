@@ -41,6 +41,7 @@
   "Sync across devices": "Синхронизация между устройствами",
   "Keep your library, watch progress, accounts, API connections, addons, relay preferences, and Library settings up to date across your devices.": "Синхронизируйте библиотеку, прогресс просмотра, аккаунты, API-подключения, аддоны, настройки ретранслятора и Library между устройствами.",
   "Some data could not be synced. Please try again.": "Не удалось синхронизировать часть данных. Попробуйте ещё раз.",
+  "Library synced, but {items} could not be synced. MiruShin will retry.": "Библиотека синхронизирована, но не удалось синхронизировать: {items}. MiruShin повторит попытку.",
   "Google Drive sync failed. Please try again.": "Не удалось выполнить синхронизацию с Google Drive. Попробуйте ещё раз.",
   "Google Drive session expired. Connect again.": "Сессия Google Drive истекла. Подключитесь снова.",
   "Could not connect to Google Drive. Please try again.": "Не удалось подключиться к Google Drive. Попробуйте ещё раз.",

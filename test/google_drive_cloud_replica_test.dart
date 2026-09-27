@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mirushin/features/library/data/google_drive_cloud_replica.dart';
+import 'package:mirushin/features/settings/domain/preference_sync_models.dart';
 
 void main() {
   test('cancelling a Drive pass aborts its active HTTP work', () async {
@@ -87,4 +88,81 @@ void main() {
     expect(deleted, <String>['manifest', 'prefs']);
     expect(progress, <(int, int)>[(1, 2), (2, 2)]);
   });
+
+  test(
+    'one malformed preference segment does not block valid replicas',
+    () async {
+      final PreferenceReplicaSegment valid = PreferenceReplicaSegment(
+        deviceId: 'valid-device',
+        revision: 3,
+        createdAt: DateTime.utc(2026, 9, 27),
+        values: const <String, PreferenceSyncValue>{},
+        tombstones: const <String, PreferenceSyncVersion>{},
+      );
+      final Dio dio = Dio();
+      dio.interceptors.add(
+        InterceptorsWrapper(
+          onRequest:
+              (RequestOptions options, RequestInterceptorHandler handler) {
+                if (options.method == 'GET' &&
+                    options.uri.path.endsWith('/files') &&
+                    options.queryParameters['alt'] != 'media') {
+                  handler.resolve(
+                    Response<dynamic>(
+                      requestOptions: options,
+                      data: <String, dynamic>{
+                        'files': <Map<String, dynamic>>[
+                          <String, dynamic>{
+                            'id': 'broken',
+                            'name':
+                                'mirushin.preferences.segment.broken.1.v1.json',
+                          },
+                          <String, dynamic>{
+                            'id': 'valid',
+                            'name': valid.fileName,
+                          },
+                        ],
+                      },
+                    ),
+                  );
+                  return;
+                }
+                if (options.method == 'GET' &&
+                    options.uri.path.endsWith('/files/broken')) {
+                  handler.resolve(
+                    Response<dynamic>(requestOptions: options, data: '{broken'),
+                  );
+                  return;
+                }
+                if (options.method == 'GET' &&
+                    options.uri.path.endsWith('/files/valid')) {
+                  handler.resolve(
+                    Response<dynamic>(
+                      requestOptions: options,
+                      data: valid.encode(),
+                    ),
+                  );
+                  return;
+                }
+                handler.reject(
+                  DioException(
+                    requestOptions: options,
+                    message:
+                        'Unexpected request: ${options.method} ${options.uri}',
+                  ),
+                );
+              },
+        ),
+      );
+
+      final List<PreferenceReplicaSegment> pulled =
+          await GoogleDriveCloudReplica(
+            accessToken: 'access-token',
+            dio: dio,
+          ).pullPreferenceSegments(excluding: const <String>{});
+
+      expect(pulled, hasLength(1));
+      expect(pulled.single.fileName, valid.fileName);
+    },
+  );
 }

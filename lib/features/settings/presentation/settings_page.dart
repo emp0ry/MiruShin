@@ -601,7 +601,7 @@ class _GoogleDriveSyncSectionState
         ),
         if (state?.lastError != null)
           Text(
-            context.t(state!.lastError!),
+            _googleDriveErrorText(context, state!.lastError!),
             style: TextStyle(color: Theme.of(context).colorScheme.error),
           ),
       ],
@@ -890,6 +890,28 @@ String _formatStorageSize(int bytes) {
       ? 1
       : 2;
   return '${value.toStringAsFixed(decimals)} ${units[index]}';
+}
+
+String _googleDriveErrorText(BuildContext context, String error) {
+  const String prefix = 'drive.partialSync:';
+  if (!error.startsWith(prefix)) return context.t(error);
+  const Map<String, String> labels = <String, String>{
+    'account': 'Accounts',
+    'preferences': 'Settings',
+    'addons': 'Addons',
+  };
+  final String items = error
+      .substring(prefix.length)
+      .split(',')
+      .map((String value) => labels[value])
+      .whereType<String>()
+      .map(context.t)
+      .toSet()
+      .join(', ');
+  return context.tf(
+    'Library synced, but {items} could not be synced. MiruShin will retry.',
+    <String, Object?>{'items': items},
+  );
 }
 
 String _formatDriveTime(DateTime value) {

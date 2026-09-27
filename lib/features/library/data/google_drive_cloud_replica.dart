@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 
 import '../../../core/constants/app_constants.dart';
 import '../../addons/domain/addon_sync_models.dart';
@@ -53,8 +54,15 @@ class GoogleDriveCloudReplica
 
   Future<DriveLibrarySnapshot?> pullLibrarySnapshot({
     void Function(int received, int total)? onProgress,
+    String? excludingChecksum,
   }) async {
     final _ManifestRead manifest = await _readManifest();
+    final String? manifestChecksum = manifest.value.snapshotChecksum;
+    if (excludingChecksum != null &&
+        excludingChecksum.isNotEmpty &&
+        manifestChecksum == excludingChecksum) {
+      return null;
+    }
     final String fileName =
         manifest.value.snapshotFileName ??
         (replicaNamespace == 'legacy'
@@ -74,7 +82,7 @@ class GoogleDriveCloudReplica
         !(includeLegacyLibrary && snapshot.replicaNamespace == 'legacy')) {
       throw StateError('Google Drive library snapshot workspace mismatch.');
     }
-    final String? expectedChecksum = manifest.value.snapshotChecksum;
+    final String? expectedChecksum = manifestChecksum;
     if (expectedChecksum != null &&
         expectedChecksum.isNotEmpty &&
         expectedChecksum != snapshot.checksum &&
@@ -185,13 +193,20 @@ class GoogleDriveCloudReplica
     final List<AccountReplicaSegment> result = <AccountReplicaSegment>[];
     for (final CloudReplicaFile file in files) {
       if (excluding.contains(file.name)) continue;
-      final AccountReplicaSegment segment = AccountReplicaSegment.decode(
-        await _download(file.id),
-      );
-      if (file.name != segment.fileName) {
-        throw StateError('Google Drive account segment identity mismatch.');
+      try {
+        final AccountReplicaSegment segment = AccountReplicaSegment.decode(
+          await _download(file.id),
+        );
+        if (file.name != segment.fileName) {
+          throw StateError('Google Drive account segment identity mismatch.');
+        }
+        result.add(segment);
+      } on Object catch (error) {
+        if (!_isMalformedReplica(error)) rethrow;
+        debugPrint(
+          'Skipping invalid Drive account segment ${file.name}: $error',
+        );
       }
-      result.add(segment);
     }
     result.sort((AccountReplicaSegment a, AccountReplicaSegment b) {
       final int created = a.createdAt.compareTo(b.createdAt);
@@ -222,13 +237,21 @@ class GoogleDriveCloudReplica
     final List<PreferenceReplicaSegment> result = <PreferenceReplicaSegment>[];
     for (final CloudReplicaFile file in files) {
       if (excluding.contains(file.name)) continue;
-      final PreferenceReplicaSegment segment = PreferenceReplicaSegment.decode(
-        await _download(file.id),
-      );
-      if (file.name != segment.fileName) {
-        throw StateError('Google Drive preference segment identity mismatch.');
+      try {
+        final PreferenceReplicaSegment segment =
+            PreferenceReplicaSegment.decode(await _download(file.id));
+        if (file.name != segment.fileName) {
+          throw StateError(
+            'Google Drive preference segment identity mismatch.',
+          );
+        }
+        result.add(segment);
+      } on Object catch (error) {
+        if (!_isMalformedReplica(error)) rethrow;
+        debugPrint(
+          'Skipping invalid Drive preference segment ${file.name}: $error',
+        );
       }
-      result.add(segment);
     }
     result.sort((PreferenceReplicaSegment a, PreferenceReplicaSegment b) {
       final int created = a.createdAt.compareTo(b.createdAt);
@@ -259,13 +282,18 @@ class GoogleDriveCloudReplica
     final List<AddonReplicaSegment> result = <AddonReplicaSegment>[];
     for (final CloudReplicaFile file in files) {
       if (excluding.contains(file.name)) continue;
-      final AddonReplicaSegment segment = AddonReplicaSegment.decode(
-        await _download(file.id),
-      );
-      if (file.name != segment.fileName) {
-        throw StateError('Google Drive addon segment identity mismatch.');
+      try {
+        final AddonReplicaSegment segment = AddonReplicaSegment.decode(
+          await _download(file.id),
+        );
+        if (file.name != segment.fileName) {
+          throw StateError('Google Drive addon segment identity mismatch.');
+        }
+        result.add(segment);
+      } on Object catch (error) {
+        if (!_isMalformedReplica(error)) rethrow;
+        debugPrint('Skipping invalid Drive addon segment ${file.name}: $error');
       }
-      result.add(segment);
     }
     result.sort((AddonReplicaSegment a, AddonReplicaSegment b) {
       final int created = a.createdAt.compareTo(b.createdAt);
@@ -323,17 +351,30 @@ class GoogleDriveCloudReplica
     final List<DriveReplicaSegment> result = <DriveReplicaSegment>[];
     for (final CloudReplicaFile file in files) {
       if (excluding.contains(file.name)) continue;
-      final String body = await _download(file.id);
-      final Object? decoded = jsonDecode(body);
-      if (decoded is! Map<String, dynamic>) continue;
-      final DriveReplicaSegment segment = DriveReplicaSegment.fromJson(decoded);
-      final String? expected = manifest.value.segments[file.name];
-      if (expected != null && expected != segment.checksum) {
-        throw StateError(
-          'Google Drive segment checksum mismatch: ${file.name}',
+      try {
+        final String body = await _download(file.id);
+        final Object? decoded = jsonDecode(body);
+        if (decoded is! Map<String, dynamic>) {
+          throw FormatException(
+            'Google Drive segment must be an object: ${file.name}',
+          );
+        }
+        final DriveReplicaSegment segment = DriveReplicaSegment.fromJson(
+          decoded,
+        );
+        final String? expected = manifest.value.segments[file.name];
+        if (expected != null && expected != segment.checksum) {
+          throw StateError(
+            'Google Drive segment checksum mismatch: ${file.name}',
+          );
+        }
+        result.add(segment);
+      } on Object catch (error) {
+        if (!_isMalformedReplica(error)) rethrow;
+        debugPrint(
+          'Skipping invalid Drive library segment ${file.name}: $error',
         );
       }
-      result.add(segment);
     }
     result.sort(
       (DriveReplicaSegment a, DriveReplicaSegment b) =>
@@ -474,8 +515,9 @@ class GoogleDriveCloudReplica
       queryParameters: <String, dynamic>{
         'spaces': 'appDataFolder',
         'q': "name = '$escaped' and trashed = false",
-        'fields': 'files(id,name,md5Checksum,size)',
-        'pageSize': 2,
+        'fields': 'files(id,name,md5Checksum,size,modifiedTime)',
+        'orderBy': 'modifiedTime desc',
+        'pageSize': 100,
       },
       options: _options(),
       cancelToken: _cancelToken,
@@ -483,11 +525,16 @@ class GoogleDriveCloudReplica
     final Object? data = response.data;
     final Object? files = data is Map<String, dynamic> ? data['files'] : null;
     if (files is! List || files.isEmpty) return null;
-    final List<Map<String, dynamic>> entries =
-        files.whereType<Map<String, dynamic>>().toList()..sort(
-          (Map<String, dynamic> a, Map<String, dynamic> b) =>
-              '${a['id'] ?? ''}'.compareTo('${b['id'] ?? ''}'),
-        );
+    final List<Map<String, dynamic>> entries = files
+        .whereType<Map<String, dynamic>>()
+        .toList();
+    entries.sort((Map<String, dynamic> a, Map<String, dynamic> b) {
+      final int modified = '${b['modifiedTime'] ?? ''}'.compareTo(
+        '${a['modifiedTime'] ?? ''}',
+      );
+      if (modified != 0) return modified;
+      return '${b['id'] ?? ''}'.compareTo('${a['id'] ?? ''}');
+    });
     if (entries.isEmpty) return null;
     final Map<String, dynamic> first = entries.first;
     return CloudReplicaFile(
@@ -674,3 +721,6 @@ class _ManifestRead {
   final CloudReplicaFile? file;
   final bool exists;
 }
+
+bool _isMalformedReplica(Object error) =>
+    error is FormatException || error is StateError || error is TypeError;

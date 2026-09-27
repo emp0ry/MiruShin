@@ -386,6 +386,9 @@ String _driveAddonSourceFingerprint(AddonSourcesState state) {
   return jsonEncode(sources);
 }
 
+String _replicaWarningCode(List<String> warnings) =>
+    'drive.partialSync:${warnings.toSet().join(',')}';
+
 class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
   static const int _maximumAutomaticRetries = 3;
 
@@ -754,40 +757,40 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
         activeCloud = libraryCloud;
         leaseDeviceId = await repository.deviceId();
         if (_disposed || _shuttingDown) return;
-        ownsDeliveryLease = await libraryCloud.acquireDeliveryLease(
-          deviceId: leaseDeviceId,
-        );
-        if (_disposed || _shuttingDown) return;
         var applied = 0;
         var restoredSnapshot = false;
-        DriveLibrarySnapshot? cloudSnapshot;
-        if (ownsDeliveryLease) {
-          cloudSnapshot = await libraryCloud.pullLibrarySnapshot();
-          if (_disposed || _shuttingDown) return;
-          if (cloudSnapshot != null &&
-              !await repository.hasAppliedDriveSnapshot(
-                cloudSnapshot.checksum,
-              )) {
-            await repository.applyDriveSnapshot(cloudSnapshot);
-            restoredSnapshot = true;
-          }
-          final Set<String> processed = await repository
-              .processedDriveSegmentNames();
-          final List<DriveReplicaSegment> incoming = await libraryCloud
-              .pullSegments(excluding: processed);
-          final Set<TrackerSource> targets = _connectedTrackerTargets(
-            ref.read(settingsProvider),
+        final Set<TrackerSource> targets = _connectedTrackerTargets(
+          ref.read(settingsProvider),
+        );
+        // Every device is a reader. The lease protects tracker delivery and
+        // compact checkpoint publication only; it must never hide remote
+        // library operations from another phone/desktop.
+        final String? appliedSnapshotChecksum = await repository
+            .appliedDriveSnapshotChecksum();
+        final DriveLibrarySnapshot? cloudSnapshot = await libraryCloud
+            .pullLibrarySnapshot(excludingChecksum: appliedSnapshotChecksum);
+        if (_disposed || _shuttingDown) return;
+        if (cloudSnapshot != null &&
+            !await repository.hasAppliedDriveSnapshot(cloudSnapshot.checksum)) {
+          await repository.applyDriveSnapshot(
+            cloudSnapshot,
+            trackerTargets: targets,
           );
-          for (final DriveReplicaSegment segment in incoming) {
-            applied += await repository.applyDriveSegment(
-              segment,
-              trackerTargets: targets,
-            );
-          }
-          await repository.applyRemoteDeliveryLedger(
-            await libraryCloud.readDeliveryLedger(),
+          restoredSnapshot = true;
+        }
+        final Set<String> processed = await repository
+            .processedDriveSegmentNames();
+        final List<DriveReplicaSegment> incoming = await libraryCloud
+            .pullSegments(excluding: processed);
+        for (final DriveReplicaSegment segment in incoming) {
+          applied += await repository.applyDriveSegment(
+            segment,
+            trackerTargets: targets,
           );
         }
+        await repository.applyRemoteDeliveryLedger(
+          await libraryCloud.readDeliveryLedger(),
+        );
         _setProgress(stage: 'Uploading local changes…', progress: 0.15);
         if (await repository.pendingDriveDeliveryCount() > 0) {
           _localCheckpointRequired = true;
@@ -796,16 +799,19 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
         if (_disposed || _shuttingDown) return;
         final DriveLibrarySnapshot outgoingSnapshot = await repository
             .buildDriveSnapshot();
-        DriveReplicaUsage? usage;
+        ownsDeliveryLease = await libraryCloud.acquireDeliveryLease(
+          deviceId: leaseDeviceId,
+        );
+        if (_disposed || _shuttingDown) return;
         if (ownsDeliveryLease) {
           await libraryCloud.pushLibrarySnapshot(outgoingSnapshot);
-          usage = await libraryCloud.readUsage();
           _localCheckpointRequired = false;
           _localRetryAttempt = 0;
         } else {
           _localCheckpointRequired = true;
           _scheduleLocalCheckpointRetry();
         }
+        final DriveReplicaUsage usage = await libraryCloud.readUsage();
         final DateTime completedAt = DateTime.now().toUtc();
         await (await SharedPreferences.getInstance()).setString(
           _googleDriveLastFullSyncAtKey,
@@ -824,8 +830,8 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
             connected: true,
             lastSyncAt: completedAt,
             appliedSegments: applied,
-            driveUsageBytes: usage?.totalBytes,
-            driveFileCount: usage?.fileCount,
+            driveUsageBytes: usage.totalBytes,
+            driveFileCount: usage.fileCount,
             cloudEntryCount: ownsDeliveryLease
                 ? outgoingSnapshot.entryCount
                 : cloudSnapshot?.entryCount,
@@ -948,8 +954,14 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
         replicaWarnings.add('addons');
       }
       _setProgress(stage: 'Checking Library backup…', progress: 0.23);
+      final Set<TrackerSource> targets = _connectedTrackerTargets(
+        ref.read(settingsProvider),
+      );
+      final String? appliedSnapshotChecksum = await repository
+          .appliedDriveSnapshotChecksum();
       final DriveLibrarySnapshot? cloudSnapshot = await libraryCloud
           .pullLibrarySnapshot(
+            excludingChecksum: appliedSnapshotChecksum,
             onProgress: (int received, int total) => _setTransferProgress(
               stage: 'Downloading Library backup…',
               transferred: received,
@@ -962,6 +974,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
           !await repository.hasAppliedDriveSnapshot(cloudSnapshot.checksum)) {
         await repository.applyDriveSnapshot(
           cloudSnapshot,
+          trackerTargets: targets,
           onProgress: (int completed, int total) => _setItemProgress(
             stage: 'Restoring Local Library…',
             completed: completed,
@@ -976,30 +989,34 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
         ref.invalidate(trackerMangaListProvider);
       }
       _setProgress(stage: 'Merging recent changes…', progress: 0.64);
-      ownsDeliveryLease = await libraryCloud.acquireDeliveryLease(
-        deviceId: leaseDeviceId,
-      );
       int applied = 0;
-      if (ownsDeliveryLease) {
-        final Set<String> processed = await repository
-            .processedDriveSegmentNames();
-        final List<DriveReplicaSegment> incoming = await libraryCloud
-            .pullSegments(excluding: processed);
-        final Set<TrackerSource> targets = _connectedTrackerTargets(
-          ref.read(settingsProvider),
+      final Set<String> processed = await repository
+          .processedDriveSegmentNames();
+      final List<DriveReplicaSegment> incoming = await libraryCloud
+          .pullSegments(excluding: processed);
+      for (final DriveReplicaSegment segment in incoming) {
+        applied += await repository.applyDriveSegment(
+          segment,
+          trackerTargets: targets,
         );
-        for (final DriveReplicaSegment segment in incoming) {
-          applied += await repository.applyDriveSegment(
-            segment,
-            trackerTargets: targets,
-          );
-        }
+      }
+      if (applied > 0) {
+        ref.invalidate(trackerLocalAnimeLibraryProvider);
+        ref.invalidate(trackerLocalMangaLibraryProvider);
+        ref.invalidate(trackerAnimeListProvider);
+        ref.invalidate(trackerMangaListProvider);
       }
       await repository.applyRemoteDeliveryLedger(
         await libraryCloud.readDeliveryLedger(),
       );
       _setProgress(stage: 'Uploading local changes…', progress: 0.76);
       await _pushPendingLibrarySegments(repository, libraryCloud);
+      if (_disposed || _shuttingDown) return;
+      // Only side effects that must have a single owner are leased. Pulling
+      // and immutable segment upload remain available to every device.
+      ownsDeliveryLease = await libraryCloud.acquireDeliveryLease(
+        deviceId: leaseDeviceId,
+      );
       if (ownsDeliveryLease) {
         await ref.read(trackerSyncCoordinatorProvider).flushPending();
         await libraryCloud.mergeDeliveryLedger(
@@ -1060,7 +1077,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
           localEntryCount: outgoingSnapshot.entryCount,
           lastError: replicaWarnings.isEmpty
               ? null
-              : 'Some data could not be synced. Please try again.',
+              : _replicaWarningCode(replicaWarnings),
           clearError: replicaWarnings.isEmpty,
         ),
       );

@@ -41,6 +41,7 @@
   "Sync across devices": "デバイス間で同期",
   "Keep your library, watch progress, accounts, API connections, addons, relay preferences, and Library settings up to date across your devices.": "ライブラリ、視聴進捗、アカウント、API接続、アドオン、リレー設定、ライブラリ設定をデバイス間で同期します。",
   "Some data could not be synced. Please try again.": "一部のデータを同期できませんでした。もう一度お試しください。",
+  "Library synced, but {items} could not be synced. MiruShin will retry.": "ライブラリは同期されましたが、{items} を同期できませんでした。MiruShin が再試行します。",
   "Google Drive sync failed. Please try again.": "Google Driveの同期に失敗しました。もう一度お試しください。",
   "Google Drive session expired. Connect again.": "Google Driveのセッションが期限切れです。もう一度接続してください。",
   "Could not connect to Google Drive. Please try again.": "Google Driveに接続できませんでした。もう一度お試しください。",

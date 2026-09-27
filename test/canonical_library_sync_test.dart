@@ -246,6 +246,154 @@ void main() {
     );
 
     test(
+      'Drive checkpoint causally repairs a missed operation on an existing device',
+      () async {
+        final UserMediaState initial = _state(progress: 2);
+        await repository.saveTrackingStates(<UserMediaState>[initial]);
+        final DriveLibrarySnapshot initialSnapshot = await repository
+            .buildDriveSnapshot();
+
+        final CanonicalLibraryDatabase peerDatabase = CanonicalLibraryDatabase(
+          NativeDatabase.memory(),
+        );
+        final CanonicalLibraryRepository peer = CanonicalLibraryRepository(
+          peerDatabase,
+        );
+        addTearDown(peerDatabase.close);
+        await peer.applyDriveSnapshot(initialSnapshot);
+
+        final UserMediaState updated = _state(progress: 7);
+        final UserMediaPatch patch = UserMediaPatch(progress: 7);
+        await repository.commitTrackingMutation(
+          states: <UserMediaState>[updated],
+          journal: <SyncJournalEntry>[_journal(updated, patch)],
+          favorites: const <LocalMediaFavoriteState>[],
+          identity: updated.identity,
+          patch: patch,
+          targets: const <TrackerSource>{TrackerSource.mal},
+          occurredAt: DateTime.utc(2026, 9, 24),
+          mediaTitle: updated.mediaItem.title,
+        );
+        final DriveLibrarySnapshot repairedSnapshot = await repository
+            .buildDriveSnapshot();
+
+        final List<int> progressTotals = <int>[];
+        final DriveSnapshotApplyResult result = await peer.applyDriveSnapshot(
+          repairedSnapshot,
+          trackerTargets: const <TrackerSource>{TrackerSource.mal},
+          onProgress: (int _, int total) => progressTotals.add(total),
+        );
+        final UserMediaState restored =
+            (await peer.loadTrackingStates()).single;
+
+        expect(restored.progress, 7);
+        expect(result.restoredEntries, 0);
+        expect(result.recoveredOperations, 1);
+        expect(progressTotals, isNotEmpty);
+        expect(progressTotals.toSet(), <int>{1});
+        expect(
+          await peer.hasAppliedDriveSnapshot(repairedSnapshot.checksum),
+          isTrue,
+        );
+
+        final DriveSnapshotApplyResult repeated = await peer.applyDriveSnapshot(
+          repairedSnapshot,
+          trackerTargets: const <TrackerSource>{TrackerSource.mal},
+        );
+        expect(repeated.recoveredOperations, 0);
+        expect((await peer.loadTrackingStates()).single.progress, 7);
+      },
+    );
+
+    test(
+      'Drive checkpoint recovery never overwrites a concurrent local field edit',
+      () async {
+        final UserMediaState initial = _state(progress: 2);
+        await repository.saveTrackingStates(<UserMediaState>[initial]);
+        final DriveLibrarySnapshot initialSnapshot = await repository
+            .buildDriveSnapshot();
+
+        final CanonicalLibraryDatabase peerDatabase = CanonicalLibraryDatabase(
+          NativeDatabase.memory(),
+        );
+        final CanonicalLibraryRepository peer = CanonicalLibraryRepository(
+          peerDatabase,
+        );
+        addTearDown(peerDatabase.close);
+        await peer.applyDriveSnapshot(initialSnapshot);
+
+        final UserMediaState localEdit = _state(progress: 4);
+        final UserMediaPatch localPatch = UserMediaPatch(progress: 4);
+        await peer.commitTrackingMutation(
+          states: <UserMediaState>[localEdit],
+          journal: <SyncJournalEntry>[_journal(localEdit, localPatch)],
+          favorites: const <LocalMediaFavoriteState>[],
+          identity: localEdit.identity,
+          patch: localPatch,
+          targets: const <TrackerSource>{},
+          occurredAt: DateTime.utc(2026, 9, 24, 1),
+          mediaTitle: localEdit.mediaItem.title,
+        );
+
+        final UserMediaState remoteEdit = _state(progress: 7);
+        final UserMediaPatch remotePatch = UserMediaPatch(progress: 7);
+        await repository.commitTrackingMutation(
+          states: <UserMediaState>[remoteEdit],
+          journal: <SyncJournalEntry>[_journal(remoteEdit, remotePatch)],
+          favorites: const <LocalMediaFavoriteState>[],
+          identity: remoteEdit.identity,
+          patch: remotePatch,
+          targets: const <TrackerSource>{},
+          occurredAt: DateTime.utc(2026, 9, 24, 2),
+          mediaTitle: remoteEdit.mediaItem.title,
+        );
+
+        final DriveSnapshotApplyResult result = await peer.applyDriveSnapshot(
+          await repository.buildDriveSnapshot(),
+        );
+        expect((await peer.loadTrackingStates()).single.progress, 4);
+        expect(result.recoveredOperations, 0);
+        expect(await peer.watchConflicts().first, isNotEmpty);
+      },
+    );
+
+    test(
+      'Drive checkpoint recovery applies a missed removal to an existing device',
+      () async {
+        final UserMediaState initial = _state(progress: 2);
+        await repository.saveTrackingStates(<UserMediaState>[initial]);
+
+        final CanonicalLibraryDatabase peerDatabase = CanonicalLibraryDatabase(
+          NativeDatabase.memory(),
+        );
+        final CanonicalLibraryRepository peer = CanonicalLibraryRepository(
+          peerDatabase,
+        );
+        addTearDown(peerDatabase.close);
+        await peer.applyDriveSnapshot(await repository.buildDriveSnapshot());
+
+        final UserMediaPatch removal = UserMediaPatch(delete: true);
+        await repository.commitTrackingMutation(
+          states: const <UserMediaState>[],
+          journal: <SyncJournalEntry>[_journal(initial, removal)],
+          favorites: const <LocalMediaFavoriteState>[],
+          identity: initial.identity,
+          patch: removal,
+          targets: const <TrackerSource>{TrackerSource.anilist},
+          occurredAt: DateTime.utc(2026, 9, 24),
+          mediaTitle: initial.mediaItem.title,
+        );
+
+        final DriveSnapshotApplyResult result = await peer.applyDriveSnapshot(
+          await repository.buildDriveSnapshot(),
+        );
+        expect(await peer.loadTrackingStates(), isEmpty);
+        expect(result.recoveredOperations, 1);
+        expect(result.localEntryCount, 0);
+      },
+    );
+
+    test(
       'commits canonical state, operation and deliveries atomically',
       () async {
         final UserMediaState state = _state(progress: 12, completed: true);

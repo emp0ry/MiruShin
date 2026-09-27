@@ -41,6 +41,7 @@
   "Sync across devices": "Sync across devices",
   "Keep your library, watch progress, accounts, API connections, addons, relay preferences, and Library settings up to date across your devices.": "Keep your library, watch progress, accounts, API connections, addons, relay preferences, and Library settings up to date across your devices.",
   "Some data could not be synced. Please try again.": "Some data could not be synced. Please try again.",
+  "Library synced, but {items} could not be synced. MiruShin will retry.": "Library synced, but {items} could not be synced. MiruShin will retry.",
   "Google Drive sync failed. Please try again.": "Google Drive sync failed. Please try again.",
   "Google Drive session expired. Connect again.": "Google Drive session expired. Connect again.",
   "Could not connect to Google Drive. Please try again.": "Could not connect to Google Drive. Please try again.",
