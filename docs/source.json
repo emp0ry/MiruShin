@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.9.4",
+          "date": "2026-09-27",
+          "localizedDescription": "- Restored native Google Drive sign-in on iPhone, iPad, and Android phones/tablets.\n- Kept the secure Cloudflare Worker browser flow as a fallback for re-signed, LiveContainer, TrollStore, jailbreak, and Android TV installations.\n- Added regression tests for platform-specific Google Drive login routing.\n- Removed the legacy web release workflow so releases use Release No Web only.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.4/MiruShin-ios-v2.9.4.ipa",
+          "size": 31642019,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.9.3",
           "date": "2026-09-26",
           "localizedDescription": "- Rebuilt Local Library as an offline-first source of truth with separate AniList account workspaces and safer AniList, MyAnimeList, and Shikimori reconciliation.\n- Expanded Google Drive Sync for complete library metadata, settings, addons, connections, playback state, and faster cross-device restoration.\n- Fixed repeated Google Drive synchronization when nothing changed, improved pending and progress states, and made real local changes upload promptly.\n- Added AniList outage fallbacks and cache-first Board, Discovery, Library, and details loading for faster navigation.\n- Fixed immediate library add, edit, and remove behavior, per-page Library filters, account isolation, and local database placement.\n- Fixed crashes when removing anime from the Library editor and when closing MiruShin on macOS.\n- Updated English, Russian, and Japanese text plus Privacy, Legal, README, and Google Drive documentation.",
@@ -695,11 +703,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.9.3",
-      "versionDate": "2026-09-26",
-      "versionDescription": "- Rebuilt Local Library as an offline-first source of truth with separate AniList account workspaces and safer AniList, MyAnimeList, and Shikimori reconciliation.\n- Expanded Google Drive Sync for complete library metadata, settings, addons, connections, playback state, and faster cross-device restoration.\n- Fixed repeated Google Drive synchronization when nothing changed, improved pending and progress states, and made real local changes upload promptly.\n- Added AniList outage fallbacks and cache-first Board, Discovery, Library, and details loading for faster navigation.\n- Fixed immediate library add, edit, and remove behavior, per-page Library filters, account isolation, and local database placement.\n- Fixed crashes when removing anime from the Library editor and when closing MiruShin on macOS.\n- Updated English, Russian, and Japanese text plus Privacy, Legal, README, and Google Drive documentation.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.3/MiruShin-ios-v2.9.3.ipa",
-      "size": 31638586,
+      "version": "2.9.4",
+      "versionDate": "2026-09-27",
+      "versionDescription": "- Restored native Google Drive sign-in on iPhone, iPad, and Android phones/tablets.\n- Kept the secure Cloudflare Worker browser flow as a fallback for re-signed, LiveContainer, TrollStore, jailbreak, and Android TV installations.\n- Added regression tests for platform-specific Google Drive login routing.\n- Removed the legacy web release workflow so releases use Release No Web only.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.4/MiruShin-ios-v2.9.4.ipa",
+      "size": 31642019,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
