@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.9.7",
+          "date": "2026-09-28",
+          "localizedDescription": "- Faster cross-device Library sync: recent Google Drive changes arrive before tracker reconciliation, without duplicate uploads from the receiving device.\n- AniList, MAL and Shikimori now deliver rapid delete and re-add actions in order, with independent retries and safer confirmation after failures.\n- Completing anime fills the known episode total and finish date together; unknown totals are requested explicitly.\n- Reduced unnecessary Google Drive backups and improved sync progress reporting.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.7/MiruShin-ios-v2.9.7.ipa",
+          "size": 31676300,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.9.6",
           "date": "2026-09-27",
           "localizedDescription": "- Fixed Google Drive Library Sync convergence across new and existing devices.\n- Devices now pull snapshots and immutable operations independently of the delivery lease.\n- Added safe recovery for missed progress, additions, and removals without overwriting concurrent local edits.\n- Reduced redundant snapshot downloads and isolated malformed replica files.\n- Improved sync progress counts and partial-sync messages in English, Russian, and Japanese.",
@@ -719,11 +727,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.9.6",
-      "versionDate": "2026-09-27",
-      "versionDescription": "- Fixed Google Drive Library Sync convergence across new and existing devices.\n- Devices now pull snapshots and immutable operations independently of the delivery lease.\n- Added safe recovery for missed progress, additions, and removals without overwriting concurrent local edits.\n- Reduced redundant snapshot downloads and isolated malformed replica files.\n- Improved sync progress counts and partial-sync messages in English, Russian, and Japanese.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.6/MiruShin-ios-v2.9.6.ipa",
-      "size": 31639636,
+      "version": "2.9.7",
+      "versionDate": "2026-09-28",
+      "versionDescription": "- Faster cross-device Library sync: recent Google Drive changes arrive before tracker reconciliation, without duplicate uploads from the receiving device.\n- AniList, MAL and Shikimori now deliver rapid delete and re-add actions in order, with independent retries and safer confirmation after failures.\n- Completing anime fills the known episode total and finish date together; unknown totals are requested explicitly.\n- Reduced unnecessary Google Drive backups and improved sync progress reporting.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.7/MiruShin-ios-v2.9.7.ipa",
+      "size": 31676300,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
