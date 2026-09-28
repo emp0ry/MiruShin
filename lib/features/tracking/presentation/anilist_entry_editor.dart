@@ -33,6 +33,7 @@ class AniListEntryEditDraft {
     required this.score,
     required this.notes,
     required this.repeat,
+    this.finalEpisodeCount,
     this.progressVolumes = 0,
     this.startedAt,
     this.completedAt,
@@ -54,6 +55,7 @@ class AniListEntryEditDraft {
       score = null,
       notes = '',
       repeat = 0,
+      finalEpisodeCount = null,
       progressVolumes = 0,
       startedAt = null,
       completedAt = null,
@@ -74,6 +76,7 @@ class AniListEntryEditDraft {
   final double? score;
   final String notes;
   final int repeat;
+  final int? finalEpisodeCount;
   final int progressVolumes;
   final DateTime? startedAt;
   final DateTime? completedAt;
@@ -482,7 +485,24 @@ Future<AniListEntryEditDraft?> showAniListEntryEditor(
                             ],
                             onChanged: (String? value) {
                               if (value == null) return;
-                              setSheetState(() => draftStatusKey = value);
+                              setSheetState(() {
+                                if (!isManga &&
+                                    (total == null || total <= 0) &&
+                                    draftStatusKey !=
+                                        AniListListStatus
+                                            .completed
+                                            .graphQlValue &&
+                                    value ==
+                                        AniListListStatus
+                                            .completed
+                                            .graphQlValue) {
+                                  // Do not silently mistake current progress
+                                  // for the final total when it is unknown.
+                                  progressController.clear();
+                                  draftProgress = 0;
+                                }
+                                draftStatusKey = value;
+                              });
                             },
                           ),
                           const SizedBox(height: AppSpacing.md),
@@ -494,13 +514,31 @@ Future<AniListEntryEditDraft?> showAniListEntryEditor(
                                   child: TextField(
                                     controller: progressController,
                                     decoration: InputDecoration(
-                                      labelText: sheetContext.t('Progress'),
-                                      helperText: sheetContext.tf(
-                                        'of {total}',
-                                        <String, Object?>{
-                                          'total': progressLimit,
-                                        },
-                                      ),
+                                      labelText:
+                                          !isManga &&
+                                              draftStatusKey ==
+                                                  AniListListStatus
+                                                      .completed
+                                                      .graphQlValue &&
+                                              (total == null || total <= 0)
+                                          ? sheetContext.t(
+                                              'Final episode count',
+                                            )
+                                          : sheetContext.t('Progress'),
+                                      helperText:
+                                          !isManga &&
+                                              draftStatusKey ==
+                                                  AniListListStatus
+                                                      .completed
+                                                      .graphQlValue &&
+                                              (total == null || total <= 0)
+                                          ? null
+                                          : sheetContext.tf(
+                                              'of {total}',
+                                              <String, Object?>{
+                                                'total': progressLimit,
+                                              },
+                                            ),
                                       border: const OutlineInputBorder(),
                                     ),
                                     keyboardType: TextInputType.number,
@@ -881,19 +919,58 @@ Future<AniListEntryEditDraft?> showAniListEntryEditor(
                                       int.tryParse(
                                         progressController.text.trim(),
                                       ) ??
-                                      draftProgress;
+                                      (!isManga &&
+                                              draftStatusKey ==
+                                                  AniListListStatus
+                                                      .completed
+                                                      .graphQlValue &&
+                                              (total == null || total <= 0)
+                                          ? 0
+                                          : draftProgress);
                                   final int parsedRepeat =
                                       int.tryParse(
                                         repeatController.text.trim(),
                                       ) ??
                                       draftRepeat;
+                                  final AniListListStatus? chosenStatus =
+                                      _statusFromEditorKey(draftStatusKey);
+                                  if (!isManga &&
+                                      chosenStatus ==
+                                          AniListListStatus.completed &&
+                                      (total == null || total <= 0) &&
+                                      parsedProgress <= 0) {
+                                    ScaffoldMessenger.of(
+                                      sheetContext,
+                                    ).showSnackBar(
+                                      SnackBar(
+                                        content: Text(
+                                          sheetContext.t(
+                                            'Enter the final episode count before marking Completed.',
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                    return;
+                                  }
                                   Navigator.pop(
                                     sheetContext,
                                     AniListEntryEditDraft(
-                                      status: _statusFromEditorKey(
-                                        draftStatusKey,
-                                      ),
-                                      progress: clampProgress(parsedProgress),
+                                      status: chosenStatus,
+                                      progress:
+                                          !isManga &&
+                                              chosenStatus ==
+                                                  AniListListStatus.completed &&
+                                              total != null &&
+                                              total > 0
+                                          ? total
+                                          : clampProgress(parsedProgress),
+                                      finalEpisodeCount:
+                                          !isManga &&
+                                              chosenStatus ==
+                                                  AniListListStatus.completed &&
+                                              (total == null || total <= 0)
+                                          ? parsedProgress
+                                          : null,
                                       score: draftScore <= 0
                                           ? null
                                           : draftScore,
@@ -907,7 +984,11 @@ Future<AniListEntryEditDraft?> showAniListEntryEditor(
                                           ) ??
                                           draftProgressVolumes,
                                       startedAt: draftStartedAt,
-                                      completedAt: draftCompletedAt,
+                                      completedAt:
+                                          chosenStatus ==
+                                              AniListListStatus.completed
+                                          ? draftCompletedAt ?? DateTime.now()
+                                          : draftCompletedAt,
                                       priority: draftPriority,
                                       private: draftPrivate,
                                       hiddenFromStatusLists:
@@ -995,11 +1076,28 @@ Future<AniListEntrySaveResult> saveAniListEntryEdit({
   // status is the local default; for an existing item choosing "Not chosen"
   // means keep its current status rather than sending an ambiguous null.
   final AniListListStatus effectiveStatus = draft.status ?? entry.status;
+  final int? knownEpisodeTotal =
+      draft.finalEpisodeCount ?? entry.mediaItem.episodeCount;
+  final effectiveMediaItem = draft.finalEpisodeCount != null
+      ? entry.mediaItem.copyWith(episodeCount: draft.finalEpisodeCount)
+      : entry.mediaItem;
+  final int effectiveProgress =
+      !isManga &&
+          effectiveStatus == AniListListStatus.completed &&
+          knownEpisodeTotal != null &&
+          knownEpisodeTotal > 0
+      ? knownEpisodeTotal
+      : draft.progress;
+  final DateTime? effectiveCompletedAt =
+      effectiveStatus == AniListListStatus.completed
+      ? draft.completedAt ?? DateTime.now().toUtc()
+      : draft.completedAt;
   final int optimisticUpdatedAt =
       DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000;
   final Set<UserMediaField> changedFields = <UserMediaField>{
     if (isNewEntry || effectiveStatus != entry.status) UserMediaField.status,
-    if (isNewEntry || draft.progress != entry.progress) UserMediaField.progress,
+    if (isNewEntry || effectiveProgress != entry.progress)
+      UserMediaField.progress,
     if (isNewEntry || (draft.score ?? 0) != (entry.score ?? 0))
       UserMediaField.score,
     if (isNewEntry || draft.notes != entry.notes) UserMediaField.notes,
@@ -1010,8 +1108,9 @@ Future<AniListEntrySaveResult> saveAniListEntryEdit({
     if (draft.extendedFieldsProvided &&
         (isNewEntry || !_sameDate(draft.startedAt, entry.startedAt)))
       UserMediaField.startedAt,
-    if (draft.extendedFieldsProvided &&
-        (isNewEntry || !_sameDate(draft.completedAt, entry.completedAt)))
+    if ((draft.extendedFieldsProvided ||
+            effectiveStatus == AniListListStatus.completed) &&
+        (isNewEntry || !_sameDate(effectiveCompletedAt, entry.completedAt)))
       UserMediaField.completedAt,
     if (draft.extendedFieldsProvided &&
         (isNewEntry || draft.priority != entry.priority))
@@ -1071,12 +1170,12 @@ Future<AniListEntrySaveResult> saveAniListEntryEdit({
   final AniListAnimeListEntry optimisticEntry = AniListAnimeListEntry(
     id: entry.id,
     status: effectiveStatus,
-    progress: draft.progress,
+    progress: effectiveProgress,
     score: draft.score,
     scoreRaw: draft.score == null
         ? null
         : (draft.score! * 10).round().clamp(0, 100),
-    mediaItem: entry.mediaItem,
+    mediaItem: effectiveMediaItem,
     notes: draft.notes,
     repeat: draft.repeat,
     progressVolumes: draft.extendedFieldsProvided
@@ -1097,8 +1196,10 @@ Future<AniListEntrySaveResult> saveAniListEntryEdit({
     createdAt: entry.createdAt,
     updatedAt: optimisticUpdatedAt,
     startedAt: draft.extendedFieldsProvided ? draft.startedAt : entry.startedAt,
-    completedAt: draft.extendedFieldsProvided
-        ? draft.completedAt
+    completedAt:
+        draft.extendedFieldsProvided ||
+            effectiveStatus == AniListListStatus.completed
+        ? effectiveCompletedAt
         : entry.completedAt,
     nextEpisode: entry.nextEpisode,
     airingAt: entry.airingAt,
@@ -1134,9 +1235,9 @@ Future<AniListEntrySaveResult> saveAniListEntryEdit({
       externalIds: entry.mediaItem.externalIds,
       mediaId: entry.mediaItem.id,
       mediaTitle: entry.mediaItem.title,
-      mediaItem: entry.mediaItem,
+      mediaItem: effectiveMediaItem,
       status: effectiveStatus,
-      progress: draft.progress,
+      progress: effectiveProgress,
       score: draft.score ?? 0,
       notes: draft.notes,
       repeat: draft.repeat,
@@ -1144,7 +1245,11 @@ Future<AniListEntrySaveResult> saveAniListEntryEdit({
           ? draft.progressVolumes
           : null,
       startedAt: draft.extendedFieldsProvided ? draft.startedAt : null,
-      completedAt: draft.extendedFieldsProvided ? draft.completedAt : null,
+      completedAt: effectiveStatus == AniListListStatus.completed
+          ? effectiveCompletedAt
+          : draft.extendedFieldsProvided
+          ? draft.completedAt
+          : null,
       priority: draft.extendedFieldsProvided ? draft.priority : null,
       private: draft.extendedFieldsProvided ? draft.private : null,
       hiddenFromStatusLists: draft.extendedFieldsProvided

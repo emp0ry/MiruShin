@@ -289,10 +289,39 @@ class TrackerSyncCoordinator {
     );
     final Set<TrackerSource> resolvedTargets =
         targets ?? _connectedTargets(identity);
-    final int? canonicalTotal = mediaItem?.episodeCount;
-    final int? safeProgress = progress == null
+    int? canonicalTotal = mediaItem?.episodeCount;
+    if (canonicalTotal == null && status == AniListListStatus.completed) {
+      for (final UserMediaState state in await _store.loadStates()) {
+        if (state.identity.matches(identity)) {
+          canonicalTotal = state.mediaItem.episodeCount;
+          break;
+        }
+      }
+    }
+    final bool completesAnime =
+        status == AniListListStatus.completed && identity.mediaKind == 'anime';
+    if (completesAnime && (canonicalTotal == null || canonicalTotal <= 0)) {
+      throw StateError(
+        'Enter the final episode count before marking Completed.',
+      );
+    }
+    final int? safeProgress =
+        completesAnime && canonicalTotal != null && canonicalTotal > 0
+        ? canonicalTotal
+        : progress == null
         ? null
         : canonicalEpisodeProgress(progress, canonicalTotal);
+    final DateTime? safeCompletedAt = status == AniListListStatus.completed
+        ? completedAt ?? DateTime.now().toUtc()
+        : completedAt;
+    final Set<UserMediaField>? effectiveFields = fields == null
+        ? null
+        : <UserMediaField>{
+            ...fields,
+            if (completesAnime && safeProgress != null) UserMediaField.progress,
+            if (status == AniListListStatus.completed)
+              UserMediaField.completedAt,
+          };
     final LocalFirstSyncEngine engine = _localEngine();
     final SyncDispatchResult result = await engine.recordMutation(
       identity: identity,
@@ -304,7 +333,7 @@ class TrackerSyncCoordinator {
         notes: notes,
         repeat: repeat,
         startedAt: startedAt,
-        completedAt: completedAt,
+        completedAt: safeCompletedAt,
         priority: priority,
         private: private,
         hiddenFromStatusLists: hiddenFromStatusLists,
@@ -314,7 +343,7 @@ class TrackerSyncCoordinator {
         malPriority: malPriority,
         malRewatchValue: malRewatchValue,
         malTags: malTags,
-        fields: fields,
+        fields: effectiveFields,
       ),
       targets: resolvedTargets,
       mediaItem: mediaItem,
@@ -323,7 +352,7 @@ class TrackerSyncCoordinator {
       backgroundDelivery: true,
       episodeCheckpoint: episodeCheckpoint,
     );
-    unawaited(flushPending());
+    if (result.pendingTargets.isNotEmpty) unawaited(flushPending());
     _invalidateHealth();
     return result;
   });
@@ -348,7 +377,7 @@ class TrackerSyncCoordinator {
       mediaTitle: mediaItem.title,
       backgroundDelivery: true,
     );
-    unawaited(flushPending());
+    if (result.pendingTargets.isNotEmpty) unawaited(flushPending());
     _invalidateHealth();
     return result;
   });
@@ -373,7 +402,7 @@ class TrackerSyncCoordinator {
       providerEntryIds: providerEntryIds,
       backgroundDelivery: true,
     );
-    unawaited(flushPending());
+    if (result.pendingTargets.isNotEmpty) unawaited(flushPending());
     _invalidateHealth();
     return result;
   });
@@ -512,6 +541,16 @@ class TrackerSyncCoordinator {
                 remote: remote,
                 journal: await store.loadJournal(),
                 propagationTargets: propagationTargets,
+                propagationAccountIds: <TrackerSource, String>{
+                  if (settings.hasAniListSession &&
+                      settings.anilistViewerId != null)
+                    TrackerSource.anilist: '${settings.anilistViewerId}',
+                  if (settings.hasMalSession && settings.malViewerId != null)
+                    TrackerSource.mal: '${settings.malViewerId}',
+                  if (settings.hasShikimoriSession &&
+                      settings.shikimoriViewerId != null)
+                    TrackerSource.shikimori: '${settings.shikimoriViewerId}',
+                },
                 completeSnapshot: true,
               );
       await store.saveJournal(result.journal);
@@ -596,6 +635,14 @@ class TrackerSyncCoordinator {
   LocalFirstSyncEngine _localEngine() => LocalFirstSyncEngine(
     store: _store,
     adapters: const <TrackerSource, TrackerProviderAdapter>{},
+    targetAccountIds: <TrackerSource, String>{
+      if (_settings.hasAniListSession && _settings.anilistViewerId != null)
+        TrackerSource.anilist: '${_settings.anilistViewerId}',
+      if (_settings.hasMalSession && _settings.malViewerId != null)
+        TrackerSource.mal: '${_settings.malViewerId}',
+      if (_settings.hasShikimoriSession && _settings.shikimoriViewerId != null)
+        TrackerSource.shikimori: '${_settings.shikimoriViewerId}',
+    },
     primary: _settings.effectivePrimaryTrackerSource,
   );
 
@@ -704,7 +751,8 @@ class TrackerSyncCoordinator {
   }
 }
 
-class _AniListAdapter implements TrackerProviderAdapter {
+class _AniListAdapter
+    implements TrackerProviderAdapter, TrackerFavoriteReadbackAdapter {
   _AniListAdapter({required this.client, required this.viewerId});
 
   final AniListApiClient client;
@@ -715,6 +763,20 @@ class _AniListAdapter implements TrackerProviderAdapter {
 
   @override
   String get accountId => '${viewerId ?? 'unknown'}';
+
+  @override
+  Future<bool?> readFavorite(MediaIdentity identity) async {
+    int? mediaId = identity.anilistId;
+    final int? malId = identity.malId;
+    if (mediaId == null && malId != null) {
+      final MediaItem? resolved = identity.mediaKind == 'manga'
+          ? await client.resolveMangaByMalId(malId)
+          : await client.resolveAnimeByMalId(malId);
+      mediaId = int.tryParse(resolved?.externalIds['anilist'] ?? '');
+    }
+    if (mediaId == null) return null;
+    return client.fetchMediaFavouriteStatus(mediaId);
+  }
 
   @override
   Future<List<UserMediaState>> fetchAnimeList() async {

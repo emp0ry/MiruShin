@@ -25,9 +25,19 @@ class CanonicalTrackingSyncStore
   Future<void> _ensureMigrated() => _migration ??= _migrate();
 
   Future<void> _migrate() async {
+    Future<void> recoverOldDeliveries() async {
+      try {
+        await _repository.recoverLegacyOperationDeliveries();
+      } on Object {
+        // Recovery is best-effort. Existing journal entries are untouched by
+        // a failed transaction and require provider read-back before writing.
+      }
+    }
+
     try {
       await _repository.initialize();
       if (await _repository.hasMigration('tracking.shared_preferences.v1')) {
+        await recoverOldDeliveries();
         if (_repository.importsLegacyData) {
           await _legacy.clearMigratedData();
         }
@@ -40,6 +50,7 @@ class CanonicalTrackingSyncStore
           favorites: const <LocalMediaFavoriteState>[],
           health: const <TrackerSource, TrackerProviderHealth>{},
         );
+        await recoverOldDeliveries();
         return;
       }
       final List<UserMediaState> states = await _legacy.loadStates();
@@ -54,6 +65,7 @@ class CanonicalTrackingSyncStore
         favorites: favorites,
         health: health,
       );
+      await recoverOldDeliveries();
       await _legacy.clearMigratedData();
     } on Object {
       // The import transaction is rolled back by Drift. Keep all legacy keys
@@ -129,6 +141,7 @@ class CanonicalTrackingSyncStore
 
   @override
   Future<void> commitMutation({
+    String? operationId,
     required List<UserMediaState> states,
     required List<SyncJournalEntry> journal,
     required List<LocalMediaFavoriteState> favorites,
@@ -147,6 +160,7 @@ class CanonicalTrackingSyncStore
       return;
     }
     await _repository.commitTrackingMutation(
+      operationId: operationId,
       states: states,
       journal: journal,
       favorites: favorites,
@@ -168,6 +182,8 @@ class CanonicalTrackingSyncStore
     required List<SyncJournalEntry> journal,
     required Set<TrackerSource> propagationTargets,
     required bool completeSnapshot,
+    Map<TrackerSource, String> propagationAccountIds =
+        const <TrackerSource, String>{},
   }) async {
     await _ensureMigrated();
     if (_migrationSafeMode) {
@@ -184,11 +200,14 @@ class CanonicalTrackingSyncStore
       journal: journal,
       propagationTargets: propagationTargets,
       completeSnapshot: completeSnapshot,
+      propagationAccountIds: propagationAccountIds,
     );
   }
 
   @override
   Future<void> updateTrackerDelivery({
+    String? operationId,
+    String? accountId,
     required MediaIdentity identity,
     required TrackerSource target,
     required String state,
@@ -197,6 +216,8 @@ class CanonicalTrackingSyncStore
     await _ensureMigrated();
     if (_migrationSafeMode) return;
     await _repository.updateTrackerDelivery(
+      operationId: operationId,
+      accountId: accountId,
       identity: identity,
       target: target,
       state: state,

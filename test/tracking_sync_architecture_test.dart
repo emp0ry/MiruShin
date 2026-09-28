@@ -211,6 +211,41 @@ void main() {
       expect(displayed.status, AniListListStatus.completed);
     });
 
+    test(
+      'missing provider timestamps do not turn every fetch into an edit',
+      () {
+        final AniListAnimeListFolder folder = AniListAnimeListFolder(
+          name: 'Watching',
+          status: AniListListStatus.current,
+          entries: <AniListAnimeListEntry>[
+            AniListAnimeListEntry(
+              id: 42,
+              status: AniListListStatus.current,
+              progress: 4,
+              mediaItem: _state(
+                source: TrackerSource.mal,
+                progress: 4,
+                updatedAt: DateTime.utc(2026, 9, 28),
+              ).mediaItem,
+            ),
+          ],
+        );
+        final UserMediaState first = userMediaStatesFromFolders(
+          <AniListAnimeListFolder>[folder],
+          source: TrackerSource.mal,
+        ).single;
+        final UserMediaState later = userMediaStatesFromFolders(
+          <AniListAnimeListFolder>[folder],
+          source: TrackerSource.mal,
+        ).single;
+        expect(later.toJson(), first.toJson());
+        expect(
+          first.updatedAt,
+          DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+        );
+      },
+    );
+
     test('preserves every Library sort and flag field through local cache', () {
       final DateTime startedAt = DateTime(2026, 1, 2);
       final DateTime completedAt = DateTime(2026, 2, 3);
@@ -345,7 +380,36 @@ void main() {
       expect(restored.isSettled, isFalse);
     });
 
-    test('coalesces fields and pending targets per stable identity', () async {
+    test('ambiguous legacy delivery reads provider before replaying', () async {
+      final UserMediaState remote = _state(
+        source: TrackerSource.anilist,
+        progress: 4,
+        updatedAt: DateTime.utc(2026, 9, 28),
+      );
+      final _MemoryTrackingSyncStore store = _MemoryTrackingSyncStore()
+        ..journal = <SyncJournalEntry>[
+          SyncJournalEntry(
+            identity: remote.identity,
+            patch: UserMediaPatch(progress: 4),
+            pendingTargets: const <TrackerSource>{TrackerSource.anilist},
+            createdAt: DateTime.utc(2026, 9, 27),
+            updatedAt: DateTime.utc(2026, 9, 27),
+          ),
+        ];
+      final _FakeAdapter aniList = _FakeAdapter(TrackerSource.anilist)
+        ..remote = <UserMediaState>[remote];
+      await LocalFirstSyncEngine(
+        store: store,
+        adapters: <TrackerSource, TrackerProviderAdapter>{
+          TrackerSource.anilist: aniList,
+        },
+      ).flush();
+      expect(aniList.fetchCalls, 1);
+      expect(aniList.applied, isEmpty);
+      expect(store.journal, isEmpty);
+    });
+
+    test('keeps separate operations and targets for rapid edits', () async {
       final _MemoryTrackingSyncStore store = _MemoryTrackingSyncStore();
       final LocalFirstSyncEngine engine = LocalFirstSyncEngine(
         store: store,
@@ -363,7 +427,7 @@ void main() {
         patch: UserMediaPatch(progress: 3),
         targets: const <TrackerSource>{TrackerSource.anilist},
       );
-      await engine.recordMutation(
+      final SyncDispatchResult second = await engine.recordMutation(
         identity: identity,
         patch: UserMediaPatch(
           status: AniListListStatus.current,
@@ -373,16 +437,140 @@ void main() {
         targets: const <TrackerSource>{TrackerSource.mal},
       );
 
-      expect(store.journal, hasLength(1));
-      final SyncJournalEntry queued = store.journal.single;
-      expect(queued.patch.progress, 5);
-      expect(queued.patch.score, 7.5);
-      expect(queued.patch.status, AniListListStatus.current);
-      expect(queued.pendingTargets, <TrackerSource>{
+      expect(store.journal, hasLength(2));
+      expect(second.pendingTargets, <TrackerSource>{TrackerSource.mal});
+      expect(store.journal.first.patch.progress, 3);
+      expect(store.journal.first.pendingTargets, <TrackerSource>{
         TrackerSource.anilist,
+      });
+      expect(store.journal.last.patch.progress, 5);
+      expect(store.journal.last.patch.score, 7.5);
+      expect(store.journal.last.patch.status, AniListListStatus.current);
+      expect(store.journal.last.pendingTargets, <TrackerSource>{
         TrackerSource.mal,
       });
+      expect(store.journal.first.operationId, isNotNull);
+      expect(
+        store.journal.last.operationId,
+        isNot(store.journal.first.operationId),
+      );
     });
+
+    test(
+      'manual final count persists with Completed in one local edit',
+      () async {
+        final _MemoryTrackingSyncStore store = _MemoryTrackingSyncStore()
+          ..states = <UserMediaState>[
+            _state(
+              source: TrackerSource.anilist,
+              progress: 0,
+              updatedAt: DateTime.utc(2026, 9, 27),
+            ),
+          ];
+        final UserMediaState before = store.states.single;
+        final LocalFirstSyncEngine engine = LocalFirstSyncEngine(
+          store: store,
+          adapters: const <TrackerSource, TrackerProviderAdapter>{},
+        );
+
+        await engine.recordMutation(
+          identity: before.identity,
+          mediaItem: before.mediaItem.copyWith(episodeCount: 24),
+          patch: UserMediaPatch(
+            status: AniListListStatus.completed,
+            progress: 24,
+          ),
+          targets: const <TrackerSource>{TrackerSource.anilist},
+          backgroundDelivery: true,
+        );
+
+        expect(store.states.single.status, AniListListStatus.completed);
+        expect(store.states.single.progress, 24);
+        expect(store.states.single.mediaItem.episodeCount, 24);
+        expect(store.journal.single.patch.progress, 24);
+      },
+    );
+
+    test(
+      'delete then re-add reaches every provider in order after an outage',
+      () async {
+        final UserMediaState original = _state(
+          source: TrackerSource.anilist,
+          progress: 4,
+          updatedAt: DateTime.utc(2026, 9, 28),
+        );
+        final _MemoryTrackingSyncStore store = _MemoryTrackingSyncStore()
+          ..states = <UserMediaState>[original];
+        final _FakeAdapter aniList = _FakeAdapter(TrackerSource.anilist)
+          ..remote = <UserMediaState>[original]
+          ..template = original
+          ..mutatesRemote = true
+          ..failMutationOnce = 1;
+        final _FakeAdapter mal = _FakeAdapter(TrackerSource.mal)
+          ..remote = <UserMediaState>[original]
+          ..template = original
+          ..mutatesRemote = true;
+        final _FakeAdapter shikimori = _FakeAdapter(TrackerSource.shikimori)
+          ..remote = <UserMediaState>[original]
+          ..template = original
+          ..mutatesRemote = true;
+        DateTime now = DateTime.utc(2026, 9, 28);
+        final LocalFirstSyncEngine engine = LocalFirstSyncEngine(
+          store: store,
+          adapters: <TrackerSource, TrackerProviderAdapter>{
+            TrackerSource.anilist: aniList,
+            TrackerSource.mal: mal,
+            TrackerSource.shikimori: shikimori,
+          },
+          now: () => now,
+        );
+        const Set<TrackerSource> targets = <TrackerSource>{
+          TrackerSource.anilist,
+          TrackerSource.mal,
+          TrackerSource.shikimori,
+        };
+        await engine.recordMutation(
+          identity: original.identity,
+          patch: UserMediaPatch(delete: true),
+          targets: targets,
+          backgroundDelivery: true,
+        );
+        await engine.recordMutation(
+          identity: original.identity,
+          patch: UserMediaPatch(status: AniListListStatus.current, progress: 1),
+          targets: targets,
+          mediaItem: original.mediaItem,
+          backgroundDelivery: true,
+        );
+
+        await engine.flush();
+        expect(aniList.applied, isEmpty);
+        expect(mal.applied.map((entry) => entry.patch.delete), <bool>[
+          true,
+          false,
+        ]);
+        expect(shikimori.applied.map((entry) => entry.patch.delete), <bool>[
+          true,
+          false,
+        ]);
+        expect(store.journal, hasLength(2));
+
+        await engine.flush();
+        expect(aniList.applied, isEmpty);
+        now = now.add(const Duration(seconds: 3));
+        await engine.flush();
+        expect(aniList.applied.map((entry) => entry.patch.delete), <bool>[
+          true,
+          false,
+        ]);
+        expect(aniList.remote.single.progress, 1);
+        expect(mal.remote.single.progress, 1);
+        expect(shikimori.remote.single.progress, 1);
+        now = now.add(const Duration(seconds: 3));
+        await engine.flush();
+        expect(store.journal, isEmpty);
+      },
+    );
 
     test('creates a local MAL-backed entry before AniList recovers', () async {
       final _MemoryTrackingSyncStore store = _MemoryTrackingSyncStore();
@@ -466,12 +654,45 @@ void main() {
       expect(store.states, isEmpty);
       expect(store.favorites, hasLength(1));
       expect(store.favorites.single.favorite, isFalse);
-      expect(store.journal, hasLength(1));
-      expect(store.journal.single.patch.favorite, isFalse);
-      expect(
-        store.journal.single.patch.touches(UserMediaField.favorite),
-        isTrue,
+      expect(store.journal, hasLength(2));
+      expect(store.journal.first.patch.favorite, isTrue);
+      expect(store.journal.last.patch.favorite, isFalse);
+      expect(store.journal.last.patch.touches(UserMediaField.favorite), isTrue);
+    });
+
+    test('a list entry cannot falsely confirm an unsent favourite', () async {
+      final _MemoryTrackingSyncStore store = _MemoryTrackingSyncStore();
+      final _FakeAdapter aniList = _FakeAdapter(TrackerSource.anilist)
+        ..remote = <UserMediaState>[
+          _state(
+            source: TrackerSource.anilist,
+            progress: 1,
+            updatedAt: DateTime.utc(2026, 9, 28),
+          ),
+        ];
+      store.journal = <SyncJournalEntry>[
+        SyncJournalEntry(
+          operationId: 'legacy-favourite',
+          identity: aniList.remote.single.identity,
+          patch: UserMediaPatch(favorite: true),
+          pendingTargets: const <TrackerSource>{TrackerSource.anilist},
+          createdAt: DateTime.utc(2026, 9, 28),
+          updatedAt: DateTime.utc(2026, 9, 28),
+          readbackBeforeWrite: true,
+        ),
+      ];
+      final LocalFirstSyncEngine engine = LocalFirstSyncEngine(
+        store: store,
+        adapters: <TrackerSource, TrackerProviderAdapter>{
+          TrackerSource.anilist: aniList,
+        },
       );
+
+      await engine.flush();
+
+      expect(aniList.applied, hasLength(1));
+      expect(aniList.applied.single.patch.favorite, isTrue);
+      expect(store.journal, isEmpty);
     });
 
     test('favorite coalescing remains independent from list deletion', () {
@@ -942,7 +1163,9 @@ void main() {
         providerOrder: const <TrackerSource>[TrackerSource.anilist],
       );
 
-      expect(aniList.applied, hasLength(1));
+      // The remote snapshot already contains the desired value, so recovery
+      // confirms the operation without replaying an unnecessary write.
+      expect(aniList.applied, isEmpty);
       expect(store.journal, isEmpty);
       expect(
         store.health[TrackerSource.anilist]?.availability,
@@ -1528,6 +1751,9 @@ class _FakeAdapter implements TrackerProviderAdapter {
   final List<TrackerSource>? applicationOrder;
   bool failFetch = false;
   bool failMutation = false;
+  int failMutationOnce = 0;
+  bool mutatesRemote = false;
+  UserMediaState? template;
   int fetchCalls = 0;
   List<UserMediaState> remote = <UserMediaState>[];
   final List<SyncJournalEntry> applied = <SyncJournalEntry>[];
@@ -1544,9 +1770,22 @@ class _FakeAdapter implements TrackerProviderAdapter {
 
   @override
   Future<void> applyMutation(SyncJournalEntry mutation) async {
+    if (failMutationOnce > 0) {
+      failMutationOnce -= 1;
+      throw StateError('${source.name} temporarily unavailable');
+    }
     if (failMutation) throw StateError('${source.name} unavailable');
     applicationOrder?.add(source);
     applied.add(mutation);
+    if (mutatesRemote) {
+      remote.removeWhere(
+        (UserMediaState value) => value.identity.matches(mutation.identity),
+      );
+      if (!mutation.patch.delete) {
+        final UserMediaState base = template!;
+        remote.add(base.apply(mutation.patch, DateTime.utc(2026, 9, 28)));
+      }
+    }
   }
 }
 

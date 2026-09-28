@@ -613,6 +613,8 @@
   "Save": "保存",
   "Save cancelled": "保存をキャンセルしました",
   "Saved to Library": "ライブラリに保存しました",
+  "Enter the final episode count before marking Completed.": "完了にする前に最終話の話数を入力してください。",
+  "Final episode count": "最終話数",
   "Saves a local AniList library export in MyAnimeList XML format.": "AniListライブラリをMyAnimeList XML形式でローカルに保存します。",
   "Saves a local AniList library export in Shikimori JSON format.": "AniListライブラリをShikimori JSON形式でローカルに保存します。",
   "Score": "スコア",

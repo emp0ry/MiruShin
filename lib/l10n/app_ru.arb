@@ -613,6 +613,8 @@
   "Save": "Сохранить",
   "Save cancelled": "Сохранение отменено",
   "Saved to Library": "Сохранено в библиотеке",
+  "Enter the final episode count before marking Completed.": "Укажите номер последней серии, прежде чем отмечать аниме как просмотренное.",
+  "Final episode count": "Количество серий всего",
   "Saves a local AniList library export in MyAnimeList XML format.": "Сохраняет локальный экспорт библиотеки AniList в формате MyAnimeList XML.",
   "Saves a local AniList library export in Shikimori JSON format.": "Сохраняет локальный экспорт библиотеки AniList в формате Shikimori JSON.",
   "Score": "Оценка",

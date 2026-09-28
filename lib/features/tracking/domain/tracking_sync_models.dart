@@ -856,15 +856,28 @@ class SyncJournalEntry {
     required this.identity,
     required this.patch,
     required this.pendingTargets,
+    this.operationId,
     this.awaitingRemoteTargets = const <TrackerSource>{},
     required this.createdAt,
     required this.updatedAt,
     this.mediaTitle,
     this.providerEntryIds = const <TrackerSource, int>{},
+    this.targetAccountIds = const <TrackerSource, String>{},
+    this.readbackBeforeWrite = false,
   });
 
   factory SyncJournalEntry.fromJson(Map<String, dynamic> json) {
     final Map<TrackerSource, int> entryIds = <TrackerSource, int>{};
+    final Map<TrackerSource, String> accountIds = <TrackerSource, String>{};
+    final Object? rawAccountIds = json['targetAccountIds'];
+    if (rawAccountIds is Map) {
+      for (final MapEntry<dynamic, dynamic> entry in rawAccountIds.entries) {
+        final String accountId = '${entry.value}'.trim();
+        if (accountId.isNotEmpty) {
+          accountIds[TrackerSource.fromName('${entry.key}')] = accountId;
+        }
+      }
+    }
     final Object? rawEntryIds = json['providerEntryIds'];
     if (rawEntryIds is Map) {
       for (final MapEntry<dynamic, dynamic> entry in rawEntryIds.entries) {
@@ -874,6 +887,7 @@ class SyncJournalEntry {
       }
     }
     return SyncJournalEntry(
+      operationId: json['operationId']?.toString(),
       identity: MediaIdentity.fromJson(
         Map<String, dynamic>.from(json['identity'] as Map? ?? const {}),
       ),
@@ -893,10 +907,13 @@ class SyncJournalEntry {
           DateTime.tryParse('${json['updatedAt'] ?? ''}') ?? DateTime(1970),
       mediaTitle: json['mediaTitle']?.toString(),
       providerEntryIds: entryIds,
+      targetAccountIds: accountIds,
+      readbackBeforeWrite: json['readbackBeforeWrite'] == true,
     );
   }
 
   final MediaIdentity identity;
+  final String? operationId;
   final UserMediaPatch patch;
   final Set<TrackerSource> pendingTargets;
   final Set<TrackerSource> awaitingRemoteTargets;
@@ -904,9 +921,12 @@ class SyncJournalEntry {
   final DateTime updatedAt;
   final String? mediaTitle;
   final Map<TrackerSource, int> providerEntryIds;
+  final Map<TrackerSource, String> targetAccountIds;
+  final bool readbackBeforeWrite;
 
   SyncJournalEntry mergedWith(SyncJournalEntry newer) {
     return SyncJournalEntry(
+      operationId: newer.operationId ?? operationId,
       identity: identity.merge(newer.identity),
       patch: patch.mergedWith(newer.patch),
       pendingTargets: <TrackerSource>{
@@ -928,10 +948,16 @@ class SyncJournalEntry {
         ...providerEntryIds,
         ...newer.providerEntryIds,
       },
+      targetAccountIds: <TrackerSource, String>{
+        ...targetAccountIds,
+        ...newer.targetAccountIds,
+      },
+      readbackBeforeWrite: readbackBeforeWrite || newer.readbackBeforeWrite,
     );
   }
 
   SyncJournalEntry withIdentity(MediaIdentity next) => SyncJournalEntry(
+    operationId: operationId,
     identity: next,
     patch: patch,
     pendingTargets: pendingTargets,
@@ -940,12 +966,15 @@ class SyncJournalEntry {
     updatedAt: updatedAt,
     mediaTitle: mediaTitle,
     providerEntryIds: providerEntryIds,
+    targetAccountIds: targetAccountIds,
+    readbackBeforeWrite: readbackBeforeWrite,
   );
 
   SyncJournalEntry deliveredTo(
     TrackerSource provider, {
     bool awaitRemoteConfirmation = false,
   }) => SyncJournalEntry(
+    operationId: operationId,
     identity: identity,
     patch: patch,
     pendingTargets: <TrackerSource>{...pendingTargets}..remove(provider),
@@ -957,9 +986,12 @@ class SyncJournalEntry {
     updatedAt: updatedAt,
     mediaTitle: mediaTitle,
     providerEntryIds: providerEntryIds,
+    targetAccountIds: targetAccountIds,
+    readbackBeforeWrite: readbackBeforeWrite,
   );
 
   SyncJournalEntry confirmedBy(TrackerSource provider) => SyncJournalEntry(
+    operationId: operationId,
     identity: identity,
     patch: patch,
     pendingTargets: pendingTargets,
@@ -969,6 +1001,8 @@ class SyncJournalEntry {
     updatedAt: updatedAt,
     mediaTitle: mediaTitle,
     providerEntryIds: providerEntryIds,
+    targetAccountIds: targetAccountIds,
+    readbackBeforeWrite: readbackBeforeWrite,
   );
 
   bool tracks(TrackerSource provider) =>
@@ -978,6 +1012,7 @@ class SyncJournalEntry {
   bool get isSettled => pendingTargets.isEmpty && awaitingRemoteTargets.isEmpty;
 
   Map<String, dynamic> toJson() => <String, dynamic>{
+    if (operationId != null) 'operationId': operationId,
     'identity': identity.toJson(),
     'patch': patch.toJson(),
     'pendingTargets': pendingTargets
@@ -996,6 +1031,13 @@ class SyncJournalEntry {
             in providerEntryIds.entries)
           entry.key.name: entry.value,
       },
+    if (targetAccountIds.isNotEmpty)
+      'targetAccountIds': <String, String>{
+        for (final MapEntry<TrackerSource, String> entry
+            in targetAccountIds.entries)
+          entry.key.name: entry.value,
+      },
+    if (readbackBeforeWrite) 'readbackBeforeWrite': true,
   };
 }
 
@@ -1271,7 +1313,13 @@ List<UserMediaState> userMediaStatesFromFolders(
   required TrackerSource source,
   DateTime? fetchedAt,
 }) {
-  final DateTime fallbackTime = (fetchedAt ?? DateTime.now()).toUtc();
+  // A fetch timestamp is not a provider edit revision. Providers that omit
+  // entry timestamps must yield the same snapshot on every read; otherwise
+  // destructive confirmation never reaches two matching snapshots and Drive
+  // considers an unchanged library a new full backup on every pass.
+  final DateTime fallbackTime =
+      (fetchedAt ?? DateTime.fromMillisecondsSinceEpoch(0, isUtc: true))
+          .toUtc();
   return <UserMediaState>[
     for (final AniListAnimeListFolder folder in folders)
       for (final AniListAnimeListEntry entry in folder.entries)

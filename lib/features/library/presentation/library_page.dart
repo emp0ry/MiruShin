@@ -35,6 +35,7 @@ import '../../tracking/application/tracker_library_provider.dart';
 import '../../tracking/domain/tracking_sync_models.dart';
 import '../../tracking/presentation/anilist_entry_editor.dart';
 import '../application/canonical_library_repository.dart';
+import '../application/google_drive_sync_controller.dart';
 import '../application/local_library_provider.dart';
 import 'local_library_editor.dart';
 
@@ -211,15 +212,43 @@ class LibraryPage extends ConsumerStatefulWidget {
 class _LibraryPageState extends ConsumerState<LibraryPage>
     with SingleTickerProviderStateMixin {
   late final TabController _mainTab;
+  Timer? _drivePoll;
+  late final AppLifecycleListener _driveLifecycle;
+  bool _foreground = true;
 
   @override
   void initState() {
     super.initState();
     _mainTab = TabController(length: 2, vsync: this);
+    _driveLifecycle = AppLifecycleListener(
+      onResume: () {
+        _foreground = true;
+        _pullDriveChanges();
+      },
+      onPause: () => _foreground = false,
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) => _pullDriveChanges());
+    _drivePoll = Timer.periodic(
+      const Duration(seconds: 12),
+      (_) => _pullDriveChanges(),
+    );
+  }
+
+  void _pullDriveChanges() {
+    if (!mounted || !_foreground || ModalRoute.of(context)?.isCurrent != true) {
+      return;
+    }
+    unawaited(
+      ref
+          .read(googleDriveSyncControllerProvider.notifier)
+          .syncNow(background: true, remoteChangesOnly: true),
+    );
   }
 
   @override
   void dispose() {
+    _drivePoll?.cancel();
+    _driveLifecycle.dispose();
     _mainTab.dispose();
     super.dispose();
   }

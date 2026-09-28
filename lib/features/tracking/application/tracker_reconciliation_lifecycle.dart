@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../library/application/google_drive_sync_controller.dart';
 import '../../settings/application/settings_state.dart';
 import 'tracker_library_provider.dart';
 import 'tracker_sync_coordinator.dart';
@@ -33,6 +34,25 @@ final trackerReconciliationLifecycleProvider = Provider<void>((Ref ref) {
     final Future<void> operation = () async {
       await ref.read(settingsProvider.notifier).ready;
       if (disposed) return;
+      final GoogleDriveSyncState drive = await ref.read(
+        googleDriveSyncControllerProvider.future,
+      );
+      if (disposed) return;
+      if (drive.connected) {
+        // Restore the current account's Drive operations before a provider
+        // snapshot can be interpreted as a new local mutation on this device.
+        await ref
+            .read(googleDriveSyncControllerProvider.notifier)
+            .syncBeforeTrackerReconciliation();
+        if (disposed) return;
+        final GoogleDriveSyncState? refreshed = ref
+            .read(googleDriveSyncControllerProvider)
+            .value;
+        if (refreshed?.lastError ==
+            'Google Drive sync failed. Please try again.') {
+          return;
+        }
+      }
       final SettingsState settings = ref.read(settingsProvider);
       if (!settings.hasAniListSession &&
           !settings.hasMalSession &&

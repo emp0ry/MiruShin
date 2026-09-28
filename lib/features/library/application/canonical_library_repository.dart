@@ -1748,6 +1748,8 @@ class CanonicalLibraryRepository {
     required List<SyncJournalEntry> journal,
     required Set<TrackerSource> propagationTargets,
     required bool completeSnapshot,
+    Map<TrackerSource, String> propagationAccountIds =
+        const <TrackerSource, String>{},
   }) async {
     await initialize();
     if (!completeSnapshot) {
@@ -2097,6 +2099,34 @@ class CanonicalLibraryRepository {
         for (final _ReconciliationProposal proposal in accepted) {
           final UserMediaState? before = proposal.current;
           UserMediaState? after;
+          final int? knownTotal =
+              proposal.incoming?.mediaItem.episodeCount ??
+              before?.mediaItem.episodeCount;
+          final bool repairsCompletedProgress =
+              !proposal.remove &&
+              proposal.incoming?.identity.mediaKind == 'anime' &&
+              proposal.incoming?.status == AniListListStatus.completed &&
+              knownTotal != null &&
+              knownTotal > 0 &&
+              (proposal.incoming?.progress ?? 0) < knownTotal;
+          final bool addsFinishDate =
+              !proposal.remove &&
+              proposal.incoming?.status == AniListListStatus.completed &&
+              proposal.incoming?.completedAt == null &&
+              before?.completedAt == null;
+          final UserMediaPatch acceptedPatch =
+              repairsCompletedProgress || addsFinishDate
+              ? proposal.patch.mergedWith(
+                  UserMediaPatch(
+                    progress: repairsCompletedProgress ? knownTotal : null,
+                    completedAt: addsFinishDate ? now : null,
+                  ),
+                )
+              : proposal.patch;
+          final Set<TrackerSource> outboundTargets = <TrackerSource>{
+            ...propagationTargets,
+            if (repairsCompletedProgress) source,
+          };
           if (proposal.remove) {
             states.removeWhere(
               (UserMediaState state) =>
@@ -2104,16 +2134,26 @@ class CanonicalLibraryRepository {
             );
           } else if (before == null) {
             after = proposal.incoming;
+            if (repairsCompletedProgress || addsFinishDate) {
+              after = after!.apply(acceptedPatch, now, providerSource: source);
+            }
             states.add(after!);
           } else {
             final ProviderUserMediaState? providerSnapshot =
                 proposal.incoming?.providerStates[source];
-            after = before.apply(proposal.patch, now, providerSource: source);
+            after = before.apply(acceptedPatch, now, providerSource: source);
             if (providerSnapshot != null) {
+              final MediaIdentity mergedIdentity = before.identity.merge(
+                proposal.incoming!.identity,
+              );
               after = after.withProviderSnapshot(
                 providerSnapshot,
-                identity: before.identity.merge(proposal.incoming!.identity),
-                mediaItem: proposal.incoming!.mediaItem,
+                identity: mergedIdentity,
+                mediaItem: _mergePresentationMetadata(
+                  before.mediaItem,
+                  proposal.incoming!.mediaItem,
+                  mergedIdentity,
+                ),
               );
             }
             final int index = states.indexWhere(
@@ -2124,22 +2164,32 @@ class CanonicalLibraryRepository {
           }
           final UserMediaPatch outboundPatch = proposal.remove
               ? UserMediaPatch(delete: true)
-              : proposal.patch;
-          if (propagationTargets.isNotEmpty) {
+              : acceptedPatch;
+          final String operationId = const Uuid().v7();
+          if (outboundTargets.isNotEmpty) {
             nextJournal = _mergeJournalMutation(
               nextJournal,
               SyncJournalEntry(
+                operationId: operationId,
                 identity: after?.identity ?? before!.identity,
                 patch: outboundPatch,
-                pendingTargets: propagationTargets,
+                pendingTargets: outboundTargets,
                 createdAt: now,
                 updatedAt: now,
                 mediaTitle: after?.mediaItem.title ?? before?.mediaItem.title,
+                targetAccountIds: <TrackerSource, String>{
+                  for (final TrackerSource target in outboundTargets)
+                    if (target == source)
+                      target: accountId
+                    else if (propagationAccountIds[target] != null)
+                      target: propagationAccountIds[target]!,
+                },
               ),
             );
           }
           await _appendOperationLocked(
             LibraryOperationDraft(
+              operationId: operationId,
               localId: proposal.localId,
               originKind: LibraryOriginKind.provider,
               originId: '${source.name}:$accountId',
@@ -2147,7 +2197,7 @@ class CanonicalLibraryRepository {
                   ? LibraryMutationIntent.remove
                   : LibraryMutationIntent.remoteImport,
               fields: <String>{
-                ...proposal.patch.fields.map(
+                ...acceptedPatch.fields.map(
                   (UserMediaField field) => field.name,
                 ),
                 if (proposal.remove) 'membership',
@@ -2158,11 +2208,18 @@ class CanonicalLibraryRepository {
               after: <String, dynamic>{
                 if (after != null) 'state': after.toJson(),
               },
-              targets: propagationTargets
+              targets: outboundTargets
                   .map((TrackerSource target) => target.name)
                   .toSet(),
               occurredAt: now,
               title: after?.mediaItem.title ?? before?.mediaItem.title,
+              targetAccountIds: <String, String>{
+                for (final TrackerSource target in outboundTargets)
+                  if (target == source)
+                    target.name: accountId
+                  else if (propagationAccountIds[target] != null)
+                    target.name: propagationAccountIds[target]!,
+              },
             ),
           );
           importedChanges += 1;
@@ -2238,12 +2295,200 @@ class CanonicalLibraryRepository {
   Future<List<SyncJournalEntry>> loadJournal() =>
       _loadBucket('tracking.journal', SyncJournalEntry.fromJson);
 
+  /// One-time best-effort recovery of the pre-v2 title-coalesced queue. Old
+  /// SQLite operation/outbox rows are authoritative when they still exist;
+  /// otherwise the old journal remains intact and is read back before write.
+  Future<void> recoverLegacyOperationDeliveries() async {
+    await initialize();
+    if (await hasMigration('journal.operationReplay.v2')) return;
+    await database.transaction(() async {
+      final List<SyncJournalEntry> old = await loadJournal();
+      if (old.every((SyncJournalEntry entry) => entry.operationId != null)) {
+        await markMigrationComplete('journal.operationReplay.v2');
+        return;
+      }
+      final List<OutboxDeliveryRecord> pending =
+          await (database.select(database.outboxDeliveryRecords)..where(
+                (OutboxDeliveryRecords table) =>
+                    table.target.isNotValue('drive') &
+                    table.state.isNotValue('confirmed'),
+              ))
+              .get();
+      final Set<String> pendingIds = pending
+          .map((OutboxDeliveryRecord row) => row.operationId)
+          .toSet();
+      final List<LibraryOperationRecord> operations = pendingIds.isEmpty
+          ? const <LibraryOperationRecord>[]
+          : await (database.select(database.libraryOperationRecords)..where(
+                  (LibraryOperationRecords table) =>
+                      table.operationId.isIn(pendingIds),
+                ))
+                .get();
+      operations.sort((a, b) {
+        final int time = a.occurredAtMs.compareTo(b.occurredAtMs);
+        return time != 0 ? time : a.operationId.compareTo(b.operationId);
+      });
+      final Set<String> claimed = old
+          .map((SyncJournalEntry entry) => entry.operationId)
+          .whereType<String>()
+          .toSet();
+      final List<SyncJournalEntry> recovered = <SyncJournalEntry>[];
+      for (final SyncJournalEntry legacy in old) {
+        if (legacy.operationId != null) {
+          recovered.add(legacy);
+          continue;
+        }
+        final String? localId = await _localIdForIdentityLocked(
+          legacy.identity,
+        );
+        final Set<TrackerSource> expected = <TrackerSource>{
+          ...legacy.pendingTargets,
+          ...legacy.awaitingRemoteTargets,
+        };
+        final Set<TrackerSource> covered = <TrackerSource>{};
+        for (final LibraryOperationRecord operation in operations) {
+          if (operation.localId != localId ||
+              !claimed.add(operation.operationId)) {
+            continue;
+          }
+          final List<OutboxDeliveryRecord> deliveries = pending
+              .where(
+                (OutboxDeliveryRecord row) =>
+                    row.operationId == operation.operationId &&
+                    expected.any(
+                      (TrackerSource target) => target.name == row.target,
+                    ),
+              )
+              .toList(growable: false);
+          if (deliveries.isEmpty) {
+            claimed.remove(operation.operationId);
+            continue;
+          }
+          final SyncJournalEntry? entry = _recoverOperationJournalEntry(
+            operation,
+            deliveries,
+            legacy.identity,
+          );
+          if (entry == null) {
+            claimed.remove(operation.operationId);
+            continue;
+          }
+          recovered.add(entry);
+          covered.addAll(<TrackerSource>{
+            ...entry.pendingTargets,
+            ...entry.awaitingRemoteTargets,
+          });
+        }
+        final Set<TrackerSource> remainingPending = <TrackerSource>{
+          ...legacy.pendingTargets,
+        }..removeAll(covered);
+        final Set<TrackerSource> remainingAwaiting = <TrackerSource>{
+          ...legacy.awaitingRemoteTargets,
+        }..removeAll(covered);
+        if (remainingPending.isNotEmpty || remainingAwaiting.isNotEmpty) {
+          recovered.add(
+            SyncJournalEntry(
+              identity: legacy.identity,
+              patch: legacy.patch,
+              pendingTargets: remainingPending,
+              awaitingRemoteTargets: remainingAwaiting,
+              createdAt: legacy.createdAt,
+              updatedAt: legacy.updatedAt,
+              mediaTitle: legacy.mediaTitle,
+              providerEntryIds: legacy.providerEntryIds,
+              targetAccountIds: legacy.targetAccountIds,
+              readbackBeforeWrite: true,
+            ),
+          );
+        }
+      }
+      await _writeBucketLocked(
+        'tracking.journal',
+        recovered.map((SyncJournalEntry entry) => entry.toJson()).toList(),
+      );
+      await markMigrationComplete('journal.operationReplay.v2');
+    });
+  }
+
+  SyncJournalEntry? _recoverOperationJournalEntry(
+    LibraryOperationRecord operation,
+    List<OutboxDeliveryRecord> deliveries,
+    MediaIdentity fallbackIdentity,
+  ) {
+    final Map<String, dynamic> after = _jsonMap(operation.afterJson);
+    final Map<String, dynamic> before = _jsonMap(operation.beforeJson);
+    final Object? rawState = after['state'];
+    final Object? rawPrevious = before['state'];
+    final UserMediaState? state = rawState is Map
+        ? UserMediaState.fromJson(Map<String, dynamic>.from(rawState))
+        : null;
+    final UserMediaState? previous = rawPrevious is Map
+        ? UserMediaState.fromJson(Map<String, dynamic>.from(rawPrevious))
+        : null;
+    final bool remove = operation.intent == LibraryMutationIntent.remove.name;
+    if (!remove && state == null && after['favorite'] is! bool) return null;
+    final Set<String> changed = _jsonStringSet(operation.fieldsJson);
+    final Set<UserMediaField> fields = changed
+        .map(_fieldFromPersistedName)
+        .whereType<UserMediaField>()
+        .toSet();
+    if (changed.contains('membership') && state != null) {
+      fields.addAll(<UserMediaField>{
+        UserMediaField.status,
+        UserMediaField.progress,
+      });
+    }
+    UserMediaPatch patch = remove
+        ? UserMediaPatch(delete: true)
+        : state == null
+        ? UserMediaPatch()
+        : _patchFromState(state, fields);
+    if (after['favorite'] is bool) {
+      patch = patch.mergedWith(
+        UserMediaPatch(favorite: after['favorite'] as bool),
+      );
+    }
+    final Set<TrackerSource> pendingTargets = <TrackerSource>{};
+    final Set<TrackerSource> awaitingTargets = <TrackerSource>{};
+    final Map<TrackerSource, String> accountIds = <TrackerSource, String>{};
+    for (final OutboxDeliveryRecord delivery in deliveries) {
+      final TrackerSource target = TrackerSource.fromName(delivery.target);
+      if (delivery.state == 'delivered') {
+        awaitingTargets.add(target);
+      } else {
+        pendingTargets.add(target);
+      }
+      if (delivery.accountId != null) {
+        accountIds[target] = delivery.accountId!;
+      }
+    }
+    final DateTime occurredAt = DateTime.fromMillisecondsSinceEpoch(
+      operation.occurredAtMs,
+      isUtc: true,
+    );
+    return SyncJournalEntry(
+      operationId: operation.operationId,
+      identity: (state?.identity ?? previous?.identity ?? fallbackIdentity)
+          .merge(fallbackIdentity),
+      patch: patch,
+      pendingTargets: pendingTargets,
+      awaitingRemoteTargets: awaitingTargets,
+      createdAt: occurredAt,
+      updatedAt: occurredAt,
+      mediaTitle: operation.title ?? state?.mediaItem.title,
+      targetAccountIds: accountIds,
+      readbackBeforeWrite: true,
+    );
+  }
+
   Future<void> saveJournal(List<SyncJournalEntry> values) => _writeBucket(
     'tracking.journal',
     values.map((SyncJournalEntry value) => value.toJson()).toList(),
   );
 
   Future<void> updateTrackerDelivery({
+    String? operationId,
+    String? accountId,
     required MediaIdentity identity,
     required TrackerSource target,
     required String state,
@@ -2256,7 +2501,10 @@ class CanonicalLibraryRepository {
       final List<LibraryOperationRecord> operations =
           await (database.select(database.libraryOperationRecords)..where(
                 (LibraryOperationRecords table) =>
-                    table.localId.equals(localId),
+                    table.localId.equals(localId) &
+                    (operationId == null
+                        ? const Constant(true)
+                        : table.operationId.equals(operationId)),
               ))
               .get();
       final Set<String> operationIds = operations
@@ -2271,14 +2519,23 @@ class CanonicalLibraryRepository {
                     table.state.isNotValue('confirmed'),
               ))
               .get();
+      // A pre-v2 journal entry might represent several historic operations.
+      // Never bulk-confirm them from one provider read-back.
+      if (operationId == null && deliveries.length != 1) return;
       final int now = DateTime.now().toUtc().millisecondsSinceEpoch;
       for (final OutboxDeliveryRecord delivery in deliveries) {
+        if (accountId != null &&
+            delivery.accountId != null &&
+            delivery.accountId != accountId) {
+          continue;
+        }
         await (database.update(database.outboxDeliveryRecords)..where(
               (OutboxDeliveryRecords table) =>
                   table.deliveryId.equals(delivery.deliveryId),
             ))
             .write(
               OutboxDeliveryRecordsCompanion(
+                accountId: Value<String?>(accountId ?? delivery.accountId),
                 state: Value<String>(state),
                 attempts: Value<int>(
                   delivery.attempts + (state == 'retry' ? 1 : 0),
@@ -2540,6 +2797,7 @@ class CanonicalLibraryRepository {
   }
 
   Future<void> commitTrackingMutation({
+    String? operationId,
     required List<UserMediaState> states,
     required List<SyncJournalEntry> journal,
     required List<LocalMediaFavoriteState> favorites,
@@ -2651,6 +2909,7 @@ class CanonicalLibraryRepository {
           previousEpisode?.completed != true;
       await _appendOperationLocked(
         LibraryOperationDraft(
+          operationId: operationId,
           localId: localId,
           originKind: originKind,
           originId: originId,
@@ -2701,6 +2960,13 @@ class CanonicalLibraryRepository {
           occurredAt: occurredAt,
           title:
               mediaTitle ?? after?.mediaItem.title ?? before?.mediaItem.title,
+          targetAccountIds: <String, String>{
+            for (final SyncJournalEntry entry in journal)
+              if (entry.operationId == operationId)
+                for (final MapEntry<TrackerSource, String> account
+                    in entry.targetAccountIds.entries)
+                  account.key.name: account.value,
+          },
         ),
       );
     });
@@ -3336,6 +3602,30 @@ class CanonicalLibraryRepository {
         .toSet();
   }
 
+  Future<String?> driveChangePageToken() async {
+    await initialize();
+    final SyncCursorRecord? row =
+        await (database.select(database.syncCursorRecords)..where(
+              (SyncCursorRecords table) =>
+                  table.scope.equals('drive.changes.pageToken'),
+            ))
+            .getSingleOrNull();
+    return row?.cursor;
+  }
+
+  Future<void> saveDriveChangePageToken(String token) async {
+    await initialize();
+    await database
+        .into(database.syncCursorRecords)
+        .insertOnConflictUpdate(
+          SyncCursorRecordsCompanion.insert(
+            scope: 'drive.changes.pageToken',
+            cursor: token,
+            updatedAtMs: DateTime.now().toUtc().millisecondsSinceEpoch,
+          ),
+        );
+  }
+
   Future<int> applyDriveSegment(
     DriveReplicaSegment segment, {
     required Set<TrackerSource> trackerTargets,
@@ -3561,6 +3851,7 @@ class CanonicalLibraryRepository {
           journal = _mergeJournalMutation(
             journal,
             SyncJournalEntry(
+              operationId: operationId,
               identity: next?.identity ?? current?.identity ?? incomingIdentity,
               patch: outboundPatch,
               pendingTargets: outboundTargets,
@@ -3739,7 +4030,7 @@ class CanonicalLibraryRepository {
   }
 
   Future<String> _appendOperationLocked(LibraryOperationDraft draft) async {
-    final String operationId = _uuid.v7();
+    final String operationId = draft.operationId ?? _uuid.v7();
     final String currentDeviceId = await deviceId();
     final Set<String> deliveryTargets = <String>{'drive', ...draft.targets};
     final CanonicalLibraryRecord? entry =
@@ -3803,6 +4094,7 @@ class CanonicalLibraryRepository {
               operationId: operationId,
               target: target,
               state: 'pending',
+              accountId: Value<String?>(draft.targetAccountIds[target]),
             ),
           );
     }
@@ -3917,12 +4209,14 @@ class CanonicalLibraryRepository {
         await _markConflictResolvedLocked(conflictId);
         return null;
       }
+      final String operationId = const Uuid().v7();
       if (trackerTargets.isNotEmpty &&
           (patch.delete || patch.touchesLibraryState)) {
         List<SyncJournalEntry> journal = await loadJournal();
         journal = _mergeJournalMutation(
           journal,
           SyncJournalEntry(
+            operationId: operationId,
             identity: resolvedIdentity,
             patch: patch,
             pendingTargets: trackerTargets,
@@ -3936,8 +4230,9 @@ class CanonicalLibraryRepository {
           journal.map((SyncJournalEntry value) => value.toJson()).toList(),
         );
       }
-      final String operationId = await _appendOperationLocked(
+      await _appendOperationLocked(
         LibraryOperationDraft(
+          operationId: operationId,
           localId: conflict.localId,
           originKind: LibraryOriginKind.user,
           intent: next == null
@@ -4188,12 +4483,14 @@ class CanonicalLibraryRepository {
               )
               .map(TrackerSource.fromName)
               .toSet();
+      final String undoOperationId = const Uuid().v7();
       if (trackerTargets.isNotEmpty &&
           (patch.delete || patch.fields.isNotEmpty)) {
         List<SyncJournalEntry> journal = await loadJournal();
         journal = _mergeJournalMutation(
           journal,
           SyncJournalEntry(
+            operationId: undoOperationId,
             identity: identity,
             patch: patch,
             pendingTargets: trackerTargets,
@@ -4209,6 +4506,7 @@ class CanonicalLibraryRepository {
       }
       return _appendOperationLocked(
         LibraryOperationDraft(
+          operationId: undoOperationId,
           localId: operation.localId,
           originKind: LibraryOriginKind.undo,
           intent: LibraryMutationIntent.undo,
@@ -4880,6 +5178,10 @@ List<SyncJournalEntry> _mergeJournalMutation(
   SyncJournalEntry incoming,
 ) {
   final List<SyncJournalEntry> result = <SyncJournalEntry>[...journal];
+  if (incoming.operationId != null) {
+    result.add(incoming);
+    return result;
+  }
   final int index = result.indexWhere(
     (SyncJournalEntry current) => current.identity.matches(incoming.identity),
   );

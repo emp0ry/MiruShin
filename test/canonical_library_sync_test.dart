@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:drift/drift.dart' show driftRuntimeOptions;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -51,6 +53,248 @@ void main() {
     });
 
     tearDown(() => database.close());
+
+    test(
+      'upgrades a v1 database without losing local state or journal',
+      () async {
+        final Directory temporary = await Directory.systemTemp.createTemp(
+          'mirushin-library-migration-',
+        );
+        final File file = File('${temporary.path}/library.sqlite');
+        try {
+          final CanonicalLibraryDatabase oldDatabase = CanonicalLibraryDatabase(
+            NativeDatabase(file),
+          );
+          final CanonicalLibraryRepository oldRepository =
+              CanonicalLibraryRepository(oldDatabase);
+          final UserMediaState state = _state(progress: 6);
+          final SyncJournalEntry queued = _journal(
+            state,
+            UserMediaPatch(progress: 6),
+          );
+          await oldRepository.importTrackingData(
+            states: <UserMediaState>[state],
+            journal: <SyncJournalEntry>[queued],
+            favorites: const <LocalMediaFavoriteState>[],
+            health: const <TrackerSource, TrackerProviderHealth>{},
+          );
+          // Recreate the pre-v2 file shape while preserving its real rows.
+          await oldDatabase.customStatement(
+            'DROP INDEX outbox_operation_target_account_idx',
+          );
+          await oldDatabase.customStatement(
+            'DROP INDEX library_operation_local_time_idx',
+          );
+          await oldDatabase.customStatement('PRAGMA user_version = 1');
+          await oldDatabase.close();
+
+          final CanonicalLibraryDatabase upgraded = CanonicalLibraryDatabase(
+            NativeDatabase(file),
+          );
+          try {
+            final CanonicalLibraryRepository repository =
+                CanonicalLibraryRepository(upgraded);
+            expect((await repository.loadTrackingStates()).single.progress, 6);
+            expect(await repository.loadJournal(), hasLength(1));
+            final indexes = await upgraded
+                .customSelect("PRAGMA index_list('outbox_delivery_records')")
+                .get();
+            expect(
+              indexes.map((row) => row.read<String>('name')),
+              contains('outbox_operation_target_account_idx'),
+            );
+            final version = await upgraded
+                .customSelect('PRAGMA user_version')
+                .getSingle();
+            expect(version.read<int>('user_version'), 2);
+          } finally {
+            await upgraded.close();
+          }
+        } finally {
+          await temporary.delete(recursive: true);
+        }
+      },
+    );
+
+    test(
+      'Device B pulls an A operation without creating Drive upload work',
+      () async {
+        final UserMediaState original = _state(progress: 2);
+        await repository.saveTrackingStates(<UserMediaState>[original]);
+        final DriveLibrarySnapshot initial = await repository
+            .buildDriveSnapshot();
+        final CanonicalLibraryDatabase peerDatabase = CanonicalLibraryDatabase(
+          NativeDatabase.memory(),
+        );
+        addTearDown(peerDatabase.close);
+        final CanonicalLibraryRepository peer = CanonicalLibraryRepository(
+          peerDatabase,
+        );
+        await peer.applyDriveSnapshot(initial);
+        expect(await peer.pendingDriveDeliveryCount(), 0);
+
+        final UserMediaPatch patch = UserMediaPatch(progress: 7);
+        final UserMediaState changed = original.apply(
+          patch,
+          DateTime.utc(2026, 9, 28),
+        );
+        await repository.commitTrackingMutation(
+          operationId: 'device-a-progress-7',
+          states: <UserMediaState>[changed],
+          journal: <SyncJournalEntry>[
+            SyncJournalEntry(
+              operationId: 'device-a-progress-7',
+              identity: changed.identity,
+              patch: patch,
+              pendingTargets: const <TrackerSource>{},
+              createdAt: DateTime.utc(2026, 9, 28),
+              updatedAt: DateTime.utc(2026, 9, 28),
+            ),
+          ],
+          favorites: const <LocalMediaFavoriteState>[],
+          identity: changed.identity,
+          patch: patch,
+          targets: const <TrackerSource>{},
+          occurredAt: DateTime.utc(2026, 9, 28),
+        );
+        final DriveReplicaSegment segment = (await repository
+            .buildPendingDriveSegment())!;
+        expect(
+          await peer.applyDriveSegment(
+            segment,
+            trackerTargets: const <TrackerSource>{},
+          ),
+          1,
+        );
+        expect((await peer.loadTrackingStates()).single.progress, 7);
+        expect(await peer.pendingDriveDeliveryCount(), 0);
+        expect(await peer.watchConflicts().first, isEmpty);
+        expect(
+          await peer.applyDriveSegment(
+            segment,
+            trackerTargets: const <TrackerSource>{},
+          ),
+          0,
+        );
+      },
+    );
+
+    test('delivery confirmation updates only its own operation', () async {
+      final UserMediaState original = _state(progress: 2);
+      await repository.saveTrackingStates(<UserMediaState>[original]);
+      final UserMediaPatch firstPatch = UserMediaPatch(progress: 3);
+      final UserMediaState first = original.apply(
+        firstPatch,
+        DateTime.utc(2026, 9, 28),
+      );
+      final SyncJournalEntry firstJournal = SyncJournalEntry(
+        operationId: 'progress-3',
+        identity: original.identity,
+        patch: firstPatch,
+        pendingTargets: const <TrackerSource>{TrackerSource.anilist},
+        createdAt: DateTime.utc(2026, 9, 28),
+        updatedAt: DateTime.utc(2026, 9, 28),
+      );
+      await repository.commitTrackingMutation(
+        operationId: 'progress-3',
+        states: <UserMediaState>[first],
+        journal: <SyncJournalEntry>[firstJournal],
+        favorites: const <LocalMediaFavoriteState>[],
+        identity: first.identity,
+        patch: firstPatch,
+        targets: const <TrackerSource>{TrackerSource.anilist},
+        occurredAt: DateTime.utc(2026, 9, 28),
+      );
+      final UserMediaPatch secondPatch = UserMediaPatch(progress: 4);
+      final UserMediaState second = first.apply(
+        secondPatch,
+        DateTime.utc(2026, 9, 28, 0, 1),
+      );
+      await repository.commitTrackingMutation(
+        operationId: 'progress-4',
+        states: <UserMediaState>[second],
+        journal: <SyncJournalEntry>[
+          firstJournal,
+          SyncJournalEntry(
+            operationId: 'progress-4',
+            identity: original.identity,
+            patch: secondPatch,
+            pendingTargets: const <TrackerSource>{TrackerSource.anilist},
+            createdAt: DateTime.utc(2026, 9, 28, 0, 1),
+            updatedAt: DateTime.utc(2026, 9, 28, 0, 1),
+          ),
+        ],
+        favorites: const <LocalMediaFavoriteState>[],
+        identity: second.identity,
+        patch: secondPatch,
+        targets: const <TrackerSource>{TrackerSource.anilist},
+        occurredAt: DateTime.utc(2026, 9, 28, 0, 1),
+      );
+      await repository.updateTrackerDelivery(
+        operationId: 'progress-3',
+        accountId: 'viewer-1',
+        identity: original.identity,
+        target: TrackerSource.anilist,
+        state: 'confirmed',
+      );
+      final List<LibraryActivityEvent> events = await repository
+          .watchActivity()
+          .first;
+      expect(
+        events
+            .firstWhere((event) => event.operationId == 'progress-3')
+            .deliveryStates['anilist'],
+        'confirmed',
+      );
+      expect(
+        events
+            .firstWhere((event) => event.operationId == 'progress-4')
+            .deliveryStates['anilist'],
+        'pending',
+      );
+    });
+
+    test('recovers delete and re-add from the v1 operation outbox', () async {
+      final UserMediaState initial = _state(progress: 2);
+      await repository.saveTrackingStates(<UserMediaState>[initial]);
+      final UserMediaPatch delete = UserMediaPatch(delete: true);
+      await repository.commitTrackingMutation(
+        states: const <UserMediaState>[],
+        journal: <SyncJournalEntry>[_journal(initial, delete)],
+        favorites: const <LocalMediaFavoriteState>[],
+        identity: initial.identity,
+        patch: delete,
+        targets: const <TrackerSource>{TrackerSource.anilist},
+        occurredAt: DateTime.utc(2026, 9, 28),
+      );
+      final UserMediaPatch add = UserMediaPatch(
+        status: AniListListStatus.current,
+        progress: 1,
+      );
+      final UserMediaState restored = initial.apply(
+        add,
+        DateTime.utc(2026, 9, 28, 0, 1),
+      );
+      await repository.commitTrackingMutation(
+        states: <UserMediaState>[restored],
+        // The old app kept only this final title-coalesced journal entry.
+        journal: <SyncJournalEntry>[_journal(restored, add)],
+        favorites: const <LocalMediaFavoriteState>[],
+        identity: initial.identity,
+        patch: add,
+        targets: const <TrackerSource>{TrackerSource.anilist},
+        occurredAt: DateTime.utc(2026, 9, 28, 0, 1),
+      );
+
+      await repository.recoverLegacyOperationDeliveries();
+      final List<SyncJournalEntry> journal = await repository.loadJournal();
+      expect(journal, hasLength(2));
+      expect(journal.map((entry) => entry.patch.delete), <bool>[true, false]);
+      expect(journal.every((entry) => entry.operationId != null), isTrue);
+      expect(journal.every((entry) => entry.readbackBeforeWrite), isTrue);
+      await repository.recoverLegacyOperationDeliveries();
+      expect(await repository.loadJournal(), hasLength(2));
+    });
 
     test('migrates 2.8.9 SharedPreferences exactly once', () async {
       SharedPreferences.setMockInitialValues(const <String, Object>{});
@@ -163,6 +407,48 @@ void main() {
         final DriveLibrarySnapshot changed = await repository
             .buildDriveSnapshot();
         expect(changed.checksum, isNot(first.checksum));
+      },
+    );
+
+    test(
+      'provider verification timestamps do not rewrite full backup',
+      () async {
+        final UserMediaState remote = _state(progress: 4);
+        await repository.reconcileProviderSnapshot(
+          source: TrackerSource.anilist,
+          accountId: 'stable-viewer',
+          mediaKind: 'anime',
+          remote: <UserMediaState>[remote],
+          journal: const <SyncJournalEntry>[],
+          propagationTargets: const <TrackerSource>{},
+          completeSnapshot: true,
+        );
+        await repository.approveProviderAccount(
+          provider: 'anilist',
+          accountId: 'stable-viewer',
+        );
+        await repository.reconcileProviderSnapshot(
+          source: TrackerSource.anilist,
+          accountId: 'stable-viewer',
+          mediaKind: 'anime',
+          remote: <UserMediaState>[remote],
+          journal: const <SyncJournalEntry>[],
+          propagationTargets: const <TrackerSource>{},
+          completeSnapshot: true,
+        );
+        final String checksum =
+            (await repository.buildDriveSnapshot()).checksum;
+        await Future<void>.delayed(const Duration(milliseconds: 2));
+        await repository.reconcileProviderSnapshot(
+          source: TrackerSource.anilist,
+          accountId: 'stable-viewer',
+          mediaKind: 'anime',
+          remote: <UserMediaState>[remote],
+          journal: const <SyncJournalEntry>[],
+          propagationTargets: const <TrackerSource>{},
+          completeSnapshot: true,
+        );
+        expect((await repository.buildDriveSnapshot()).checksum, checksum);
       },
     );
 
@@ -918,6 +1204,58 @@ void main() {
         TrackerSource.mal,
       });
     });
+
+    test(
+      'external Completed 0/12 repairs local progress and queues source',
+      () async {
+        final UserMediaState remote = _state(progress: 0, completed: true);
+        final ProviderReconciliationResult preview = await repository
+            .reconcileProviderSnapshot(
+              source: TrackerSource.anilist,
+              accountId: 'completed-viewer',
+              mediaKind: 'anime',
+              remote: <UserMediaState>[remote],
+              journal: const <SyncJournalEntry>[],
+              propagationTargets: const <TrackerSource>{TrackerSource.mal},
+              propagationAccountIds: const <TrackerSource, String>{
+                TrackerSource.mal: 'mal-viewer',
+              },
+              completeSnapshot: true,
+            );
+        expect(preview.requiresAccountApproval, isTrue);
+        await repository.approveProviderAccount(
+          provider: 'anilist',
+          accountId: 'completed-viewer',
+        );
+        final ProviderReconciliationResult imported = await repository
+            .reconcileProviderSnapshot(
+              source: TrackerSource.anilist,
+              accountId: 'completed-viewer',
+              mediaKind: 'anime',
+              remote: <UserMediaState>[remote],
+              journal: const <SyncJournalEntry>[],
+              propagationTargets: const <TrackerSource>{TrackerSource.mal},
+              propagationAccountIds: const <TrackerSource, String>{
+                TrackerSource.mal: 'mal-viewer',
+              },
+              completeSnapshot: true,
+            );
+        expect(imported.states.single.status, AniListListStatus.completed);
+        expect(imported.states.single.progress, 12);
+        expect(imported.journal.single.patch.progress, 12);
+        expect(imported.journal.single.pendingTargets, <TrackerSource>{
+          TrackerSource.anilist,
+          TrackerSource.mal,
+        });
+        expect(
+          imported.journal.single.targetAccountIds,
+          <TrackerSource, String>{
+            TrackerSource.anilist: 'completed-viewer',
+            TrackerSource.mal: 'mal-viewer',
+          },
+        );
+      },
+    );
 
     test(
       'explicit account approval bypasses first-import mass quarantine',

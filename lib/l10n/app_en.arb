@@ -613,6 +613,8 @@
   "Save": "Save",
   "Save cancelled": "Save cancelled",
   "Saved to Library": "Saved to Library",
+  "Enter the final episode count before marking Completed.": "Enter the final episode count before marking Completed.",
+  "Final episode count": "Final episode count",
   "Saves a local AniList library export in MyAnimeList XML format.": "Saves a local AniList library export in MyAnimeList XML format.",
   "Saves a local AniList library export in Shikimori JSON format.": "Saves a local AniList library export in Shikimori JSON format.",
   "Score": "Score",

@@ -1,9 +1,55 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mirushin/features/library/data/google_drive_cloud_replica.dart';
+import 'package:mirushin/features/library/domain/cloud_replica_models.dart';
 import 'package:mirushin/features/settings/domain/preference_sync_models.dart';
 
 void main() {
+  test(
+    'unchanged Drive change cursor does not enumerate appData files',
+    () async {
+      final Dio dio = Dio();
+      final List<String> requests = <String>[];
+      dio.interceptors.add(
+        InterceptorsWrapper(
+          onRequest:
+              (RequestOptions options, RequestInterceptorHandler handler) {
+                requests.add(options.uri.path);
+                if (options.uri.path.endsWith('/changes')) {
+                  handler.resolve(
+                    Response<dynamic>(
+                      requestOptions: options,
+                      data: <String, dynamic>{
+                        'changes': <Object>[],
+                        'newStartPageToken': 'next-token',
+                      },
+                    ),
+                  );
+                  return;
+                }
+                handler.reject(
+                  DioException(
+                    requestOptions: options,
+                    message: 'Unexpected Drive request',
+                  ),
+                );
+              },
+        ),
+      );
+      final DriveLibraryChanges changes = await GoogleDriveCloudReplica(
+        accessToken: 'access-token',
+        replicaNamespace: 'anilist-1',
+        dio: dio,
+      ).pullLibraryChanges(excluding: const <String>{}, pageToken: 'old-token');
+
+      expect(changes.segments, isEmpty);
+      expect(changes.nextPageToken, 'next-token');
+      expect(changes.manifestChanged, isFalse);
+      expect(requests, hasLength(1));
+      expect(requests.single, endsWith('/changes'));
+    },
+  );
+
   test('cancelling a Drive pass aborts its active HTTP work', () async {
     final CancelToken cancelToken = CancelToken()..cancel('app closing');
     final GoogleDriveCloudReplica replica = GoogleDriveCloudReplica(

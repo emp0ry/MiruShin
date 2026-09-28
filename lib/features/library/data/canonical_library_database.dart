@@ -261,16 +261,35 @@ class CanonicalLibraryDatabase extends _$CanonicalLibraryDatabase {
        );
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
-    onCreate: (Migrator migrator) => migrator.createAll(),
+    onCreate: (Migrator migrator) async {
+      await migrator.createAll();
+      await _createOperationDeliveryIndexes();
+    },
+    onUpgrade: (Migrator migrator, int from, int to) async {
+      // v2 changes only the lookup path. Existing v1 rows, operation history,
+      // and old Drive-file identity remain untouched.
+      if (from < 2) await _createOperationDeliveryIndexes();
+    },
     beforeOpen: (OpeningDetails details) async {
       await customStatement('PRAGMA foreign_keys = ON');
       await customStatement('PRAGMA journal_mode = WAL');
     },
   );
+
+  Future<void> _createOperationDeliveryIndexes() async {
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS outbox_operation_target_account_idx '
+      'ON outbox_delivery_records (operation_id, target, account_id)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS library_operation_local_time_idx '
+      'ON library_operation_records (local_id, occurred_at_ms)',
+    );
+  }
 }
 
 QueryExecutor _openDatabase(

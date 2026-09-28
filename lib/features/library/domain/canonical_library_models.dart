@@ -93,6 +93,7 @@ enum LibraryMutationIntent {
 
 class LibraryOperationDraft {
   const LibraryOperationDraft({
+    this.operationId,
     required this.localId,
     required this.originKind,
     required this.intent,
@@ -105,9 +106,11 @@ class LibraryOperationDraft {
     this.title,
     this.undoOf,
     this.visibleInLog = true,
+    this.targetAccountIds = const <String, String>{},
   });
 
   final String localId;
+  final String? operationId;
   final LibraryOriginKind originKind;
   final String? originId;
   final LibraryMutationIntent intent;
@@ -119,6 +122,7 @@ class LibraryOperationDraft {
   final String? title;
   final String? undoOf;
   final bool visibleInLog;
+  final Map<String, String> targetAccountIds;
 }
 
 class LibraryActivityEvent {

@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:uuid/uuid.dart';
+
 import '../../../shared/models/anilist_models.dart';
 import '../../../shared/models/media_item.dart';
 import '../data/tracking_sync_store.dart';
@@ -17,6 +19,12 @@ abstract class TrackerProviderAdapter {
       const <UserMediaState>[];
 
   Future<void> applyMutation(SyncJournalEntry mutation);
+}
+
+/// A favourite is not part of provider list snapshots, so only an adapter
+/// with an independent read can confirm it after an uncertain delivery.
+abstract interface class TrackerFavoriteReadbackAdapter {
+  Future<bool?> readFavorite(MediaIdentity identity);
 }
 
 class UnresolvedProviderIdentityException implements Exception {
@@ -64,6 +72,7 @@ class LocalFirstSyncEngine {
   LocalFirstSyncEngine({
     required TrackingSyncStore store,
     required Map<TrackerSource, TrackerProviderAdapter> adapters,
+    this.targetAccountIds = const <TrackerSource, String>{},
     this.primary = TrackerSource.anilist,
     DateTime Function()? now,
   }) : _store = store,
@@ -72,6 +81,7 @@ class LocalFirstSyncEngine {
 
   final TrackingSyncStore _store;
   final Map<TrackerSource, TrackerProviderAdapter> _adapters;
+  final Map<TrackerSource, String> targetAccountIds;
   final TrackerSource primary;
   final DateTime Function() _now;
   final UserMediaConflictResolver _resolver = const UserMediaConflictResolver();
@@ -89,7 +99,7 @@ class LocalFirstSyncEngine {
     bool backgroundDelivery = false,
     TrackingEpisodeCheckpoint? episodeCheckpoint,
   }) async {
-    final MediaIdentity resolved = await _serial<MediaIdentity>(() async {
+    final String recordedOperationId = await _serial<String>(() async {
       final List<UserMediaState> states = await _store.loadStates();
       final int stateIndex = states.indexWhere(
         (UserMediaState state) => state.identity.matches(identity),
@@ -107,13 +117,25 @@ class LocalFirstSyncEngine {
           : identity;
 
       final DateTime timestamp = _now().toUtc();
+      final String operationId = const Uuid().v7();
       if (stateIndex >= 0) {
         if (patch.delete) {
           states.removeAt(stateIndex);
         } else if (patch.touchesLibraryState) {
-          states[stateIndex] = states[stateIndex]
-              .withIdentity(nextIdentity)
-              .apply(patch, timestamp);
+          UserMediaState previous = states[stateIndex].withIdentity(
+            nextIdentity,
+          );
+          // A user-supplied final episode count is trusted metadata. Preserve
+          // it with the same atomic status/progress edit and its Drive record.
+          if ((previous.mediaItem.episodeCount ?? 0) <= 0 &&
+              (mediaItem?.episodeCount ?? 0) > 0) {
+            previous = previous.withMediaItem(
+              previous.mediaItem.copyWith(
+                episodeCount: mediaItem!.episodeCount,
+              ),
+            );
+          }
+          states[stateIndex] = previous.apply(patch, timestamp);
         } else {
           states[stateIndex] = states[stateIndex].withIdentity(nextIdentity);
         }
@@ -160,6 +182,7 @@ class LocalFirstSyncEngine {
       }
 
       final SyncJournalEntry incoming = SyncJournalEntry(
+        operationId: operationId,
         identity: nextIdentity,
         patch: patch,
         pendingTargets: targets,
@@ -167,19 +190,20 @@ class LocalFirstSyncEngine {
         updatedAt: timestamp,
         mediaTitle: mediaTitle,
         providerEntryIds: providerEntryIds,
+        targetAccountIds: <TrackerSource, String>{
+          for (final TrackerSource target in targets)
+            if (targetAccountIds[target] != null)
+              target: targetAccountIds[target]!,
+        },
       );
       final List<SyncJournalEntry> journal = await _store.loadJournal();
-      final int index = journal.indexWhere(
-        (SyncJournalEntry current) => current.identity.matches(nextIdentity),
-      );
-      if (index < 0) {
-        journal.add(incoming);
-      } else {
-        journal[index] = journal[index].mergedWith(incoming);
-      }
+      // Every user action must retain its own provider delivery. In particular,
+      // remove followed by add must never collapse into the final add patch.
+      journal.add(incoming);
       final TrackingSyncStore store = _store;
       if (store is AtomicTrackingSyncStore) {
         await (store as AtomicTrackingSyncStore).commitMutation(
+          operationId: operationId,
           states: states,
           journal: journal,
           favorites: favorites,
@@ -195,7 +219,7 @@ class LocalFirstSyncEngine {
         await store.saveFavorites(favorites);
         await store.saveJournal(journal);
       }
-      return nextIdentity;
+      return operationId;
     });
 
     if (!backgroundDelivery) {
@@ -205,7 +229,9 @@ class LocalFirstSyncEngine {
       () async {
         final List<SyncJournalEntry> journal = await _store.loadJournal();
         for (final SyncJournalEntry entry in journal) {
-          if (entry.identity.matches(resolved)) return entry.pendingTargets;
+          if (entry.operationId == recordedOperationId) {
+            return entry.pendingTargets;
+          }
         }
         return <TrackerSource>{};
       },
@@ -294,6 +320,19 @@ class LocalFirstSyncEngine {
     List<SyncJournalEntry> journal = await _store.loadJournal();
     if (journal.isEmpty) return;
     final List<UserMediaState> states = await _store.loadStates();
+    final Map<TrackerSource, TrackerProviderHealth> health = await _store
+        .loadHealth();
+    final Set<TrackerSource> providerBackoff = <TrackerSource>{
+      for (final MapEntry<TrackerSource, TrackerProviderHealth> entry
+          in health.entries)
+        if (_retryIsDeferred(entry.value, _now().toUtc())) entry.key,
+    };
+    final List<(MediaIdentity, TrackerSource)> blocked =
+        <(MediaIdentity, TrackerSource)>[];
+    bool isBlocked(MediaIdentity identity, TrackerSource target) => blocked.any(
+      ((MediaIdentity, TrackerSource) value) =>
+          value.$2 == target && value.$1.matches(identity),
+    );
 
     for (int index = 0; index < journal.length; index += 1) {
       SyncJournalEntry entry = journal[index];
@@ -308,6 +347,41 @@ class LocalFirstSyncEngine {
         journal[index] = entry;
       }
 
+      // A later action for the same title may only leave after the previous
+      // one has actually reached this provider. This preserves remove/add and
+      // rapid status transitions even across offline sessions.
+      for (final TrackerSource target in entry.awaitingRemoteTargets.toList(
+        growable: false,
+      )) {
+        final TrackerProviderAdapter? adapter = _adapters[target];
+        if (adapter == null ||
+            providerBackoff.contains(target) ||
+            isBlocked(entry.identity, target)) {
+          continue;
+        }
+        if (!_targetsAccount(entry, adapter)) {
+          blocked.add((entry.identity, target));
+          continue;
+        }
+        try {
+          if (await _readbackConfirms(adapter, entry)) {
+            entry = entry.confirmedBy(target);
+            journal[index] = entry;
+            await _updateDelivery(
+              entry.identity,
+              target,
+              'confirmed',
+              operationId: entry.operationId,
+              accountId: adapter.accountId,
+            );
+          } else {
+            blocked.add((entry.identity, target));
+          }
+        } on Object {
+          blocked.add((entry.identity, target));
+        }
+      }
+
       final List<TrackerSource> orderedTargets = <TrackerSource>[
         if (entry.pendingTargets.contains(primary)) primary,
         ...TrackerSource.values.where(
@@ -317,8 +391,32 @@ class LocalFirstSyncEngine {
       ];
       for (final TrackerSource target in orderedTargets) {
         final TrackerProviderAdapter? adapter = _adapters[target];
-        if (adapter == null) continue;
+        if (adapter == null ||
+            providerBackoff.contains(target) ||
+            isBlocked(entry.identity, target)) {
+          continue;
+        }
+        if (!_targetsAccount(entry, adapter)) {
+          blocked.add((entry.identity, target));
+          continue;
+        }
         try {
+          if (entry.readbackBeforeWrite || entry.operationId == null) {
+            // Old merged queues and recovered v1 operations have uncertain
+            // transport history. Observe the actual account before writing.
+            if (await _readbackConfirms(adapter, entry)) {
+              entry = entry.deliveredTo(target).confirmedBy(target);
+              journal[index] = entry;
+              await _updateDelivery(
+                entry.identity,
+                target,
+                'confirmed',
+                operationId: entry.operationId,
+                accountId: adapter.accountId,
+              );
+              continue;
+            }
+          }
           await adapter.applyMutation(entry);
           final bool awaitConfirmation =
               entry.patch.delete || entry.patch.touchesLibraryState;
@@ -327,11 +425,45 @@ class LocalFirstSyncEngine {
             awaitRemoteConfirmation: awaitConfirmation,
           );
           journal[index] = entry;
+          // Persist the uncertain/delivered state before read-back. If the
+          // process dies during confirmation, the next flush reads the remote
+          // result rather than blindly replaying a delete or toggle.
+          await _store.saveJournal(
+            journal
+                .where((SyncJournalEntry value) => !value.isSettled)
+                .toList(),
+          );
+          final bool hasSuccessor = journal
+              .skip(index + 1)
+              .any(
+                (SyncJournalEntry later) =>
+                    later.identity.matches(entry.identity) &&
+                    later.tracks(target),
+              );
+          if (entry.awaitingRemoteTargets.contains(target) &&
+              (entry.patch.delete || hasSuccessor)) {
+            try {
+              if (await _readbackConfirms(adapter, entry)) {
+                entry = entry.confirmedBy(target);
+                journal[index] = entry;
+              }
+            } on Object {
+              // The write may have succeeded while list read-back is down.
+              // Keep it awaiting confirmation and block successors.
+            }
+          }
           await _updateDelivery(
             entry.identity,
             target,
-            awaitConfirmation ? 'delivered' : 'confirmed',
+            entry.awaitingRemoteTargets.contains(target)
+                ? 'delivered'
+                : 'confirmed',
+            operationId: entry.operationId,
+            accountId: adapter.accountId,
           );
+          if (entry.awaitingRemoteTargets.contains(target)) {
+            blocked.add((entry.identity, target));
+          }
           await _recordSuccessLocked(target);
           await _store.saveJournal(
             journal
@@ -339,27 +471,60 @@ class LocalFirstSyncEngine {
                 .toList(),
           );
         } on UnresolvedProviderIdentityException catch (error) {
+          blocked.add((entry.identity, target));
           // Mapping may be learned from a later provider refresh. This is not
           // a provider outage and the mutation remains queued.
           await _updateDelivery(
             entry.identity,
             target,
             'pending',
+            operationId: entry.operationId,
+            accountId: adapter.accountId,
             error: '$error',
           );
         } on TrackerAuthenticationException catch (error) {
+          providerBackoff.add(target);
+          blocked.add((entry.identity, target));
           await _updateDelivery(
             entry.identity,
             target,
             'retry',
+            operationId: entry.operationId,
+            accountId: adapter.accountId,
             error: '$error',
           );
           await _recordFailureLocked(target, error, authentication: true);
         } catch (error) {
+          providerBackoff.add(target);
+          blocked.add((entry.identity, target));
+          // A timeout can occur after the provider applied the mutation.
+          // Check before retrying so delete/add cannot be inverted later.
+          try {
+            if (await _readbackConfirms(adapter, entry)) {
+              entry = entry.deliveredTo(target).confirmedBy(target);
+              journal[index] = entry;
+              blocked.removeWhere(
+                ((MediaIdentity, TrackerSource) value) =>
+                    value.$2 == target && value.$1.matches(entry.identity),
+              );
+              await _updateDelivery(
+                entry.identity,
+                target,
+                'confirmed',
+                operationId: entry.operationId,
+                accountId: adapter.accountId,
+              );
+              continue;
+            }
+          } on Object {
+            // Keep the original transport error and retry the operation.
+          }
           await _updateDelivery(
             entry.identity,
             target,
             'retry',
+            operationId: entry.operationId,
+            accountId: adapter.accountId,
             error: '$error',
           );
           await _recordFailureLocked(target, error);
@@ -401,18 +566,25 @@ class LocalFirstSyncEngine {
           );
           final TrackingSyncStore store = _store;
           if (store is ReconciliationTrackingSyncStore) {
-            final ProviderReconciliationResult reconciliation =
-                await (store as ReconciliationTrackingSyncStore)
-                    .reconcileProviderSnapshot(
-                      source: source,
-                      accountId: adapter.accountId,
-                      mediaKind: mediaKind,
-                      remote: remote,
-                      journal: pendingBeforeConfirmation,
-                      propagationTargets: <TrackerSource>{..._adapters.keys}
-                        ..remove(source),
-                      completeSnapshot: true,
-                    );
+            final ProviderReconciliationResult
+            reconciliation = await (store as ReconciliationTrackingSyncStore)
+                .reconcileProviderSnapshot(
+                  source: source,
+                  accountId: adapter.accountId,
+                  mediaKind: mediaKind,
+                  remote: remote,
+                  journal: pendingBeforeConfirmation,
+                  propagationTargets: <TrackerSource>{..._adapters.keys}
+                    ..remove(source),
+                  propagationAccountIds: <TrackerSource, String>{
+                    for (final MapEntry<TrackerSource, TrackerProviderAdapter>
+                        target
+                        in _adapters.entries)
+                      if (target.key != source)
+                        target.key: target.value.accountId,
+                  },
+                  completeSnapshot: true,
+                );
             local = reconciliation.states;
             final List<SyncJournalEntry> beforeReconciliationConfirmation =
                 reconciliation.journal;
@@ -505,18 +677,25 @@ class LocalFirstSyncEngine {
           );
           final TrackingSyncStore store = _store;
           if (store is ReconciliationTrackingSyncStore) {
-            final ProviderReconciliationResult reconciliation =
-                await (store as ReconciliationTrackingSyncStore)
-                    .reconcileProviderSnapshot(
-                      source: source,
-                      accountId: adapter.accountId,
-                      mediaKind: mediaKind,
-                      remote: remote,
-                      journal: pendingBeforeConfirmation,
-                      propagationTargets: <TrackerSource>{..._adapters.keys}
-                        ..remove(source),
-                      completeSnapshot: true,
-                    );
+            final ProviderReconciliationResult
+            reconciliation = await (store as ReconciliationTrackingSyncStore)
+                .reconcileProviderSnapshot(
+                  source: source,
+                  accountId: adapter.accountId,
+                  mediaKind: mediaKind,
+                  remote: remote,
+                  journal: pendingBeforeConfirmation,
+                  propagationTargets: <TrackerSource>{..._adapters.keys}
+                    ..remove(source),
+                  propagationAccountIds: <TrackerSource, String>{
+                    for (final MapEntry<TrackerSource, TrackerProviderAdapter>
+                        target
+                        in _adapters.entries)
+                      if (target.key != source)
+                        target.key: target.value.accountId,
+                  },
+                  completeSnapshot: true,
+                );
             local = reconciliation.states;
             final List<SyncJournalEntry> beforeReconciliationConfirmation =
                 reconciliation.journal;
@@ -719,26 +898,42 @@ class LocalFirstSyncEngine {
     List<UserMediaState> remote,
     TrackerSource source,
   ) {
-    return journal
-        .map((SyncJournalEntry mutation) {
-          if (!mutation.awaitingRemoteTargets.contains(source)) {
-            return mutation;
-          }
-          UserMediaState? matching;
-          for (final UserMediaState state in remote) {
-            if (state.identity.matches(mutation.identity)) {
-              matching = state;
-              break;
-            }
-          }
-          final bool confirmed = mutation.patch.delete
-              ? matching == null
-              : matching != null &&
-                    _providerSnapshotConfirms(mutation.patch, matching, source);
-          return confirmed ? mutation.confirmedBy(source) : mutation;
-        })
-        .where((SyncJournalEntry mutation) => !mutation.isSettled)
-        .toList(growable: false);
+    final TrackerProviderAdapter? adapter = _adapters[source];
+    if (adapter == null) return journal;
+    final List<MediaIdentity> unresolved = <MediaIdentity>[];
+    final List<SyncJournalEntry> result = <SyncJournalEntry>[];
+    for (final SyncJournalEntry mutation in journal) {
+      if (!mutation.tracks(source)) {
+        if (!mutation.isSettled) result.add(mutation);
+        continue;
+      }
+      if (!_targetsAccount(mutation, adapter) ||
+          unresolved.any((MediaIdentity id) => id.matches(mutation.identity))) {
+        result.add(mutation);
+        continue;
+      }
+      UserMediaState? matching;
+      for (final UserMediaState state in remote) {
+        if (state.identity.matches(mutation.identity)) {
+          matching = state;
+          break;
+        }
+      }
+      final bool confirmed = mutation.patch.delete
+          ? matching == null
+          : matching != null &&
+                _providerSnapshotConfirms(mutation.patch, matching, source);
+      if (confirmed) {
+        final SyncJournalEntry settled = mutation
+            .deliveredTo(source)
+            .confirmedBy(source);
+        if (!settled.isSettled) result.add(settled);
+      } else {
+        unresolved.add(mutation.identity);
+        result.add(mutation);
+      }
+    }
+    return result;
   }
 
   Future<void> _recordSnapshotConfirmations(
@@ -747,16 +942,26 @@ class LocalFirstSyncEngine {
     TrackerSource source,
   ) async {
     for (final SyncJournalEntry previous in before) {
-      if (!previous.awaitingRemoteTargets.contains(source)) continue;
+      if (!previous.tracks(source)) continue;
+      final TrackerProviderAdapter? adapter = _adapters[source];
+      if (adapter == null || !_targetsAccount(previous, adapter)) continue;
       SyncJournalEntry? current;
       for (final SyncJournalEntry candidate in after) {
-        if (candidate.identity.matches(previous.identity)) {
+        if (previous.operationId != null
+            ? candidate.operationId == previous.operationId
+            : candidate.identity.matches(previous.identity)) {
           current = candidate;
           break;
         }
       }
-      if (current?.awaitingRemoteTargets.contains(source) == true) continue;
-      await _updateDelivery(previous.identity, source, 'confirmed');
+      if (current?.tracks(source) == true) continue;
+      await _updateDelivery(
+        previous.identity,
+        source,
+        'confirmed',
+        operationId: previous.operationId,
+        accountId: _adapters[source]?.accountId,
+      );
     }
   }
 
@@ -764,11 +969,15 @@ class LocalFirstSyncEngine {
     MediaIdentity identity,
     TrackerSource target,
     String state, {
+    String? operationId,
+    String? accountId,
     String? error,
   }) async {
     final TrackingSyncStore store = _store;
     if (store is! DeliveryTrackingSyncStore) return;
     await (store as DeliveryTrackingSyncStore).updateTrackerDelivery(
+      operationId: operationId,
+      accountId: accountId,
       identity: identity,
       target: target,
       state: state,
@@ -776,11 +985,25 @@ class LocalFirstSyncEngine {
     );
   }
 
+  bool _targetsAccount(
+    SyncJournalEntry mutation,
+    TrackerProviderAdapter adapter,
+  ) {
+    final String? expected = mutation.targetAccountIds[adapter.source];
+    return expected == null || expected == adapter.accountId;
+  }
+
   bool _providerSnapshotConfirms(
     UserMediaPatch patch,
     UserMediaState remote,
-    TrackerSource source,
-  ) {
+    TrackerSource source, {
+    bool ignoreFavorite = false,
+  }) {
+    // List snapshots do not contain AniList's independent favourite state.
+    // Treating a matching list entry as confirmation could silently skip a
+    // favourite toggle after a crash or legacy queue migration. The AniList
+    // adapter reads the actual favourite state before toggling instead.
+    if (!ignoreFavorite && patch.touches(UserMediaField.favorite)) return false;
     if (patch.touches(UserMediaField.status) &&
         patch.status != null &&
         remote.status != patch.status) {
@@ -814,6 +1037,42 @@ class LocalFirstSyncEngine {
     return true;
   }
 
+  Future<bool> _readbackConfirms(
+    TrackerProviderAdapter adapter,
+    SyncJournalEntry mutation,
+  ) async {
+    if (mutation.patch.touches(UserMediaField.favorite)) {
+      final bool? actual = adapter is TrackerFavoriteReadbackAdapter
+          ? await (adapter as TrackerFavoriteReadbackAdapter).readFavorite(
+              mutation.identity,
+            )
+          : null;
+      if (actual == null || actual != mutation.patch.favorite) return false;
+      if (!mutation.patch.delete && !mutation.patch.touchesLibraryState) {
+        return true;
+      }
+    }
+    final List<UserMediaState> remote = mutation.identity.mediaKind == 'manga'
+        ? await adapter.fetchMangaList()
+        : await adapter.fetchAnimeList();
+    UserMediaState? matching;
+    for (final UserMediaState state in remote) {
+      if (state.identity.matches(mutation.identity)) {
+        matching = state;
+        break;
+      }
+    }
+    return mutation.patch.delete
+        ? matching == null
+        : matching != null &&
+              _providerSnapshotConfirms(
+                mutation.patch,
+                matching,
+                adapter.source,
+                ignoreFavorite: true,
+              );
+  }
+
   SyncJournalEntry? _pendingMutation(
     List<SyncJournalEntry> journal,
     MediaIdentity identity,
@@ -834,6 +1093,13 @@ class LocalFirstSyncEngine {
         health[provider] ?? TrackerProviderHealth(provider: provider);
     health[provider] = current.success(_now().toUtc());
     await _store.saveHealth(health);
+  }
+
+  bool _retryIsDeferred(TrackerProviderHealth health, DateTime now) {
+    final DateTime? failedAt = health.lastFailureAt;
+    if (health.consecutiveFailures <= 0 || failedAt == null) return false;
+    final int seconds = 1 << health.consecutiveFailures.clamp(1, 6);
+    return now.isBefore(failedAt.add(Duration(seconds: seconds)));
   }
 
   Future<void> _recordFailureLocked(

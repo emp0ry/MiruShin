@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 
@@ -42,6 +43,10 @@ class GoogleDriveCloudReplica
       ? 'mirushin.segment.'
       : 'mirushin.$replicaNamespace.segment.';
 
+  String get _librarySnapshotName => replicaNamespace == 'legacy'
+      ? 'mirushin.library.snapshot.v2.json'
+      : 'mirushin.$replicaNamespace.library.snapshot.v2.json';
+
   bool _isLibrarySegment(String name) {
     final bool current =
         name.startsWith(_librarySegmentPrefix) && name.endsWith('.json');
@@ -55,8 +60,12 @@ class GoogleDriveCloudReplica
   Future<DriveLibrarySnapshot?> pullLibrarySnapshot({
     void Function(int received, int total)? onProgress,
     String? excludingChecksum,
+    String? manifestFileId,
+    String? snapshotFileId,
   }) async {
-    final _ManifestRead manifest = await _readManifest();
+    final _ManifestRead manifest = await _readManifest(
+      knownFileId: manifestFileId,
+    );
     final String? manifestChecksum = manifest.value.snapshotChecksum;
     if (excludingChecksum != null &&
         excludingChecksum.isNotEmpty &&
@@ -64,11 +73,10 @@ class GoogleDriveCloudReplica
       return null;
     }
     final String fileName =
-        manifest.value.snapshotFileName ??
-        (replicaNamespace == 'legacy'
-            ? 'mirushin.library.snapshot.v2.json'
-            : 'mirushin.$replicaNamespace.library.snapshot.v2.json');
-    final CloudReplicaFile? file = await _findByName(fileName);
+        manifest.value.snapshotFileName ?? _librarySnapshotName;
+    final CloudReplicaFile? file = snapshotFileId == null
+        ? await _findByName(fileName)
+        : CloudReplicaFile(id: snapshotFileId, name: fileName);
     if (file == null) return null;
     final String body = await _download(file.id, onProgress: onProgress);
     final Object? decoded = jsonDecode(body);
@@ -351,30 +359,7 @@ class GoogleDriveCloudReplica
     final List<DriveReplicaSegment> result = <DriveReplicaSegment>[];
     for (final CloudReplicaFile file in files) {
       if (excluding.contains(file.name)) continue;
-      try {
-        final String body = await _download(file.id);
-        final Object? decoded = jsonDecode(body);
-        if (decoded is! Map<String, dynamic>) {
-          throw FormatException(
-            'Google Drive segment must be an object: ${file.name}',
-          );
-        }
-        final DriveReplicaSegment segment = DriveReplicaSegment.fromJson(
-          decoded,
-        );
-        final String? expected = manifest.value.segments[file.name];
-        if (expected != null && expected != segment.checksum) {
-          throw StateError(
-            'Google Drive segment checksum mismatch: ${file.name}',
-          );
-        }
-        result.add(segment);
-      } on Object catch (error) {
-        if (!_isMalformedReplica(error)) rethrow;
-        debugPrint(
-          'Skipping invalid Drive library segment ${file.name}: $error',
-        );
-      }
+      result.add(await _loadLibrarySegment(file, manifest.value));
     }
     result.sort(
       (DriveReplicaSegment a, DriveReplicaSegment b) =>
@@ -383,9 +368,144 @@ class GoogleDriveCloudReplica
     return result;
   }
 
+  /// A device lists all segment files once, then asks Drive only for changes
+  /// in appDataFolder. The initial page token is captured before the full
+  /// listing, so a concurrent upload is seen again on the next pass.
+  Future<DriveLibraryChanges> pullLibraryChanges({
+    required Set<String> excluding,
+    String? pageToken,
+  }) async {
+    String? token = pageToken;
+    if (token == null || token.isEmpty) {
+      final String start = await _startChangePageToken();
+      return DriveLibraryChanges(
+        segments: await pullSegments(excluding: excluding),
+        nextPageToken: start,
+        manifestChanged: true,
+      );
+    }
+    try {
+      final Map<String, CloudReplicaFile> changed =
+          <String, CloudReplicaFile>{};
+      bool manifestChanged = false;
+      String? manifestFileId;
+      String? snapshotFileId;
+      String nextToken = token;
+      while (true) {
+        final Response<dynamic> response = await _dio.get<dynamic>(
+          '${AppConstants.googleDriveApiBaseUrl}/changes',
+          queryParameters: <String, dynamic>{
+            'pageToken': nextToken,
+            'spaces': 'appDataFolder',
+            'includeRemoved': true,
+            'pageSize': 1000,
+            'fields':
+                'nextPageToken,newStartPageToken,changes(fileId,removed,file(id,name,md5Checksum,size))',
+          },
+          options: _options(),
+          cancelToken: _cancelToken,
+        );
+        final Object? data = response.data;
+        if (data is! Map<String, dynamic>) {
+          throw const FormatException('Invalid Google Drive change page.');
+        }
+        for (final Object? raw in (data['changes'] as List?) ?? const []) {
+          if (raw is! Map || raw['removed'] == true) continue;
+          final Object? rawFile = raw['file'];
+          if (rawFile is! Map) continue;
+          final String name = '${rawFile['name'] ?? ''}';
+          final String id = '${rawFile['id'] ?? raw['fileId'] ?? ''}';
+          if (name == _libraryManifestName) {
+            manifestChanged = true;
+            manifestFileId = id.isEmpty ? null : id;
+          }
+          if (name == _librarySnapshotName && id.isNotEmpty) {
+            snapshotFileId = id;
+          }
+          if (!_isLibrarySegment(name) || id.isEmpty) continue;
+          changed[name] = CloudReplicaFile(
+            id: id,
+            name: name,
+            checksum: rawFile['md5Checksum']?.toString(),
+          );
+        }
+        final String? next = data['nextPageToken']?.toString();
+        if (next == null || next.isEmpty) {
+          nextToken = data['newStartPageToken']?.toString() ?? nextToken;
+          break;
+        }
+        nextToken = next;
+      }
+      final List<DriveReplicaSegment> segments = <DriveReplicaSegment>[];
+      for (final CloudReplicaFile file in changed.values) {
+        if (excluding.contains(file.name)) continue;
+        segments.add(await _loadLibrarySegment(file));
+      }
+      segments.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+      return DriveLibraryChanges(
+        segments: segments,
+        nextPageToken: nextToken,
+        manifestChanged: manifestChanged,
+        manifestFileId: manifestFileId,
+        snapshotFileId: snapshotFileId,
+      );
+    } on DioException catch (error) {
+      if (error.response?.statusCode != 410) rethrow;
+      final String start = await _startChangePageToken();
+      return DriveLibraryChanges(
+        segments: await pullSegments(excluding: excluding),
+        nextPageToken: start,
+        manifestChanged: true,
+      );
+    }
+  }
+
+  Future<String> _startChangePageToken() async {
+    final Response<dynamic> response = await _dio.get<dynamic>(
+      '${AppConstants.googleDriveApiBaseUrl}/changes/startPageToken',
+      options: _options(),
+      cancelToken: _cancelToken,
+    );
+    final Object? body = response.data;
+    final String token = body is Map ? '${body['startPageToken'] ?? ''}' : '';
+    if (token.isEmpty) {
+      throw const FormatException('Google Drive change token is missing.');
+    }
+    return token;
+  }
+
+  Future<DriveReplicaSegment> _loadLibrarySegment(
+    CloudReplicaFile file, [
+    DriveReplicaManifest? manifest,
+  ]) async {
+    final String body = await _download(file.id);
+    if (file.checksum != null &&
+        file.checksum!.isNotEmpty &&
+        md5.convert(utf8.encode(body)).toString() != file.checksum) {
+      throw StateError('Google Drive segment checksum mismatch: ${file.name}');
+    }
+    final Object? decoded = jsonDecode(body);
+    if (decoded is! Map<String, dynamic>) {
+      throw FormatException('Invalid Google Drive segment: ${file.name}');
+    }
+    final DriveReplicaSegment segment = DriveReplicaSegment.fromJson(decoded);
+    if (file.name != segment.fileName) {
+      throw StateError('Google Drive segment identity mismatch: ${file.name}');
+    }
+    final String? expected = manifest?.segments[file.name];
+    if (expected != null && expected != segment.checksum) {
+      throw StateError('Google Drive segment checksum mismatch: ${file.name}');
+    }
+    return segment;
+  }
+
   @override
-  Future<Map<String, Map<String, String>>> readDeliveryLedger() async {
-    final _ManifestRead manifest = await _readManifest();
+  Future<Map<String, Map<String, String>>> readDeliveryLedger({
+    String? manifestFileId,
+  }) async {
+    final _ManifestRead manifest = await _readManifest(
+      knownFileId: manifestFileId,
+    );
     return <String, Map<String, String>>{
       for (final MapEntry<String, Map<String, String>> entry
           in manifest.value.deliveryLedger.entries)
@@ -638,8 +758,10 @@ class GoogleDriveCloudReplica
     );
   }
 
-  Future<_ManifestRead> _readManifest() async {
-    final CloudReplicaFile? file = await _findByName(_libraryManifestName);
+  Future<_ManifestRead> _readManifest({String? knownFileId}) async {
+    final CloudReplicaFile? file = knownFileId == null
+        ? await _findByName(_libraryManifestName)
+        : CloudReplicaFile(id: knownFileId, name: _libraryManifestName);
     if (file == null) {
       return const _ManifestRead(value: DriveReplicaManifest(), exists: false);
     }

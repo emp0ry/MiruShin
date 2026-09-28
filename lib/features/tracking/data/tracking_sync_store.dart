@@ -51,6 +51,7 @@ abstract class TrackingSyncStore {
 /// in one database transaction.
 abstract class AtomicTrackingSyncStore {
   Future<void> commitMutation({
+    String? operationId,
     required List<UserMediaState> states,
     required List<SyncJournalEntry> journal,
     required List<LocalMediaFavoriteState> favorites,
@@ -75,6 +76,8 @@ abstract class ReconciliationTrackingSyncStore {
     required List<SyncJournalEntry> journal,
     required Set<TrackerSource> propagationTargets,
     required bool completeSnapshot,
+    Map<TrackerSource, String> propagationAccountIds =
+        const <TrackerSource, String>{},
   });
 }
 
@@ -83,6 +86,8 @@ abstract class ReconciliationTrackingSyncStore {
 /// adapters to the canonical database implementation.
 abstract class DeliveryTrackingSyncStore {
   Future<void> updateTrackerDelivery({
+    String? operationId,
+    String? accountId,
     required MediaIdentity identity,
     required TrackerSource target,
     required String state,

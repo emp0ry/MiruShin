@@ -169,8 +169,31 @@ class DriveLibrarySnapshot {
             'entryCount': entryCount,
             'media': _stableSnapshotRows(media),
             'libraryEntries': _stableSnapshotRows(libraryEntries),
-            'providerBindings': _stableSnapshotRows(providerBindings),
-            'providerSnapshots': _stableSnapshotRows(providerSnapshots),
+            'providerBindings': _stableSnapshotRows(
+              providerBindings
+                  .map((Map<String, dynamic> row) {
+                    final Map<String, dynamic> stable =
+                        Map<String, dynamic>.from(row);
+                    // Rechecking an exact identity is transport bookkeeping,
+                    // not a change to the user's recoverable library.
+                    stable.remove('verifiedAtMs');
+                    return stable;
+                  })
+                  .toList(growable: false),
+            ),
+            'providerSnapshots': _stableSnapshotRows(
+              providerSnapshots
+                  .map((Map<String, dynamic> row) {
+                    final Map<String, dynamic> stable =
+                        Map<String, dynamic>.from(row);
+                    // Fetch time and the first destructive verification pass do
+                    // not change the user's library or its recoverable metadata.
+                    stable.remove('fetchedAtMs');
+                    stable.remove('destructiveConfirmationCount');
+                    return stable;
+                  })
+                  .toList(growable: false),
+            ),
             'episodeStates': _stableSnapshotRows(episodeStates),
             'streamPreferences': _stableSnapshotRows(streamPreferences),
             'operations': _stableSnapshotRows(operations),
@@ -204,6 +227,22 @@ class CloudReplicaFile {
   final String? checksum;
   final String? etag;
   final int? sizeBytes;
+}
+
+class DriveLibraryChanges {
+  const DriveLibraryChanges({
+    required this.segments,
+    required this.nextPageToken,
+    this.manifestChanged = false,
+    this.manifestFileId,
+    this.snapshotFileId,
+  });
+
+  final List<DriveReplicaSegment> segments;
+  final String nextPageToken;
+  final bool manifestChanged;
+  final String? manifestFileId;
+  final String? snapshotFileId;
 }
 
 class DriveReplicaManifest {
