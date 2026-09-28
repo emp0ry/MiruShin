@@ -30,6 +30,7 @@
   "Restoring Local Library…": "ローカルライブラリを復元しています…",
   "Merging recent changes…": "最新の変更を統合しています…",
   "Uploading local changes…": "ローカルの変更をアップロードしています…",
+  "Preparing Library backup…": "ライブラリのバックアップを準備しています…",
   "Uploading Library backup…": "ライブラリのバックアップをアップロードしています…",
   "Finishing sync…": "同期を完了しています…",
   "Syncing…": "同期中…",
@@ -1558,5 +1559,12 @@
   "Some franchise entries are unavailable ({count}).": "一部のシリーズ作品を表示できません（{count}件）。",
   "Conflicting sequence data was resolved by release date.": "矛盾する順序は公開日をもとに並べました。",
   "No main story could be identified.": "本編を特定できませんでした。",
-  "Some library entries are temporarily unavailable ({count}). Metadata will retry automatically.": "一部のライブラリエントリは一時的に利用できません（{count}件）。メタデータは自動的に再取得されます。"
+  "Some library entries are temporarily unavailable ({count}). Metadata will retry automatically.": "一部のライブラリエントリは一時的に利用できません（{count}件）。メタデータは自動的に再取得されます。",
+  "More details": "詳細を見る",
+  "Ignore": "無視する",
+  "Unavailable library entries": "メタデータがないライブラリエントリ",
+  "Unnamed entry": "名前のないエントリ",
+  "These entries are saved locally, but their titles are missing or only contain placeholder text. They stay in your library and continue syncing. This notice does not block Google Drive Sync.": "これらのエントリはローカルに保存されていますが、タイトルが未取得か仮の表示です。ライブラリに残り、同期も続きます。この通知はGoogle Drive同期を妨げません。",
+  "Retry asks trackers for metadata again. Ignore only hides this notice on this device; it does not delete entries or stop sync.": "「再試行」はトラッカーにメタデータを再要求します。「無視する」はこの端末の通知だけを非表示にし、エントリの削除や同期の停止は行いません。",
+  "Notice hidden. The entries and sync are unchanged.": "通知を非表示にしました。エントリと同期は変更されていません。"
 }

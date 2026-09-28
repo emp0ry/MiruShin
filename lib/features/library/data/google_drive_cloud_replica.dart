@@ -23,7 +23,15 @@ class GoogleDriveCloudReplica
     this.includeLegacyLibrary = false,
     CancelToken? cancelToken,
     Dio? dio,
-  }) : _dio = dio ?? Dio(),
+  }) : _dio =
+           dio ??
+           Dio(
+             BaseOptions(
+               connectTimeout: const Duration(seconds: 15),
+               sendTimeout: const Duration(seconds: 45),
+               receiveTimeout: const Duration(seconds: 45),
+             ),
+           ),
        _cancelToken = cancelToken,
        _accessToken = accessToken;
 
@@ -320,14 +328,26 @@ class GoogleDriveCloudReplica
   );
 
   @override
-  Future<CloudReplicaFile> pushSegment(DriveReplicaSegment segment) async {
+  Future<CloudReplicaFile> pushSegment(
+    DriveReplicaSegment segment, {
+    void Function(int sent, int total)? onProgress,
+  }) async {
     final CloudReplicaFile? existing = await _findByName(segment.fileName);
-    if (existing != null) return existing;
-    final CloudReplicaFile uploaded = await _createJsonFile(
-      segment.fileName,
-      segment.encode(),
-    );
+    // A previous attempt can upload the file and fail while updating the
+    // manifest. Reuse that immutable file, but still finish its registration.
+    final CloudReplicaFile uploaded =
+        existing ??
+        await _createJsonFile(
+          segment.fileName,
+          segment.encode(),
+          onProgress: onProgress,
+        );
     await _updateManifest((DriveReplicaManifest manifest) {
+      final String? registeredChecksum = manifest.segments[segment.fileName];
+      if (registeredChecksum == segment.checksum) return manifest;
+      if (registeredChecksum != null) {
+        throw StateError('Google Drive segment checksum mismatch.');
+      }
       return DriveReplicaManifest(
         revision: manifest.revision + 1,
         segments: <String, String>{
@@ -521,11 +541,26 @@ class GoogleDriveCloudReplica
     return _updateManifest((DriveReplicaManifest manifest) {
       final Map<String, Map<String, String>> merged =
           <String, Map<String, String>>{
-            ...manifest.deliveryLedger,
             for (final MapEntry<String, Map<String, String>> entry
-                in deliveries.entries)
+                in manifest.deliveryLedger.entries)
               entry.key: Map<String, String>.from(entry.value),
           };
+      var changed = false;
+      for (final MapEntry<String, Map<String, String>> operation
+          in deliveries.entries) {
+        final Map<String, String> targets = merged.putIfAbsent(
+          operation.key,
+          () => <String, String>{},
+        );
+        for (final MapEntry<String, String> target in operation.value.entries) {
+          if (targets[target.key] == target.value) continue;
+          targets[target.key] = target.value;
+          changed = true;
+        }
+      }
+      // A no-op full sync must not rewrite the manifest. Besides wasting
+      // requests, that write makes every other device see a false Drive change.
+      if (!changed) return manifest;
       return DriveReplicaManifest(
         revision: manifest.revision + 1,
         segments: manifest.segments,

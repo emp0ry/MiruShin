@@ -119,6 +119,77 @@ void main() {
     },
   );
 
+  testWidgets('unavailable metadata shows details and can be ignored', (
+    WidgetTester tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final List<AniListAnimeListFolder> folders = <AniListAnimeListFolder>[
+      AniListAnimeListFolder(
+        name: AniListListStatus.current.label,
+        status: AniListListStatus.current,
+        entries: <AniListAnimeListEntry>[_newEntry(42, 'Saved media')],
+      ),
+    ];
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          settingsProvider.overrideWith(_ConnectedSettings.new),
+          trackerLocalAnimeLibraryProvider.overrideWith(
+            (Ref ref) async => TrackerLocalAnimeLibrary(
+              folders: folders,
+              pendingMutations: const <TrackerLibraryOptimisticMutation>[],
+            ),
+          ),
+          trackerLocalMangaLibraryProvider.overrideWith(
+            (Ref ref) async => const TrackerLocalAnimeLibrary(
+              folders: <AniListAnimeListFolder>[],
+              pendingMutations: <TrackerLibraryOptimisticMutation>[],
+            ),
+          ),
+          downloadsProvider.overrideWith(_EmptyDownloads.new),
+        ],
+        child: MaterialApp(
+          locale: const Locale('en'),
+          theme: AppTheme.dark().copyWith(platform: TargetPlatform.macOS),
+          supportedLocales: AppLocalizations.supportedLocales,
+          localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
+            AppLocalizations.delegate,
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+          home: const Scaffold(body: LibraryPage()),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.textContaining('Some library entries are temporarily unavailable'),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('More details'));
+    await tester.pumpAndSettle();
+    expect(find.text('Unavailable library entries'), findsOneWidget);
+    expect(find.textContaining('anilist: 42'), findsOneWidget);
+    await tester.tap(find.text('Close'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Ignore'));
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining('Some library entries are temporarily unavailable'),
+      findsNothing,
+    );
+    expect(folders.single.entries.single.mediaItem.title, 'Saved media');
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('each Library folder restores only its own saved filters', (
     WidgetTester tester,
   ) async {

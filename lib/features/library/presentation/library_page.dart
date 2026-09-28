@@ -99,9 +99,13 @@ bool _isRenderableLibraryEntry(AniListAnimeListEntry entry) {
   ).hasMatch(title);
 }
 
-({List<AniListAnimeListFolder> folders, int hiddenCount})
+({
+  List<AniListAnimeListFolder> folders,
+  List<AniListAnimeListEntry> hiddenEntries,
+})
 _filterRenderableLibraryFolders(List<AniListAnimeListFolder> folders) {
-  final Set<String> hidden = <String>{};
+  final Map<String, AniListAnimeListEntry> hidden =
+      <String, AniListAnimeListEntry>{};
   final List<AniListAnimeListFolder> filtered = folders
       .map((AniListAnimeListFolder folder) {
         final List<AniListAnimeListEntry> entries = folder.entries
@@ -111,7 +115,7 @@ _filterRenderableLibraryFolders(List<AniListAnimeListFolder> folders) {
                 entry.mediaItem.externalIds,
                 mediaId: entry.mediaItem.id,
               );
-              hidden.add(jsonEncode(identity.toJson()));
+              hidden.putIfAbsent(jsonEncode(identity.toJson()), () => entry);
               return false;
             })
             .toList(growable: false);
@@ -123,8 +127,15 @@ _filterRenderableLibraryFolders(List<AniListAnimeListFolder> folders) {
       })
       .where((AniListAnimeListFolder folder) => folder.entries.isNotEmpty)
       .toList(growable: false);
-  return (folders: filtered, hiddenCount: hidden.length);
+  return (folders: filtered, hiddenEntries: hidden.values.toList());
 }
+
+String _unavailableEntryKey(AniListAnimeListEntry entry) => jsonEncode(
+  MediaIdentity.fromExternalIds(
+    entry.mediaItem.externalIds,
+    mediaId: entry.mediaItem.id,
+  ).toJson(),
+);
 
 // Sort
 
@@ -170,12 +181,16 @@ class _AniListStatusBannerState {
     this.isLoading = false,
     this.actionLabel,
     this.onAction,
+    this.unavailableEntries = const <AniListAnimeListEntry>[],
+    this.onIgnoreUnavailable,
   });
 
   final String message;
   final bool isLoading;
   final String? actionLabel;
   final Future<void> Function()? onAction;
+  final List<AniListAnimeListEntry> unavailableEntries;
+  final VoidCallback? onIgnoreUnavailable;
 }
 
 class _AniListTabViewState {
@@ -358,6 +373,74 @@ class _AniListDataTabState extends ConsumerState<_AniListDataTab>
   Timer? _slowFullListTimer;
   DateTime? _fullListPendingSince;
   bool _showSlowFullList = false;
+  late final String _ignoredUnavailableKey;
+  Set<String> _ignoredUnavailable = <String>{};
+
+  @override
+  void initState() {
+    super.initState();
+    final String workspace = ref
+        .read(libraryWorkspaceScopeProvider)
+        .workspaceId;
+    _ignoredUnavailableKey =
+        'library.unavailableNoticeIgnored.v1.$workspace.${widget.mediaType.toLowerCase()}';
+    unawaited(_loadIgnoredUnavailable());
+  }
+
+  Future<void> _loadIgnoredUnavailable() async {
+    try {
+      final SharedPreferences preferences =
+          await SharedPreferences.getInstance();
+      if (!mounted) return;
+      setState(() {
+        _ignoredUnavailable = <String>{
+          ..._ignoredUnavailable,
+          ...?preferences.getStringList(_ignoredUnavailableKey),
+        };
+      });
+    } on Object catch (error) {
+      debugPrint('Could not read ignored Library notices: $error');
+    }
+  }
+
+  List<AniListAnimeListEntry> _visibleUnavailable(
+    List<AniListAnimeListEntry> entries,
+  ) => entries
+      .where(
+        (AniListAnimeListEntry entry) =>
+            !_ignoredUnavailable.contains(_unavailableEntryKey(entry)),
+      )
+      .toList(growable: false);
+
+  void _ignoreUnavailable(List<AniListAnimeListEntry> entries) {
+    setState(() {
+      _ignoredUnavailable = <String>{
+        ..._ignoredUnavailable,
+        ...entries.map(_unavailableEntryKey),
+      };
+    });
+    unawaited(_saveIgnoredUnavailable());
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          context.t('Notice hidden. The entries and sync are unchanged.'),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _saveIgnoredUnavailable() async {
+    try {
+      final SharedPreferences preferences =
+          await SharedPreferences.getInstance();
+      await preferences.setStringList(
+        _ignoredUnavailableKey,
+        _ignoredUnavailable.toList(growable: false),
+      );
+    } on Object catch (error) {
+      debugPrint('Could not save ignored Library notices: $error');
+    }
+  }
 
   @override
   bool get wantKeepAlive => true;
@@ -464,18 +547,23 @@ class _AniListDataTabState extends ConsumerState<_AniListDataTab>
                 useLocalFallback: true,
               );
           final filtered = _filterRenderableLibraryFolders(effectiveFolders);
-          final _AniListStatusBannerState? banner = filtered.hiddenCount == 0
+          final List<AniListAnimeListEntry> unavailable = _visibleUnavailable(
+            filtered.hiddenEntries,
+          );
+          final _AniListStatusBannerState? banner = unavailable.isEmpty
               ? null
               : _AniListStatusBannerState(
                   message: context.tf(
                     'Some library entries are temporarily unavailable ({count}). Metadata will retry automatically.',
-                    <String, Object?>{'count': filtered.hiddenCount},
+                    <String, Object?>{'count': unavailable.length},
                   ),
                   actionLabel: 'Retry',
                   onAction: () => refreshAniListLibraryForMediaType(
                     ProviderScope.containerOf(context, listen: false),
                     mediaType: widget.mediaType,
                   ),
+                  unavailableEntries: unavailable,
+                  onIgnoreUnavailable: () => _ignoreUnavailable(unavailable),
                 );
           return _AniListTabContent(
             state: _AniListTabViewState(
@@ -684,21 +772,26 @@ class _AniListDataTabState extends ConsumerState<_AniListDataTab>
         isLoading: true,
       );
     }
-    if (filteredDisplay.hiddenCount > 0) {
-      final String unavailable = context.tf(
+    final List<AniListAnimeListEntry> unavailable = _visibleUnavailable(
+      filteredDisplay.hiddenEntries,
+    );
+    if (unavailable.isNotEmpty) {
+      final String unavailableMessage = context.tf(
         'Some library entries are temporarily unavailable ({count}). Metadata will retry automatically.',
-        <String, Object?>{'count': filteredDisplay.hiddenCount},
+        <String, Object?>{'count': unavailable.length},
       );
       banner = _AniListStatusBannerState(
         message: banner == null
-            ? unavailable
-            : '${banner.message}\n$unavailable',
+            ? unavailableMessage
+            : '${banner.message}\n$unavailableMessage',
         isLoading: banner?.isLoading ?? false,
         actionLabel: 'Retry',
         onAction: () => refreshAniListLibraryForMediaType(
           ProviderScope.containerOf(context, listen: false),
           mediaType: widget.mediaType,
         ),
+        unavailableEntries: unavailable,
+        onIgnoreUnavailable: () => _ignoreUnavailable(unavailable),
       );
     }
 
@@ -800,11 +893,18 @@ class _AniListTabContent extends StatelessWidget {
       );
     }
     if (state.phase == _AniListTabPhase.empty) {
-      return NeutralPlaceholder(
+      final Widget placeholder = NeutralPlaceholder(
         title: 'Library is empty',
         message: emptyMessage,
         icon: Icons.video_library_rounded,
         height: 300,
+      );
+      if (state.banner == null) return placeholder;
+      return Column(
+        children: <Widget>[
+          _AniListBannerBox(banner: state.banner!),
+          Expanded(child: placeholder),
+        ],
       );
     }
     final Widget libraryView = _AniListView(
@@ -888,21 +988,43 @@ class _AniListStatusBanner extends StatelessWidget {
                   banner.message,
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
-                if (banner.actionLabel != null && banner.onAction != null)
+                if (banner.actionLabel != null ||
+                    banner.unavailableEntries.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(top: AppSpacing.xs),
-                    child: TextButton.icon(
-                      onPressed: () => unawaited(banner.onAction!.call()),
-                      icon: const Icon(Icons.refresh_rounded, size: 16),
-                      label: Text(banner.actionLabel!),
-                      style: TextButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: AppSpacing.sm,
-                          vertical: 0,
-                        ),
-                        minimumSize: Size.zero,
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
+                    child: Wrap(
+                      spacing: AppSpacing.sm,
+                      runSpacing: AppSpacing.xs,
+                      children: <Widget>[
+                        if (banner.actionLabel != null &&
+                            banner.onAction != null)
+                          TextButton.icon(
+                            onPressed: () => unawaited(banner.onAction!.call()),
+                            icon: const Icon(Icons.refresh_rounded, size: 16),
+                            label: Text(context.t(banner.actionLabel!)),
+                          ),
+                        if (banner.unavailableEntries.isNotEmpty)
+                          TextButton.icon(
+                            onPressed: () => _showUnavailableDetails(
+                              context,
+                              banner.unavailableEntries,
+                            ),
+                            icon: const Icon(
+                              Icons.info_outline_rounded,
+                              size: 16,
+                            ),
+                            label: Text(context.t('More details')),
+                          ),
+                        if (banner.onIgnoreUnavailable != null)
+                          TextButton.icon(
+                            onPressed: banner.onIgnoreUnavailable,
+                            icon: const Icon(
+                              Icons.visibility_off_outlined,
+                              size: 16,
+                            ),
+                            label: Text(context.t('Ignore')),
+                          ),
+                      ],
                     ),
                   ),
               ],
@@ -912,6 +1034,68 @@ class _AniListStatusBanner extends StatelessWidget {
       ),
     );
   }
+}
+
+Future<void> _showUnavailableDetails(
+  BuildContext context,
+  List<AniListAnimeListEntry> entries,
+) => showDialog<void>(
+  context: context,
+  builder: (BuildContext dialogContext) => AlertDialog(
+    title: Text(dialogContext.t('Unavailable library entries')),
+    content: SizedBox(
+      width: 520,
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Text(
+              dialogContext.t(
+                'These entries are saved locally, but their titles are missing or only contain placeholder text. They stay in your library and continue syncing. This notice does not block Google Drive Sync.',
+              ),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            for (final AniListAnimeListEntry entry in entries)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(
+                  entry.mediaItem.title.trim().isEmpty
+                      ? dialogContext.t('Unnamed entry')
+                      : entry.mediaItem.title,
+                ),
+                subtitle: Text(
+                  '${dialogContext.t(entry.status.label)} · '
+                  '${_unavailableEntryIds(entry)}',
+                ),
+              ),
+            const SizedBox(height: AppSpacing.sm),
+            Text(
+              dialogContext.t(
+                'Retry asks trackers for metadata again. Ignore only hides this notice on this device; it does not delete entries or stop sync.',
+              ),
+              style: Theme.of(dialogContext).textTheme.bodySmall,
+            ),
+          ],
+        ),
+      ),
+    ),
+    actions: <Widget>[
+      TextButton(
+        onPressed: () => Navigator.of(dialogContext).pop(),
+        child: Text(dialogContext.t('Close')),
+      ),
+    ],
+  ),
+);
+
+String _unavailableEntryIds(AniListAnimeListEntry entry) {
+  final List<String> ids = <String>[
+    for (final String provider in <String>['anilist', 'mal', 'shikimori'])
+      if ((entry.mediaItem.externalIds[provider] ?? '').trim().isNotEmpty)
+        '$provider: ${entry.mediaItem.externalIds[provider]}',
+  ];
+  return ids.isEmpty ? entry.mediaItem.id : ids.join(' · ');
 }
 
 class _AniListLoadingState extends StatelessWidget {

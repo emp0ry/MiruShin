@@ -30,6 +30,7 @@
   "Restoring Local Library…": "Restoring Local Library…",
   "Merging recent changes…": "Merging recent changes…",
   "Uploading local changes…": "Uploading local changes…",
+  "Preparing Library backup…": "Preparing Library backup…",
   "Uploading Library backup…": "Uploading Library backup…",
   "Finishing sync…": "Finishing sync…",
   "Syncing…": "Syncing…",
@@ -1558,5 +1559,12 @@
   "Some franchise entries are unavailable ({count}).": "Some franchise entries are unavailable ({count}).",
   "Conflicting sequence data was resolved by release date.": "Conflicting sequence data was resolved by release date.",
   "No main story could be identified.": "No main story could be identified.",
-  "Some library entries are temporarily unavailable ({count}). Metadata will retry automatically.": "Some library entries are temporarily unavailable ({count}). Metadata will retry automatically."
+  "Some library entries are temporarily unavailable ({count}). Metadata will retry automatically.": "Some library entries are temporarily unavailable ({count}). Metadata will retry automatically.",
+  "More details": "More details",
+  "Ignore": "Ignore",
+  "Unavailable library entries": "Unavailable library entries",
+  "Unnamed entry": "Unnamed entry",
+  "These entries are saved locally, but their titles are missing or only contain placeholder text. They stay in your library and continue syncing. This notice does not block Google Drive Sync.": "These entries are saved locally, but their titles are missing or only contain placeholder text. They stay in your library and continue syncing. This notice does not block Google Drive Sync.",
+  "Retry asks trackers for metadata again. Ignore only hides this notice on this device; it does not delete entries or stop sync.": "Retry asks trackers for metadata again. Ignore only hides this notice on this device; it does not delete entries or stop sync.",
+  "Notice hidden. The entries and sync are unchanged.": "Notice hidden. The entries and sync are unchanged."
 }

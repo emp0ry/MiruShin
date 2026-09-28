@@ -30,6 +30,7 @@
   "Restoring Local Library…": "Восстановление локальной библиотеки…",
   "Merging recent changes…": "Объединение последних изменений…",
   "Uploading local changes…": "Отправка локальных изменений…",
+  "Preparing Library backup…": "Подготовка резервной копии библиотеки…",
   "Uploading Library backup…": "Сохранение библиотеки в Google Drive…",
   "Finishing sync…": "Завершение синхронизации…",
   "Syncing…": "Синхронизация…",
@@ -1563,5 +1564,12 @@
   "Some franchise entries are unavailable ({count}).": "Некоторые тайтлы франшизы недоступны ({count}).",
   "Conflicting sequence data was resolved by release date.": "Противоречия в связях разрешены по датам выхода.",
   "No main story could be identified.": "Не удалось определить основную историю.",
-  "Some library entries are temporarily unavailable ({count}). Metadata will retry automatically.": "Некоторые записи библиотеки временно недоступны ({count}). Метаданные будут загружены автоматически."
+  "Some library entries are temporarily unavailable ({count}). Metadata will retry automatically.": "Некоторые записи библиотеки временно недоступны ({count}). Метаданные будут загружены автоматически.",
+  "More details": "Подробнее",
+  "Ignore": "Игнорировать",
+  "Unavailable library entries": "Записи без метаданных",
+  "Unnamed entry": "Запись без названия",
+  "These entries are saved locally, but their titles are missing or only contain placeholder text. They stay in your library and continue syncing. This notice does not block Google Drive Sync.": "Эти записи сохранены локально, но их названия отсутствуют или пока заменены заглушкой. Они остаются в библиотеке и продолжают синхронизироваться. Это уведомление не блокирует Google Drive Sync.",
+  "Retry asks trackers for metadata again. Ignore only hides this notice on this device; it does not delete entries or stop sync.": "«Повторить» снова запрашивает метаданные у трекеров. «Игнорировать» скрывает только уведомление на этом устройстве: записи не удаляются, синхронизация не останавливается.",
+  "Notice hidden. The entries and sync are unchanged.": "Уведомление скрыто. Записи и синхронизация не изменены."
 }
