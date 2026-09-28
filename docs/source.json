@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.9.8",
+          "date": "2026-09-28",
+          "localizedDescription": "- Fixed Google Drive Sync getting stuck after uploading local changes when a tracker API is unavailable.\n- Improved sync progress, retry handling, and background storage-size refresh.\n- Added details and a safe Ignore option for Library entries with unavailable metadata.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.8/MiruShin-ios-v2.9.8.ipa",
+          "size": 31683142,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.9.7",
           "date": "2026-09-28",
           "localizedDescription": "- Faster cross-device Library sync: recent Google Drive changes arrive before tracker reconciliation, without duplicate uploads from the receiving device.\n- AniList, MAL and Shikimori now deliver rapid delete and re-add actions in order, with independent retries and safer confirmation after failures.\n- Completing anime fills the known episode total and finish date together; unknown totals are requested explicitly.\n- Reduced unnecessary Google Drive backups and improved sync progress reporting.",
@@ -727,11 +735,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.9.7",
+      "version": "2.9.8",
       "versionDate": "2026-09-28",
-      "versionDescription": "- Faster cross-device Library sync: recent Google Drive changes arrive before tracker reconciliation, without duplicate uploads from the receiving device.\n- AniList, MAL and Shikimori now deliver rapid delete and re-add actions in order, with independent retries and safer confirmation after failures.\n- Completing anime fills the known episode total and finish date together; unknown totals are requested explicitly.\n- Reduced unnecessary Google Drive backups and improved sync progress reporting.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.7/MiruShin-ios-v2.9.7.ipa",
-      "size": 31676300,
+      "versionDescription": "- Fixed Google Drive Sync getting stuck after uploading local changes when a tracker API is unavailable.\n- Improved sync progress, retry handling, and background storage-size refresh.\n- Added details and a safe Ignore option for Library entries with unavailable metadata.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.8/MiruShin-ios-v2.9.8.ipa",
+      "size": 31683142,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
