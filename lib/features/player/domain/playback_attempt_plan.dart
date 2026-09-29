@@ -21,6 +21,25 @@ class PlaybackAttempt {
   }
 }
 
+/// Prefer a previously proven route without bypassing source/platform
+/// capability filtering or removing any of the normal fallback attempts.
+List<PlaybackAttempt> prioritizePlaybackAttempt(
+  List<PlaybackAttempt> attempts,
+  PlaybackRouteHint? hint,
+) {
+  if (hint == null || attempts.length < 2) return attempts;
+  final int index = attempts.indexWhere(
+    (PlaybackAttempt attempt) =>
+        attempt.backend == hint.backend && attempt.disableProxy == hint.direct,
+  );
+  if (index <= 0) return attempts;
+  return <PlaybackAttempt>[
+    attempts[index],
+    ...attempts.take(index),
+    ...attempts.skip(index + 1),
+  ];
+}
+
 /// Whether [url] is downloaded segmented media represented by a local HLS
 /// playlist. Downloaded DASH presentations use the same `.m3u8` container, so
 /// this intentionally classifies by the stored URL rather than stream type.

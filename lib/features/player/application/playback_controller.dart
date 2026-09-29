@@ -34,6 +34,7 @@ import '../engine/player_engine_factory.dart';
 import '../engine/seek_thumbnail.dart';
 import '../engine/seek_thumbnail_extractor.dart';
 import '../engine/seek_thumbnail_source.dart';
+import '../engine/stream_url_policy.dart';
 import 'player_settings.dart';
 import 'resume_stability.dart';
 
@@ -302,6 +303,7 @@ class PlaybackController extends Notifier<PlaybackState> {
   Timer? _manualSeekEofQuarantineTimer;
   int _retryCount = 0;
   int _playbackGeneration = 0;
+  PlaybackRouteHint? _provenPlaybackRoute;
   int _seekPreviewGeneration = 0;
   int _manualSeekEpoch = 0;
   int? _manualSeekEofEpoch;
@@ -655,6 +657,10 @@ class PlaybackController extends Notifier<PlaybackState> {
 
   int get playbackGeneration => _playbackGeneration;
 
+  /// Only a route that rendered video and advanced in real playback may guide
+  /// the next episode. A successful open() alone is not enough.
+  PlaybackRouteHint? get provenPlaybackRoute => _provenPlaybackRoute;
+
   @visibleForTesting
   void debugSetPlaybackState(PlaybackState value) {
     _engineForDispose = value.engine;
@@ -862,7 +868,10 @@ class PlaybackController extends Notifier<PlaybackState> {
     return link?.shareUri.toString() ?? '';
   }
 
-  Future<void> load(MediaPlaybackItem item) async {
+  Future<void> load(
+    MediaPlaybackItem item, {
+    PlaybackRouteHint? preferredPlaybackRoute,
+  }) async {
     debugPrint(
       '[DEBUG] load: S${item.seasonNumber}E${item.episodeNumber} ignoreProgress=${item.ignoreProgress}',
     );
@@ -872,6 +881,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     // replacement engine, so waiting until _open would leave a stale recovery
     // free to mutate the outgoing session during that gap.
     _playbackGeneration++;
+    _provenPlaybackRoute = null;
     _stopOfflineStallWatch();
     _progressTimer?.cancel();
     _undoTimer?.cancel();
@@ -942,6 +952,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       autoplay: true,
       voiceover: voiceover,
       clearVoiceover: voiceover == null,
+      preferredPlaybackRoute: preferredPlaybackRoute,
     );
     // A host load is a global source/episode change. Guest loads caused by
     // synchronization are marked non-user-initiated and ignored by the party
@@ -1090,6 +1101,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     double? preserveAspectRatio,
     PlayerBackend? backendOverride,
     List<PlaybackAttempt>? attemptPlan,
+    PlaybackRouteHint? preferredPlaybackRoute,
     int attemptIndex = 0,
     List<String> attemptFailures = const <String>[],
     bool respectDesiredPlaying = false,
@@ -1107,6 +1119,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     _prematureEofRecoveryNeedsProgressFrom = null;
     _resetManualSeekEofWindow();
     final int generation = ++_playbackGeneration;
+    _provenPlaybackRoute = null;
     _clearInteractiveSeek();
     _cancelSeekThumbnailRequests();
     _resumeGuardPosition = position;
@@ -1166,10 +1179,13 @@ class PlaybackController extends Notifier<PlaybackState> {
     final List<PlaybackAttempt> attempts = youtubeEmbed
         ? const <PlaybackAttempt>[]
         : attemptPlan ??
-              _buildPlaybackAttemptPlan(
-                preference: backendOverride ?? settings.playerBackend,
-                url: url,
-                streamType: streamType,
+              prioritizePlaybackAttempt(
+                _buildPlaybackAttemptPlan(
+                  preference: backendOverride ?? settings.playerBackend,
+                  url: url,
+                  streamType: streamType,
+                ),
+                preferredPlaybackRoute,
               );
     if (!youtubeEmbed &&
         (attempts.isEmpty ||
@@ -1291,7 +1307,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       _retryCount = 0;
       _updateMediaSession();
       _startProgressSaver();
-      _watchPlaybackProgress(engine, generation);
+      _watchPlaybackProgress(engine, generation, attempt, position);
       if (!engine.managesStartupPlaybackSpeed) {
         _reinforcePlaybackSpeed(engine, generation);
       }
@@ -1836,10 +1852,9 @@ class PlaybackController extends Notifier<PlaybackState> {
     PlaybackAttempt attempt,
     Object error,
   ) {
-    String description = error
-        .toString()
-        .replaceAll(RegExp(r'\s+'), ' ')
-        .trim();
+    String description = redactMediaUrlsInText(
+      error.toString(),
+    ).replaceAll(RegExp(r'\s+'), ' ').trim();
     if (description.length > 320) {
       description = '${description.substring(0, 317)}...';
     }
@@ -3663,13 +3678,33 @@ class PlaybackController extends Notifier<PlaybackState> {
   // state changes (~every 120ms) instead of the 5-second periodic saver, so a
   // seek to the end, a paused-on-completion backend, or one that snaps the final
   // position back to 0:00 can't make completion slip through the poll gap.
-  void _watchPlaybackProgress(PlayerEngine engine, int generation) {
+  void _watchPlaybackProgress(
+    PlayerEngine engine,
+    int generation,
+    PlaybackAttempt? attempt,
+    Duration openedAt,
+  ) {
     late void Function() listener;
     listener = () {
       if (generation != _playbackGeneration ||
           !identical(state.engine, engine)) {
         engine.removeListener(listener);
         return;
+      }
+      final PlayerEngineState playback = engine.state.value;
+      if (_provenPlaybackRoute == null &&
+          attempt != null &&
+          engine.initialPositionSettled &&
+          playback.isInitialized &&
+          playback.hasVideoSurface &&
+          playback.isPlaying &&
+          !playback.isBuffering &&
+          !playback.hasError &&
+          playback.position >= openedAt + const Duration(seconds: 1)) {
+        _provenPlaybackRoute = PlaybackRouteHint(
+          backend: attempt.backend,
+          direct: attempt.disableProxy,
+        );
       }
       _engineStateEventEpoch++;
       _evaluatePlaybackProgress(engine);

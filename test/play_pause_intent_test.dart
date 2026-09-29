@@ -42,6 +42,63 @@ void main() {
 
   group('PlaybackController play/pause intent', () {
     test(
+      'next-episode route is used first and proven only after video plays',
+      () async {
+        SharedPreferences.setMockInitialValues(<String, Object>{
+          'mirushin.player.settings': '{"seekPreviewsEnabled":false}',
+        });
+        final _LifecyclePlayerEngine engine = _LifecyclePlayerEngine();
+        addTearDown(engine.disposeNotifier);
+        final List<PlayerBackend> selectedBackends = <PlayerBackend>[];
+        final CanonicalLibraryDatabase database = CanonicalLibraryDatabase(
+          NativeDatabase.memory(),
+        );
+        final ProviderContainer c = ProviderContainer(
+          overrides: [
+            canonicalLibraryDatabaseProvider.overrideWithValue(database),
+            playerEngineBuilderProvider.overrideWithValue(({
+              double? initialAspectRatio,
+              required PlayerBackend backend,
+              required bool youtubeEmbed,
+              required String trailerBackLabel,
+            }) {
+              selectedBackends.add(backend);
+              return engine;
+            }),
+          ],
+        );
+        addTearDown(() async {
+          c.dispose();
+          await database.close();
+        });
+        final PlaybackController controller = c.read(
+          playbackControllerProvider.notifier,
+        );
+
+        await controller.load(
+          _testPlaybackItem('next-route-proof'),
+          preferredPlaybackRoute: const PlaybackRouteHint(
+            backend: PlayerBackend.fvp,
+            direct: true,
+          ),
+        );
+        expect(selectedBackends.single, PlayerBackend.fvp);
+        expect(engine.openedSource?.disableProxy, isTrue);
+        expect(controller.provenPlaybackRoute, isNull);
+
+        engine.setState(
+          engine.value.copyWith(
+            position: const Duration(seconds: 2),
+            hasVideoSurface: true,
+            isBuffering: false,
+          ),
+        );
+        expect(controller.provenPlaybackRoute?.backend, PlayerBackend.fvp);
+        expect(controller.provenPlaybackRoute?.direct, isTrue);
+      },
+    );
+
+    test(
       'watch-party guest saves automatic progress without auto-next',
       () async {
         final ProviderContainer c = container();
@@ -1892,6 +1949,7 @@ class _LifecyclePlayerEngine extends PlayerEngine {
   int playCalls = 0;
   int disposeCalls = 0;
   bool disposed = false;
+  PlayerSource? openedSource;
 
   @override
   bool get managesStartupPlaybackSpeed => true;
@@ -1914,10 +1972,15 @@ class _LifecyclePlayerEngine extends PlayerEngine {
     Duration? startAt,
     bool autoplay = false,
   }) async {
+    openedSource = source;
     if (!openStarted.isCompleted) openStarted.complete();
     await openGate?.future;
     if (disposed) return;
     _state.value = _state.value.copyWith(isInitialized: true);
+  }
+
+  void setState(PlayerEngineState value) {
+    _state.value = value;
   }
 
   @override

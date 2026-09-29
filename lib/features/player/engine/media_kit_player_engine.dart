@@ -348,7 +348,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
               ? _proxy.dashUrl(remoteUri, headers: headers)
               : _proxy.mediaUrl(remoteUri, headers: headers);
           _usingProxy = true;
-          debugPrint('MediaKit open via proxy: $playbackUrl');
+          debugPrint('MediaKit open via proxy: ${mediaUrlForLog(playbackUrl)}');
         } on Object catch (proxyErr) {
           if (!source.allowDirectFallback) {
             debugPrint('MediaKit proxy start failed: $proxyErr');
@@ -364,8 +364,8 @@ class MediaKitPlayerEngine extends PlayerEngine {
         unawaited(_proxy.stop());
         debugPrint(
           source.disableProxy
-              ? 'MediaKit open direct after proxy fallback: $playbackUrl'
-              : 'MediaKit open direct: $playbackUrl',
+              ? 'MediaKit open direct after proxy fallback: ${mediaUrlForLog(playbackUrl)}'
+              : 'MediaKit open direct: ${mediaUrlForLog(playbackUrl)}',
         );
       }
       _nativePlaybackUrl = playbackUrl;

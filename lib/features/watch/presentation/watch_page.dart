@@ -195,6 +195,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
   String? _preferredQualityLabel;
   String? _preferredVoiceOverId;
   String? _preferredVoiceOverLabel;
+  PlaybackRouteHint? _preferredPlaybackRoute;
   String? _streamPreferenceScope;
   Future<void>? _streamPreferenceLoad;
   int _streamPreferenceRevision = 0;
@@ -263,6 +264,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     _preferredQualityLabel = null;
     _preferredVoiceOverId = null;
     _preferredVoiceOverLabel = null;
+    _preferredPlaybackRoute = null;
     _streamPreferenceScope = null;
     _streamPreferenceLoad = null;
     _streamPreferenceRevision++;
@@ -907,6 +909,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
               preferences: preferences,
             );
           },
+          preferredPlaybackRoute: isAutoNext ? _preferredPlaybackRoute : null,
         ),
       );
       if (transitionId != null) {
@@ -994,6 +997,7 @@ class _WatchPageState extends ConsumerState<WatchPage> {
   }
 
   void _rememberPlayerStreamPreferences(PlayerNextEpisodeResult result) {
+    _preferredPlaybackRoute = result.playbackRouteHint;
     _rememberStreamSelection(
       serverId: result.serverId,
       serverTitle: result.serverTitle,

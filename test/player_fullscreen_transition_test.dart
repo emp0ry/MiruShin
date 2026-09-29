@@ -142,6 +142,10 @@ void main() {
       final _FullscreenTestEngine engine = _FullscreenTestEngine();
       final _FullscreenTestPlaybackController controller =
           _FullscreenTestPlaybackController(_item, engine);
+      controller.provenRouteForTest = const PlaybackRouteHint(
+        backend: PlayerBackend.fvp,
+        direct: true,
+      );
       Object? routeResult;
       final GoRouter router = GoRouter(
         routes: <RouteBase>[
@@ -218,6 +222,8 @@ void main() {
       expect(nextResult.serverTitle, 'Server');
       expect(nextResult.qualityId, 'auto');
       expect(nextResult.qualityLabel, 'Auto');
+      expect(nextResult.playbackRouteHint?.backend, PlayerBackend.fvp);
+      expect(nextResult.playbackRouteHint?.direct, isTrue);
       expect(controller.stopCalls, greaterThanOrEqualTo(1));
       expect(setFullscreenCalls, contains(true));
       await tester.pump(const Duration(seconds: 3));
@@ -526,6 +532,10 @@ class _FullscreenTestPlaybackController extends PlaybackController {
   int stopCalls = 0;
   int markWatchedCalls = 0;
   int testPlaybackGeneration = 0;
+  PlaybackRouteHint? provenRouteForTest;
+
+  @override
+  PlaybackRouteHint? get provenPlaybackRoute => provenRouteForTest;
 
   @override
   int get playbackGeneration => testPlaybackGeneration;
@@ -559,7 +569,10 @@ class _FullscreenTestPlaybackController extends PlaybackController {
   }
 
   @override
-  Future<void> load(MediaPlaybackItem item) async {}
+  Future<void> load(
+    MediaPlaybackItem item, {
+    PlaybackRouteHint? preferredPlaybackRoute,
+  }) async {}
 
   @override
   Future<void> stop() async {

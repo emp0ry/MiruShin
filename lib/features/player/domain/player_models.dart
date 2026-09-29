@@ -14,6 +14,15 @@ enum StreamType { mp4, hls, dash, unknown }
 /// sequence.
 enum PlayerBackend { auto, mpv, fvp }
 
+/// A session-only hint for opening the next episode. It is not a global
+/// player setting: each source must still pass the normal capability checks.
+class PlaybackRouteHint {
+  const PlaybackRouteHint({required this.backend, required this.direct});
+
+  final PlayerBackend backend;
+  final bool direct;
+}
+
 enum SeekPreviewMode { progressive, onDemand }
 
 extension SeekPreviewModeLabel on SeekPreviewMode {
@@ -293,6 +302,7 @@ class PlayerNextEpisodeResult {
     this.qualityLabel,
     this.voiceoverId,
     this.voiceoverLabel,
+    this.playbackRouteHint,
   });
 
   final bool startInFullscreen;
@@ -303,6 +313,7 @@ class PlayerNextEpisodeResult {
   final String? qualityLabel;
   final String? voiceoverId;
   final String? voiceoverLabel;
+  final PlaybackRouteHint? playbackRouteHint;
 }
 
 /// Returned by the player when the user picks a specific episode from the

@@ -19,10 +19,80 @@ const int _kSegmentRetries = 4;
 const int _kRetryBackoffBaseMs = 150;
 const Duration _kIdleReset = Duration(seconds: 40);
 const int _kBufferedSegmentLimitBytes = 32 * 1024 * 1024;
+const int _kMaxPlaylistBytes = 4 * 1024 * 1024;
 const List<String> _kHttp11Protocols = <String>['http/1.1'];
 
 class _SegmentBufferTooLarge implements Exception {
   const _SegmentBufferTooLarge();
+}
+
+class _DirectMediaResponse implements Exception {
+  const _DirectMediaResponse();
+}
+
+bool _startsWithHlsHeader(Uint8List bytes) {
+  int index = 0;
+  if (bytes.length >= 3 &&
+      bytes[0] == 0xef &&
+      bytes[1] == 0xbb &&
+      bytes[2] == 0xbf) {
+    index = 3;
+  }
+  while (index < bytes.length &&
+      (bytes[index] == 0x20 ||
+          bytes[index] == 0x09 ||
+          bytes[index] == 0x0a ||
+          bytes[index] == 0x0d)) {
+    index++;
+  }
+  const List<int> signature = <int>[0x23, 0x45, 0x58, 0x54, 0x4d, 0x33, 0x55];
+  if (bytes.length - index < signature.length) return false;
+  for (int i = 0; i < signature.length; i++) {
+    if (bytes[index + i] != signature[i]) return false;
+  }
+  return true;
+}
+
+bool _looksLikeDirectMedia(Uint8List bytes, String mimeType) {
+  if (_startsWithHlsHeader(bytes)) return false;
+  int first = 0;
+  while (first < bytes.length &&
+      (bytes[first] == 0x20 ||
+          bytes[first] == 0x09 ||
+          bytes[first] == 0x0a ||
+          bytes[first] == 0x0d)) {
+    first++;
+  }
+  if (first < bytes.length && bytes[first] == 0x3c) {
+    return false; // HTML/XML error pages are never media.
+  }
+  if (mimeType.startsWith('video/') || mimeType.startsWith('audio/')) {
+    return true;
+  }
+  if (bytes.length >= 8 &&
+      bytes[4] == 0x66 &&
+      bytes[5] == 0x74 &&
+      bytes[6] == 0x79 &&
+      bytes[7] == 0x70) {
+    return true; // ISO BMFF / MP4: box type "ftyp".
+  }
+  if (bytes.length >= 4 &&
+      bytes[0] == 0x1a &&
+      bytes[1] == 0x45 &&
+      bytes[2] == 0xdf &&
+      bytes[3] == 0xa3) {
+    return true; // Matroska / WebM.
+  }
+  if (bytes.length >= 3 &&
+      bytes[0] == 0x46 &&
+      bytes[1] == 0x4c &&
+      bytes[2] == 0x56) {
+    return true; // FLV.
+  }
+  return bytes.length >= 377 &&
+      bytes[0] == 0x47 &&
+      bytes[188] == 0x47 &&
+      bytes[376] == 0x47; // MPEG-TS.
 }
 
 String _safeUpstream(Uri uri) {
@@ -33,7 +103,13 @@ String _safeUpstream(Uri uri) {
   return '${uri.scheme}:<redacted>';
 }
 
-String _safeFailure(Object error) => error.runtimeType.toString();
+String _safeFailure(Object error) {
+  if (error is HttpException) {
+    final Match? status = RegExp(r'^HTTP (\d{3})$').firstMatch(error.message);
+    if (status != null) return 'HTTP ${status.group(1)}';
+  }
+  return error.runtimeType.toString();
+}
 
 /// Local HTTP/HLS proxy that sits between MPV/native PiP and the upstream CDN.
 ///
@@ -77,6 +153,11 @@ class LocalHlsProxy {
   HttpServer? _server;
   int? _port;
   HttpClient? _httpClient;
+  // A signed URL can advertise an edge which has become unreachable. Keep the
+  // original hostname, SNI, URL and headers, but try normal DNS after that
+  // edge fails. This is scoped to one proxy session, never persisted.
+  final Set<String> _dnsFallbackHosts = <String>{};
+  final Set<String> _directMediaUrls = <String>{};
   DateTime? _lastRequestAt;
   Map<String, String> _forwardHeaders = <String, String>{};
   final Set<String> _localRoots = <String>{};
@@ -116,6 +197,8 @@ class LocalHlsProxy {
     _server = null;
     _port = null;
     _forwardHeaders = <String, String>{};
+    _dnsFallbackHosts.clear();
+    _directMediaUrls.clear();
     _localRoots.clear();
     _inlineDashManifests.clear();
     _inlineDashHeaders.clear();
@@ -528,8 +611,58 @@ class LocalHlsProxy {
     }
     debugPrint('HlsProxy playlist ← ${_safeUpstream(src)}');
 
+    if (_directMediaUrls.contains(src.toString())) {
+      return _serveSegment(req, forceStreaming: true);
+    }
+
     try {
-      final String raw = await _fetchPlaylist(src);
+      bool directMediaServed = false;
+      final String raw = await _fetchPlaylist(
+        src,
+        range: req.headers.value(HttpHeaders.rangeHeader),
+        onDirectMedia:
+            (
+              HttpClientResponse upstream,
+              List<int> firstBytes,
+              StreamIterator<List<int>> remaining,
+            ) async {
+              directMediaServed = true;
+              _directMediaUrls.add(src.toString());
+              debugPrint(
+                'HlsProxy: source is direct media, streaming first response',
+              );
+              req.response.statusCode = upstream.statusCode;
+              req.response.bufferOutput = false;
+              _copyResponseHeaders(
+                upstream.headers,
+                req.response.headers,
+                defaultContentType: 'application/octet-stream',
+              );
+              if (upstream.contentLength >= 0) {
+                req.response.contentLength = upstream.contentLength;
+              }
+              try {
+                req.response.add(firstBytes);
+                while (await remaining.moveNext()) {
+                  if (_stopping) break;
+                  _lastRequestAt = DateTime.now();
+                  req.response.add(remaining.current);
+                }
+                await req.response.close();
+              } on Object catch (error) {
+                if (!_stopping || !_isShutdownError(error)) {
+                  debugPrint(
+                    'HlsProxy direct stream FAIL ${_safeUpstream(src)} '
+                    '(${_safeFailure(error)})',
+                  );
+                }
+                try {
+                  await req.response.close();
+                } catch (_) {}
+              }
+            },
+      );
+      if (directMediaServed) return;
 
       // Validate: every HLS playlist must start with #EXTM3U.
       final String trimmed = raw.trimLeft();
@@ -573,7 +706,16 @@ class LocalHlsProxy {
     }
   }
 
-  Future<String> _fetchPlaylist(Uri url) async {
+  Future<String> _fetchPlaylist(
+    Uri url, {
+    String? range,
+    Future<void> Function(
+      HttpClientResponse upstream,
+      List<int> firstBytes,
+      StreamIterator<List<int>> remaining,
+    )?
+    onDirectMedia,
+  }) async {
     if (url.scheme == 'file') {
       return File.fromUri(url).readAsString();
     }
@@ -586,6 +728,9 @@ class LocalHlsProxy {
             .getUrl(url)
             .timeout(_kConnectTimeout);
         _applyUpstreamHeaders(r, url);
+        if (range != null && range.trim().isNotEmpty) {
+          r.headers.set(HttpHeaders.rangeHeader, range.trim());
+        }
         final HttpClientResponse resp = await r.close().timeout(_kReadTimeout);
 
         if (resp.statusCode < 200 || resp.statusCode >= 300) {
@@ -594,14 +739,60 @@ class LocalHlsProxy {
           throw HttpException('HTTP ${resp.statusCode}', uri: url);
         }
 
-        // Decompress (autoUncompress handles gzip) then decode.
-        return await resp.transform(utf8.decoder).join().timeout(_kReadTimeout);
+        // Inspect a small prefix before decoding. Some extensionless URLs are
+        // direct media despite an addon's HLS hint; reading those to EOF would
+        // buffer the entire video in memory before failing UTF-8 decoding.
+        final BytesBuilder body = BytesBuilder(copy: false);
+        final BytesBuilder prefix = BytesBuilder(copy: false);
+        final String mimeType = resp.headers.contentType?.mimeType ?? '';
+        final StreamIterator<List<int>> chunks = StreamIterator<List<int>>(
+          resp.timeout(_kReadTimeout),
+        );
+        try {
+          while (await chunks.moveNext()) {
+            final List<int> chunk = chunks.current;
+            if (prefix.length < 377) {
+              prefix.add(chunk.take(377 - prefix.length).toList());
+            }
+            if (prefix.length >= 12 &&
+                _looksLikeDirectMedia(prefix.toBytes(), mimeType)) {
+              if (onDirectMedia == null) {
+                throw const _DirectMediaResponse();
+              }
+              final List<int> firstBytes = <int>[...body.takeBytes(), ...chunk];
+              await onDirectMedia(resp, firstBytes, chunks);
+              return '';
+            }
+            body.add(chunk);
+            if (body.length > _kMaxPlaylistBytes) {
+              throw const FormatException('Playlist exceeds size limit.');
+            }
+          }
+        } finally {
+          await chunks.cancel();
+        }
+        final Uint8List bytes = body.takeBytes();
+        try {
+          return utf8.decode(bytes);
+        } on FormatException {
+          // Content classification must stay useful without logging signed
+          // URLs, response bytes, cookies, or provider credentials.
+          debugPrint(
+            'HlsProxy: invalid UTF-8 response '
+            '(mime=${mimeType.isEmpty ? 'unknown' : mimeType}, '
+            'hlsHeader=${_startsWithHlsHeader(bytes)})',
+          );
+          rethrow;
+        }
+      } on _DirectMediaResponse {
+        rethrow;
       } on Object catch (error) {
         debugPrint(
           'HlsProxy playlist attempt $attempt/$_kPlaylistRetries FAIL '
           '(${_safeFailure(error)})',
         );
         if (attempt == _kPlaylistRetries) rethrow;
+        _switchToDnsAfterPinnedEdgeFailure(url);
         _destroyClient();
         await Future<void>.delayed(
           Duration(milliseconds: _kRetryBackoffBaseMs * attempt),
@@ -833,8 +1024,11 @@ class LocalHlsProxy {
           _kReadTimeout,
         );
 
-        if (_isRetriableStatus(upstream.statusCode) &&
-            attempt < _kSegmentRetries) {
+        final bool changedEdge =
+            upstream.statusCode >= 400 &&
+            _switchToDnsAfterPinnedEdgeFailure(uri);
+        if (attempt < _kSegmentRetries &&
+            (_isRetriableStatus(upstream.statusCode) || changedEdge)) {
           await upstream.drain<void>().catchError((_) {});
           debugPrint(
             'HlsProxy seg retry $attempt '
@@ -869,6 +1063,7 @@ class LocalHlsProxy {
         final bool canRetry =
             _isRetriableError(error) && attempt < _kSegmentRetries;
         if (canRetry) {
+          _switchToDnsAfterPinnedEdgeFailure(uri);
           debugPrint(
             'HlsProxy seg retry $attempt (${_safeFailure(error)}) '
             '${_safeUpstream(uri)}',
@@ -914,8 +1109,11 @@ class LocalHlsProxy {
           _kReadTimeout,
         );
 
-        if (_isRetriableStatus(upstream.statusCode) &&
-            attempt < _kSegmentRetries) {
+        final bool changedEdge =
+            upstream.statusCode >= 400 &&
+            _switchToDnsAfterPinnedEdgeFailure(uri);
+        if (attempt < _kSegmentRetries &&
+            (_isRetriableStatus(upstream.statusCode) || changedEdge)) {
           await upstream.drain<void>().catchError((_) {});
           debugPrint(
             'HlsProxy seg retry $attempt '
@@ -969,6 +1167,7 @@ class LocalHlsProxy {
         final bool canRetry =
             _isRetriableError(error) && attempt < _kSegmentRetries;
         if (canRetry) {
+          _switchToDnsAfterPinnedEdgeFailure(uri);
           debugPrint(
             'HlsProxy seg retry $attempt (${_safeFailure(error)}) '
             '${_safeUpstream(uri)}',
@@ -1140,7 +1339,9 @@ class LocalHlsProxy {
       return Socket.startConnect(proxyHost, proxyPort ?? 80);
     }
 
-    final String connectHost = explicitMediaEdgeAddress(uri) ?? uri.host;
+    final String connectHost = _dnsFallbackHosts.contains(uri.host)
+        ? uri.host
+        : explicitMediaEdgeAddress(uri) ?? uri.host;
     final int port = uri.hasPort ? uri.port : _defaultPort(uri);
     final Future<ConnectionTask<Socket>> pending = Socket.startConnect(
       connectHost,
@@ -1177,6 +1378,15 @@ class LocalHlsProxy {
       _httpClient?.close(force: true);
     } catch (_) {}
     _httpClient = null;
+  }
+
+  bool _switchToDnsAfterPinnedEdgeFailure(Uri uri) {
+    if (explicitMediaEdgeAddress(uri) == null ||
+        !_dnsFallbackHosts.add(uri.host)) {
+      return false;
+    }
+    debugPrint('HlsProxy: pinned edge failed; retrying host via DNS');
+    return true;
   }
 
   void _resetIfIdle() {

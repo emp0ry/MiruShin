@@ -172,12 +172,14 @@ class PlayerPage extends ConsumerStatefulWidget {
     required this.item,
     this.startInFullscreen = false,
     this.onPrepareNextEpisode,
+    this.preferredPlaybackRoute,
     super.key,
   });
 
   final MediaPlaybackItem item;
   final bool startInFullscreen;
   final ValueChanged<PlayerNextEpisodeResult>? onPrepareNextEpisode;
+  final PlaybackRouteHint? preferredPlaybackRoute;
 
   @override
   ConsumerState<PlayerPage> createState() => _PlayerPageState();
@@ -316,7 +318,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
         unawaited(_setFullscreen(true));
       }
       _requestPlayerFocus();
-      _playbackNotifier.load(widget.item);
+      _playbackNotifier.load(
+        widget.item,
+        preferredPlaybackRoute: widget.preferredPlaybackRoute,
+      );
       _scheduleHide(
         _isYoutubeTrailerPlayback(
               ref.read(playbackControllerProvider),
@@ -1012,6 +1017,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
             qualityLabel: playbackState.quality?.label,
             voiceoverId: playbackState.voiceover?.id,
             voiceoverLabel: playbackState.voiceover?.label,
+            playbackRouteHint: _playbackNotifier.provenPlaybackRoute,
           )
         : null;
     // Do not pop the route until the active engine session has been stopped.
@@ -1049,6 +1055,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
         qualityLabel: playbackState.quality?.label,
         voiceoverId: playbackState.voiceover?.id,
         voiceoverLabel: playbackState.voiceover?.label,
+        playbackRouteHint: _playbackNotifier.provenPlaybackRoute,
       ),
     );
   }

@@ -24,6 +24,52 @@ void main() {
     ]);
   });
 
+  test('proven next-episode route moves first without losing fallbacks', () {
+    final List<PlaybackAttempt> attempts = buildPlaybackAttemptPlan(
+      preference: PlayerBackend.auto,
+      mpvAvailable: true,
+      fvpAvailable: true,
+      proxyEligible: true,
+      directEligible: true,
+    );
+
+    expect(
+      labels(
+        prioritizePlaybackAttempt(
+          attempts,
+          const PlaybackRouteHint(backend: PlayerBackend.fvp, direct: true),
+        ),
+      ),
+      <String>[
+        'FVP + direct',
+        'MPV + local proxy',
+        'MPV + direct',
+        'FVP + local proxy',
+      ],
+    );
+    expect(labels(attempts).first, 'MPV + local proxy');
+  });
+
+  test('unavailable next-episode hint cannot bypass route capabilities', () {
+    final List<PlaybackAttempt> attempts = buildPlaybackAttemptPlan(
+      preference: PlayerBackend.auto,
+      mpvAvailable: false,
+      fvpAvailable: true,
+      proxyEligible: true,
+      directEligible: false,
+    );
+
+    expect(
+      labels(
+        prioritizePlaybackAttempt(
+          attempts,
+          const PlaybackRouteHint(backend: PlayerBackend.mpv, direct: true),
+        ),
+      ),
+      <String>['FVP + local proxy'],
+    );
+  });
+
   test('Auto skips MPV when the platform does not provide it', () {
     final List<PlaybackAttempt> attempts = buildPlaybackAttemptPlan(
       preference: PlayerBackend.auto,

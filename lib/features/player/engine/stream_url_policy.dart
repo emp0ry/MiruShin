@@ -1,5 +1,21 @@
 import 'dart:io';
 
+/// Keep signed media URLs (including tokens and query parameters) out of logs.
+String mediaUrlForLog(String url) {
+  final Uri? uri = Uri.tryParse(url);
+  if (uri == null) return '<invalid media URL>';
+  if (uri.scheme == 'http' || uri.scheme == 'https') {
+    final String port = uri.hasPort ? ':${uri.port}' : '';
+    return '${uri.scheme}://${uri.host}$port/<redacted>';
+  }
+  return '${uri.scheme}:<redacted>';
+}
+
+String redactMediaUrlsInText(String message) => message.replaceAllMapped(
+  RegExp(r'(?:https?|file)://\S+'),
+  (Match match) => mediaUrlForLog(match.group(0) ?? ''),
+);
+
 /// Returns an explicit edge IP carried by a signed media URL, when present.
 /// This is intentionally based only on URL metadata and never on a host name.
 String? explicitMediaEdgeAddress(Uri uri) {

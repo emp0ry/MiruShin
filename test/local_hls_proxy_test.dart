@@ -7,6 +7,208 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mirushin/features/player/engine/local_hls_proxy.dart';
 
 void main() {
+  test('a one-use direct media URL is fetched only once', () async {
+    final Uint8List video = Uint8List.fromList(<int>[
+      0,
+      0,
+      0,
+      24,
+      0x66,
+      0x74,
+      0x79,
+      0x70,
+      ...List<int>.filled(128, 0x41),
+    ]);
+    int upstreamRequests = 0;
+    final HttpServer upstream = await HttpServer.bind(
+      InternetAddress.loopbackIPv4,
+      0,
+    );
+    final StreamSubscription<HttpRequest> subscription = upstream.listen((
+      HttpRequest request,
+    ) {
+      upstreamRequests++;
+      if (upstreamRequests == 1) {
+        request.response
+          ..statusCode = HttpStatus.ok
+          ..headers.contentType = ContentType.binary
+          ..add(video);
+      } else {
+        request.response.statusCode = HttpStatus.forbidden;
+      }
+      unawaited(request.response.close());
+    });
+    final LocalHlsProxy proxy = LocalHlsProxy();
+    final HttpClient client = HttpClient();
+    try {
+      await proxy.start();
+      final Uri source = Uri.parse(
+        'http://127.0.0.1:${upstream.port}/one-use-media',
+      );
+      final HttpClientResponse response = await (await client.getUrl(
+        Uri.parse(proxy.playlistUrl(source)),
+      )).close();
+      expect(response.statusCode, HttpStatus.ok);
+      expect(
+        await response.fold<List<int>>(<int>[], (a, b) => a..addAll(b)),
+        video,
+      );
+      expect(upstreamRequests, 1);
+    } finally {
+      client.close(force: true);
+      await proxy.stop();
+      await subscription.cancel();
+      await upstream.close(force: true);
+    }
+  });
+
+  test('mislabelled HLS URL streams MP4 bytes and preserves Range', () async {
+    final Uint8List video = Uint8List.fromList(<int>[
+      0,
+      0,
+      0,
+      24,
+      0x66,
+      0x74,
+      0x79,
+      0x70,
+      ...List<int>.filled(128, 0x41),
+    ]);
+    final HttpServer upstream = await HttpServer.bind(
+      InternetAddress.loopbackIPv4,
+      0,
+    );
+    final StreamSubscription<HttpRequest> subscription = upstream.listen((
+      HttpRequest request,
+    ) {
+      final bool ranged =
+          request.headers.value(HttpHeaders.rangeHeader) != null;
+      // Some CDNs send opaque media as application/octet-stream.
+      request.response.headers.contentType = ContentType.binary;
+      if (ranged) {
+        request.response
+          ..statusCode = HttpStatus.partialContent
+          ..headers.set(
+            HttpHeaders.contentRangeHeader,
+            'bytes 0-7/${video.length}',
+          )
+          ..add(video.sublist(0, 8));
+      } else {
+        request.response
+          ..statusCode = HttpStatus.ok
+          ..add(video);
+      }
+      unawaited(request.response.close());
+    });
+    final LocalHlsProxy proxy = LocalHlsProxy();
+    final HttpClient client = HttpClient();
+    try {
+      await proxy.start();
+      final Uri source = Uri.parse(
+        'http://127.0.0.1:${upstream.port}/opaque-stream',
+      );
+      final Uri local = Uri.parse(proxy.playlistUrl(source));
+      final HttpClientResponse first = await (await client.getUrl(
+        local,
+      )).close();
+      expect(first.statusCode, HttpStatus.ok);
+      expect(first.headers.contentType?.mimeType, 'application/octet-stream');
+      expect(
+        await first.fold<List<int>>(<int>[], (a, b) => a..addAll(b)),
+        video,
+      );
+
+      final HttpClientRequest rangeRequest = await client.getUrl(local);
+      rangeRequest.headers.set(HttpHeaders.rangeHeader, 'bytes=0-7');
+      final HttpClientResponse partial = await rangeRequest.close();
+      expect(partial.statusCode, HttpStatus.partialContent);
+      expect(
+        partial.headers.value(HttpHeaders.contentRangeHeader),
+        'bytes 0-7/${video.length}',
+      );
+      expect(
+        await partial.fold<List<int>>(<int>[], (a, b) => a..addAll(b)),
+        video.sublist(0, 8),
+      );
+    } finally {
+      client.close(force: true);
+      await proxy.stop();
+      await subscription.cancel();
+      await upstream.close(force: true);
+    }
+  });
+
+  test('HTML masquerading as a playlist is not treated as video', () async {
+    final HttpServer upstream = await HttpServer.bind(
+      InternetAddress.loopbackIPv4,
+      0,
+    );
+    final StreamSubscription<HttpRequest> subscription = upstream.listen((
+      HttpRequest request,
+    ) {
+      request.response
+        ..statusCode = HttpStatus.ok
+        ..headers.contentType = ContentType.html
+        ..write('<html>Not a video</html>');
+      unawaited(request.response.close());
+    });
+    final LocalHlsProxy proxy = LocalHlsProxy();
+    final HttpClient client = HttpClient();
+    try {
+      await proxy.start();
+      final Uri source = Uri.parse('http://127.0.0.1:${upstream.port}/opaque');
+      final HttpClientResponse response = await (await client.getUrl(
+        Uri.parse(proxy.playlistUrl(source)),
+      )).close();
+      expect(response.statusCode, HttpStatus.badGateway);
+      await response.drain<void>();
+    } finally {
+      client.close(force: true);
+      await proxy.stop();
+      await subscription.cancel();
+      await upstream.close(force: true);
+    }
+  });
+
+  test('a failed signed edge retries the same URL through DNS', () async {
+    final HttpServer upstream = await HttpServer.bind(
+      InternetAddress.loopbackIPv4,
+      0,
+    );
+    final StreamSubscription<HttpRequest> subscription = upstream.listen((
+      HttpRequest request,
+    ) {
+      request.response
+        ..statusCode = HttpStatus.ok
+        ..write('#EXTM3U\n#EXT-X-ENDLIST\n');
+      unawaited(request.response.close());
+    });
+    final LocalHlsProxy proxy = LocalHlsProxy();
+    final HttpClient client = HttpClient();
+    try {
+      await proxy.start();
+      // 127.0.0.2 has no listener; the hostname 127.0.0.1 does. The signed
+      // query must be retained while only the socket destination changes.
+      final Uri source = Uri.parse(
+        'http://127.0.0.1:${upstream.port}/index.m3u8?urls=127.0.0.2&sig=test',
+      );
+      final Uri local = Uri.parse(proxy.playlistUrl(source));
+      final HttpClientResponse response = await (await client.getUrl(
+        local,
+      )).close();
+      expect(response.statusCode, HttpStatus.ok);
+      expect(
+        await response.transform(utf8.decoder).join(),
+        contains('#EXTM3U'),
+      );
+    } finally {
+      client.close(force: true);
+      await proxy.stop();
+      await subscription.cancel();
+      await upstream.close(force: true);
+    }
+  });
+
   test(
     'rewritten playlist and segment URLs preserve provider headers',
     () async {

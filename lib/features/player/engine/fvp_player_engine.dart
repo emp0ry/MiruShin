@@ -352,15 +352,15 @@ class FvpPlayerEngine extends PlayerEngine {
             : _proxy.mediaUrl(remoteUri, headers: source.headers);
         debugPrint(
           isDash && Platform.isWindows
-              ? 'FVP open DASH via HLS compatibility proxy: $playbackUrl'
-              : 'FVP open via proxy: $playbackUrl',
+              ? 'FVP open DASH via HLS compatibility proxy: ${mediaUrlForLog(playbackUrl)}'
+              : 'FVP open via proxy: ${mediaUrlForLog(playbackUrl)}',
         );
       } else {
         unawaited(_proxy.stop());
         debugPrint(
           source.disableProxy
-              ? 'FVP open direct after proxy fallback: $playbackUrl'
-              : 'FVP open direct MDK URL: $playbackUrl',
+              ? 'FVP open direct after proxy fallback: ${mediaUrlForLog(playbackUrl)}'
+              : 'FVP open direct MDK URL: ${mediaUrlForLog(playbackUrl)}',
         );
       }
       _nativePlaybackUrl = isLocalHls && useProxy ? playbackUrl : null;
