@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.9.9",
+          "date": "2026-09-29",
+          "localizedDescription": "- Fixed direct-media playback through the local proxy without requesting signed streams twice.\n- Reuse a proven playback route for the next episode while keeping fallbacks.\n- Redacted signed media URLs from player diagnostics.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.9/MiruShin-ios-v2.9.9.ipa",
+          "size": 31683099,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.9.8",
           "date": "2026-09-28",
           "localizedDescription": "- Fixed Google Drive Sync getting stuck after uploading local changes when a tracker API is unavailable.\n- Improved sync progress, retry handling, and background storage-size refresh.\n- Added details and a safe Ignore option for Library entries with unavailable metadata.",
@@ -735,11 +743,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.9.8",
-      "versionDate": "2026-09-28",
-      "versionDescription": "- Fixed Google Drive Sync getting stuck after uploading local changes when a tracker API is unavailable.\n- Improved sync progress, retry handling, and background storage-size refresh.\n- Added details and a safe Ignore option for Library entries with unavailable metadata.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.8/MiruShin-ios-v2.9.8.ipa",
-      "size": 31683142,
+      "version": "2.9.9",
+      "versionDate": "2026-09-29",
+      "versionDescription": "- Fixed direct-media playback through the local proxy without requesting signed streams twice.\n- Reuse a proven playback route for the next episode while keeping fallbacks.\n- Redacted signed media URLs from player diagnostics.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.9/MiruShin-ios-v2.9.9.ipa",
+      "size": 31683099,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
