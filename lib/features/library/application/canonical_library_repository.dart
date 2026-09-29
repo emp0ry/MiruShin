@@ -3130,25 +3130,75 @@ class CanonicalLibraryRepository {
                 (LibraryOperationRecords table) => table.localId.isIn(localIds),
               ))
               .get();
-    return DriveLibrarySnapshot(
-      snapshotId: _uuid.v7(),
-      deviceId: await deviceId(),
-      createdAt: DateTime.now().toUtc(),
-      replicaNamespace: replicaNamespace,
-      media: media.map(_mediaRowJson).toList(growable: false),
-      libraryEntries: library.map(_libraryRowJson).toList(growable: false),
-      providerBindings: bindings
-          .map(_providerBindingRowJson)
-          .toList(growable: false),
-      providerSnapshots: providerSnapshots
-          .map(_providerSnapshotRowJson)
-          .toList(growable: false),
-      episodeStates: episodes.map(_episodeRowJson).toList(growable: false),
-      streamPreferences: streams
-          .map(_streamReplicaRowJson)
-          .toList(growable: false),
-      operations: operations.map(_operationRowJson).toList(growable: false),
+    return compute(
+      _buildDriveSnapshotFromRows,
+      _DriveSnapshotRows(
+        snapshotId: _uuid.v7(),
+        deviceId: await deviceId(),
+        createdAt: DateTime.now().toUtc(),
+        replicaNamespace: replicaNamespace,
+        media: media,
+        library: library,
+        bindings: bindings,
+        providerSnapshots: providerSnapshots,
+        episodes: episodes,
+        streams: streams,
+        operations: operations,
+      ),
+      debugLabel: 'MiruShin Drive snapshot rows',
     );
+  }
+
+  /// Number of immutable local segments already confirmed by Drive. A full
+  /// backup can be deferred while these segments remain sufficient for a new
+  /// device to replay the latest user actions.
+  Future<int> pushedDriveSegmentCount() async {
+    await initialize();
+    final count = database.syncCursorRecords.scope.count();
+    final row =
+        await (database.selectOnly(database.syncCursorRecords)
+              ..addColumns(<Expression<Object>>[count])
+              ..where(database.syncCursorRecords.scope.like('drive.pushed:%')))
+            .getSingle();
+    return row.read(count) ?? 0;
+  }
+
+  Future<int> activeLibraryEntryCount() async {
+    await initialize();
+    final count = database.canonicalLibraryRecords.localId.count();
+    final row =
+        await (database.selectOnly(database.canonicalLibraryRecords)
+              ..addColumns(<Expression<Object>>[count])
+              ..where(database.canonicalLibraryRecords.inLibrary.equals(true)))
+            .getSingle();
+    return row.read(count) ?? 0;
+  }
+
+  Future<int> checkpointedDriveSegmentCount() async {
+    await initialize();
+    final SyncCursorRecord? row =
+        await (database.select(database.syncCursorRecords)..where(
+              (SyncCursorRecords table) =>
+                  table.scope.equals('drive.snapshot.pushedSegmentCount.v1'),
+            ))
+            .getSingleOrNull();
+    return int.tryParse(row?.cursor ?? '') ?? 0;
+  }
+
+  /// Record only the count captured before building the published snapshot.
+  /// A segment uploaded concurrently remains above this watermark and will
+  /// cause another checkpoint on a later full sync.
+  Future<void> markDriveSnapshotPublished(int pushedSegmentCount) async {
+    await initialize();
+    await database
+        .into(database.syncCursorRecords)
+        .insertOnConflictUpdate(
+          SyncCursorRecordsCompanion.insert(
+            scope: 'drive.snapshot.pushedSegmentCount.v1',
+            cursor: '$pushedSegmentCount',
+            updatedAtMs: DateTime.now().toUtc().millisecondsSinceEpoch,
+          ),
+        );
   }
 
   Future<String?> appliedDriveSnapshotChecksum() async {
@@ -4979,6 +5029,57 @@ Map<String, dynamic> _streamPreferenceJson(CanonicalStreamPreference value) =>
       'qualityId': value.qualityId,
       'qualityLabel': value.qualityLabel,
     };
+
+class _DriveSnapshotRows {
+  const _DriveSnapshotRows({
+    required this.snapshotId,
+    required this.deviceId,
+    required this.createdAt,
+    required this.replicaNamespace,
+    required this.media,
+    required this.library,
+    required this.bindings,
+    required this.providerSnapshots,
+    required this.episodes,
+    required this.streams,
+    required this.operations,
+  });
+
+  final String snapshotId;
+  final String deviceId;
+  final DateTime createdAt;
+  final String replicaNamespace;
+  final List<CanonicalMediaRecord> media;
+  final List<CanonicalLibraryRecord> library;
+  final List<ProviderBindingRecord> bindings;
+  final List<ProviderSnapshotRecord> providerSnapshots;
+  final List<EpisodeStateRecord> episodes;
+  final List<StreamPreferenceRecord> streams;
+  final List<LibraryOperationRecord> operations;
+}
+
+DriveLibrarySnapshot _buildDriveSnapshotFromRows(_DriveSnapshotRows rows) =>
+    DriveLibrarySnapshot(
+      snapshotId: rows.snapshotId,
+      deviceId: rows.deviceId,
+      createdAt: rows.createdAt,
+      replicaNamespace: rows.replicaNamespace,
+      media: rows.media.map(_mediaRowJson).toList(growable: false),
+      libraryEntries: rows.library.map(_libraryRowJson).toList(growable: false),
+      providerBindings: rows.bindings
+          .map(_providerBindingRowJson)
+          .toList(growable: false),
+      providerSnapshots: rows.providerSnapshots
+          .map(_providerSnapshotRowJson)
+          .toList(growable: false),
+      episodeStates: rows.episodes.map(_episodeRowJson).toList(growable: false),
+      streamPreferences: rows.streams
+          .map(_streamReplicaRowJson)
+          .toList(growable: false),
+      operations: rows.operations
+          .map(_operationRowJson)
+          .toList(growable: false),
+    );
 
 Map<String, dynamic> _operationRowJson(LibraryOperationRecord value) =>
     <String, dynamic>{

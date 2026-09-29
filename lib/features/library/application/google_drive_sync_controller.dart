@@ -402,7 +402,6 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
   bool _runningCoalescedFollowUp = false;
   bool _activeProgressVisible = false;
   bool _applyingRemoteChanges = false;
-  bool _localCheckpointRequired = false;
   bool _cloudDataDeletionActive = false;
   bool _disposed = false;
   bool _shuttingDown = false;
@@ -726,7 +725,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
         final int pending = await ref
             .read(canonicalLibraryRepositoryProvider)
             .pendingDriveDeliveryCount();
-        if (pending <= 0 && !_localCheckpointRequired) {
+        if (pending <= 0) {
           _localRetryAttempt = 0;
           return;
         }
@@ -849,9 +848,6 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
           return;
         }
         _setProgress(stage: 'Uploading local changes…', progress: 0.15);
-        if (await repository.pendingDriveDeliveryCount() > 0) {
-          _localCheckpointRequired = true;
-        }
         final bool moreLocalChanges = await _pushPendingLibrarySegments(
           repository,
           libraryCloud,
@@ -859,38 +855,17 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
           progressEnd: 0.68,
         );
         if (_disposed || _shuttingDown) return;
-        final bool checkpointNeeded = _localCheckpointRequired;
-        if (checkpointNeeded) {
-          _setProgress(stage: 'Preparing Library backup…', progress: 0.7);
-        }
-        final DriveLibrarySnapshot? outgoingSnapshot = checkpointNeeded
-            ? await repository.buildDriveSnapshot()
-            : null;
-        ownsDeliveryLease =
-            checkpointNeeded &&
-            await libraryCloud.acquireDeliveryLease(deviceId: leaseDeviceId);
-        if (_disposed || _shuttingDown) return;
-        if (ownsDeliveryLease && outgoingSnapshot != null) {
-          await libraryCloud.pushLibrarySnapshot(
-            outgoingSnapshot,
-            onProgress: (int sent, int total) => _setTransferProgress(
-              stage: 'Uploading Library backup…',
-              transferred: sent,
-              total: total,
-              start: 0.72,
-              end: 0.94,
-            ),
-          );
-          _localCheckpointRequired = false;
-          _localRetryAttempt = 0;
-        } else if (checkpointNeeded) {
-          _localCheckpointRequired = true;
-          _scheduleLocalCheckpointRetry();
-        }
-        // A local checkpoint must not enumerate every appDataFolder file just
-        // to refresh the size label. The periodic/full pass owns that work.
+        // Immutable segments already make the change available to other
+        // devices. Rebuilding the entire Library here made every playback
+        // checkpoint serialize years of history on the UI isolate. A full
+        // sync publishes the compact backup later, using a durable watermark.
         _setProgress(stage: 'Finishing sync…', progress: 0.96);
-        if (moreLocalChanges) _scheduleLocalCheckpointRetry();
+        if (moreLocalChanges) {
+          _scheduleLocalCheckpointRetry();
+        } else {
+          _localRetryAttempt = 0;
+        }
+        final int localEntryCount = await repository.activeLibraryEntryCount();
         final DateTime completedAt = DateTime.now().toUtc();
         await (await SharedPreferences.getInstance()).setString(
           _googleDriveLastFullSyncAtKey,
@@ -909,10 +884,10 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
             connected: true,
             lastSyncAt: completedAt,
             appliedSegments: applied,
-            cloudEntryCount: ownsDeliveryLease
-                ? outgoingSnapshot?.entryCount
-                : cloudSnapshot?.entryCount,
-            localEntryCount: outgoingSnapshot?.entryCount,
+            cloudEntryCount: moreLocalChanges
+                ? cloudSnapshot?.entryCount
+                : localEntryCount,
+            localEntryCount: localEntryCount,
             clearError: true,
             clearProgress: true,
           ),
@@ -1096,8 +1071,6 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
         );
       }
       _setProgress(stage: 'Uploading local changes…', progress: 0.76);
-      final bool hadLocalChanges =
-          await repository.pendingDriveDeliveryCount() > 0;
       final bool moreLocalChanges = await _pushPendingLibrarySegments(
         repository,
         libraryCloud,
@@ -1105,8 +1078,10 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
         progressEnd: 0.8,
       );
       if (_disposed || _shuttingDown) return;
+      final int pushedSegmentCount = await repository.pushedDriveSegmentCount();
       final bool needsCheckpoint =
-          hadLocalChanges ||
+          pushedSegmentCount >
+              await repository.checkpointedDriveSegmentCount() ||
           (cloudSnapshot == null && appliedSnapshotChecksum == null);
       // Tracker delivery has its own background queue. Waiting for every
       // AniList/MAL/Shikimori request here can hold the Drive UI at 377/377
@@ -1138,6 +1113,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
             end: 0.94,
           ),
         );
+        await repository.markDriveSnapshotPublished(pushedSegmentCount);
       }
       _setProgress(stage: 'Finishing sync…', progress: 0.96);
       final DateTime completedAt = DateTime.now().toUtc();
@@ -1147,7 +1123,6 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
       );
       if (_disposed || _shuttingDown) return;
       if (outgoingSnapshot != null) {
-        _localCheckpointRequired = false;
         _localRetryAttempt = 0;
       } else if (needsCheckpoint) {
         // The immutable segments are already safe in Drive, but the compact
@@ -1156,6 +1131,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
         _scheduleLocalCheckpointRetry();
       }
       if (moreLocalChanges) _scheduleLocalCheckpointRetry();
+      final int localEntryCount = await repository.activeLibraryEntryCount();
       if (replicaWarnings.isEmpty) {
         _fullRetryAttempt = 0;
       } else {
@@ -1171,10 +1147,10 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
           lastSyncAt: completedAt,
           appliedSegments: applied,
           clearProgress: true,
-          cloudEntryCount: outgoingSnapshot != null
-              ? outgoingSnapshot.entryCount
-              : cloudSnapshot?.entryCount,
-          localEntryCount: outgoingSnapshot?.entryCount,
+          cloudEntryCount: moreLocalChanges
+              ? (outgoingSnapshot?.entryCount ?? cloudSnapshot?.entryCount)
+              : localEntryCount,
+          localEntryCount: localEntryCount,
           lastError: replicaWarnings.isEmpty
               ? null
               : _replicaWarningCode(replicaWarnings),

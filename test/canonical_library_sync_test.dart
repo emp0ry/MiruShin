@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:drift/drift.dart' show driftRuntimeOptions;
@@ -5,6 +6,7 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mirushin/features/library/application/canonical_library_repository.dart';
 import 'package:mirushin/features/library/data/canonical_library_database.dart';
+import 'package:mirushin/features/library/data/canonical_library_database_open_io.dart';
 import 'package:mirushin/features/library/domain/canonical_library_models.dart';
 import 'package:mirushin/features/library/domain/cloud_replica_models.dart';
 import 'package:mirushin/features/tracking/data/canonical_tracking_sync_store.dart';
@@ -53,6 +55,54 @@ void main() {
     });
 
     tearDown(() => database.close());
+
+    test(
+      'native Library reads do not wait for a Drive write transaction',
+      () async {
+        final Directory temporary = await Directory.systemTemp.createTemp(
+          'mirushin-library-read-pool-',
+        );
+        final CanonicalLibraryDatabase fileDatabase = CanonicalLibraryDatabase(
+          canonicalLibraryNativeConnection(
+            File('${temporary.path}/library.sqlite'),
+          ),
+        );
+        final CanonicalLibraryRepository fileRepository =
+            CanonicalLibraryRepository(fileDatabase);
+        final Completer<void> writerStarted = Completer<void>();
+        final Completer<void> finishWriter = Completer<void>();
+        Future<void>? writer;
+        try {
+          await fileRepository.saveTrackingStates(<UserMediaState>[
+            _state(progress: 6),
+          ]);
+          writer = fileDatabase.transaction(() async {
+            await fileDatabase.customStatement(
+              "UPDATE legacy_bucket_records SET value_json = 'busy' "
+              "WHERE bucket = 'meta.deviceId'",
+            );
+            writerStarted.complete();
+            await finishWriter.future;
+          });
+          await writerStarted.future;
+          final Future<List<UserMediaState>> read = fileRepository
+              .loadTrackingStates();
+          final bool returnedWhileWriting = await Future.any(<Future<bool>>[
+            read.then(
+              (List<UserMediaState> rows) =>
+                  rows.length == 1 && rows.single.progress == 6,
+            ),
+            Future<bool>.delayed(const Duration(seconds: 2), () => false),
+          ]);
+          expect(returnedWhileWriting, isTrue);
+        } finally {
+          finishWriter.complete();
+          if (writer != null) await writer;
+          await fileDatabase.close();
+          await temporary.delete(recursive: true);
+        }
+      },
+    );
 
     test(
       'upgrades a v1 database without losing local state or journal',
@@ -911,6 +961,7 @@ void main() {
 
         expect(await repository.watchPendingDriveDeliveryCount().first, 1);
         expect(await repository.pendingDriveDeliveryCount(), 1);
+        expect(await repository.activeLibraryEntryCount(), 1);
         expect((await repository.buildDriveSnapshot()).entryCount, 1);
         DriveReplicaSegment segment = (await repository
             .buildPendingDriveSegment())!;
@@ -951,9 +1002,65 @@ void main() {
           occurredAt: DateTime.utc(2026, 9, 24, 0, 2),
         );
         expect(await repository.watchPendingDriveDeliveryCount().first, 1);
+        expect(await repository.activeLibraryEntryCount(), 0);
         expect((await repository.buildDriveSnapshot()).entryCount, 0);
         segment = (await repository.buildPendingDriveSegment())!;
         expect(segment.operations.single['intent'], 'remove');
+      },
+    );
+
+    test(
+      'Drive checkpoint watermark survives later segment deliveries',
+      () async {
+        expect(await repository.pushedDriveSegmentCount(), 0);
+        expect(await repository.checkpointedDriveSegmentCount(), 0);
+
+        final UserMediaState original = _state(progress: 2);
+        await repository.commitTrackingMutation(
+          states: <UserMediaState>[original],
+          journal: const <SyncJournalEntry>[],
+          favorites: const <LocalMediaFavoriteState>[],
+          identity: original.identity,
+          patch: UserMediaPatch(progress: 2),
+          targets: const <TrackerSource>{},
+          occurredAt: DateTime.utc(2026, 9, 24),
+        );
+        final DriveReplicaSegment first = (await repository
+            .buildPendingDriveSegment())!;
+        await repository.markDriveSegmentDelivered(
+          first,
+          remoteFileId: 'first',
+        );
+        expect(await repository.pushedDriveSegmentCount(), 1);
+        expect(await repository.checkpointedDriveSegmentCount(), 0);
+
+        // A full sync captures this watermark before building its backup.
+        final int captured = await repository.pushedDriveSegmentCount();
+        final UserMediaState edited = _state(progress: 3);
+        await repository.commitTrackingMutation(
+          states: <UserMediaState>[edited],
+          journal: const <SyncJournalEntry>[],
+          favorites: const <LocalMediaFavoriteState>[],
+          identity: edited.identity,
+          patch: UserMediaPatch(progress: 3),
+          targets: const <TrackerSource>{},
+          occurredAt: DateTime.utc(2026, 9, 24, 0, 1),
+        );
+        final DriveReplicaSegment second = (await repository
+            .buildPendingDriveSegment())!;
+        await repository.markDriveSegmentDelivered(
+          second,
+          remoteFileId: 'second',
+        );
+        await repository.markDriveSnapshotPublished(captured);
+        expect(await repository.pushedDriveSegmentCount(), 2);
+        expect(await repository.checkpointedDriveSegmentCount(), 1);
+
+        final CanonicalLibraryRepository reopened = CanonicalLibraryRepository(
+          database,
+        );
+        expect(await reopened.pushedDriveSegmentCount(), 2);
+        expect(await reopened.checkpointedDriveSegmentCount(), 1);
       },
     );
 

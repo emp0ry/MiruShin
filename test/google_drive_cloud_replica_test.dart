@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mirushin/features/library/data/google_drive_cloud_replica.dart';
@@ -7,6 +8,216 @@ import 'package:mirushin/features/library/domain/cloud_replica_models.dart';
 import 'package:mirushin/features/settings/domain/preference_sync_models.dart';
 
 void main() {
+  test('optimized Library checksum stays compatible with old v2 manifests', () {
+    final DriveLibrarySnapshot snapshot = DriveLibrarySnapshot(
+      snapshotId: 'new-envelope',
+      deviceId: 'device-a',
+      createdAt: DateTime.utc(2026, 9, 29),
+      replicaNamespace: 'anilist:1',
+      media: <Map<String, dynamic>>[
+        <String, dynamic>{
+          'localId': 'z',
+          'media': <String, dynamic>{'title': 'Z'},
+        },
+        <String, dynamic>{
+          'localId': 'a',
+          'media': <String, dynamic>{'title': 'A'},
+        },
+      ],
+      libraryEntries: <Map<String, dynamic>>[
+        <String, dynamic>{'localId': 'z', 'inLibrary': true},
+        <String, dynamic>{'localId': 'a', 'inLibrary': true},
+      ],
+      providerBindings: <Map<String, dynamic>>[
+        <String, dynamic>{'localId': 'z', 'verifiedAtMs': 10},
+      ],
+      providerSnapshots: <Map<String, dynamic>>[
+        <String, dynamic>{
+          'localId': 'z',
+          'fetchedAtMs': 20,
+          'destructiveConfirmationCount': 1,
+          'raw': <String, dynamic>{'notes': 'keep'},
+        },
+      ],
+      episodeStates: const <Map<String, dynamic>>[],
+      streamPreferences: const <Map<String, dynamic>>[],
+      operations: const <Map<String, dynamic>>[],
+    );
+    List<Map<String, dynamic>> oldSort(List<Map<String, dynamic>> rows) =>
+        <Map<String, dynamic>>[
+          ...rows,
+        ]..sort((left, right) => jsonEncode(left).compareTo(jsonEncode(right)));
+    final String oldChecksum = sha256
+        .convert(
+          utf8.encode(
+            jsonEncode(<String, dynamic>{
+              'schemaVersion': 2,
+              'replicaNamespace': snapshot.replicaNamespace,
+              'entryCount': snapshot.entryCount,
+              'media': oldSort(snapshot.media),
+              'libraryEntries': oldSort(snapshot.libraryEntries),
+              'providerBindings': oldSort(<Map<String, dynamic>>[
+                <String, dynamic>{'localId': 'z'},
+              ]),
+              'providerSnapshots': oldSort(<Map<String, dynamic>>[
+                <String, dynamic>{
+                  'localId': 'z',
+                  'raw': <String, dynamic>{'notes': 'keep'},
+                },
+              ]),
+              'episodeStates': oldSort(snapshot.episodeStates),
+              'streamPreferences': oldSort(snapshot.streamPreferences),
+              'operations': oldSort(snapshot.operations),
+            }),
+          ),
+        )
+        .toString();
+    expect(snapshot.checksum, oldChecksum);
+  });
+
+  test('unchanged backup is prepared off-isolate without re-upload', () async {
+    final DriveLibrarySnapshot snapshot = DriveLibrarySnapshot(
+      snapshotId: 'checkpoint',
+      deviceId: 'device-a',
+      createdAt: DateTime.utc(2026, 9, 29),
+      replicaNamespace: 'anilist:1',
+      media: const <Map<String, dynamic>>[],
+      libraryEntries: const <Map<String, dynamic>>[],
+      providerBindings: const <Map<String, dynamic>>[],
+      providerSnapshots: const <Map<String, dynamic>>[],
+      episodeStates: const <Map<String, dynamic>>[],
+      streamPreferences: const <Map<String, dynamic>>[],
+      operations: const <Map<String, dynamic>>[],
+    );
+    final Dio dio = Dio();
+    var uploads = 0;
+    dio.interceptors.add(
+      InterceptorsWrapper(
+        onRequest: (RequestOptions options, RequestInterceptorHandler handler) {
+          if (options.method == 'GET' && options.uri.path.endsWith('/files')) {
+            final String query = '${options.queryParameters['q'] ?? ''}';
+            final String name = query.contains(snapshot.fileName)
+                ? snapshot.fileName
+                : 'mirushin.anilist:1.manifest.v1.json';
+            handler.resolve(
+              Response<dynamic>(
+                requestOptions: options,
+                data: <String, dynamic>{
+                  'files': <Map<String, dynamic>>[
+                    <String, dynamic>{
+                      'id': name == snapshot.fileName ? 'snapshot' : 'manifest',
+                      'name': name,
+                    },
+                  ],
+                },
+              ),
+            );
+            return;
+          }
+          if (options.method == 'GET' &&
+              options.uri.path.endsWith('/files/manifest')) {
+            handler.resolve(
+              Response<dynamic>(
+                requestOptions: options,
+                data: jsonEncode(
+                  DriveReplicaManifest(
+                    snapshotChecksum: snapshot.checksum,
+                  ).toJson(),
+                ),
+              ),
+            );
+            return;
+          }
+          uploads += 1;
+          handler.reject(
+            DioException(
+              requestOptions: options,
+              message: 'Unexpected request: ${options.method} ${options.uri}',
+            ),
+          );
+        },
+      ),
+    );
+    final GoogleDriveCloudReplica replica = GoogleDriveCloudReplica(
+      accessToken: 'access-token',
+      replicaNamespace: 'anilist:1',
+      dio: dio,
+    );
+
+    final CloudReplicaFile result = await replica.pushLibrarySnapshot(snapshot);
+    expect(result.id, 'snapshot');
+    expect(uploads, 0);
+  });
+
+  test('Library backup is decoded and verified off the UI isolate', () async {
+    final DriveLibrarySnapshot snapshot = DriveLibrarySnapshot(
+      snapshotId: 'checkpoint',
+      deviceId: 'device-a',
+      createdAt: DateTime.utc(2026, 9, 29),
+      replicaNamespace: 'anilist:1',
+      media: const <Map<String, dynamic>>[],
+      libraryEntries: const <Map<String, dynamic>>[
+        <String, dynamic>{'localId': 'a', 'inLibrary': true},
+      ],
+      providerBindings: const <Map<String, dynamic>>[],
+      providerSnapshots: const <Map<String, dynamic>>[],
+      episodeStates: const <Map<String, dynamic>>[],
+      streamPreferences: const <Map<String, dynamic>>[],
+      operations: const <Map<String, dynamic>>[],
+    );
+    final Dio dio = Dio();
+    dio.interceptors.add(
+      InterceptorsWrapper(
+        onRequest: (RequestOptions options, RequestInterceptorHandler handler) {
+          if (options.method == 'GET' &&
+              options.uri.path.endsWith('/files/manifest')) {
+            handler.resolve(
+              Response<String>(
+                requestOptions: options,
+                data: jsonEncode(
+                  DriveReplicaManifest(
+                    snapshotFileName: snapshot.fileName,
+                    snapshotChecksum: snapshot.checksum,
+                    snapshotEntryCount: 1,
+                  ).toJson(),
+                ),
+              ),
+            );
+            return;
+          }
+          if (options.method == 'GET' &&
+              options.uri.path.endsWith('/files/snapshot')) {
+            handler.resolve(
+              Response<String>(
+                requestOptions: options,
+                data: snapshot.encode(),
+              ),
+            );
+            return;
+          }
+          handler.reject(
+            DioException(
+              requestOptions: options,
+              message: 'Unexpected request: ${options.method} ${options.uri}',
+            ),
+          );
+        },
+      ),
+    );
+    final GoogleDriveCloudReplica replica = GoogleDriveCloudReplica(
+      accessToken: 'access-token',
+      replicaNamespace: 'anilist:1',
+      dio: dio,
+    );
+
+    final DriveLibrarySnapshot? restored = await replica.pullLibrarySnapshot(
+      manifestFileId: 'manifest',
+      snapshotFileId: 'snapshot',
+    );
+    expect(restored?.entryCount, 1);
+    expect(restored?.checksum, snapshot.checksum);
+  });
+
   test(
     'delivery ledger merges targets and skips unchanged manifest writes',
     () async {

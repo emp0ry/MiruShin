@@ -1,7 +1,6 @@
 import 'package:drift/drift.dart';
-import 'package:drift_flutter/drift_flutter.dart';
 
-import 'canonical_library_database_path.dart';
+import 'canonical_library_database_open.dart';
 
 part 'canonical_library_database.g.dart';
 
@@ -295,16 +294,7 @@ class CanonicalLibraryDatabase extends _$CanonicalLibraryDatabase {
 QueryExecutor _openDatabase(
   String databaseName, {
   String? legacyDatabaseName,
-}) => driftDatabase(
-  name: databaseName,
-  native: DriftNativeOptions(
-    databaseDirectory: () => canonicalLibraryDatabaseDirectory(
-      databaseName: databaseName,
-      legacyDatabaseName: legacyDatabaseName,
-    ),
-  ),
-  web: DriftWebOptions(
-    sqlite3Wasm: Uri.parse('sqlite3.wasm'),
-    driftWorker: Uri.parse('drift_worker.js'),
-  ),
+}) => openCanonicalLibraryDatabase(
+  databaseName: databaseName,
+  legacyDatabaseName: legacyDatabaseName,
 );

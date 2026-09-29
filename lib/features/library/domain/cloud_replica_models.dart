@@ -160,58 +160,65 @@ class DriveLibrarySnapshot {
   /// Identifies the actual checkpoint contents. Runtime envelope values are
   /// excluded so an unchanged library does not upload another full snapshot
   /// merely because a later sync generated a new id and timestamp.
-  String get checksum => sha256
-      .convert(
-        utf8.encode(
-          jsonEncode(<String, dynamic>{
-            'schemaVersion': 2,
-            'replicaNamespace': replicaNamespace,
-            'entryCount': entryCount,
-            'media': _stableSnapshotRows(media),
-            'libraryEntries': _stableSnapshotRows(libraryEntries),
-            'providerBindings': _stableSnapshotRows(
-              providerBindings
-                  .map((Map<String, dynamic> row) {
-                    final Map<String, dynamic> stable =
-                        Map<String, dynamic>.from(row);
-                    // Rechecking an exact identity is transport bookkeeping,
-                    // not a change to the user's recoverable library.
-                    stable.remove('verifiedAtMs');
-                    return stable;
-                  })
-                  .toList(growable: false),
-            ),
-            'providerSnapshots': _stableSnapshotRows(
-              providerSnapshots
-                  .map((Map<String, dynamic> row) {
-                    final Map<String, dynamic> stable =
-                        Map<String, dynamic>.from(row);
-                    // Fetch time and the first destructive verification pass do
-                    // not change the user's library or its recoverable metadata.
-                    stable.remove('fetchedAtMs');
-                    stable.remove('destructiveConfirmationCount');
-                    return stable;
-                  })
-                  .toList(growable: false),
-            ),
-            'episodeStates': _stableSnapshotRows(episodeStates),
-            'streamPreferences': _stableSnapshotRows(streamPreferences),
-            'operations': _stableSnapshotRows(operations),
+  late final String checksum = sha256
+      .convert(utf8.encode(_stableContentJson()))
+      .toString();
+
+  String _stableContentJson() {
+    // Preserve the exact field order and bytes of the existing v2 checksum.
+    // Reuse each encoded row for sorting and output instead of serializing the
+    // entire provider/operation history a second time.
+    final StringBuffer content = StringBuffer('{"schemaVersion":2,')
+      ..write('"replicaNamespace":')
+      ..write(jsonEncode(replicaNamespace))
+      ..write(',"entryCount":')
+      ..write(entryCount)
+      ..write(',"media":')
+      ..write(_stableSnapshotRowsJson(media))
+      ..write(',"libraryEntries":')
+      ..write(_stableSnapshotRowsJson(libraryEntries))
+      ..write(',"providerBindings":')
+      ..write(
+        _stableSnapshotRowsJson(
+          providerBindings.map((Map<String, dynamic> row) {
+            final Map<String, dynamic> stable = Map<String, dynamic>.from(row);
+            stable.remove('verifiedAtMs');
+            return stable;
           }),
         ),
       )
-      .toString();
+      ..write(',"providerSnapshots":')
+      ..write(
+        _stableSnapshotRowsJson(
+          providerSnapshots.map((Map<String, dynamic> row) {
+            final Map<String, dynamic> stable = Map<String, dynamic>.from(row);
+            stable.remove('fetchedAtMs');
+            stable.remove('destructiveConfirmationCount');
+            return stable;
+          }),
+        ),
+      )
+      ..write(',"episodeStates":')
+      ..write(_stableSnapshotRowsJson(episodeStates))
+      ..write(',"streamPreferences":')
+      ..write(_stableSnapshotRowsJson(streamPreferences))
+      ..write(',"operations":')
+      ..write(_stableSnapshotRowsJson(operations))
+      ..write('}');
+    return content.toString();
+  }
 
   int get encodedSizeBytes => utf8.encode(encode()).length;
 }
 
-List<Map<String, dynamic>> _stableSnapshotRows(
-  List<Map<String, dynamic>> rows,
-) => <Map<String, dynamic>>[...rows]
-  ..sort(
-    (Map<String, dynamic> left, Map<String, dynamic> right) =>
-        jsonEncode(left).compareTo(jsonEncode(right)),
-  );
+String _stableSnapshotRowsJson(Iterable<Map<String, dynamic>> rows) {
+  // Keep the v2 checksum byte-for-byte compatible with existing manifests.
+  // Encoding inside the comparator used to serialize large provider snapshots
+  // O(n log n) times on every backup; decorate each row only once instead.
+  final List<String> encoded = rows.map(jsonEncode).toList(growable: false)
+    ..sort();
+  return '[${encoded.join(',')}]';
+}
 
 class CloudReplicaFile {
   const CloudReplicaFile({

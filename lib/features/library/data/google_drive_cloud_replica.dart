@@ -11,6 +11,30 @@ import '../../settings/domain/account_sync_models.dart';
 import '../../settings/domain/preference_sync_models.dart';
 import '../domain/cloud_replica_models.dart';
 
+// Serialize the large checkpoint away from Flutter's UI isolate on native
+// platforms. `compute` runs inline on Web, where the single-pass checksum
+// sorting still avoids the old O(n log n) JSON encoding cost.
+(String, String, int) _prepareLibrarySnapshot(DriveLibrarySnapshot snapshot) {
+  final String body = snapshot.encode();
+  return (body, snapshot.checksum, utf8.encode(body).length);
+}
+
+DriveLibrarySnapshot _decodeLibrarySnapshot((String, String?) input) {
+  final Object? decoded = jsonDecode(input.$1);
+  if (decoded is! Map<String, dynamic>) {
+    throw const FormatException('Invalid Google Drive library snapshot.');
+  }
+  final DriveLibrarySnapshot snapshot = DriveLibrarySnapshot.fromJson(decoded);
+  final String? expectedChecksum = input.$2;
+  if (expectedChecksum != null &&
+      expectedChecksum.isNotEmpty &&
+      expectedChecksum != snapshot.checksum &&
+      expectedChecksum != snapshot.legacyEnvelopeChecksum) {
+    throw StateError('Google Drive library snapshot checksum mismatch.');
+  }
+  return snapshot;
+}
+
 class GoogleDriveCloudReplica
     implements
         CloudReplica,
@@ -87,23 +111,14 @@ class GoogleDriveCloudReplica
         : CloudReplicaFile(id: snapshotFileId, name: fileName);
     if (file == null) return null;
     final String body = await _download(file.id, onProgress: onProgress);
-    final Object? decoded = jsonDecode(body);
-    if (decoded is! Map<String, dynamic>) {
-      throw const FormatException('Invalid Google Drive library snapshot.');
-    }
-    final DriveLibrarySnapshot snapshot = DriveLibrarySnapshot.fromJson(
-      decoded,
+    final DriveLibrarySnapshot snapshot = await compute(
+      _decodeLibrarySnapshot,
+      (body, manifestChecksum),
+      debugLabel: 'MiruShin Drive snapshot decode',
     );
     if (snapshot.replicaNamespace != replicaNamespace &&
         !(includeLegacyLibrary && snapshot.replicaNamespace == 'legacy')) {
       throw StateError('Google Drive library snapshot workspace mismatch.');
-    }
-    final String? expectedChecksum = manifestChecksum;
-    if (expectedChecksum != null &&
-        expectedChecksum.isNotEmpty &&
-        expectedChecksum != snapshot.checksum &&
-        expectedChecksum != snapshot.legacyEnvelopeChecksum) {
-      throw StateError('Google Drive library snapshot checksum mismatch.');
     }
     final int? expectedCount = manifest.value.snapshotEntryCount;
     if (expectedCount != null && expectedCount != snapshot.entryCount) {
@@ -119,9 +134,13 @@ class GoogleDriveCloudReplica
     if (snapshot.replicaNamespace != replicaNamespace) {
       throw StateError('Google Drive library snapshot workspace mismatch.');
     }
-    final String body = snapshot.encode();
+    final (String body, String checksum, int sizeBytes) = await compute(
+      _prepareLibrarySnapshot,
+      snapshot,
+      debugLabel: 'MiruShin Drive snapshot encode',
+    );
     final _ManifestRead current = await _readManifest();
-    if (current.value.snapshotChecksum == snapshot.checksum) {
+    if (current.value.snapshotChecksum == checksum) {
       final CloudReplicaFile? existing = await _findByName(snapshot.fileName);
       if (existing != null) return existing;
     }
@@ -134,9 +153,9 @@ class GoogleDriveCloudReplica
         manifest,
         revision: manifest.revision + 1,
         snapshotFileName: snapshot.fileName,
-        snapshotChecksum: snapshot.checksum,
+        snapshotChecksum: checksum,
         snapshotEntryCount: snapshot.entryCount,
-        snapshotSizeBytes: snapshot.encodedSizeBytes,
+        snapshotSizeBytes: sizeBytes,
         snapshotCreatedAt: snapshot.createdAt,
       );
     });
@@ -145,7 +164,7 @@ class GoogleDriveCloudReplica
       name: uploaded.name,
       checksum: uploaded.checksum,
       etag: uploaded.etag,
-      sizeBytes: snapshot.encodedSizeBytes,
+      sizeBytes: sizeBytes,
     );
   }
 

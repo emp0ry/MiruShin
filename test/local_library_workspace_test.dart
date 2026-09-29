@@ -192,6 +192,31 @@ void main() {
     );
     expect(canonical.folders.expand((folder) => folder.entries), isNotEmpty);
   });
+
+  test('unrelated settings do not reopen the canonical library', () async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final ProviderContainer container = ProviderContainer(
+      overrides: [
+        canonicalLibraryDatabaseFactoryProvider.overrideWithValue(
+          (String name, String? legacyName) =>
+              CanonicalLibraryDatabase(NativeDatabase.memory(), name),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+    await container.read(settingsProvider.notifier).ready;
+
+    final CanonicalLibraryRepository original = container.read(
+      canonicalLibraryRepositoryProvider,
+    );
+    await container.read(trackerLocalAnimeLibraryProvider.future);
+    container.read(settingsProvider.notifier).setThemeMode(AppThemeMode.dark);
+    final CanonicalLibraryRepository afterTheme = container.read(
+      canonicalLibraryRepositoryProvider,
+    );
+    expect(identical(afterTheme, original), isTrue);
+    expect(container.read(trackerLocalAnimeLibraryProvider).hasValue, isTrue);
+  });
 }
 
 Future<void> _waitForRemovedPreference(String key) async {
