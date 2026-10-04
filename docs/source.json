@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.9.11",
+          "date": "2026-10-04",
+          "localizedDescription": "- Restore fresh Google Drive Library changes before tracker sync on another device.\n- Preserve Updated sorting and safely resolve cross-device conflicts.\n- Keep delete/re-add operations ordered, and show clearer sync status.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.11/MiruShin-ios-v2.9.11.ipa",
+          "size": 31699291,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.9.10",
           "date": "2026-09-29",
           "localizedDescription": "- Local Library stays responsive while Google Drive restores data.\n- Google Drive sync uploads small changes without rebuilding the full backup after every edit.\n- Reduced backup processing on the UI thread and improved sync progress and counts.",
@@ -751,11 +759,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.9.10",
-      "versionDate": "2026-09-29",
-      "versionDescription": "- Local Library stays responsive while Google Drive restores data.\n- Google Drive sync uploads small changes without rebuilding the full backup after every edit.\n- Reduced backup processing on the UI thread and improved sync progress and counts.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.10/MiruShin-ios-v2.9.10.ipa",
-      "size": 31694568,
+      "version": "2.9.11",
+      "versionDate": "2026-10-04",
+      "versionDescription": "- Restore fresh Google Drive Library changes before tracker sync on another device.\n- Preserve Updated sorting and safely resolve cross-device conflicts.\n- Keep delete/re-add operations ordered, and show clearer sync status.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.11/MiruShin-ios-v2.9.11.ipa",
+      "size": 31699291,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
