@@ -457,12 +457,15 @@ class _LibrarySyncPageState extends ConsumerState<LibrarySyncPage> {
         normalized == 'confirmed' || normalized == 'delivered';
     final bool error = normalized == 'failed' || normalized == 'blocked';
     final bool retry = normalized == 'retry' || normalized == 'retrying';
+    final bool superseded = normalized == 'superseded';
     final Color color = complete
         ? AppColors.success
         : error
         ? Theme.of(context).colorScheme.error
         : retry
         ? AppColors.warning
+        : superseded
+        ? Theme.of(context).colorScheme.outline
         : Theme.of(context).colorScheme.tertiary;
     final IconData icon = complete
         ? Icons.check_circle_outline_rounded
@@ -470,6 +473,8 @@ class _LibrarySyncPageState extends ConsumerState<LibrarySyncPage> {
         ? Icons.error_outline_rounded
         : retry
         ? Icons.sync_problem_outlined
+        : superseded
+        ? Icons.history_rounded
         : Icons.schedule_rounded;
     return _routePill(
       icon: icon,
@@ -1271,6 +1276,7 @@ String _deliveryStateLabel(String state) => switch (state) {
   'retry' || 'retrying' => 'Retrying',
   'failed' => 'Failed',
   'blocked' => 'Needs attention',
+  'superseded' => 'Replaced by newer change',
   _ => 'Waiting',
 };
 

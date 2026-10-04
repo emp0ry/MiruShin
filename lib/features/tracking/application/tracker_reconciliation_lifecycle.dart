@@ -41,10 +41,10 @@ final trackerReconciliationLifecycleProvider = Provider<void>((Ref ref) {
       if (drive.connected) {
         // Restore the current account's Drive operations before a provider
         // snapshot can be interpreted as a new local mutation on this device.
-        await ref
+        final bool driveReady = await ref
             .read(googleDriveSyncControllerProvider.notifier)
             .syncBeforeTrackerReconciliation();
-        if (disposed) return;
+        if (disposed || !driveReady) return;
         final GoogleDriveSyncState? refreshed = ref
             .read(googleDriveSyncControllerProvider)
             .value;

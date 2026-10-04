@@ -3023,19 +3023,40 @@ class CanonicalLibraryRepository {
     int limit = 200,
   }) async {
     await initialize();
-    final List<OutboxDeliveryRecord> pending =
-        await (database.select(database.outboxDeliveryRecords)
-              ..where(
+    // Delivery IDs are not a chronological queue (legacy IDs in particular
+    // are not UUIDv7). Preserve delete→add and conflict-resolution order even
+    // when a backlog spans several Drive segments.
+    final List<QueryRow> orderedIds = await database
+        .customSelect(
+          'SELECT d.delivery_id FROM outbox_delivery_records AS d '
+          'JOIN library_operation_records AS o ON o.operation_id = d.operation_id '
+          "WHERE d.target = 'drive' AND d.state IN ('pending', 'retry') "
+          'ORDER BY o.occurred_at_ms ASC, o.operation_id ASC LIMIT ?',
+          variables: <Variable<int>>[Variable<int>(limit)],
+          readsFrom: <ResultSetImplementation>{
+            database.outboxDeliveryRecords,
+            database.libraryOperationRecords,
+          },
+        )
+        .get();
+    final List<String> deliveryIds = orderedIds
+        .map((QueryRow row) => row.read<String>('delivery_id'))
+        .toList(growable: false);
+    final List<OutboxDeliveryRecord> pending = deliveryIds.isEmpty
+        ? const <OutboxDeliveryRecord>[]
+        : await (database.select(database.outboxDeliveryRecords)..where(
                 (OutboxDeliveryRecords table) =>
-                    table.target.equals('drive') &
-                    table.state.isIn(const <String>['pending', 'retry']),
-              )
-              ..orderBy(<OrderClauseGenerator<OutboxDeliveryRecords>>[
-                (OutboxDeliveryRecords table) =>
-                    OrderingTerm.asc(table.deliveryId),
-              ])
-              ..limit(limit))
-            .get();
+                    table.deliveryId.isIn(deliveryIds),
+              ))
+              .get();
+    final Map<String, int> order = <String, int>{
+      for (var index = 0; index < deliveryIds.length; index += 1)
+        deliveryIds[index]: index,
+    };
+    pending.sort(
+      (OutboxDeliveryRecord a, OutboxDeliveryRecord b) =>
+          (order[a.deliveryId] ?? 0).compareTo(order[b.deliveryId] ?? 0),
+    );
     if (pending.isEmpty) return null;
     final List<LibraryOperationRecord> operations = <LibraryOperationRecord>[];
     final Set<String> localIds = <String>{};
@@ -3730,6 +3751,12 @@ class CanonicalLibraryRepository {
         final UserMediaState? incomingBefore = rawBeforeState is Map
             ? UserMediaState.fromJson(Map<String, dynamic>.from(rawBeforeState))
             : null;
+        final DateTime operationAt =
+            DateTime.tryParse(
+              '${remoteOperation['occurredAt'] ?? ''}',
+            )?.toUtc() ??
+            incomingAfter?.updatedAt.toUtc() ??
+            segment.createdAt.toUtc();
         final MediaItem mediaItem =
             incomingAfter?.mediaItem ??
             incomingBefore?.mediaItem ??
@@ -3781,7 +3808,10 @@ class CanonicalLibraryRepository {
         );
         final Set<String> accepted = <String>{};
         for (final String field in fields) {
-          if (_jsonEquivalent(currentRevisions[field], baseRevisions[field]) ||
+          if (_baseRevisionMatches(
+                currentRevisions[field],
+                baseRevisions[field],
+              ) ||
               _jsonEquivalent(
                 currentRevisions[field],
                 resultingRevisions[field],
@@ -3796,7 +3826,11 @@ class CanonicalLibraryRepository {
                     localId: localId,
                     fieldName: field,
                     localValueJson: jsonEncode(current?.toJson()),
-                    incomingValueJson: jsonEncode(incomingAfter?.toJson()),
+                    incomingValueJson: jsonEncode(<String, dynamic>{
+                      ...?incomingAfter?.toJson(),
+                      if (incomingAfter == null) '__deleted': true,
+                      '__incomingRevision': resultingRevisions[field],
+                    }),
                     localOperationId: Value<String?>(
                       _jsonMap(
                         currentRevisions[field],
@@ -3809,6 +3843,37 @@ class CanonicalLibraryRepository {
           }
         }
         if (accepted.isEmpty) continue;
+
+        // A resolution operation may explicitly name both sides of a prior
+        // conflict as causal parents. Once it applies, that old prompt is no
+        // longer actionable on this device.
+        for (final String field in accepted) {
+          final Object? rawBase = baseRevisions[field];
+          if (rawBase is! List) continue;
+          final Set<String> parentIds = rawBase
+              .whereType<Map>()
+              .map(
+                (Map<dynamic, dynamic> value) =>
+                    value['operationId']?.toString(),
+              )
+              .whereType<String>()
+              .toSet();
+          if (parentIds.isEmpty) continue;
+          await (database.update(database.libraryConflictRecords)..where(
+                (LibraryConflictRecords table) =>
+                    table.localId.equals(localId) &
+                    table.fieldName.equals(field) &
+                    table.state.equals('open') &
+                    (table.localOperationId.isIn(parentIds) |
+                        table.incomingOperationId.isIn(parentIds)),
+              ))
+              .write(
+                LibraryConflictRecordsCompanion(
+                  state: const Value<String>('resolved'),
+                  resolvedAtMs: Value<int>(importedAt.millisecondsSinceEpoch),
+                ),
+              );
+        }
 
         UserMediaState? next = current;
         final bool removesMembership =
@@ -3823,9 +3888,9 @@ class CanonicalLibraryRepository {
                   CanonicalLibraryRecordsCompanion(
                     inLibrary: const Value<bool>(false),
                     tombstonedAtMs: Value<int>(
-                      importedAt.millisecondsSinceEpoch,
+                      operationAt.millisecondsSinceEpoch,
                     ),
-                    updatedAtMs: Value<int>(importedAt.millisecondsSinceEpoch),
+                    updatedAtMs: Value<int>(operationAt.millisecondsSinceEpoch),
                   ),
                 );
           }
@@ -3847,7 +3912,9 @@ class CanonicalLibraryRepository {
                 .toSet();
             next = current.apply(
               _patchFromState(incomingAfter, acceptedFields),
-              importedAt,
+              current.updatedAt.isAfter(operationAt)
+                  ? current.updatedAt
+                  : operationAt,
             );
             for (final ProviderUserMediaState provider
                 in incomingAfter.providerStates.values) {
@@ -3935,11 +4002,7 @@ class CanonicalLibraryRepository {
                 undoOf: Value<String?>(remoteOperation['undoOf']?.toString()),
                 title: Value<String?>(remoteOperation['title']?.toString()),
                 visibleInLog: const Value<bool>(true),
-                occurredAtMs:
-                    DateTime.tryParse(
-                      '${remoteOperation['occurredAt'] ?? ''}',
-                    )?.millisecondsSinceEpoch ??
-                    segment.createdAt.millisecondsSinceEpoch,
+                occurredAtMs: operationAt.millisecondsSinceEpoch,
               ),
             );
         await database
@@ -4093,6 +4156,21 @@ class CanonicalLibraryRepository {
     final Map<String, dynamic> beforeRevisions = Map<String, dynamic>.from(
       revisions,
     );
+    for (final MapEntry<String, List<Object?>> alternate
+        in draft.baseRevisionAlternatives.entries) {
+      if (!draft.fields.contains(alternate.key)) continue;
+      final List<Object?> acceptedBases = <Object?>[
+        beforeRevisions[alternate.key],
+      ];
+      for (final Object? revision in alternate.value) {
+        if (!acceptedBases.any(
+          (Object? existing) => _jsonEquivalent(existing, revision),
+        )) {
+          acceptedBases.add(revision);
+        }
+      }
+      beforeRevisions[alternate.key] = acceptedBases;
+    }
     for (final String field in draft.fields) {
       final Map<String, dynamic> previous = _jsonMap(revisions[field]);
       revisions[field] = <String, dynamic>{
@@ -4165,7 +4243,7 @@ class CanonicalLibraryRepository {
               localId: row.localId,
               fieldName: row.fieldName,
               localValue: _decodeJsonValue(row.localValueJson),
-              incomingValue: _decodeJsonValue(row.incomingValueJson),
+              incomingValue: _publicConflictValue(row.incomingValueJson),
               createdAt: DateTime.fromMillisecondsSinceEpoch(
                 row.createdAtMs,
                 isUtc: true,
@@ -4175,6 +4253,24 @@ class CanonicalLibraryRepository {
           )
           .toList(growable: false),
     );
+  }
+
+  /// A conflicting stale-device operation must not be sent to a tracker while
+  /// the user is deciding which field value to keep.
+  Future<Set<String>> unresolvedConflictLocalOperationIds() async {
+    await initialize();
+    final List<LibraryConflictRecord> rows =
+        await (database.select(database.libraryConflictRecords)..where(
+              (LibraryConflictRecords table) =>
+                  table.state.equals('open') &
+                  table.localOperationId.isNotNull(),
+            ))
+            .get();
+    return rows
+        .map((LibraryConflictRecord row) => row.localOperationId)
+        .whereType<String>()
+        .where((String id) => id.isNotEmpty)
+        .toSet();
   }
 
   Future<String?> resolveConflict({
@@ -4242,17 +4338,86 @@ class CanonicalLibraryRepository {
         await _upsertTrackingStateLocked(next);
       }
 
-      final Set<UserMediaField> fields = field == null
-          ? const <UserMediaField>{}
-          : <UserMediaField>{field};
+      // Once the last conflict for a local operation is resolved, its old
+      // provider delivery must never run after the user's decision. Rebase
+      // all fields from that pending operation onto the selected current
+      // state and deliver that as a new operation instead.
+      final Set<UserMediaField> fields = <UserMediaField>{?field};
+      final Map<String, List<Object?>> alternateBases =
+          <String, List<Object?>>{};
+      final Map<String, dynamic> incomingConflictValue = _jsonMap(
+        conflict.incomingValueJson,
+      );
+      if (incomingConflictValue.containsKey('__incomingRevision')) {
+        alternateBases[conflict.fieldName] = <Object?>[
+          incomingConflictValue['__incomingRevision'],
+        ];
+      }
+      final String? staleOperationId = conflict.localOperationId;
+      if (staleOperationId != null && staleOperationId.isNotEmpty) {
+        final List<LibraryConflictRecord> otherOpenConflicts =
+            await (database.select(database.libraryConflictRecords)..where(
+                  (LibraryConflictRecords table) =>
+                      table.localOperationId.equals(staleOperationId) &
+                      table.state.equals('open') &
+                      table.conflictId.isNotValue(conflictId),
+                ))
+                .get();
+        if (otherOpenConflicts.isEmpty) {
+          final List<SyncJournalEntry> journal = await loadJournal();
+          final SyncJournalEntry? staleEntry = journal
+              .where(
+                (SyncJournalEntry entry) =>
+                    entry.operationId == staleOperationId,
+              )
+              .firstOrNull;
+          if (staleEntry != null) {
+            fields.addAll(staleEntry.patch.fields);
+            final LibraryOperationRecord? staleOperation =
+                await (database.select(database.libraryOperationRecords)..where(
+                      (LibraryOperationRecords table) =>
+                          table.operationId.equals(staleOperationId),
+                    ))
+                    .getSingleOrNull();
+            final Map<String, dynamic> staleBases = _jsonMap(
+              staleOperation?.baseRevisionsJson,
+            );
+            for (final UserMediaField staleField in staleEntry.patch.fields) {
+              final Object? base = staleBases[staleField.name];
+              alternateBases
+                  .putIfAbsent(staleField.name, () => <Object?>[])
+                  .addAll(base is List ? base : <Object?>[base]);
+            }
+            await _writeBucketLocked(
+              'tracking.journal',
+              journal
+                  .where(
+                    (SyncJournalEntry entry) =>
+                        entry.operationId != staleOperationId,
+                  )
+                  .map((SyncJournalEntry entry) => entry.toJson())
+                  .toList(),
+            );
+            await (database.update(database.outboxDeliveryRecords)..where(
+                  (OutboxDeliveryRecords table) =>
+                      table.operationId.equals(staleOperationId) &
+                      table.target.isNotValue('drive') &
+                      table.state.isIn(const <String>['pending', 'retry']),
+                ))
+                .write(
+                  const OutboxDeliveryRecordsCompanion(
+                    state: Value<String>('superseded'),
+                  ),
+                );
+          }
+        }
+      }
       final UserMediaPatch patch = next == null
           ? UserMediaPatch(delete: true)
-          : membership
-          ? UserMediaPatch(
-              fields: const <UserMediaField>{UserMediaField.status},
-              status: next.status,
-            )
-          : _patchFromState(next, fields);
+          : _patchFromState(next, <UserMediaField>{
+              ...fields,
+              if (membership) UserMediaField.status,
+            });
       final MediaIdentity? resolvedIdentity =
           next?.identity ?? current?.identity ?? incoming?.identity;
       if (resolvedIdentity == null) {
@@ -4288,7 +4453,10 @@ class CanonicalLibraryRepository {
           intent: next == null
               ? LibraryMutationIntent.remove
               : LibraryMutationIntent.edit,
-          fields: <String>{conflict.fieldName},
+          fields: <String>{
+            conflict.fieldName,
+            ...fields.map((UserMediaField value) => value.name),
+          },
           before: <String, dynamic>{
             if (current != null) 'state': current.toJson(),
           },
@@ -4299,6 +4467,7 @@ class CanonicalLibraryRepository {
           },
           occurredAt: now,
           title: next?.mediaItem.title ?? current?.mediaItem.title,
+          baseRevisionAlternatives: alternateBases,
         ),
       );
       await _markConflictResolvedLocked(conflictId);
@@ -4985,9 +5154,20 @@ Object? _decodeJsonValue(String source) {
   }
 }
 
+Object? _publicConflictValue(String source) {
+  final Object? decoded = _decodeJsonValue(source);
+  if (decoded is! Map) return decoded;
+  if (decoded['__deleted'] == true) return null;
+  return <String, dynamic>{
+    for (final MapEntry<dynamic, dynamic> entry in decoded.entries)
+      if (!'${entry.key}'.startsWith('__')) '${entry.key}': entry.value,
+  };
+}
+
 UserMediaState? _stateFromConflictJson(String source) {
   final Object? decoded = _decodeJsonValue(source);
   if (decoded is! Map) return null;
+  if (decoded['__deleted'] == true) return null;
   try {
     return UserMediaState.fromJson(Map<String, dynamic>.from(decoded));
   } on Object {
@@ -5549,6 +5729,10 @@ UserMediaPatch _patchSubset(UserMediaPatch patch, Set<UserMediaField> fields) =>
       delete: patch.delete,
       fields: fields,
     );
+
+bool _baseRevisionMatches(Object? current, Object? base) => base is List
+    ? base.any((Object? candidate) => _jsonEquivalent(current, candidate))
+    : _jsonEquivalent(current, base);
 
 bool _jsonEquivalent(Object? left, Object? right) =>
     jsonEncode(left) == jsonEncode(right);

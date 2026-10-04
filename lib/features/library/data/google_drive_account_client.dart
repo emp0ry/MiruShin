@@ -75,6 +75,8 @@ class GoogleDriveAccountClient {
         'fields': 'user(displayName,emailAddress,photoLink,permissionId)',
       },
       options: Options(
+        connectTimeout: const Duration(seconds: 4),
+        receiveTimeout: const Duration(seconds: 4),
         headers: <String, String>{
           'Authorization': 'Bearer ${accessToken.trim()}',
         },

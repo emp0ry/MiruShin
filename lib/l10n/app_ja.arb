@@ -14,6 +14,8 @@
   "Synced": "同期済み",
   "Waiting": "同期待ち",
   "Waiting to sync": "同期待ち",
+  "Checking for updates…": "更新を確認中…",
+  "Replaced by newer change": "新しい変更に置き換えられました",
   "Retrying": "再試行中",
   "Yes": "はい",
   "No": "いいえ",

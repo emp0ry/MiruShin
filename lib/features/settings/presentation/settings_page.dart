@@ -554,6 +554,9 @@ class _GoogleDriveSyncSectionState
           '$status • ${context.t('Waiting to sync')}: '
           '$pendingDriveChanges';
     }
+    if (connected && state?.checking == true) {
+      status = '$status • ${context.t('Checking for updates…')}';
+    }
 
     return SettingsSection(
       title: context.t('Google Drive Sync'),

@@ -14,6 +14,8 @@
   "Synced": "Synced",
   "Waiting": "Waiting",
   "Waiting to sync": "Waiting to sync",
+  "Checking for updates…": "Checking for updates…",
+  "Replaced by newer change": "Replaced by newer change",
   "Retrying": "Retrying",
   "Yes": "Yes",
   "No": "No",

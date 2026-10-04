@@ -14,6 +14,8 @@
   "Synced": "Синхронизировано",
   "Waiting": "Ожидает отправки",
   "Waiting to sync": "Ожидают синхронизации",
+  "Checking for updates…": "Проверка обновлений…",
+  "Replaced by newer change": "Заменено новым изменением",
   "Retrying": "Повторная попытка",
   "Yes": "Да",
   "No": "Нет",

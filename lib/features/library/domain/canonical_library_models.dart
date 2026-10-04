@@ -107,6 +107,7 @@ class LibraryOperationDraft {
     this.undoOf,
     this.visibleInLog = true,
     this.targetAccountIds = const <String, String>{},
+    this.baseRevisionAlternatives = const <String, List<Object?>>{},
   });
 
   final String localId;
@@ -123,6 +124,10 @@ class LibraryOperationDraft {
   final String? undoOf;
   final bool visibleInLog;
   final Map<String, String> targetAccountIds;
+
+  /// Other revisions explicitly seen while resolving a concurrent edit.
+  /// They are causal parents, not a timestamp-based conflict override.
+  final Map<String, List<Object?>> baseRevisionAlternatives;
 }
 
 class LibraryActivityEvent {

@@ -74,6 +74,7 @@ class LocalFirstSyncEngine {
     required Map<TrackerSource, TrackerProviderAdapter> adapters,
     this.targetAccountIds = const <TrackerSource, String>{},
     this.primary = TrackerSource.anilist,
+    this.blockedOperationIds = const <String>{},
     DateTime Function()? now,
   }) : _store = store,
        _adapters = adapters,
@@ -83,6 +84,7 @@ class LocalFirstSyncEngine {
   final Map<TrackerSource, TrackerProviderAdapter> _adapters;
   final Map<TrackerSource, String> targetAccountIds;
   final TrackerSource primary;
+  final Set<String> blockedOperationIds;
   final DateTime Function() _now;
   final UserMediaConflictResolver _resolver = const UserMediaConflictResolver();
 
@@ -336,6 +338,16 @@ class LocalFirstSyncEngine {
 
     for (int index = 0; index < journal.length; index += 1) {
       SyncJournalEntry entry = journal[index];
+      if (entry.operationId != null &&
+          blockedOperationIds.contains(entry.operationId)) {
+        for (final TrackerSource target in <TrackerSource>{
+          ...entry.pendingTargets,
+          ...entry.awaitingRemoteTargets,
+        }) {
+          blocked.add((entry.identity, target));
+        }
+        continue;
+      }
       final int stateIndex = states.indexWhere(
         (UserMediaState state) => state.identity.matches(entry.identity),
       );

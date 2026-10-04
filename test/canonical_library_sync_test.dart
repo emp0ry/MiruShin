@@ -217,6 +217,11 @@ void main() {
           1,
         );
         expect((await peer.loadTrackingStates()).single.progress, 7);
+        expect(
+          (await peer.loadTrackingStates()).single.updatedAt,
+          DateTime.utc(2026, 9, 28),
+          reason: 'Receiving a Drive operation must not change Updated sort.',
+        );
         expect(await peer.pendingDriveDeliveryCount(), 0);
         expect(await peer.watchConflicts().first, isEmpty);
         expect(
@@ -303,6 +308,53 @@ void main() {
         'pending',
       );
     });
+
+    test(
+      'Drive batches preserve delete then re-add across batch boundaries',
+      () async {
+        final UserMediaState original = _state(progress: 2);
+        await repository.saveTrackingStates(<UserMediaState>[original]);
+        final String localId =
+            (await repository.loadTrackingStates()).single.identity.localId;
+        await repository.appendOperation(
+          LibraryOperationDraft(
+            operationId: 'z-delete-first',
+            localId: localId,
+            originKind: LibraryOriginKind.user,
+            intent: LibraryMutationIntent.remove,
+            fields: const <String>{'membership'},
+            before: <String, dynamic>{'state': original.toJson()},
+            after: const <String, dynamic>{},
+            targets: const <String>{},
+            occurredAt: DateTime.utc(2026, 9, 28, 1),
+          ),
+        );
+        await repository.appendOperation(
+          LibraryOperationDraft(
+            operationId: 'a-readd-second',
+            localId: localId,
+            originKind: LibraryOriginKind.user,
+            intent: LibraryMutationIntent.add,
+            fields: const <String>{'membership'},
+            before: const <String, dynamic>{},
+            after: <String, dynamic>{'state': original.toJson()},
+            targets: const <String>{},
+            occurredAt: DateTime.utc(2026, 9, 28, 2),
+          ),
+        );
+
+        final DriveReplicaSegment first = (await repository
+            .buildPendingDriveSegment(limit: 1))!;
+        expect(first.operations.single['operationId'], 'z-delete-first');
+        await repository.markDriveSegmentDelivered(
+          first,
+          remoteFileId: 'first',
+        );
+        final DriveReplicaSegment second = (await repository
+            .buildPendingDriveSegment(limit: 1))!;
+        expect(second.operations.single['operationId'], 'a-readd-second');
+      },
+    );
 
     test('recovers delete and re-add from the v1 operation outbox', () async {
       final UserMediaState initial = _state(progress: 2);
@@ -661,12 +713,22 @@ void main() {
         final UserMediaState localEdit = _state(progress: 4);
         final UserMediaPatch localPatch = UserMediaPatch(progress: 4);
         await peer.commitTrackingMutation(
+          operationId: 'device-b-progress',
           states: <UserMediaState>[localEdit],
-          journal: <SyncJournalEntry>[_journal(localEdit, localPatch)],
+          journal: <SyncJournalEntry>[
+            SyncJournalEntry(
+              operationId: 'device-b-progress',
+              identity: localEdit.identity,
+              patch: localPatch,
+              pendingTargets: const <TrackerSource>{TrackerSource.anilist},
+              createdAt: DateTime.utc(2026, 9, 24, 1),
+              updatedAt: DateTime.utc(2026, 9, 24, 1),
+            ),
+          ],
           favorites: const <LocalMediaFavoriteState>[],
           identity: localEdit.identity,
           patch: localPatch,
-          targets: const <TrackerSource>{},
+          targets: const <TrackerSource>{TrackerSource.anilist},
           occurredAt: DateTime.utc(2026, 9, 24, 1),
           mediaTitle: localEdit.mediaItem.title,
         );
@@ -690,6 +752,102 @@ void main() {
         expect((await peer.loadTrackingStates()).single.progress, 4);
         expect(result.recoveredOperations, 0);
         expect(await peer.watchConflicts().first, isNotEmpty);
+        expect(await peer.unresolvedConflictLocalOperationIds(), hasLength(1));
+
+        final CanonicalLibraryConflict conflict =
+            (await peer.watchConflicts().first).single;
+        await peer.resolveConflict(
+          conflictId: conflict.conflictId,
+          takeIncoming: true,
+          trackerTargets: const <TrackerSource>{TrackerSource.anilist},
+        );
+        final List<SyncJournalEntry> journal = await peer.loadJournal();
+        expect(
+          journal.any(
+            (SyncJournalEntry value) =>
+                value.operationId == 'device-b-progress',
+          ),
+          isFalse,
+        );
+        expect(journal.last.patch.progress, 7);
+        expect(await peer.unresolvedConflictLocalOperationIds(), isEmpty);
+        final LibraryActivityEvent staleOperation =
+            (await peer.watchActivity().first).singleWhere(
+              (LibraryActivityEvent value) =>
+                  value.operationId == 'device-b-progress',
+            );
+        expect(staleOperation.deliveryStates['anilist'], 'superseded');
+
+        final DriveReplicaSegment rebased = (await peer
+            .buildPendingDriveSegment())!;
+        expect(rebased.operations.first['operationId'], 'device-b-progress');
+        await repository.applyDriveSegment(
+          rebased,
+          trackerTargets: const <TrackerSource>{},
+        );
+        expect((await repository.loadTrackingStates()).single.progress, 7);
+        expect(await repository.watchConflicts().first, isEmpty);
+      },
+    );
+
+    test(
+      'Drive merges A progress with B score without a false conflict',
+      () async {
+        final UserMediaState initial = _state(progress: 2);
+        await repository.saveTrackingStates(<UserMediaState>[initial]);
+        final CanonicalLibraryDatabase peerDatabase = CanonicalLibraryDatabase(
+          NativeDatabase.memory(),
+        );
+        final CanonicalLibraryRepository peer = CanonicalLibraryRepository(
+          peerDatabase,
+        );
+        addTearDown(peerDatabase.close);
+        await peer.applyDriveSnapshot(await repository.buildDriveSnapshot());
+
+        final UserMediaPatch scorePatch = UserMediaPatch(score: 9);
+        final UserMediaState scoreEdit = initial.apply(
+          scorePatch,
+          DateTime.utc(2026, 9, 24, 1),
+        );
+        await peer.commitTrackingMutation(
+          operationId: 'device-b-score',
+          states: <UserMediaState>[scoreEdit],
+          journal: const <SyncJournalEntry>[],
+          favorites: const <LocalMediaFavoriteState>[],
+          identity: scoreEdit.identity,
+          patch: scorePatch,
+          targets: const <TrackerSource>{},
+          occurredAt: DateTime.utc(2026, 9, 24, 1),
+        );
+
+        final UserMediaPatch progressPatch = UserMediaPatch(progress: 7);
+        final UserMediaState progressEdit = initial.apply(
+          progressPatch,
+          DateTime.utc(2026, 9, 24, 2),
+        );
+        await repository.commitTrackingMutation(
+          operationId: 'device-a-progress',
+          states: <UserMediaState>[progressEdit],
+          journal: const <SyncJournalEntry>[],
+          favorites: const <LocalMediaFavoriteState>[],
+          identity: progressEdit.identity,
+          patch: progressPatch,
+          targets: const <TrackerSource>{},
+          occurredAt: DateTime.utc(2026, 9, 24, 2),
+        );
+        final DriveReplicaSegment segment = (await repository
+            .buildPendingDriveSegment())!;
+        await peer.applyDriveSegment(
+          segment,
+          trackerTargets: const <TrackerSource>{},
+        );
+
+        final UserMediaState merged = (await peer.loadTrackingStates()).single;
+        expect(merged.progress, 7);
+        expect(merged.score, 9);
+        expect(merged.updatedAt, DateTime.utc(2026, 9, 24, 2));
+        expect(await peer.watchConflicts().first, isEmpty);
+        expect(await peer.pendingDriveDeliveryCount(), 1);
       },
     );
 

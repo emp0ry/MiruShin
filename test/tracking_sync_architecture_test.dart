@@ -315,6 +315,43 @@ void main() {
 
   group('offline journal', () {
     test(
+      'Drive conflict blocks a stale operation and later tracker edits',
+      () async {
+        final UserMediaState local = _state(
+          source: TrackerSource.anilist,
+          progress: 5,
+          updatedAt: DateTime.utc(2026, 9, 28),
+        );
+        final _MemoryTrackingSyncStore store = _MemoryTrackingSyncStore()
+          ..states = <UserMediaState>[local]
+          ..journal = <SyncJournalEntry>[
+            for (final (String id, int progress) in <(String, int)>[
+              ('stale-device-b-edit', 4),
+              ('later-device-b-edit', 5),
+            ])
+              SyncJournalEntry(
+                operationId: id,
+                identity: local.identity,
+                patch: UserMediaPatch(progress: progress),
+                pendingTargets: const <TrackerSource>{TrackerSource.anilist},
+                createdAt: DateTime.utc(2026, 9, 28),
+                updatedAt: DateTime.utc(2026, 9, 28),
+              ),
+          ];
+        final _FakeAdapter adapter = _FakeAdapter(TrackerSource.anilist);
+        await LocalFirstSyncEngine(
+          store: store,
+          adapters: <TrackerSource, TrackerProviderAdapter>{
+            TrackerSource.anilist: adapter,
+          },
+          blockedOperationIds: const <String>{'stale-device-b-edit'},
+        ).flush();
+        expect(adapter.applied, isEmpty);
+        expect(store.journal, hasLength(2));
+      },
+    );
+
+    test(
       'migration safe mode queues locally without contacting providers',
       () async {
         final _SafeModeTrackingSyncStore store = _SafeModeTrackingSyncStore();

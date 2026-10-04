@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../shared/models/anilist_models.dart';
 import '../../../shared/models/media_item.dart';
 import '../../library/application/canonical_library_repository.dart';
+import '../../library/application/google_drive_sync_controller.dart';
 import '../../profile/application/anilist_user_settings_provider.dart';
 import '../../settings/application/settings_state.dart';
 import '../data/anilist_api_client.dart';
@@ -48,13 +49,26 @@ final trackerSyncCoordinatorProvider = Provider<TrackerSyncCoordinator>((
     ),
   );
   final SettingsState settings = ref.read(settingsProvider);
+  final CanonicalLibraryRepository repository = ref.watch(
+    canonicalLibraryRepositoryProvider,
+  );
   return TrackerSyncCoordinator(
     ref,
     store: ref.watch(trackingSyncStoreProvider),
     settings: settings,
     settingsController: ref.read(settingsProvider.notifier),
-    repository: ref.watch(canonicalLibraryRepositoryProvider),
+    repository: repository,
     effectiveTitleLanguage: settings.anilistTitleLanguage,
+    beforeTrackerNetwork: () async {
+      final GoogleDriveSyncState drive = await ref.read(
+        googleDriveSyncControllerProvider.future,
+      );
+      if (!ref.mounted) return false;
+      if (!drive.configured) return true;
+      return ref
+          .read(googleDriveSyncControllerProvider.notifier)
+          .ensureWorkspaceReadyForTrackerDelivery(repository.replicaNamespace);
+    },
   );
 });
 
@@ -175,11 +189,13 @@ class TrackerSyncCoordinator {
     SettingsController? settingsController,
     CanonicalLibraryRepository? repository,
     String? effectiveTitleLanguage,
+    Future<bool> Function()? beforeTrackerNetwork,
   }) : _boundStore = store,
        _boundSettings = settings,
        _boundSettingsController = settingsController,
        _boundRepository = repository,
-       _boundTitleLanguage = effectiveTitleLanguage;
+       _boundTitleLanguage = effectiveTitleLanguage,
+       _beforeTrackerNetwork = beforeTrackerNetwork;
 
   final Ref _ref;
   final TrackingSyncStore? _boundStore;
@@ -187,6 +203,7 @@ class TrackerSyncCoordinator {
   final SettingsController? _boundSettingsController;
   final CanonicalLibraryRepository? _boundRepository;
   final String? _boundTitleLanguage;
+  final Future<bool> Function()? _beforeTrackerNetwork;
   // User mutations and remote work deliberately have separate lanes. A slow
   // tracker refresh/flush must never keep Add/Edit/Delete waiting before its
   // canonical SQLite transaction can commit.
@@ -408,6 +425,7 @@ class TrackerSyncCoordinator {
   });
 
   Future<void> flushPending() => _serialNetwork<void>(() async {
+    if (!await _canContactTrackers()) return;
     final LocalFirstSyncEngine engine = await _engine();
     await engine.flush();
     _invalidateHealth();
@@ -417,6 +435,7 @@ class TrackerSyncCoordinator {
     required TrackerSource preferred,
     Set<TrackerSource> excluded = const <TrackerSource>{},
   }) => _serialNetwork<TrackerLibrarySnapshot>(() async {
+    if (!await _canContactTrackers()) return _cachedSnapshot('anime');
     final LocalFirstSyncEngine engine = await _engine();
     final List<TrackerSource> order =
         <TrackerSource>[
@@ -444,6 +463,7 @@ class TrackerSyncCoordinator {
     required TrackerSource preferred,
     Set<TrackerSource> excluded = const <TrackerSource>{},
   }) => _serialNetwork<TrackerLibrarySnapshot>(() async {
+    if (!await _canContactTrackers()) return _cachedSnapshot('manga');
     final LocalFirstSyncEngine engine = await _engine();
     final List<TrackerSource> order =
         <TrackerSource>[
@@ -480,6 +500,7 @@ class TrackerSyncCoordinator {
     String mediaKind = 'anime',
     Set<TrackerSource> excluded = const <TrackerSource>{},
   }) => _serialNetwork<TrackerLibrarySnapshot>(() async {
+    if (!await _canContactTrackers()) return _cachedSnapshot(mediaKind);
     final LocalFirstSyncEngine engine = await _engine();
     final List<TrackerSource> order =
         <TrackerSource>[
@@ -513,6 +534,12 @@ class TrackerSyncCoordinator {
     required bool completeSnapshot,
     String mediaKind = 'anime',
   }) => _serialNetwork<List<AniListAnimeListFolder>>(() async {
+    if (!await _canContactTrackers()) {
+      final List<UserMediaState> local = await _store.loadStates();
+      return foldersFromUserMediaStates(
+        local.where((state) => state.identity.mediaKind == mediaKind).toList(),
+      );
+    }
     final List<UserMediaState> remote = userMediaStatesFromFolders(
       folders,
       source: source,
@@ -591,6 +618,19 @@ class TrackerSyncCoordinator {
     return foldersFromUserMediaStates(await _store.loadStates());
   }
 
+  Future<bool> _canContactTrackers() async =>
+      await (_beforeTrackerNetwork?.call() ?? Future<bool>.value(true));
+
+  Future<TrackerLibrarySnapshot> _cachedSnapshot(String mediaKind) async {
+    final List<UserMediaState> states = await _store.loadStates();
+    return TrackerLibrarySnapshot(
+      folders: foldersFromUserMediaStates(
+        states.where((state) => state.identity.mediaKind == mediaKind).toList(),
+      ),
+      fromCache: true,
+    );
+  }
+
   Future<void> recordProviderFailure(TrackerSource source, Object error) =>
       _serialNetwork<void>(() async {
         final LocalFirstSyncEngine engine = LocalFirstSyncEngine(
@@ -629,6 +669,8 @@ class TrackerSyncCoordinator {
       store: _store,
       adapters: await _adapters(),
       primary: _settings.effectivePrimaryTrackerSource,
+      blockedOperationIds: await _repository
+          .unresolvedConflictLocalOperationIds(),
     );
   }
 
