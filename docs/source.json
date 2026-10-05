@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.9.12",
+          "date": "2026-10-05",
+          "localizedDescription": "- Fixed cross-device status, score, and Favorite inconsistencies; Library cards and Edit now read the same canonical local state.\n- Prevented stale provider previews, background queue writes, and rounded tracker scores from overwriting newer local changes.\n- Isolated per-episode checkpoint revisions and deduplicated false sync conflicts while preserving genuine concurrent edits.\n- Added safe, history-backed recovery for legacy library inconsistencies and 36 regression tests.\n- Improved reactive local-library updates and avoided redundant no-op database writes.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.12/MiruShin-ios-v2.9.12.ipa",
+          "size": 31734708,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.9.11",
           "date": "2026-10-04",
           "localizedDescription": "- Restore fresh Google Drive Library changes before tracker sync on another device.\n- Preserve Updated sorting and safely resolve cross-device conflicts.\n- Keep delete/re-add operations ordered, and show clearer sync status.",
@@ -759,11 +767,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.9.11",
-      "versionDate": "2026-10-04",
-      "versionDescription": "- Restore fresh Google Drive Library changes before tracker sync on another device.\n- Preserve Updated sorting and safely resolve cross-device conflicts.\n- Keep delete/re-add operations ordered, and show clearer sync status.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.11/MiruShin-ios-v2.9.11.ipa",
-      "size": 31699291,
+      "version": "2.9.12",
+      "versionDate": "2026-10-05",
+      "versionDescription": "- Fixed cross-device status, score, and Favorite inconsistencies; Library cards and Edit now read the same canonical local state.\n- Prevented stale provider previews, background queue writes, and rounded tracker scores from overwriting newer local changes.\n- Isolated per-episode checkpoint revisions and deduplicated false sync conflicts while preserving genuine concurrent edits.\n- Added safe, history-backed recovery for legacy library inconsistencies and 36 regression tests.\n- Improved reactive local-library updates and avoided redundant no-op database writes.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.12/MiruShin-ios-v2.9.12.ipa",
+      "size": 31734708,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
