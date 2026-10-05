@@ -128,7 +128,7 @@ final googleDriveSyncControllerProvider =
       GoogleDriveSyncController.new,
     );
 
-final googleDriveSyncLifecycleProvider = Provider<void>((Ref ref) {
+final googleDriveSyncLifecycleProvider = Provider<VoidCallback>((Ref ref) {
   Timer? localPushDebounce;
   Timer? fullSyncDebounce;
   var disposed = false;
@@ -168,6 +168,7 @@ final googleDriveSyncLifecycleProvider = Provider<void>((Ref ref) {
       AsyncValue<GoogleDriveSyncState>? previous,
       AsyncValue<GoogleDriveSyncState> next,
     ) {
+      if (disposed) return;
       final bool becameConnected =
           next.value?.connected == true && previous?.value?.connected != true;
       if (becameConnected) {
@@ -286,13 +287,17 @@ final googleDriveSyncLifecycleProvider = Provider<void>((Ref ref) {
       );
     },
   );
-  ref.onDispose(() {
+  void stop() {
+    if (disposed) return;
     disposed = true;
     localPushDebounce?.cancel();
     fullSyncDebounce?.cancel();
     timer.cancel();
     lifecycle.dispose();
-  });
+  }
+
+  ref.onDispose(stop);
+  return stop;
 });
 
 String _driveAccountFingerprint(SettingsState settings) {

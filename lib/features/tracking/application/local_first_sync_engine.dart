@@ -75,6 +75,7 @@ class LocalFirstSyncEngine {
     this.targetAccountIds = const <TrackerSource, String>{},
     this.primary = TrackerSource.anilist,
     this.blockedOperationIds = const <String>{},
+    this.isStopping,
     DateTime Function()? now,
   }) : _store = store,
        _adapters = adapters,
@@ -85,6 +86,8 @@ class LocalFirstSyncEngine {
   final Map<TrackerSource, String> targetAccountIds;
   final TrackerSource primary;
   final Set<String> blockedOperationIds;
+  final bool Function()? isStopping;
+  bool get _stopping => isStopping?.call() ?? false;
   final DateTime Function() _now;
   final UserMediaConflictResolver _resolver = const UserMediaConflictResolver();
 
@@ -338,6 +341,7 @@ class LocalFirstSyncEngine {
   }
 
   Future<void> _flushLocked() async {
+    if (_stopping) return;
     if (await _isInMigrationSafeMode()) return;
     List<SyncJournalEntry> journal = await _loadJournal();
     if (journal.isEmpty) return;
@@ -357,6 +361,7 @@ class LocalFirstSyncEngine {
     );
 
     for (int index = 0; index < journal.length; index += 1) {
+      if (_stopping) break;
       SyncJournalEntry entry = journal[index];
       if (entry.operationId != null &&
           blockedOperationIds.contains(entry.operationId)) {
@@ -385,6 +390,7 @@ class LocalFirstSyncEngine {
       for (final TrackerSource target in entry.awaitingRemoteTargets.toList(
         growable: false,
       )) {
+        if (_stopping) break;
         final TrackerProviderAdapter? adapter = _adapters[target];
         if (adapter == null ||
             providerBackoff.contains(target) ||
@@ -422,6 +428,7 @@ class LocalFirstSyncEngine {
         ),
       ];
       for (final TrackerSource target in orderedTargets) {
+        if (_stopping) break;
         final TrackerProviderAdapter? adapter = _adapters[target];
         if (adapter == null ||
             providerBackoff.contains(target) ||
@@ -527,6 +534,12 @@ class LocalFirstSyncEngine {
           );
           await _recordFailureLocked(target, error, authentication: true);
         } catch (error) {
+          if (_stopping) {
+            // A cancelled write may have reached the server. Preserve the
+            // operation and require read-back when this workspace resumes.
+            journal[index] = entry.withReadbackBeforeWrite();
+            break;
+          }
           providerBackoff.add(target);
           blocked.add((entry.identity, target));
           // A timeout can occur after the provider applied the mutation.
@@ -582,12 +595,14 @@ class LocalFirstSyncEngine {
         return LocalFirstLibraryResult(states: local, fromCache: true);
       }
       for (final TrackerSource source in providerOrder) {
+        if (_stopping) break;
         final TrackerProviderAdapter? adapter = _adapters[source];
         if (adapter == null) continue;
         try {
           final List<UserMediaState> remote = mediaKind == 'manga'
               ? await adapter.fetchMangaList()
               : await adapter.fetchAnimeList();
+          if (_stopping) break;
           final List<SyncJournalEntry> pendingBeforeConfirmation = journal;
           final List<SyncJournalEntry> beforeConfirmation = journal;
           journal = _confirmRemoteSnapshot(journal, remote, source);
@@ -652,6 +667,7 @@ class LocalFirstSyncEngine {
         } on TrackerAuthenticationException catch (error) {
           await _recordFailureLocked(source, error, authentication: true);
         } catch (error) {
+          if (_stopping) break;
           await _recordFailureLocked(source, error);
         }
       }
@@ -693,6 +709,7 @@ class LocalFirstSyncEngine {
       TrackerSource? firstSuccessfulSource;
       final Set<TrackerSource> visited = <TrackerSource>{};
       for (final TrackerSource source in providerOrder) {
+        if (_stopping) break;
         if (!visited.add(source)) continue;
         final TrackerProviderAdapter? adapter = _adapters[source];
         if (adapter == null) continue;
@@ -700,6 +717,7 @@ class LocalFirstSyncEngine {
           final List<UserMediaState> remote = mediaKind == 'manga'
               ? await adapter.fetchMangaList()
               : await adapter.fetchAnimeList();
+          if (_stopping) break;
           final List<SyncJournalEntry> pendingBeforeConfirmation = journal;
           final List<SyncJournalEntry> beforeConfirmation = journal;
           journal = _confirmRemoteSnapshot(journal, remote, source);
@@ -760,6 +778,7 @@ class LocalFirstSyncEngine {
         } on TrackerAuthenticationException catch (error) {
           await _recordFailureLocked(source, error, authentication: true);
         } catch (error) {
+          if (_stopping) break;
           await _recordFailureLocked(source, error);
         }
       }

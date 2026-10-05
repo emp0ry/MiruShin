@@ -148,8 +148,16 @@ class CanonicalLibraryDatabaseRegistry {
   final Set<CanonicalLibraryDatabase> _databases = <CanonicalLibraryDatabase>{};
   final Map<CanonicalLibraryDatabase, Future<void>> _closing =
       <CanonicalLibraryDatabase, Future<void>>{};
+  Future<void>? _shutdown;
+  bool _acceptingDatabases = true;
+
+  bool get isShuttingDown => !_acceptingDatabases;
 
   void register(CanonicalLibraryDatabase database) {
+    if (isShuttingDown) {
+      throw StateError('Cannot open a library database during shutdown.');
+    }
+    if (_closing.containsKey(database)) return;
     _databases.add(database);
   }
 
@@ -160,11 +168,22 @@ class CanonicalLibraryDatabaseRegistry {
     });
   }
 
-  Future<void> closeAll() async {
+  Future<void> closeAll() {
+    final Future<void>? shutdown = _shutdown;
+    if (shutdown != null) return shutdown;
+    _acceptingDatabases = false;
     final List<CanonicalLibraryDatabase> databases = _databases.toList(
       growable: false,
     );
-    await Future.wait<void>(databases.map(close), eagerError: false);
+    for (final database in databases) {
+      close(database);
+    }
+    // A provider may already have started closing its DB. It is no longer in
+    // _databases, but native exit must still wait for its isolate/read pool.
+    return _shutdown = Future.wait<void>(
+      _closing.values,
+      eagerError: false,
+    ).then((_) {});
   }
 }
 
@@ -178,12 +197,16 @@ final _canonicalLibraryDatabaseByNameProvider =
       Ref ref,
       LibraryWorkspaceScope scope,
     ) {
+      final CanonicalLibraryDatabaseRegistry registry = ref.watch(
+        canonicalLibraryDatabaseRegistryProvider,
+      );
+      if (registry.isShuttingDown) {
+        throw StateError('Cannot open a library database during shutdown.');
+      }
       final CanonicalLibraryDatabase database = ref.watch(
         canonicalLibraryDatabaseFactoryProvider,
       )(scope.databaseName, scope.legacyDatabaseName);
-      final CanonicalLibraryDatabaseRegistry registry = ref.watch(
-        canonicalLibraryDatabaseRegistryProvider,
-      )..register(database);
+      registry.register(database);
       ref.onDispose(() => unawaited(registry.close(database)));
       return database;
     });

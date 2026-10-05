@@ -6,6 +6,36 @@ import Darwin
 
 @main
 class AppDelegate: FlutterAppDelegate {
+  private var exitChannel: FlutterMethodChannel?
+  private var terminationPending = false
+
+  func installExitHandshake(messenger: FlutterBinaryMessenger) {
+    exitChannel = FlutterMethodChannel(name: "mirushin/lifecycle", binaryMessenger: messenger)
+  }
+
+  override func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+    guard !terminationPending else { return .terminateLater }
+    guard let channel = exitChannel else {
+      return super.applicationShouldTerminate(sender)
+    }
+    terminationPending = true
+    // AppKit keeps the window and Dart VM alive until we explicitly reply.
+    // Repeated Quit/close requests must not bypass the outstanding cleanup.
+    DispatchQueue.main.async { [weak self] in
+      channel.invokeMethod("prepareForExit", arguments: nil) { response in
+        let notStarted = (response as? NSObject) == FlutterMethodNotImplemented
+        let cleanedUp = (response as? Bool) == true
+        if !cleanedUp && !notStarted {
+          NSLog("MiruShin shutdown did not complete; keeping the application open.")
+        }
+        self?.terminationPending = false
+        // No Dart handler means bootstrap has not yet opened the library.
+        sender.reply(toApplicationShouldTerminate: cleanedUp || notStarted)
+      }
+    }
+    return .terminateLater
+  }
+
   override func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
     return true
   }

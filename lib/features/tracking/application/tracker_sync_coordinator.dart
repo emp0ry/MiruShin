@@ -29,6 +29,30 @@ final trackerProviderHealthProvider =
       return ref.watch(trackingSyncStoreProvider).loadHealth();
     });
 
+/// Includes coordinators from accounts switched out while work was in flight.
+/// Their queues must drain before any of their workspace databases are closed.
+class TrackerSyncCoordinatorRegistry {
+  final Set<TrackerSyncCoordinator> _coordinators = {};
+  Future<void>? _shutdown;
+
+  void register(TrackerSyncCoordinator coordinator) {
+    if (_shutdown != null) {
+      throw StateError('Cannot start tracker work during shutdown.');
+    }
+    _coordinators.add(coordinator);
+  }
+
+  Future<void> prepareForExit() => _shutdown ??= Future.wait<void>(
+    _coordinators.map((coordinator) => coordinator.prepareForExit()),
+    eagerError: false,
+  ).then((_) {});
+}
+
+final trackerSyncCoordinatorRegistryProvider =
+    Provider<TrackerSyncCoordinatorRegistry>(
+      (Ref ref) => TrackerSyncCoordinatorRegistry(),
+    );
+
 final trackerSyncCoordinatorProvider = Provider<TrackerSyncCoordinator>((
   Ref ref,
 ) {
@@ -52,7 +76,7 @@ final trackerSyncCoordinatorProvider = Provider<TrackerSyncCoordinator>((
   final CanonicalLibraryRepository repository = ref.watch(
     canonicalLibraryRepositoryProvider,
   );
-  return TrackerSyncCoordinator(
+  final coordinator = TrackerSyncCoordinator(
     ref,
     store: ref.watch(trackingSyncStoreProvider),
     settings: settings,
@@ -70,6 +94,8 @@ final trackerSyncCoordinatorProvider = Provider<TrackerSyncCoordinator>((
           .ensureWorkspaceReadyForTrackerDelivery(repository.replicaNamespace);
     },
   );
+  ref.read(trackerSyncCoordinatorRegistryProvider).register(coordinator);
+  return coordinator;
 });
 
 class TrackerLibrarySnapshot {
@@ -209,6 +235,21 @@ class TrackerSyncCoordinator {
   // canonical SQLite transaction can commit.
   Future<void> _mutationTail = Future<void>.value();
   Future<void> _networkTail = Future<void>.value();
+  final CancelToken _networkCancellation = CancelToken();
+  bool _shuttingDown = false;
+  Future<void>? _shutdown;
+
+  Future<void> prepareForExit() {
+    if (_shutdown != null) return _shutdown!;
+    _shuttingDown = true;
+    _networkCancellation.cancel('MiruShin is closing.');
+    // Tail futures are completion barriers, not the results of requests. A
+    // failed/cancelled request still releases its lane and leaves its outbox.
+    return _shutdown = Future.wait<void>([
+      _mutationTail,
+      _networkTail,
+    ], eagerError: false).then((_) {});
+  }
 
   SettingsState get _settings => _boundSettings ?? _ref.read(settingsProvider);
   SettingsController get _controller =>
@@ -424,12 +465,19 @@ class TrackerSyncCoordinator {
     return result;
   });
 
-  Future<void> flushPending() => _serialNetwork<void>(() async {
-    if (!await _canContactTrackers()) return;
-    final LocalFirstSyncEngine engine = await _engine();
-    await engine.flush();
-    _invalidateHealth();
-  });
+  Future<void> flushPending() async {
+    if (_shuttingDown) return;
+    try {
+      await _serialNetwork<void>(() async {
+        if (!await _canContactTrackers()) return;
+        final LocalFirstSyncEngine engine = await _engine();
+        await engine.flush();
+        _invalidateHealth();
+      });
+    } on TrackerSyncStoppedException {
+      // Shutdown cancels queued background work, not persisted user actions.
+    }
+  }
 
   Future<TrackerLibrarySnapshot> refreshAnimeLibrary({
     required TrackerSource preferred,
@@ -617,8 +665,12 @@ class TrackerSyncCoordinator {
     return foldersFromUserMediaStates(await _store.loadStates());
   }
 
-  Future<bool> _canContactTrackers() async =>
-      await (_beforeTrackerNetwork?.call() ?? Future<bool>.value(true));
+  Future<bool> _canContactTrackers() async {
+    if (_shuttingDown) return false;
+    final allowed =
+        await (_beforeTrackerNetwork?.call() ?? Future<bool>.value(true));
+    return !_shuttingDown && allowed;
+  }
 
   Future<TrackerLibrarySnapshot> _cachedSnapshot(String mediaKind) async {
     final List<UserMediaState> states = await _store.loadStates();
@@ -670,6 +722,7 @@ class TrackerSyncCoordinator {
       primary: _settings.effectivePrimaryTrackerSource,
       blockedOperationIds: await _repository
           .unresolvedConflictLocalOperationIds(),
+      isStopping: () => _shuttingDown,
     );
   }
 
@@ -688,7 +741,7 @@ class TrackerSyncCoordinator {
   );
 
   Future<Map<TrackerSource, TrackerProviderAdapter>> _adapters() async {
-    if (_boundSettings != null && !_ref.mounted) {
+    if (_shuttingDown || (_boundSettings != null && !_ref.mounted)) {
       // This coordinator belongs to an account that has been switched out.
       // Keep its pending outbox in that account's database for a later retry;
       // never deliver it with the newly active account's credentials.
@@ -709,6 +762,7 @@ class TrackerSyncCoordinator {
       adapters[TrackerSource.anilist] = _AniListAdapter(
         client: AniListApiClient(
           accessToken: aniListToken,
+          cancelToken: _networkCancellation,
           titleLanguage: titleLanguage == 'RUSSIAN' ? 'ENGLISH' : titleLanguage,
         ),
         viewerId: settings.anilistViewerId,
@@ -717,10 +771,13 @@ class TrackerSyncCoordinator {
 
     if (settings.hasMalSession) {
       final String? token = await _controller.validMalAccessToken();
-      if (_boundSettings != null && !_ref.mounted) return adapters;
+      if (_shuttingDown || (_boundSettings != null && !_ref.mounted)) {
+        return adapters;
+      }
       if (token != null && token.trim().isNotEmpty) {
         malMetadataClient = MalApiClient(
           accessToken: token,
+          cancelToken: _networkCancellation,
           onRefreshToken: () => _ref.mounted
               ? _controller.refreshMalToken()
               : Future<String?>.value(),
@@ -735,11 +792,14 @@ class TrackerSyncCoordinator {
     final int? shikimoriViewerId = settings.shikimoriViewerId;
     if (settings.hasShikimoriSession && shikimoriViewerId != null) {
       final String? token = await _controller.validShikimoriAccessToken();
-      if (_boundSettings != null && !_ref.mounted) return adapters;
+      if (_shuttingDown || (_boundSettings != null && !_ref.mounted)) {
+        return adapters;
+      }
       if (token != null && token.trim().isNotEmpty) {
         adapters[TrackerSource.shikimori] = _ShikimoriAdapter(
           ShikimoriApiClient(
             accessToken: token,
+            cancelToken: _networkCancellation,
             userId: shikimoriViewerId,
             onRefreshToken: () => _ref.mounted
                 ? _controller.refreshShikimoriToken()
@@ -781,6 +841,9 @@ class TrackerSyncCoordinator {
     Future<T> Function() action, {
     required bool mutation,
   }) {
+    if (_shuttingDown) {
+      return Future<T>.error(const TrackerSyncStoppedException());
+    }
     final Completer<void> release = Completer<void>();
     final Future<void> previous = mutation ? _mutationTail : _networkTail;
     if (mutation) {
@@ -788,8 +851,19 @@ class TrackerSyncCoordinator {
     } else {
       _networkTail = release.future;
     }
-    return previous.then((_) => action()).whenComplete(release.complete);
+    return previous
+        .then((_) {
+          if (!mutation && _shuttingDown) {
+            throw const TrackerSyncStoppedException();
+          }
+          return action();
+        })
+        .whenComplete(release.complete);
   }
+}
+
+class TrackerSyncStoppedException implements Exception {
+  const TrackerSyncStoppedException();
 }
 
 class _AniListAdapter

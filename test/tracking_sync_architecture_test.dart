@@ -1,6 +1,9 @@
+import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mirushin/features/settings/application/settings_state.dart';
 import 'package:mirushin/features/tracking/application/local_first_sync_engine.dart';
 import 'package:mirushin/features/tracking/application/tracker_sync_coordinator.dart';
 import 'package:mirushin/features/tracking/data/tracking_sync_store.dart';
@@ -11,6 +14,160 @@ import 'package:mirushin/shared/models/media_item.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  group('graceful process exit', () {
+    test(
+      'cancelled snapshot is not imported or recorded as an outage',
+      () async {
+        final store = _MemoryTrackingSyncStore();
+        final entered = Completer<void>();
+        final release = Completer<void>();
+        var stopping = false;
+        final anilist = _FakeAdapter(TrackerSource.anilist)
+          ..remote = [
+            _state(
+              source: TrackerSource.anilist,
+              progress: 8,
+              updatedAt: DateTime.utc(2026, 10, 5),
+            ),
+          ]
+          ..onFetch = () async {
+            entered.complete();
+            await release.future;
+          };
+        final mal = _FakeAdapter(TrackerSource.mal);
+        final engine = LocalFirstSyncEngine(
+          store: store,
+          adapters: {TrackerSource.anilist: anilist, TrackerSource.mal: mal},
+          isStopping: () => stopping,
+        );
+        final refresh = engine.refreshAllProviderSnapshots(
+          providerOrder: [TrackerSource.anilist, TrackerSource.mal],
+        );
+        await entered.future;
+        stopping = true;
+        release.complete();
+        await refresh;
+        expect(store.states, isEmpty);
+        expect(store.health, isEmpty);
+        expect(mal.fetchCalls, 0);
+      },
+    );
+
+    test(
+      'interrupted write stays pending and reads back before retry',
+      () async {
+        final store = _MemoryTrackingSyncStore();
+        final entered = Completer<void>();
+        final release = Completer<void>();
+        var stopping = false;
+        final original = _state(
+          source: TrackerSource.anilist,
+          progress: 2,
+          updatedAt: DateTime.utc(2026, 10, 5),
+        );
+        final adapter = _FakeAdapter(TrackerSource.anilist)
+          ..mutatesRemote = true
+          ..template = original
+          ..onApplied = () async {
+            entered.complete();
+            await release.future;
+            throw StateError('Transport cancelled after server applied write');
+          };
+        final engine = LocalFirstSyncEngine(
+          store: store,
+          adapters: {TrackerSource.anilist: adapter},
+          isStopping: () => stopping,
+        );
+        await engine.recordMutation(
+          identity: original.identity,
+          patch: UserMediaPatch(progress: 8),
+          targets: {TrackerSource.anilist},
+          mediaItem: original.mediaItem,
+          backgroundDelivery: true,
+        );
+        final flushing = engine.flush();
+        await entered.future;
+        stopping = true;
+        release.complete();
+        await flushing;
+        expect(store.journal.single.pendingTargets, {TrackerSource.anilist});
+        expect(store.journal.single.readbackBeforeWrite, isTrue);
+        expect(store.health, isEmpty);
+        final recovered = _FakeAdapter(TrackerSource.anilist)
+          ..remote = adapter.remote;
+        await LocalFirstSyncEngine(
+          store: store,
+          adapters: {TrackerSource.anilist: recovered},
+        ).flush();
+        expect(recovered.applied, isEmpty);
+        expect(store.journal, isEmpty);
+      },
+    );
+
+    test(
+      'all workspace coordinators drain already accepted local edits',
+      () async {
+        final container = ProviderContainer();
+        final registry = TrackerSyncCoordinatorRegistry();
+        final first = _GatedTrackingStore();
+        final second = _GatedTrackingStore();
+        final provider = Provider<TrackerSyncCoordinator>(
+          (ref) => TrackerSyncCoordinator(
+            ref,
+            store: first,
+            settings: const SettingsState(),
+          ),
+        );
+        final otherProvider = Provider<TrackerSyncCoordinator>(
+          (ref) => TrackerSyncCoordinator(
+            ref,
+            store: second,
+            settings: const SettingsState(),
+          ),
+        );
+        final a = container.read(provider);
+        final b = container.read(otherProvider);
+        registry.register(a);
+        registry.register(b);
+        final mutationA = a.pushEntryEdit(
+          externalIds: const {'anilist': '10'},
+          progress: 8,
+          targets: {},
+        );
+        final mutationB = b.pushEntryEdit(
+          externalIds: const {'anilist': '20'},
+          progress: 4,
+          targets: {},
+        );
+        await Future.wait([first.entered.future, second.entered.future]);
+        bool finished = false;
+        final exit = registry.prepareForExit().then((_) => finished = true);
+        try {
+          await Future<void>.delayed(Duration.zero);
+          expect(finished, isFalse);
+          first.release.complete();
+          await mutationA;
+          expect(finished, isFalse);
+          second.release.complete();
+          await mutationB;
+          await exit;
+          expect(first.states.single.progress, 8);
+          expect(second.states.single.progress, 4);
+          await a.flushPending();
+          expect(() => registry.register(a), throwsStateError);
+          await expectLater(
+            a.pushEntryEdit(externalIds: const {'anilist': '10'}, progress: 9),
+            throwsA(isA<TrackerSyncStoppedException>()),
+          );
+        } finally {
+          if (!first.release.isCompleted) first.release.complete();
+          if (!second.release.isCompleted) second.release.complete();
+          await exit;
+          container.dispose();
+        }
+      },
+    );
+  });
   group('provider-agnostic identity and mappings', () {
     test('keeps stable local id while learning every provider id', () {
       const MediaIdentity existing = MediaIdentity(
@@ -1779,6 +1936,17 @@ class _SafeModeTrackingSyncStore extends _MemoryTrackingSyncStore
   Future<bool> isInMigrationSafeMode() async => true;
 }
 
+class _GatedTrackingStore extends _MemoryTrackingSyncStore {
+  final entered = Completer<void>();
+  final release = Completer<void>();
+  @override
+  Future<List<UserMediaState>> loadStates() async {
+    if (!entered.isCompleted) entered.complete();
+    await release.future;
+    return super.loadStates();
+  }
+}
+
 class _FakeAdapter implements TrackerProviderAdapter {
   _FakeAdapter(this.source, {this.applicationOrder});
 
@@ -1796,10 +1964,13 @@ class _FakeAdapter implements TrackerProviderAdapter {
   int fetchCalls = 0;
   List<UserMediaState> remote = <UserMediaState>[];
   final List<SyncJournalEntry> applied = <SyncJournalEntry>[];
+  Future<void> Function()? onFetch;
+  Future<void> Function()? onApplied;
 
   @override
   Future<List<UserMediaState>> fetchAnimeList() async {
     fetchCalls += 1;
+    await onFetch?.call();
     if (failFetch) throw StateError('${source.name} unavailable');
     return remote;
   }
@@ -1825,6 +1996,7 @@ class _FakeAdapter implements TrackerProviderAdapter {
         remote.add(base.apply(mutation.patch, DateTime.utc(2026, 9, 28)));
       }
     }
+    await onApplied?.call();
   }
 }
 

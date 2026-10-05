@@ -14,6 +14,7 @@ class MalApiClient {
     required String accessToken,
     Future<String?> Function()? onRefreshToken,
     Dio? dio,
+    this.cancelToken,
   }) : _accessToken = accessToken,
        _onRefreshToken = onRefreshToken,
        _dio =
@@ -27,6 +28,7 @@ class MalApiClient {
            );
 
   final Dio _dio;
+  final CancelToken? cancelToken;
   String _accessToken;
   final Future<String?> Function()? _onRefreshToken;
 
@@ -474,6 +476,7 @@ class MalApiClient {
     try {
       return await _dio.request<dynamic>(
         path,
+        cancelToken: cancelToken,
         data: data,
         queryParameters: queryParameters,
         options: Options(

@@ -42,6 +42,56 @@ void main() {
 
   group('PlaybackController play/pause intent', () {
     test(
+      'exit waits for the final SQLite checkpoint without abandoning it',
+      () async {
+        final c = container();
+        final database = c.read(canonicalLibraryDatabaseProvider);
+        final controller = c.read(playbackControllerProvider.notifier);
+        final item = _testPlaybackItem('shutdown-checkpoint');
+        await c.read(playerSettingsProvider.future);
+        await c
+            .read(localLibraryProvider.notifier)
+            .loadEpisodeProgress(item.id, 1, 1);
+        final engine = _FakePlayerEngine(
+          const PlayerEngineState(
+            isInitialized: true,
+            position: Duration(minutes: 3),
+            duration: Duration(minutes: 24),
+          ),
+        );
+        controller.debugSetPlaybackState(
+          PlaybackState(item: item, engine: engine),
+        );
+        final entered = Completer<void>();
+        final release = Completer<void>();
+        final writer = database.transaction(() async {
+          await database.customSelect('SELECT 1').get();
+          entered.complete();
+          await release.future;
+        });
+        await entered.future;
+        bool finished = false;
+        final exiting = controller.prepareForExit().then(
+          (_) => finished = true,
+        );
+        try {
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+          expect(engine.disposeCalls, 1);
+          expect(finished, isFalse);
+        } finally {
+          release.complete();
+          await writer;
+          await exiting;
+        }
+        final checkpoint = await c
+            .read(localLibraryProvider.notifier)
+            .loadEpisodeProgress(item.id, 1, 1);
+        expect(checkpoint?.positionSeconds, 180);
+        expect(finished, isTrue);
+      },
+    );
+
+    test(
       'next-episode route is used first and proven only after video plays',
       () async {
         SharedPreferences.setMockInitialValues(<String, Object>{

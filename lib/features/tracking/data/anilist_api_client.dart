@@ -29,6 +29,7 @@ class AniListApiClient {
   AniListApiClient({
     String? accessToken,
     Dio? dio,
+    this.cancelToken,
     Duration connectTimeout = const Duration(seconds: 12),
     Duration receiveTimeout = defaultReceiveTimeout,
     Duration timeoutRetryDelay = defaultTimeoutRetryDelay,
@@ -49,6 +50,7 @@ class AniListApiClient {
            );
 
   final Dio _dio;
+  final CancelToken? cancelToken;
   final String? _accessToken;
   final Duration _timeoutRetryDelay;
   final bool retryTimeoutReads;
@@ -2366,6 +2368,7 @@ class AniListApiClient {
 
     Future<Response<dynamic>> send() => _dio.post<dynamic>(
       '',
+      cancelToken: cancelToken,
       data: <String, dynamic>{'query': query, 'variables': variables},
       options: Options(
         headers: <String, String>{

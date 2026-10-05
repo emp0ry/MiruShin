@@ -336,6 +336,8 @@ class PlaybackController extends Notifier<PlaybackState> {
     'playbackEngineDispose',
   );
   Future<void>? _finalProgressSaveBarrier;
+  final Set<Future<void>> _progressSaves = {};
+  bool _preparingForExit = false;
   final SeekThumbnailRequestTracker _seekThumbnailRequests =
       SeekThumbnailRequestTracker();
   final SeekThumbnailService _seekThumbnailService = SeekThumbnailService(
@@ -2109,6 +2111,14 @@ class PlaybackController extends Notifier<PlaybackState> {
     }
   }
 
+  Future<void> prepareForExit() async {
+    _preparingForExit = true;
+    await stop();
+    // Timer/event callbacks may have started saves before stop cancelled them.
+    // Drain those too: native exit must not abandon a SQLite checkpoint.
+    await Future.wait<void>(_progressSaves.toList(), eagerError: false);
+  }
+
   Future<void> stop() async {
     unawaited(MediaSessionService.clearNowPlaying());
     unawaited(_ignorePlaybackTeardownErrors(DiscordRpcService.clearActivity()));
@@ -2117,7 +2127,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     Future<void>? finalProgressSave;
     if (item != null && engine != null && !item.ignoreProgress) {
       late final Future<void> barrier;
-      barrier = _saveProgress(item, engine)
+      barrier = _saveProgress(item, engine, finalCheckpoint: true)
           .catchError((Object _) {
             // Exiting should still release the native player if persistence is busy.
           })
@@ -4147,6 +4157,21 @@ class PlaybackController extends Notifier<PlaybackState> {
 
   Future<void> _saveProgress(
     MediaPlaybackItem item,
+    PlayerEngine engine, {
+    bool finalCheckpoint = false,
+  }) {
+    if (_preparingForExit && !finalCheckpoint) return Future<void>.value();
+    late final Future<void> save;
+    save = _saveProgressNow(
+      item,
+      engine,
+    ).whenComplete(() => _progressSaves.remove(save));
+    _progressSaves.add(save);
+    return save;
+  }
+
+  Future<void> _saveProgressNow(
+    MediaPlaybackItem item,
     PlayerEngine engine,
   ) async {
     if (item.ignoreProgress || !ref.mounted) return;
@@ -4244,20 +4269,18 @@ class PlaybackController extends Notifier<PlaybackState> {
     }
 
     if (!ref.mounted) return;
-    unawaited(
-      ref
-          .read(localLibraryProvider.notifier)
-          .updateWatchProgress(
-            mediaId: item.id,
-            seasonNumber: item.seasonNumber,
-            episodeNumber: item.episodeNumber,
-            positionFraction: watched
-                ? 1.0
-                : (durationSeconds != null && durationSeconds > 0
-                      ? position.inSeconds / durationSeconds
-                      : null),
-          ),
-    );
+    await ref
+        .read(localLibraryProvider.notifier)
+        .updateWatchProgress(
+          mediaId: item.id,
+          seasonNumber: item.seasonNumber,
+          episodeNumber: item.episodeNumber,
+          positionFraction: watched
+              ? 1.0
+              : (durationSeconds != null && durationSeconds > 0
+                    ? position.inSeconds / durationSeconds
+                    : null),
+        );
   }
 
   Future<bool> _trySyncTrackers(

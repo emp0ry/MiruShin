@@ -20,6 +20,7 @@ class ShikimoriApiClient {
     required int userId,
     Future<String?> Function()? onRefreshToken,
     Dio? dio,
+    this.cancelToken,
   }) : _accessToken = accessToken,
        _userId = userId,
        _onRefreshToken = onRefreshToken,
@@ -34,6 +35,7 @@ class ShikimoriApiClient {
            );
 
   final Dio _dio;
+  final CancelToken? cancelToken;
   String _accessToken;
   int _userId;
   final Future<String?> Function()? _onRefreshToken;
@@ -423,6 +425,7 @@ class ShikimoriApiClient {
     try {
       return await _dio.request<dynamic>(
         path,
+        cancelToken: cancelToken,
         data: data,
         queryParameters: queryParameters,
         options: Options(

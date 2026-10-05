@@ -970,6 +970,20 @@ class SyncJournalEntry {
     readbackBeforeWrite: readbackBeforeWrite,
   );
 
+  SyncJournalEntry withReadbackBeforeWrite() => SyncJournalEntry(
+    operationId: operationId,
+    identity: identity,
+    patch: patch,
+    pendingTargets: pendingTargets,
+    awaitingRemoteTargets: awaitingRemoteTargets,
+    createdAt: createdAt,
+    updatedAt: updatedAt,
+    mediaTitle: mediaTitle,
+    providerEntryIds: providerEntryIds,
+    targetAccountIds: targetAccountIds,
+    readbackBeforeWrite: true,
+  );
+
   SyncJournalEntry deliveredTo(
     TrackerSource provider, {
     bool awaitRemoteConfirmation = false,

@@ -43,6 +43,7 @@ class MainFlutterWindow: NSWindow, NSWindowDelegate {
 
     RegisterGeneratedPlugins(registry: flutterViewController)
     let messenger = flutterViewController.engine.binaryMessenger
+    (NSApp.delegate as? AppDelegate)?.installExitHandshake(messenger: messenger)
 
     // Window channel (fullscreen management)
     let wch = FlutterMethodChannel(name: "mirushin/window", binaryMessenger: messenger)
@@ -260,6 +261,13 @@ class MainFlutterWindow: NSWindow, NSWindowDelegate {
 
   func windowDidFailToExitFullScreen(_ window: NSWindow) {
     fullscreenTransitionDidFail(target: false)
+  }
+
+  func windowShouldClose(_ sender: NSWindow) -> Bool {
+    // Closing the Flutter view first destroys the UI isolate before async DB
+    // cleanup can finish. Keep it alive and use the same handshake as Cmd-Q.
+    NSApp.terminate(sender)
+    return false
   }
 
   func windowWillClose(_ notification: Notification) {

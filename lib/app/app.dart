@@ -11,6 +11,7 @@ import 'package:go_router/go_router.dart';
 
 import '../core/cache/artwork_cache_manager.dart';
 import '../core/constants/app_constants.dart';
+import '../core/platform/native_exit_handshake.dart';
 import '../core/platform/tv_platform.dart';
 import '../features/addons/application/cloudflare_challenge_service.dart';
 import '../features/addons/application/sora_addons_provider.dart';
@@ -24,6 +25,7 @@ import '../features/player/application/playback_controller.dart';
 import '../features/settings/application/settings_state.dart';
 import '../features/tracking/application/tracker_library_provider.dart';
 import '../features/tracking/application/tracker_reconciliation_lifecycle.dart';
+import '../features/tracking/application/tracker_sync_coordinator.dart';
 import '../features/watch/application/stream_selection_preferences.dart';
 import 'app_routes.dart';
 import 'deep_links/mirushin_deep_link_service.dart';
@@ -41,7 +43,7 @@ class MiruShinApp extends ConsumerStatefulWidget {
 }
 
 class _MiruShinAppState extends ConsumerState<MiruShinApp> {
-  static const Duration _exitPlaybackCleanupTimeout = Duration(seconds: 2);
+  static const Duration _exitWebViewCleanupTimeout = Duration(seconds: 2);
 
   late final GoRouter _router;
   late final AppLifecycleListener _lifecycleListener;
@@ -49,11 +51,18 @@ class _MiruShinAppState extends ConsumerState<MiruShinApp> {
   late final SoraJsRuntime _soraRuntime;
   late final GoogleDriveSyncController _googleDriveSyncController;
   late final CanonicalLibraryDatabaseRegistry _libraryDatabaseRegistry;
+  late final TrackerSyncCoordinatorRegistry _trackerCoordinatorRegistry;
+  late final VoidCallback _stopDriveLifecycle;
+  late final Future<void> Function() _stopTrackerReconciliation;
+  final NativeExitHandshake _nativeExitHandshake = NativeExitHandshake();
   Future<void>? _exitCleanup;
 
   @override
   void initState() {
     super.initState();
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.macOS) {
+      _nativeExitHandshake.attach(_cleanupForExit);
+    }
     _playbackController = ref.read(playbackControllerProvider.notifier);
     _soraRuntime = ref.read(soraJsRuntimeProvider);
     _googleDriveSyncController = ref.read(
@@ -61,6 +70,13 @@ class _MiruShinAppState extends ConsumerState<MiruShinApp> {
     );
     _libraryDatabaseRegistry = ref.read(
       canonicalLibraryDatabaseRegistryProvider,
+    );
+    _trackerCoordinatorRegistry = ref.read(
+      trackerSyncCoordinatorRegistryProvider,
+    );
+    _stopDriveLifecycle = ref.read(googleDriveSyncLifecycleProvider);
+    _stopTrackerReconciliation = ref.read(
+      trackerReconciliationLifecycleProvider,
     );
     _router = buildAppRouter(widget.initialRoute);
     MiruShinDeepLinkService.instance.attachRouter(
@@ -89,7 +105,7 @@ class _MiruShinAppState extends ConsumerState<MiruShinApp> {
   void dispose() {
     MiruShinDeepLinkService.instance.detachRouter(_router);
     _lifecycleListener.dispose();
-    unawaited(_cleanupForExit());
+    unawaited(_cleanupForExit().then((_) => _nativeExitHandshake.detach()));
     CloudflareChallengeService.instance.registerSolver(null);
     super.dispose();
   }
@@ -99,19 +115,22 @@ class _MiruShinAppState extends ConsumerState<MiruShinApp> {
     if (cleanup != null) return cleanup;
 
     return _exitCleanup = () async {
+      _stopDriveLifecycle();
+      final trackerReconciliationStopped = _stopTrackerReconciliation();
+      final driveStopped = _googleDriveSyncController.prepareForExit();
+      // Do not time out persistence: a timeout leaves SQLite writes running
+      // while the native engine tears down. Save the player's final checkpoint
+      // before stopping the local mutation lane.
+      await _playbackController.prepareForExit();
       await Future.wait<void>(<Future<void>>[
-        _googleDriveSyncController.prepareForExit(),
-        _playbackController
-            .stop()
-            .timeout(_exitPlaybackCleanupTimeout)
-            .catchError((_) {
-              // During process teardown the player may already be half gone.
-            }),
-        _soraRuntime.shutdown().timeout(_exitPlaybackCleanupTimeout).catchError(
-          (_) {
-            // Native WebView teardown is best-effort during process exit.
-          },
-        ),
+        driveStopped,
+        _trackerCoordinatorRegistry.prepareForExit(),
+        trackerReconciliationStopped,
+        _soraRuntime.shutdown().timeout(_exitWebViewCleanupTimeout).catchError((
+          _,
+        ) {
+          // Native WebView teardown is best-effort during process exit.
+        }),
       ]);
       // This must be the final step: all sync/database users are stopped first,
       // then Drift is closed and awaited before Flutter tears down the Dart VM.
