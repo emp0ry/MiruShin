@@ -981,6 +981,9 @@ void main() {
 
     expect(find.text('Durable Offline Anime'), findsOneWidget);
     expect(find.text('Watching  1'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 1));
+    await tester.runAsync(database.close); // Await reactive query disposal.
   });
 
   testWidgets('save can finish safely after the calling widget is unmounted', (

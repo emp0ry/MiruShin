@@ -1647,7 +1647,8 @@ class AniListSmileyPicker extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         children: _options
             .map((({IconData icon, String tooltip, double value}) opt) {
-              final bool selected = (score - opt.value).abs() < 0.1;
+              final bool selected =
+                  score > 0 && aniListSmileyScoreIcon(score) == opt.icon;
               return IconButton(
                 tooltip: context.t(selected ? 'Unscore' : opt.tooltip),
                 iconSize: 30,

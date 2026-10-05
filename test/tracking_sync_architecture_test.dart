@@ -208,7 +208,9 @@ void main() {
         states,
       ).single.entries.single;
       expect(displayed.progress, 12);
-      expect(displayed.status, AniListListStatus.completed);
+      // Rendering must not invent a status different from canonical state.
+      // The mutation/reconciliation path performs any explicit repair.
+      expect(displayed.status, AniListListStatus.current);
     });
 
     test(

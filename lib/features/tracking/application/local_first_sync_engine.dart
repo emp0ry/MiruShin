@@ -90,6 +90,26 @@ class LocalFirstSyncEngine {
 
   Future<void> _tail = Future<void>.value();
   Future<void>? _activeFlush;
+  List<SyncJournalEntry> _journalBaseline = const [];
+
+  Future<List<SyncJournalEntry>> _loadJournal() async {
+    final entries = await _store.loadJournal();
+    _journalBaseline = List.of(entries);
+    return entries;
+  }
+
+  Future<void> _saveJournal(List<SyncJournalEntry> entries) async {
+    final store = _store;
+    if (store is ConcurrentJournalTrackingSyncStore) {
+      await (store as ConcurrentJournalTrackingSyncStore).saveJournalChanges(
+        _journalBaseline,
+        entries,
+      );
+    } else {
+      await store.saveJournal(entries);
+    }
+    _journalBaseline = List.of(entries);
+  }
 
   Future<SyncDispatchResult> recordMutation({
     required MediaIdentity identity,
@@ -319,7 +339,7 @@ class LocalFirstSyncEngine {
 
   Future<void> _flushLocked() async {
     if (await _isInMigrationSafeMode()) return;
-    List<SyncJournalEntry> journal = await _store.loadJournal();
+    List<SyncJournalEntry> journal = await _loadJournal();
     if (journal.isEmpty) return;
     final List<UserMediaState> states = await _store.loadStates();
     final Map<TrackerSource, TrackerProviderHealth> health = await _store
@@ -440,7 +460,7 @@ class LocalFirstSyncEngine {
           // Persist the uncertain/delivered state before read-back. If the
           // process dies during confirmation, the next flush reads the remote
           // result rather than blindly replaying a delete or toggle.
-          await _store.saveJournal(
+          await _saveJournal(
             journal
                 .where((SyncJournalEntry value) => !value.isSettled)
                 .toList(),
@@ -477,7 +497,7 @@ class LocalFirstSyncEngine {
             blocked.add((entry.identity, target));
           }
           await _recordSuccessLocked(target);
-          await _store.saveJournal(
+          await _saveJournal(
             journal
                 .where((SyncJournalEntry value) => !value.isSettled)
                 .toList(),
@@ -546,7 +566,7 @@ class LocalFirstSyncEngine {
     journal = journal
         .where((SyncJournalEntry entry) => !entry.isSettled)
         .toList();
-    await _store.saveJournal(journal);
+    await _saveJournal(journal);
   }
 
   Future<LocalFirstLibraryResult> refreshAnimeList({
@@ -557,7 +577,7 @@ class LocalFirstSyncEngine {
     await flush();
     final LocalFirstLibraryResult result = await _serial(() async {
       List<UserMediaState> local = await _store.loadStates();
-      List<SyncJournalEntry> journal = await _store.loadJournal();
+      List<SyncJournalEntry> journal = await _loadJournal();
       if (await _isInMigrationSafeMode()) {
         return LocalFirstLibraryResult(states: local, fromCache: true);
       }
@@ -610,9 +630,10 @@ class LocalFirstSyncEngine {
               journal,
               source,
             );
-            await _store.saveJournal(journal);
+            _journalBaseline = List.of(beforeReconciliationConfirmation);
+            await _saveJournal(journal);
           } else {
-            await _store.saveJournal(journal);
+            await _saveJournal(journal);
             local = _mergeRemote(
               local,
               remote,
@@ -664,7 +685,7 @@ class LocalFirstSyncEngine {
     await flush();
     final LocalFirstLibraryResult result = await _serial(() async {
       List<UserMediaState> local = await _store.loadStates();
-      List<SyncJournalEntry> journal = await _store.loadJournal();
+      List<SyncJournalEntry> journal = await _loadJournal();
       if (await _isInMigrationSafeMode()) {
         return LocalFirstLibraryResult(states: local, fromCache: true);
       }
@@ -721,9 +742,10 @@ class LocalFirstSyncEngine {
               journal,
               source,
             );
-            await _store.saveJournal(journal);
+            _journalBaseline = List.of(beforeReconciliationConfirmation);
+            await _saveJournal(journal);
           } else {
-            await _store.saveJournal(journal);
+            await _saveJournal(journal);
             local = _mergeRemote(
               local,
               remote,
@@ -763,9 +785,18 @@ class LocalFirstSyncEngine {
     bool incomingAiringIsAuthoritative = false,
   }) {
     return _serial<List<UserMediaState>>(() async {
+      final store = _store;
+      if (store is PresentationTrackingSyncStore) {
+        // Partial previews and cached reads can enrich a title, not replace
+        // tracking state or become outbound user mutations.
+        await (store as PresentationTrackingSyncStore).enrichRemoteMetadata(
+          remote,
+        );
+        return store.loadStates();
+      }
       final List<UserMediaState> local = await _store.loadStates();
       if (await _isInMigrationSafeMode()) return local;
-      List<SyncJournalEntry> journal = await _store.loadJournal();
+      List<SyncJournalEntry> journal = await _loadJournal();
       // A status-filtered preview is not an authoritative provider snapshot.
       // It may contain a just-created Watching entry while the already-loaded
       // full Library is still stale. Settling the journal from that preview
@@ -779,7 +810,7 @@ class LocalFirstSyncEngine {
           journal,
           snapshotSource,
         );
-        await _store.saveJournal(journal);
+        await _saveJournal(journal);
       }
       final List<UserMediaState> merged = _mergeRemote(
         local,

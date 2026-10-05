@@ -64,6 +64,19 @@ abstract class AtomicTrackingSyncStore {
   });
 }
 
+/// Network passes commit only changes to the journal they actually read.
+/// Concurrent local/Drive operations must not disappear during a delivery.
+abstract class ConcurrentJournalTrackingSyncStore {
+  Future<void> saveJournalChanges(
+    List<SyncJournalEntry> before,
+    List<SyncJournalEntry> after,
+  );
+}
+
+abstract class PresentationTrackingSyncStore {
+  Future<void> enrichRemoteMetadata(List<UserMediaState> remote);
+}
+
 /// Optional SQLite-backed reconciliation contract. A full authenticated
 /// provider snapshot is persisted first, diffed only against that same
 /// provider account, and accepted into canonical state field-by-field.

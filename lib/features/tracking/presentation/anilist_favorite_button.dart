@@ -37,26 +37,29 @@ class _AniListFavoriteButtonState extends ConsumerState<AniListFavoriteButton> {
         (SettingsState settings) => settings.anilistAccessToken.trim(),
       ),
     );
-    if ((identity.anilistId == null && identity.malId == null) ||
-        token.isEmpty) {
+    if (identity.anilistId == null &&
+        identity.malId == null &&
+        identity.shikimoriId == null) {
       return const SizedBox.shrink();
     }
 
     final bool itemFavourite = aniListItemIsFavourite(widget.item);
-    final bool? serverFavourite = mediaId == null
+    final bool? localFavourite = ref.watch(
+      anilistFavoriteProvider.select(
+        (values) => localFavoriteFor(values, identity),
+      ),
+    );
+    final bool? serverFavourite =
+        mediaId == null ||
+            token.isEmpty ||
+            localFavourite != null ||
+            widget.item.externalIds.containsKey('anilist_is_favourite')
         ? null
         : ref
               .watch(anilistMediaFavoriteStatusProvider(mediaId))
               .maybeWhen(data: (bool? value) => value, orElse: () => null);
     final bool baseFavourite = serverFavourite ?? itemFavourite;
-    final bool favourite =
-        ref.watch(
-          anilistFavoriteProvider.select(
-            (Map<String, bool> overrides) =>
-                localFavoriteFor(overrides, identity),
-          ),
-        ) ??
-        baseFavourite;
+    final bool favourite = localFavourite ?? baseFavourite;
     final Color iconColor = favourite
         ? Colors.redAccent.shade100
         : widget.onImage

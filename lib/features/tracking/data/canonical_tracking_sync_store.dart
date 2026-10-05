@@ -7,6 +7,8 @@ class CanonicalTrackingSyncStore
     implements
         TrackingSyncStore,
         AtomicTrackingSyncStore,
+        ConcurrentJournalTrackingSyncStore,
+        PresentationTrackingSyncStore,
         ReconciliationTrackingSyncStore,
         DeliveryTrackingSyncStore,
         MigrationSafeModeTrackingSyncStore {
@@ -28,6 +30,7 @@ class CanonicalTrackingSyncStore
     Future<void> recoverOldDeliveries() async {
       try {
         await _repository.recoverLegacyOperationDeliveries();
+        await _repository.repairSyncConsistency();
       } on Object {
         // Recovery is best-effort. Existing journal entries are untouched by
         // a failed transaction and require provider read-back before writing.
@@ -107,6 +110,28 @@ class CanonicalTrackingSyncStore
     await _ensureMigrated();
     if (_migrationSafeMode) return _legacy.saveJournal(entries);
     await _repository.saveJournal(entries);
+  }
+
+  @override
+  Future<void> saveJournalChanges(
+    List<SyncJournalEntry> before,
+    List<SyncJournalEntry> after,
+  ) async {
+    await _ensureMigrated();
+    if (_migrationSafeMode) return _legacy.saveJournal(after);
+    await _repository.saveJournalChanges(before, after);
+  }
+
+  @override
+  Future<void> enrichRemoteMetadata(List<UserMediaState> remote) async {
+    await _ensureMigrated();
+    if (_migrationSafeMode) return;
+    for (final state in remote) {
+      await _repository.enrichPresentationMetadata(
+        identity: state.identity,
+        mediaItem: state.mediaItem,
+      );
+    }
   }
 
   @override

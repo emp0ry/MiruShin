@@ -1613,7 +1613,8 @@ void main() {
           );
       expect(second.destructiveChangesPending, 0);
       expect(second.states.single.progress, 4);
-      expect(second.journal.single.pendingTargets, <TrackerSource>{
+      expect(second.journal, hasLength(2));
+      expect(second.journal.last.pendingTargets, <TrackerSource>{
         TrackerSource.mal,
       });
     });
@@ -1688,8 +1689,9 @@ void main() {
             );
         expect(second.destructiveChangesPending, 0);
         expect(second.states, isEmpty);
-        expect(second.journal.single.patch.delete, isTrue);
-        expect(second.journal.single.pendingTargets, <TrackerSource>{
+        expect(second.journal, hasLength(2));
+        expect(second.journal.last.patch.delete, isTrue);
+        expect(second.journal.last.pendingTargets, <TrackerSource>{
           TrackerSource.anilist,
           TrackerSource.mal,
         });

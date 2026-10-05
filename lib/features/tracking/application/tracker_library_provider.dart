@@ -2,8 +2,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../shared/models/anilist_models.dart';
 import '../../../shared/models/media_item.dart';
+import '../../library/application/canonical_library_repository.dart';
 import '../../settings/application/settings_state.dart';
-import '../domain/tracker_models.dart';
 import '../domain/tracking_sync_models.dart';
 import 'tracker_sync_coordinator.dart';
 
@@ -20,10 +20,9 @@ final trackerLibraryOptimisticMutationsProvider =
 
 /// Durable local view of the selected tracker account.
 ///
-/// The provider list remains the authority once a live snapshot is available,
-/// but this snapshot lets the UI render immediately during startup/outages and
-/// restores pending edits after an app restart. Pending journal mutations are
-/// kept separately so a stale provider response cannot overwrite them.
+/// SQLite is always the authority, including while trackers are unavailable.
+/// A reactive query refreshes this view after local commits and Drive imports;
+/// the delivery journal never overlays already-committed canonical fields.
 final trackerLocalAnimeLibraryProvider =
     FutureProvider<TrackerLocalAnimeLibrary>(
       (Ref ref) => _loadCanonicalLibrary(ref, 'anime'),
@@ -34,11 +33,20 @@ final trackerLocalMangaLibraryProvider =
       (Ref ref) => _loadCanonicalLibrary(ref, 'manga'),
     );
 
+final _canonicalTrackingStatesProvider = StreamProvider<List<UserMediaState>>((
+  ref,
+) async* {
+  final repository = ref.watch(canonicalLibraryRepositoryProvider);
+  final store = ref.watch(trackingSyncStoreProvider);
+  yield await store.loadStates();
+  yield* repository.watchTrackingStates();
+});
+
 Future<TrackerLocalAnimeLibrary> _loadCanonicalLibrary(
   Ref ref,
   String mediaKind,
 ) async {
-  final account = ref.watch(
+  ref.watch(
     settingsProvider.select(
       (SettingsState settings) => (
         settings.effectivePrimaryTrackerSource,
@@ -50,41 +58,19 @@ Future<TrackerLocalAnimeLibrary> _loadCanonicalLibrary(
   );
   // Account ids invalidate provider snapshots and select that AniList
   // workspace's physically isolated canonical library.
-  final TrackerSource source = account.$1;
   final store = ref.watch(trackingSyncStoreProvider);
-  final List<UserMediaState> states = await store.loadStates();
-  final List<SyncJournalEntry> journal = await store.loadJournal();
+  final cached = ref.watch(_canonicalTrackingStatesProvider).asData?.value;
+  final states = cached ?? await store.loadStates();
   final List<UserMediaState> visibleStates = states
       .where((UserMediaState state) => state.identity.mediaKind == mediaKind)
       .toList(growable: false);
   final List<AniListAnimeListFolder> folders = foldersFromUserMediaStates(
     visibleStates,
   );
-  final List<AniListAnimeListEntry> entries = <AniListAnimeListEntry>[
-    for (final AniListAnimeListFolder folder in folders) ...folder.entries,
-  ];
-
-  AniListAnimeListEntry? seedFor(MediaIdentity identity) {
-    for (final AniListAnimeListEntry entry in entries) {
-      if (_entryIdentity(entry).matches(identity)) return entry;
-    }
-    return null;
-  }
-
   return TrackerLocalAnimeLibrary(
     folders: folders,
-    pendingMutations: <TrackerLibraryOptimisticMutation>[
-      for (final SyncJournalEntry mutation in journal)
-        if (mutation.identity.mediaKind == mediaKind &&
-            mutation.tracks(source) &&
-            (mutation.patch.delete || mutation.patch.touchesLibraryState))
-          TrackerLibraryOptimisticMutation(
-            identity: mutation.identity,
-            patch: mutation.patch,
-            seedEntry: seedFor(mutation.identity),
-            updatedAt: mutation.updatedAt,
-          ),
-    ],
+    pendingMutations: const [],
+    canonical: true,
   );
 }
 
@@ -92,10 +78,14 @@ class TrackerLocalAnimeLibrary {
   const TrackerLocalAnimeLibrary({
     required this.folders,
     required this.pendingMutations,
+    this.canonical = false,
   });
 
   final List<AniListAnimeListFolder> folders;
   final List<TrackerLibraryOptimisticMutation> pendingMutations;
+
+  /// False only for legacy/noncanonical views that still need an overlay.
+  final bool canonical;
 }
 
 class TrackerLibraryOptimisticMutation {
@@ -379,18 +369,21 @@ List<AniListAnimeListFolder> effectiveTrackerAnimeLibrary({
 }) {
   List<AniListAnimeListFolder> result =
       local != null &&
-          (local.folders.isNotEmpty ||
+          (local.canonical ||
+              local.folders.isNotEmpty ||
               providerFolders.isEmpty ||
               useLocalFallback)
       ? local.folders
       : providerFolders;
-  if (local != null && local.pendingMutations.isNotEmpty) {
+  if (local?.canonical != true &&
+      local != null &&
+      local.pendingMutations.isNotEmpty) {
     result = applyTrackerLibraryOptimisticMutations(
       result,
       local.pendingMutations,
     );
   }
-  if (optimistic.isNotEmpty) {
+  if (local?.canonical != true && optimistic.isNotEmpty) {
     result = applyTrackerLibraryOptimisticMutations(result, optimistic);
   }
   if (statuses == null || statuses.isEmpty) return result;

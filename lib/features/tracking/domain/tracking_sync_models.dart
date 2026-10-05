@@ -1341,14 +1341,7 @@ List<AniListAnimeListFolder> foldersFromUserMediaStates(
       state.progress,
       state.mediaItem.episodeCount,
     );
-    final int? total = state.mediaItem.episodeCount;
-    final AniListListStatus displayStatus =
-        state.status == AniListListStatus.current &&
-            total != null &&
-            total > 0 &&
-            displayProgress >= total
-        ? AniListListStatus.completed
-        : state.status;
+    final AniListListStatus displayStatus = state.status;
     grouped
         .putIfAbsent(displayStatus, () => <AniListAnimeListEntry>[])
         .add(
@@ -1357,9 +1350,7 @@ List<AniListAnimeListFolder> foldersFromUserMediaStates(
             status: displayStatus,
             progress: displayProgress,
             score: state.score,
-            scoreRaw: aniListState?.data['scoreRaw'] is num
-                ? (aniListState!.data['scoreRaw'] as num).toInt()
-                : state.score == null
+            scoreRaw: state.score == null
                 ? null
                 : (state.score! * 10).round().clamp(0, 100),
             mediaItem: state.mediaItem.copyWith(

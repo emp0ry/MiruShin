@@ -1,8 +1,7 @@
-import 'dart:async';
-
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../shared/models/media_item.dart';
+import '../../library/application/canonical_library_repository.dart';
 import '../../settings/application/settings_state.dart';
 import '../data/anilist_api_client.dart';
 import '../domain/tracking_sync_models.dart';
@@ -12,6 +11,14 @@ final anilistFavoriteProvider =
     NotifierProvider<AniListFavoriteController, Map<String, bool>>(
       AniListFavoriteController.new,
     );
+
+final _canonicalFavoritesProvider =
+    StreamProvider<List<LocalMediaFavoriteState>>((ref) async* {
+      final repository = ref.watch(canonicalLibraryRepositoryProvider);
+      final store = ref.watch(trackingSyncStoreProvider);
+      yield await store.loadFavorites();
+      yield* repository.watchFavorites();
+    });
 
 final anilistMediaFavoriteStatusProvider = FutureProvider.autoDispose
     .family<bool?, int>((Ref ref, int mediaId) async {
@@ -24,26 +31,15 @@ final anilistMediaFavoriteStatusProvider = FutureProvider.autoDispose
     });
 
 class AniListFavoriteController extends Notifier<Map<String, bool>> {
-  bool _loadingPersisted = false;
-
   @override
   Map<String, bool> build() {
-    if (!_loadingPersisted) {
-      _loadingPersisted = true;
-      unawaited(_loadPersisted());
-    }
-    return const <String, bool>{};
-  }
-
-  Future<void> _loadPersisted() async {
-    final List<LocalMediaFavoriteState> favorites = await ref
-        .read(trackingSyncStoreProvider)
-        .loadFavorites();
-    state = <String, bool>{
+    final favorites =
+        ref.watch(_canonicalFavoritesProvider).asData?.value ??
+        const <LocalMediaFavoriteState>[];
+    return <String, bool>{
       for (final LocalMediaFavoriteState favorite in favorites)
         for (final String key in favoriteIdentityKeys(favorite.identity))
           key: favorite.favorite,
-      ...state,
     };
   }
 
@@ -53,9 +49,14 @@ class AniListFavoriteController extends Notifier<Map<String, bool>> {
       mediaId: item.id,
     );
     final bool next = !current;
+    final repository = ref.read(canonicalLibraryRepositoryProvider);
     await ref
         .read(trackerSyncCoordinatorProvider)
         .pushFavorite(mediaItem: item, favorite: next);
+    if (!ref.mounted ||
+        ref.read(canonicalLibraryRepositoryProvider) != repository) {
+      return;
+    }
     // The heart changes only after SQLite committed the desired value and its
     // durable outbox. Network delivery remains asynchronous and idempotent.
     state = <String, bool>{

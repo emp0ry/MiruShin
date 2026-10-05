@@ -261,6 +261,283 @@ class CanonicalLibraryRepository {
     await _ensureDeviceId();
   }
 
+  /// Repairs only facts supported by existing operation history. No network
+  /// read, wall-clock winner or guessed progress participates in this upgrade.
+  Future<void> repairSyncConsistency() async {
+    await initialize();
+    await database.transaction(() async {
+      final marker =
+          await (database.select(database.syncCursorRecords)..where(
+                (table) => table.scope.equals('migration:field-consistency.v1'),
+              ))
+              .getSingleOrNull();
+      if (marker != null) return;
+      final history =
+          await (database.select(database.libraryOperationRecords)..orderBy([
+                (table) => OrderingTerm.asc(table.occurredAtMs),
+                (table) => OrderingTerm.asc(table.operationId),
+              ]))
+              .get();
+      final operations = <String, Map<String, dynamic>>{
+        for (final op in history)
+          op.operationId: {
+            'baseRevisions': _jsonMap(op.baseRevisionsJson),
+            'after': _jsonMap(op.afterJson),
+            'originKind': op.originKind,
+            'occurredAtMs': op.occurredAtMs,
+          },
+      };
+      final historyByLocal = <String, List<LibraryOperationRecord>>{};
+      for (final op in history) {
+        historyByLocal.putIfAbsent(op.localId, () => []).add(op);
+      }
+      final rows = await database
+          .select(database.canonicalLibraryRecords)
+          .get();
+      final favoriteValues = await loadFavorites();
+      for (final row in rows) {
+        UserMediaState state = UserMediaState.fromJson(
+          _jsonMap(row.canonicalStateJson),
+        );
+        final revisions = _jsonMap(row.fieldRevisionsJson);
+        final originalFields = revisions.keys
+            .where((field) => revisions[field] != null)
+            .toSet();
+        bool favorite = row.favorite;
+        bool inLibrary = row.inLibrary;
+        int? tombstonedAtMs = row.tombstonedAtMs;
+        final Map<String, UserMediaState> parsedAfterStates = {};
+        final rowHistory = historyByLocal[row.localId] ?? const [];
+        // Legacy first-import operations had revisions in their history, but
+        // not on their newly created canonical row. Recover matching values.
+        for (final op in rowHistory) {
+          final after = _jsonMap(operations[op.operationId]?['after']);
+          final rawState = after['state'];
+          final afterState = rawState is Map
+              ? parsedAfterStates.putIfAbsent(
+                  op.operationId,
+                  () => UserMediaState.fromJson(
+                    Map<String, dynamic>.from(rawState),
+                  ),
+                )
+              : null;
+          for (final field in _jsonStringSet(op.fieldsJson)) {
+            if (originalFields.contains(field)) continue;
+            if (_jsonEquivalent(
+              _canonicalFieldValue(
+                field,
+                state,
+                membership: row.inLibrary,
+                favorite: favorite,
+              ),
+              _operationFieldValue(field, after, parsedState: afterState),
+            )) {
+              revisions[field] = _jsonMap(op.resultingRevisionsJson)[field];
+            }
+          }
+        }
+        // A stale whole-row write changed a value without changing its field
+        // revision. Restore that revision's documented value, not a snapshot.
+        for (final item in revisions.entries) {
+          final leaves = _revisionLeaves(item.value);
+          if (leaves.length != 1) continue;
+          final id = _jsonMap(leaves.single)['operationId']?.toString();
+          final op = operations[id];
+          if (op == null) continue;
+          final after = _jsonMap(op['after']);
+          if (item.key == 'favorite' && after['favorite'] is bool) {
+            favorite = after['favorite'] as bool;
+          } else if (item.key == 'membership') {
+            inLibrary = after['state'] is Map;
+            tombstonedAtMs = inLibrary
+                ? null
+                : (op['occurredAtMs'] as int? ?? row.tombstonedAtMs);
+          } else {
+            final field = _fieldFromPersistedName(item.key);
+            final raw = after['state'];
+            if (field != null &&
+                field != UserMediaField.favorite &&
+                raw is Map) {
+              state = state.apply(
+                _patchFromState(
+                  parsedAfterStates.putIfAbsent(
+                    id!,
+                    () =>
+                        UserMediaState.fromJson(Map<String, dynamic>.from(raw)),
+                  ),
+                  {field},
+                ),
+                state.updatedAt.isAfter(
+                      DateTime.fromMillisecondsSinceEpoch(
+                        op['occurredAtMs'] as int,
+                        isUtc: true,
+                      ),
+                    )
+                    ? state.updatedAt
+                    : DateTime.fromMillisecondsSinceEpoch(
+                        op['occurredAtMs'] as int,
+                        isUtc: true,
+                      ),
+              );
+            }
+          }
+        }
+        // The legacy favorites bucket is richer than SQLite's old default
+        // false column; preserve it when no revisioned favorite exists.
+        if (revisions['favorite'] == null) {
+          for (final value in favoriteValues) {
+            if (value.identity.matches(state.identity)) {
+              favorite = value.favorite;
+            }
+          }
+        }
+        await _upsertTrackingStateLocked(state);
+        await (database.update(
+          database.canonicalLibraryRecords,
+        )..where((table) => table.localId.equals(row.localId))).write(
+          CanonicalLibraryRecordsCompanion(
+            inLibrary: Value(inLibrary),
+            tombstonedAtMs: Value(tombstonedAtMs),
+            favorite: Value(favorite),
+            fieldRevisionsJson: Value(jsonEncode(revisions)),
+          ),
+        );
+        if (revisions.containsKey('favorite') || favorite) {
+          await _setFavoriteLocked(
+            localId: row.localId,
+            identity: state.identity,
+            favorite: favorite,
+            at: state.updatedAt,
+            mediaItem: state.mediaItem,
+          );
+        }
+      }
+      await _refreshActiveIdsLocked();
+      await _retireObsoleteConflictsLocked(operations);
+      await database
+          .into(database.syncCursorRecords)
+          .insertOnConflictUpdate(
+            SyncCursorRecordsCompanion.insert(
+              scope: 'migration:field-consistency.v1',
+              cursor: 'verified',
+              updatedAtMs: DateTime.now().toUtc().millisecondsSinceEpoch,
+            ),
+          );
+    });
+  }
+
+  Future<void> _retireObsoleteConflictsLocked(
+    Map<String, Map<String, dynamic>> operations,
+  ) async {
+    final conflicts = await (database.select(
+      database.libraryConflictRecords,
+    )..where((table) => table.state.equals('open'))).get();
+    final seen = <(String, String, String?)>{};
+    for (final conflict in conflicts) {
+      final row =
+          await (database.select(database.canonicalLibraryRecords)
+                ..where((table) => table.localId.equals(conflict.localId)))
+              .getSingleOrNull();
+      if (row == null) continue;
+      Object? revision = _jsonMap(row.fieldRevisionsJson)[conflict.fieldName];
+      final incoming = operations[conflict.incomingOperationId];
+      if (incoming != null && !incoming.containsKey('after')) {
+        final operation =
+            await (database.selectOnly(database.libraryOperationRecords)
+                  ..addColumns([database.libraryOperationRecords.afterJson])
+                  ..where(
+                    database.libraryOperationRecords.operationId.equals(
+                      conflict.incomingOperationId!,
+                    ),
+                  ))
+                .getSingleOrNull();
+        if (operation != null) {
+          incoming['after'] = _jsonMap(
+            operation.read(database.libraryOperationRecords.afterJson),
+          );
+        }
+      }
+      final state = UserMediaState.fromJson(_jsonMap(row.canonicalStateJson));
+      final legacyIncoming = _jsonMap(conflict.incomingValueJson);
+      final incomingAfter = incoming != null
+          ? _jsonMap(incoming['after'])
+          : <String, dynamic>{
+              if (legacyIncoming.containsKey('identity'))
+                'state': legacyIncoming,
+              if (legacyIncoming['favorite'] is bool)
+                'favorite': legacyIncoming['favorite'],
+              if (legacyIncoming['episode'] is Map)
+                'episode': legacyIncoming['episode'],
+            };
+      Object? currentValue = _canonicalFieldValue(
+        conflict.fieldName,
+        state,
+        membership: row.inLibrary,
+        favorite: row.favorite,
+      );
+      if (conflict.fieldName == 'episodeProgress' &&
+          incomingAfter['episode'] is Map) {
+        final checkpoint = _jsonMap(incomingAfter['episode']);
+        final episodeKey = _episodeRevisionKey(checkpoint);
+        revision = _jsonMap(row.fieldRevisionsJson)[episodeKey] ?? revision;
+        final episode =
+            await (database.select(database.episodeStateRecords)..where(
+                  (table) => table.episodeStateId.equals(
+                    '${row.localId}:${(checkpoint['watchCycle'] as num?)?.toInt() ?? 0}:${(checkpoint['season'] as num?)?.toInt() ?? 1}:${(checkpoint['episode'] as num?)?.toDouble() ?? 1}',
+                  ),
+                ))
+                .getSingleOrNull();
+        currentValue = episode == null
+            ? null
+            : _episodeCheckpointValue(_episodeRowCheckpoint(episode));
+      }
+      final sameValue =
+          (incoming != null ||
+              legacyIncoming.containsKey('identity') ||
+              (conflict.fieldName == 'favorite' &&
+                  legacyIncoming['favorite'] is bool) ||
+              legacyIncoming['episode'] is Map) &&
+          (_fieldFromPersistedName(conflict.fieldName) != null ||
+              conflict.fieldName == 'episodeProgress') &&
+          _jsonEquivalent(
+            currentValue,
+            _operationFieldValue(conflict.fieldName, incomingAfter),
+          );
+      final obsolete =
+          conflict.incomingOperationId != null &&
+          _revisionDescendsFrom(
+            revision,
+            conflict.incomingOperationId!,
+            conflict.fieldName,
+            operations,
+          );
+      final staleProvider =
+          (incoming?['originKind'] ??
+                  _jsonMap(legacyIncoming['__incomingRevision'])['origin']) ==
+              'provider' &&
+          _revisionOrigins(revision).any((v) => v == 'user' || v == 'undo');
+      final duplicate =
+          conflict.incomingOperationId != null &&
+          !seen.add((
+            conflict.localId,
+            conflict.fieldName,
+            conflict.incomingOperationId,
+          ));
+      if (sameValue || obsolete || staleProvider || duplicate) {
+        await (database.update(database.libraryConflictRecords)
+              ..where((table) => table.conflictId.equals(conflict.conflictId)))
+            .write(
+              LibraryConflictRecordsCompanion(
+                state: const Value('resolved'),
+                resolvedAtMs: Value(
+                  DateTime.now().toUtc().millisecondsSinceEpoch,
+                ),
+              ),
+            );
+      }
+    }
+  }
+
   Future<String> deviceId() async {
     await initialize();
     final LegacyBucketRecord? row =
@@ -732,6 +1009,10 @@ class CanonicalLibraryRepository {
             ))
             .getSingleOrNull();
 
+    if (existing?.inLibrary == true &&
+        existing!.canonicalStateJson == jsonEncode(canonical.toJson())) {
+      return localId;
+    }
     await database
         .into(database.canonicalLibraryRecords)
         .insertOnConflictUpdate(
@@ -741,6 +1022,7 @@ class CanonicalLibraryRepository {
             progress: Value<int>(canonical.progress),
             progressVolumes: Value<int>(canonical.progressVolumes),
             repeatCount: Value<int>(canonical.repeat),
+            favorite: Value<bool>(existing?.favorite ?? false),
             scoreRaw: Value<int?>(scoreRaw),
             scoreFormat: Value<String?>(
               stateScoreFormat ?? existing?.scoreFormat,
@@ -1755,13 +2037,14 @@ class CanonicalLibraryRepository {
     if (!completeSnapshot) {
       return ProviderReconciliationResult(
         states: await loadTrackingStates(),
-        journal: journal,
+        journal: await loadJournal(),
       );
     }
     return database.transaction(() async {
       final DateTime now = DateTime.now().toUtc();
       final int nowMs = now.millisecondsSinceEpoch;
       final List<UserMediaState> states = await loadTrackingStates();
+      final List<SyncJournalEntry> liveJournal = await loadJournal();
       final String accountScope = 'provider-account:${source.name}:$accountId';
       final SyncCursorRecord? accountCursor =
           await (database.select(database.syncCursorRecords)..where(
@@ -1859,7 +2142,7 @@ class CanonicalLibraryRepository {
             );
         return ProviderReconciliationResult(
           states: states,
-          journal: journal,
+          journal: liveJournal,
           requiresAccountApproval: true,
         );
       }
@@ -1908,7 +2191,7 @@ class CanonicalLibraryRepository {
       if (accountCursor.cursor != 'approved') {
         return ProviderReconciliationResult(
           states: states,
-          journal: journal,
+          journal: liveJournal,
           requiresAccountApproval: accountCursor.cursor == 'pending',
         );
       }
@@ -1946,7 +2229,7 @@ class CanonicalLibraryRepository {
           changed = _providerPatchBetween(current, incoming, source);
         }
         final SyncJournalEntry? pending = _pendingForProvider(
-          journal,
+          liveJournal,
           incoming.identity,
           source,
         );
@@ -1955,6 +2238,68 @@ class CanonicalLibraryRepository {
             changed,
             <UserMediaField>{...changed.fields}
               ..removeAll(pending.patch.fields),
+          );
+        }
+
+        if (current != null &&
+            changed.touches(UserMediaField.score) &&
+            source != TrackerSource.anilist) {
+          final row = await (database.select(
+            database.canonicalLibraryRecords,
+          )..where((table) => table.localId.equals(localId))).getSingleOrNull();
+          final revision = _jsonMap(_jsonMap(row?.fieldRevisionsJson)['score']);
+          final operationId = revision['operationId']?.toString();
+          if (operationId != null) {
+            final delivered =
+                await (database.select(database.outboxDeliveryRecords)..where(
+                      (table) =>
+                          table.operationId.equals(operationId) &
+                          table.target.equals(source.name) &
+                          table.accountId.equals(accountId) &
+                          table.state.equals('confirmed'),
+                    ))
+                    .getSingleOrNull();
+            // Integer-score trackers acknowledge a projection of the precise
+            // local score. That echo is not a user edit to the raw score.
+            if (delivered != null &&
+                (current.score ?? 0).round() == (incoming.score ?? 0)) {
+              changed = _patchSubset(
+                changed,
+                {...changed.fields}..remove(UserMediaField.score),
+              );
+            }
+          }
+        }
+
+        if (current != null) {
+          final row = await (database.select(
+            database.canonicalLibraryRecords,
+          )..where((table) => table.localId.equals(localId))).getSingleOrNull();
+          final revisions = _jsonMap(row?.fieldRevisionsJson);
+          changed = _patchSubset(
+            changed,
+            changed.fields.where((field) {
+              if (forceInitialImport &&
+                  _revisionOrigins(
+                    revisions[field.name],
+                  ).any((origin) => origin == 'user' || origin == 'undo')) {
+                return false;
+              }
+              return !_jsonEquivalent(
+                _canonicalFieldValue(
+                  field.name,
+                  current,
+                  membership: true,
+                  favorite: row?.favorite ?? false,
+                ),
+                _canonicalFieldValue(
+                  field.name,
+                  incoming,
+                  membership: true,
+                  favorite: row?.favorite ?? false,
+                ),
+              );
+            }).toSet(),
           );
         }
 
@@ -2004,7 +2349,7 @@ class CanonicalLibraryRepository {
         if (stateIndex < 0) continue;
         final UserMediaState current = states[stateIndex];
         final SyncJournalEntry? pending = _pendingForProvider(
-          journal,
+          liveJournal,
           current.identity,
           source,
         );
@@ -2085,7 +2430,7 @@ class CanonicalLibraryRepository {
             );
       }
 
-      List<SyncJournalEntry> nextJournal = <SyncJournalEntry>[...journal];
+      List<SyncJournalEntry> nextJournal = <SyncJournalEntry>[...liveJournal];
       int importedChanges = 0;
       if (!massQuarantine) {
         final List<_ReconciliationProposal> accepted =
@@ -2147,7 +2492,20 @@ class CanonicalLibraryRepository {
                 proposal.incoming!.identity,
               );
               after = after.withProviderSnapshot(
-                providerSnapshot,
+                ProviderUserMediaState(
+                  provider: source,
+                  entryId: providerSnapshot.entryId,
+                  rawStatus: providerSnapshot.rawStatus,
+                  rawScore: providerSnapshot.rawScore,
+                  updatedAt: providerSnapshot.updatedAt,
+                  data: {
+                    ...providerSnapshot.data,
+                    for (final key in _canonicalProviderDataKeys(source))
+                      if (after.providerStates[source]?.data.containsKey(key) ==
+                          true)
+                        key: after.providerStates[source]!.data[key],
+                  },
+                ),
                 identity: mergedIdentity,
                 mediaItem: _mergePresentationMetadata(
                   before.mediaItem,
@@ -2166,6 +2524,10 @@ class CanonicalLibraryRepository {
               ? UserMediaPatch(delete: true)
               : acceptedPatch;
           final String operationId = const Uuid().v7();
+          // The first import must have a row BEFORE assigning its revisions.
+          // Otherwise the next user action gets a null causal base on A while
+          // B has already received the initial import's revision.
+          if (after != null) await _upsertTrackingStateLocked(after);
           if (outboundTargets.isNotEmpty) {
             nextJournal = _mergeJournalMutation(
               nextJournal,
@@ -2200,6 +2562,7 @@ class CanonicalLibraryRepository {
                 ...acceptedPatch.fields.map(
                   (UserMediaField field) => field.name,
                 ),
+                if (before == null && after != null) 'membership',
                 if (proposal.remove) 'membership',
               },
               before: <String, dynamic>{
@@ -2486,6 +2849,49 @@ class CanonicalLibraryRepository {
     values.map((SyncJournalEntry value) => value.toJson()).toList(),
   );
 
+  Future<void> saveJournalChanges(
+    List<SyncJournalEntry> before,
+    List<SyncJournalEntry> after,
+  ) async {
+    await initialize();
+    await database.transaction(() async {
+      String key(SyncJournalEntry entry) =>
+          entry.operationId ??
+          'legacy:${jsonEncode(entry.identity.toJson())}:${entry.createdAt.toIso8601String()}:${jsonEncode(entry.patch.toJson())}';
+      final Map<String, SyncJournalEntry> live = {
+        for (final entry in await loadJournal()) key(entry): entry,
+      };
+      final Map<String, SyncJournalEntry> next = {
+        for (final entry in after) key(entry): entry,
+      };
+      for (final entry in before) {
+        final current = live[key(entry)];
+        // A concurrent delivery/repair may have updated this operation too.
+        // Never replace it with an older network pass's result.
+        if (current == null ||
+            !_jsonEquivalent(current.toJson(), entry.toJson())) {
+          continue;
+        }
+        final changed = next.remove(key(entry));
+        if (changed == null) {
+          live.remove(key(entry));
+        } else {
+          live[key(entry)] = changed;
+        }
+      }
+      final Set<String> baselineIds = before.map(key).toSet();
+      for (final entry in next.values) {
+        if (!baselineIds.contains(key(entry))) {
+          live.putIfAbsent(key(entry), () => entry);
+        }
+      }
+      await _writeBucketLocked(
+        'tracking.journal',
+        live.values.map((e) => e.toJson()).toList(),
+      );
+    });
+  }
+
   Future<void> updateTrackerDelivery({
     String? operationId,
     String? accountId,
@@ -2549,8 +2955,77 @@ class CanonicalLibraryRepository {
                 lastError: Value<String?>(error),
               ),
             );
+        if (state == 'confirmed') {
+          final operation = operations.firstWhere(
+            (op) => op.operationId == delivery.operationId,
+          );
+          final providerAccount = accountId ?? delivery.accountId;
+          if (providerAccount != null) {
+            await _advanceConfirmedProviderSnapshotLocked(
+              operation,
+              target,
+              providerAccount,
+            );
+          }
+        }
       }
     });
+  }
+
+  Future<void> _advanceConfirmedProviderSnapshotLocked(
+    LibraryOperationRecord operation,
+    TrackerSource provider,
+    String accountId,
+  ) async {
+    final snapshot =
+        await (database.select(database.providerSnapshotRecords)..where(
+              (table) =>
+                  table.localId.equals(operation.localId) &
+                  table.provider.equals(provider.name) &
+                  table.accountId.equals(accountId),
+            ))
+            .getSingleOrNull();
+    if (snapshot == null) return;
+    final after = _jsonMap(operation.afterJson)['state'];
+    if (after is! Map) {
+      return; // Removal is verified by the next complete snapshot.
+    }
+    final intended = UserMediaState.fromJson(Map<String, dynamic>.from(after));
+    final previous = _providerStateFromSnapshot(snapshot);
+    if (previous == null) return;
+    final supported = _providerPatchBetween(null, intended, provider).fields;
+    final fields =
+        _jsonStringSet(
+            operation.fieldsJson,
+          ).map(_fieldFromPersistedName).whereType<UserMediaField>().toSet()
+          ..retainAll(supported);
+    if (fields.isEmpty) return;
+    UserMediaPatch patch = _patchFromState(intended, fields);
+    if (provider != TrackerSource.anilist &&
+        fields.contains(UserMediaField.score)) {
+      patch = patch.mergedWith(
+        UserMediaPatch(
+          score: integerProviderScore(intended.score ?? 0).toDouble(),
+        ),
+      );
+    }
+    final projected = previous.apply(
+      patch,
+      previous.updatedAt,
+      providerSource: provider,
+    );
+    // Read-back proved these fields were delivered to THIS account. Advance
+    // its comparison baseline so the provider's rounded score/status echo is
+    // not imported as a fresh manual action on the next background pass.
+    await (database.update(
+      database.providerSnapshotRecords,
+    )..where((table) => table.snapshotId.equals(snapshot.snapshotId))).write(
+      ProviderSnapshotRecordsCompanion(
+        normalizedJson: Value(jsonEncode(projected.toJson())),
+        contentHash: Value(_stateHash(projected)),
+        destructiveConfirmationCount: const Value(0),
+      ),
+    );
   }
 
   Future<Map<String, Map<String, String>>>
@@ -2572,6 +3047,7 @@ class CanonicalLibraryRepository {
               row.confirmedAtMs!,
               isUtc: true,
             ).toIso8601String(),
+          if (row.accountId != null) 'accountId': row.accountId!,
         },
     };
   }
@@ -2584,7 +3060,16 @@ class CanonicalLibraryRepository {
     await database.transaction(() async {
       final Set<(String, String)> affected = <(String, String)>{};
       final int now = DateTime.now().toUtc().millisecondsSinceEpoch;
-      for (final MapEntry<String, Map<String, String>> item in ledger.entries) {
+      final ordered = ledger.entries.toList()
+        ..sort((a, b) {
+          int confirmedAt(Map<String, String> value) =>
+              DateTime.tryParse(
+                value['confirmedAt'] ?? '',
+              )?.millisecondsSinceEpoch ??
+              0;
+          return confirmedAt(a.value).compareTo(confirmedAt(b.value));
+        });
+      for (final MapEntry<String, Map<String, String>> item in ordered) {
         if (item.value['state'] != 'confirmed') continue;
         final OutboxDeliveryRecord? delivery =
             await (database.select(database.outboxDeliveryRecords)..where(
@@ -2593,6 +3078,13 @@ class CanonicalLibraryRepository {
                 ))
                 .getSingleOrNull();
         if (delivery == null || delivery.target == 'drive') continue;
+        final accountId = item.value['accountId'];
+        if (delivery.accountId != null && delivery.accountId != accountId) {
+          continue;
+        }
+        if (delivery.state == 'confirmed' && delivery.accountId == accountId) {
+          continue;
+        }
         final LibraryOperationRecord? operation =
             await (database.select(database.libraryOperationRecords)..where(
                   (LibraryOperationRecords table) =>
@@ -2611,6 +3103,7 @@ class CanonicalLibraryRepository {
             ))
             .write(
               OutboxDeliveryRecordsCompanion(
+                accountId: Value(accountId ?? delivery.accountId),
                 state: const Value<String>('confirmed'),
                 deliveredAtMs: Value<int>(
                   delivery.deliveredAtMs ?? confirmedAt,
@@ -2619,6 +3112,13 @@ class CanonicalLibraryRepository {
                 lastError: const Value<String?>(null),
               ),
             );
+        if (accountId != null) {
+          await _advanceConfirmedProviderSnapshotLocked(
+            operation,
+            TrackerSource.fromName(delivery.target),
+            accountId,
+          );
+        }
         affected.add((operation.localId, delivery.target));
       }
 
@@ -2677,6 +3177,101 @@ class CanonicalLibraryRepository {
 
   Future<List<LocalMediaFavoriteState>> loadFavorites() =>
       _loadBucket('tracking.favorites', LocalMediaFavoriteState.fromJson);
+
+  Stream<List<LocalMediaFavoriteState>> watchFavorites() =>
+      Stream<void>.fromFuture(initialize()).asyncExpand(
+        (_) =>
+            (database.select(database.legacyBucketRecords)
+                  ..where((table) => table.bucket.equals('tracking.favorites')))
+                .watch()
+                .map(
+                  (rows) => rows.isEmpty
+                      ? <LocalMediaFavoriteState>[]
+                      : _jsonList(rows.single.valueJson)
+                            .whereType<Map>()
+                            .map(
+                              (value) => LocalMediaFavoriteState.fromJson(
+                                Map<String, dynamic>.from(value),
+                              ),
+                            )
+                            .toList(),
+                ),
+      );
+
+  Stream<List<UserMediaState>> watchTrackingStates() =>
+      Stream<void>.fromFuture(initialize()).asyncExpand(
+        (_) =>
+            (database.select(database.canonicalLibraryRecords)
+                  ..where((table) => table.inLibrary.equals(true)))
+                .watch()
+                .distinct((left, right) {
+                  if (left.length != right.length) return false;
+                  for (int index = 0; index < left.length; index++) {
+                    if (left[index].localId != right[index].localId ||
+                        left[index].canonicalStateJson !=
+                            right[index].canonicalStateJson) {
+                      return false;
+                    }
+                  }
+                  return true;
+                })
+                .map(
+                  (rows) =>
+                      rows
+                          .map(
+                            (row) => UserMediaState.fromJson(
+                              _jsonMap(row.canonicalStateJson),
+                            ),
+                          )
+                          .toList()
+                        ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt)),
+                ),
+      );
+
+  Future<void> _setFavoriteLocked({
+    required String localId,
+    required MediaIdentity identity,
+    required bool favorite,
+    required DateTime at,
+    MediaItem? mediaItem,
+  }) async {
+    final values = await loadFavorites();
+    values.removeWhere((value) => value.identity.matches(identity));
+    values.add(
+      LocalMediaFavoriteState(
+        identity: identity,
+        favorite: favorite,
+        updatedAt: at,
+      ),
+    );
+    await _writeBucketLocked(
+      'tracking.favorites',
+      values.map((v) => v.toJson()).toList(),
+    );
+    final row = await (database.select(
+      database.canonicalLibraryRecords,
+    )..where((table) => table.localId.equals(localId))).getSingleOrNull();
+    if (row == null) {
+      final shell = UserMediaState(
+        identity: identity,
+        mediaItem: mediaItem ?? _placeholderMedia(identity),
+        status: AniListListStatus.planning,
+        progress: 0,
+        createdAt: at,
+        updatedAt: at,
+        source: TrackerSource.anilist,
+      );
+      await _upsertTrackingStateLocked(shell);
+      await (database.update(
+        database.canonicalLibraryRecords,
+      )..where((table) => table.localId.equals(localId))).write(
+        const CanonicalLibraryRecordsCompanion(inLibrary: Value(false)),
+      );
+    }
+    await (database.update(database.canonicalLibraryRecords)
+          ..where((table) => table.localId.equals(localId)))
+        .write(CanonicalLibraryRecordsCompanion(favorite: Value(favorite)));
+  }
 
   Future<void> saveFavorites(List<LocalMediaFavoriteState> values) async {
     await initialize();
@@ -2812,35 +3407,44 @@ class CanonicalLibraryRepository {
   }) async {
     await initialize();
     await database.transaction(() async {
-      final List<UserMediaState> beforeStates = await loadTrackingStates();
-      final List<LocalMediaFavoriteState> beforeFavorites =
-          await loadFavorites();
-      UserMediaState? before;
-      for (final UserMediaState state in beforeStates) {
-        if (state.identity.matches(identity)) {
-          before = state;
-          break;
-        }
-      }
-      await _saveTrackingStatesLocked(states, tombstoneMissing: true);
-      await _writeBucketLocked(
-        'tracking.journal',
-        journal.map((SyncJournalEntry value) => value.toJson()).toList(),
-      );
-      await _writeBucketLocked(
-        'tracking.favorites',
-        favorites
-            .map((LocalMediaFavoriteState value) => value.toJson())
-            .toList(),
-      );
-      await _applyFavoritesLocked(favorites, states);
-
+      final String? knownId = await _localIdForIdentityLocked(identity);
+      final CanonicalLibraryRecord? liveRow = knownId == null
+          ? null
+          : await (database.select(database.canonicalLibraryRecords)
+                  ..where((table) => table.localId.equals(knownId)))
+                .getSingleOrNull();
+      final UserMediaState? before = liveRow?.inLibrary == true
+          ? UserMediaState.fromJson(_jsonMap(liveRow!.canonicalStateJson))
+          : null;
       UserMediaState? after;
       for (final UserMediaState state in states) {
         if (state.identity.matches(identity)) {
           after = state;
           break;
         }
+      }
+      // The caller's list was read before this transaction. Apply only the
+      // requested fields to the live row, never replace a workspace with that
+      // stale list (Drive and background reconciliation can run meanwhile).
+      if (patch.delete) {
+        after = null;
+      } else if (before != null) {
+        UserMediaState live = before.withIdentity(
+          before.identity.merge(identity),
+        );
+        if ((live.mediaItem.episodeCount ?? 0) <= 0 &&
+            (after?.mediaItem.episodeCount ?? 0) > 0) {
+          live = live.withMediaItem(
+            live.mediaItem.copyWith(
+              episodeCount: after!.mediaItem.episodeCount,
+            ),
+          );
+        }
+        after = live.apply(patch, occurredAt);
+      } else if (!patch.touchesLibraryState) {
+        // A stale caller can still hold this row after a concurrent deletion.
+        // Favorite/checkpoint-only actions must never re-add membership.
+        after = null;
       }
       final String localId = await _resolveOrCreateMediaLocked(
         identity: after?.identity ?? before?.identity ?? identity,
@@ -2862,18 +3466,53 @@ class CanonicalLibraryRepository {
       final UserMediaState? canonicalAfter = after?.withIdentity(
         canonicalIdentity(after.identity),
       );
-      bool favoriteValue(
-        List<LocalMediaFavoriteState> values,
-        MediaIdentity target,
-      ) {
-        for (final LocalMediaFavoriteState value in values) {
-          if (value.identity.matches(target)) return value.favorite;
-        }
-        return false;
+      if (canonicalAfter != null) {
+        await _upsertTrackingStateLocked(canonicalAfter);
+      } else if (before != null && patch.delete) {
+        await (database.update(
+          database.canonicalLibraryRecords,
+        )..where((table) => table.localId.equals(localId))).write(
+          CanonicalLibraryRecordsCompanion(
+            inLibrary: const Value(false),
+            tombstonedAtMs: Value(occurredAt.toUtc().millisecondsSinceEpoch),
+            updatedAtMs: Value(occurredAt.toUtc().millisecondsSinceEpoch),
+          ),
+        );
       }
-
-      final bool beforeFavorite = favoriteValue(beforeFavorites, identity);
-      final bool afterFavorite = favoriteValue(favorites, identity);
+      final Set<String> activeIds = (await _readBucketLocked(
+        'tracking.stateIds',
+      )).whereType<String>().toSet();
+      if (canonicalAfter != null) activeIds.add(localId);
+      if (patch.delete) activeIds.remove(localId);
+      await _writeBucketLocked('tracking.stateIds', activeIds.toList()..sort());
+      final List<SyncJournalEntry> liveJournal = await loadJournal();
+      for (final SyncJournalEntry entry in journal) {
+        if (entry.operationId == operationId &&
+            !liveJournal.any(
+              (value) => value.operationId == entry.operationId,
+            )) {
+          liveJournal.add(entry);
+        }
+      }
+      await _writeBucketLocked(
+        'tracking.journal',
+        liveJournal.map((value) => value.toJson()).toList(),
+      );
+      final bool beforeFavorite = liveRow?.favorite ?? false;
+      final bool afterFavorite = patch.touches(UserMediaField.favorite)
+          ? patch.favorite ?? beforeFavorite
+          : beforeFavorite;
+      if (patch.touches(UserMediaField.favorite)) {
+        await _setFavoriteLocked(
+          localId: localId,
+          identity: canonicalIdentity(
+            after?.identity ?? before?.identity ?? identity,
+          ),
+          favorite: afterFavorite,
+          at: occurredAt,
+          mediaItem: after?.mediaItem ?? before?.mediaItem,
+        );
+      }
       final bool addsMembership =
           canonicalBefore == null && canonicalAfter != null;
       EpisodeStateRecord? previousEpisode;
@@ -3042,6 +3681,7 @@ class CanonicalLibraryRepository {
     final List<String> deliveryIds = orderedIds
         .map((QueryRow row) => row.read<String>('delivery_id'))
         .toList(growable: false);
+    if (deliveryIds.isEmpty) return null;
     final List<OutboxDeliveryRecord> pending = deliveryIds.isEmpty
         ? const <OutboxDeliveryRecord>[]
         : await (database.select(database.outboxDeliveryRecords)..where(
@@ -3341,6 +3981,39 @@ class CanonicalLibraryRepository {
             shikimoriId: remote.identity.shikimoriId,
           );
           await _upsertTrackingStateLocked(remote.withIdentity(translated));
+          bool? restoredFavorite = row['favorite'] as bool?;
+          if (restoredFavorite == null) {
+            // Compatibility with checkpoints written before favorite was
+            // serialized: recover it from the immutable operation history.
+            final history =
+                snapshot.operations
+                    .where(
+                      (op) =>
+                          op['localId'] == remoteLocalId &&
+                          _jsonMap(op['after']).containsKey('favorite'),
+                    )
+                    .toList()
+                  ..sort(
+                    (a, b) =>
+                        '${a['occurredAt']}'.compareTo('${b['occurredAt']}'),
+                  );
+            if (history.isNotEmpty) {
+              restoredFavorite =
+                  _jsonMap(history.last['after'])['favorite'] as bool?;
+            }
+          }
+          if (restoredFavorite != null) {
+            await _setFavoriteLocked(
+              localId: localId,
+              identity: translated,
+              favorite: restoredFavorite,
+              at: DateTime.fromMillisecondsSinceEpoch(
+                remoteUpdated,
+                isUtc: true,
+              ),
+              mediaItem: remote.mediaItem,
+            );
+          }
           await (database.update(database.canonicalLibraryRecords)..where(
                 (CanonicalLibraryRecords table) =>
                     table.localId.equals(localId),
@@ -3727,6 +4400,8 @@ class CanonicalLibraryRepository {
           };
       final Map<String, String> translatedIds = <String, String>{};
 
+      final handledEpisodes = <String>{};
+      final knownOperations = await _readRevisionGraphLocked();
       for (final Map<String, dynamic> remoteOperation in segment.operations) {
         final String operationId = '${remoteOperation['operationId'] ?? ''}';
         final String remoteLocalId = '${remoteOperation['localId'] ?? ''}';
@@ -3737,7 +4412,16 @@ class CanonicalLibraryRepository {
                       table.operationId.equals(operationId),
                 ))
                 .getSingleOrNull();
-        if (duplicate != null) continue;
+        if (duplicate != null) {
+          translatedIds[remoteLocalId] = duplicate.localId;
+          final episodeKey = _episodeRevisionKey(
+            _jsonMap(duplicate.afterJson)['episode'],
+          );
+          if (episodeKey != null) {
+            handledEpisodes.add('${duplicate.localId}:$episodeKey');
+          }
+          continue;
+        }
 
         final Map<String, dynamic> mediaRow =
             mediaByRemoteId[remoteLocalId] ?? const <String, dynamic>{};
@@ -3773,14 +4457,19 @@ class CanonicalLibraryRepository {
                     ),
                     mediaId: remoteLocalId,
                   ));
+        final mediaIdentity = MediaIdentity.fromExternalIds(
+          mediaItem.externalIds,
+          mediaId: mediaItem.id,
+        );
         final MediaIdentity incomingIdentity =
             incomingAfter?.identity ??
             incomingBefore?.identity ??
             MediaIdentity(
               localId: remoteLocalId,
-              kind: '${mediaRow['mediaKind'] ?? ''}' == 'manga'
-                  ? 'manga'
-                  : null,
+              kind: mediaIdentity.mediaKind,
+              anilistId: mediaIdentity.anilistId,
+              malId: mediaIdentity.malId,
+              shikimoriId: mediaIdentity.shikimoriId,
             );
         final String localId = translatedIds[remoteLocalId] ??=
             await _resolveOrCreateMediaLocked(
@@ -3807,17 +4496,100 @@ class CanonicalLibraryRepository {
           currentRow?.fieldRevisionsJson,
         );
         final Set<String> accepted = <String>{};
+        final Set<String> equivalent = <String>{};
+        final String? episodeRevisionKey = fields.contains('episodeProgress')
+            ? _episodeRevisionKey(after['episode'])
+            : null;
+        EpisodeStateRecord? currentEpisode;
+        if (fields.contains('episodeProgress') && after['episode'] is Map) {
+          final checkpoint = _jsonMap(after['episode']);
+          final season = (checkpoint['season'] as num?)?.toInt() ?? 1;
+          final episode = (checkpoint['episode'] as num?)?.toDouble() ?? 1;
+          final cycle = (checkpoint['watchCycle'] as num?)?.toInt() ?? 0;
+          currentEpisode =
+              await (database.select(database.episodeStateRecords)..where(
+                    (table) =>
+                        table.localId.equals(localId) &
+                        table.seasonNumber.equals(season) &
+                        table.episodeNumber.equals(episode) &
+                        table.watchCycle.equals(cycle),
+                  ))
+                  .getSingleOrNull();
+          handledEpisodes.add('$localId:${_episodeRevisionKey(checkpoint)}');
+        }
         for (final String field in fields) {
-          if (_baseRevisionMatches(
-                currentRevisions[field],
-                baseRevisions[field],
-              ) ||
-              _jsonEquivalent(
-                currentRevisions[field],
-                resultingRevisions[field],
-              )) {
+          final currentRevision =
+              field == 'episodeProgress' && episodeRevisionKey != null
+              ? currentRevisions[episodeRevisionKey] ?? currentRevisions[field]
+              : currentRevisions[field];
+          final Object? currentValue = field == 'episodeProgress'
+              ? (currentEpisode == null
+                    ? null
+                    : _episodeCheckpointValue({
+                        'season': currentEpisode.seasonNumber,
+                        'episode': currentEpisode.episodeNumber,
+                        'watchCycle': currentEpisode.watchCycle,
+                        'positionSeconds': currentEpisode.positionSeconds,
+                        'durationSeconds': currentEpisode.durationSeconds,
+                        'completed': currentEpisode.completed,
+                      }))
+              : _canonicalFieldValue(
+                  field,
+                  current,
+                  membership: currentRow?.inLibrary ?? false,
+                  favorite: currentRow?.favorite ?? false,
+                );
+          final Object? beforeValue = _operationFieldValue(
+            field,
+            before,
+            parsedState: incomingBefore,
+          );
+          final Object? afterValue = _operationFieldValue(
+            field,
+            after,
+            parsedState: incomingAfter,
+          );
+          // Do not replay an ancestor after a newer descendant has already
+          // arrived via a checkpoint or another device's segment.
+          if (_revisionDescendsFrom(
+            currentRevision,
+            operationId,
+            field,
+            knownOperations,
+          )) {
+            continue;
+          }
+          if (_baseRevisionMatches(currentRevision, baseRevisions[field]) ||
+              _jsonEquivalent(currentRevision, resultingRevisions[field]) ||
+              (field == 'episodeProgress' && currentEpisode == null) ||
+              (field != 'metadata' &&
+                  _jsonEquivalent(currentValue, beforeValue))) {
             accepted.add(field);
+          } else if (field != 'metadata' &&
+              _jsonEquivalent(currentValue, afterValue)) {
+            accepted.add(field);
+            equivalent.add(field);
+          } else if ('${remoteOperation['originKind']}' ==
+                  LibraryOriginKind.provider.name &&
+              _revisionOrigins(currentRevisions[field]).any(
+                (origin) =>
+                    origin == LibraryOriginKind.user.name ||
+                    origin == LibraryOriginKind.undo.name,
+              )) {
+            // Independently fetched provider state has no causal evidence of
+            // replacing an explicit local action. Its fetch time is not an
+            // action timestamp and must not turn it into a winning edit.
+            continue;
           } else {
+            final existingConflict =
+                await (database.select(database.libraryConflictRecords)..where(
+                      (table) =>
+                          table.localId.equals(localId) &
+                          table.fieldName.equals(field) &
+                          table.incomingOperationId.equals(operationId),
+                    ))
+                    .getSingleOrNull();
+            if (existingConflict != null) continue;
             await database
                 .into(database.libraryConflictRecords)
                 .insert(
@@ -3825,16 +4597,24 @@ class CanonicalLibraryRepository {
                     conflictId: _uuid.v7(),
                     localId: localId,
                     fieldName: field,
-                    localValueJson: jsonEncode(current?.toJson()),
+                    localValueJson: jsonEncode({
+                      ...?current?.toJson(),
+                      if (field == 'favorite')
+                        'favorite': currentRow?.favorite ?? false,
+                      if (field == 'episodeProgress' && currentEpisode != null)
+                        'episode': _episodeRowCheckpoint(currentEpisode),
+                    }),
                     incomingValueJson: jsonEncode(<String, dynamic>{
                       ...?incomingAfter?.toJson(),
-                      if (incomingAfter == null) '__deleted': true,
+                      if (incomingAfter == null && field == 'membership')
+                        '__deleted': true,
+                      if (field == 'favorite') 'favorite': after['favorite'],
+                      if (field == 'episodeProgress')
+                        'episode': after['episode'],
                       '__incomingRevision': resultingRevisions[field],
                     }),
                     localOperationId: Value<String?>(
-                      _jsonMap(
-                        currentRevisions[field],
-                      )['operationId']?.toString(),
+                      _jsonMap(currentRevision)['operationId']?.toString(),
                     ),
                     incomingOperationId: Value<String?>(operationId),
                     createdAtMs: importedAt.millisecondsSinceEpoch,
@@ -3842,7 +4622,17 @@ class CanonicalLibraryRepository {
                 );
           }
         }
-        if (accepted.isEmpty) continue;
+        knownOperations[operationId] = remoteOperation;
+        if (accepted.isEmpty) {
+          await _recordReceivedDriveOperationLocked(
+            remoteOperation,
+            localId,
+            segment.deviceId,
+            operationAt,
+            importedAt,
+          );
+          continue;
+        }
 
         // A resolution operation may explicitly name both sides of a prior
         // conflict as causal parents. Once it applies, that old prompt is no
@@ -3879,29 +4669,53 @@ class CanonicalLibraryRepository {
         final bool removesMembership =
             accepted.contains('membership') && incomingAfter == null;
         if (removesMembership) {
-          if (currentRow != null) {
-            await (database.update(database.canonicalLibraryRecords)..where(
-                  (CanonicalLibraryRecords table) =>
-                      table.localId.equals(localId),
-                ))
-                .write(
-                  CanonicalLibraryRecordsCompanion(
-                    inLibrary: const Value<bool>(false),
-                    tombstonedAtMs: Value<int>(
-                      operationAt.millisecondsSinceEpoch,
-                    ),
-                    updatedAtMs: Value<int>(operationAt.millisecondsSinceEpoch),
+          if (currentRow == null) {
+            // Keep a revisioned tombstone even if deletion arrives before
+            // the original add segment. A late add must not resurrect it.
+            final identity = MediaIdentity(
+              localId: localId,
+              kind: incomingIdentity.mediaKind,
+              anilistId: incomingIdentity.anilistId,
+              malId: incomingIdentity.malId,
+              shikimoriId: incomingIdentity.shikimoriId,
+            );
+            await _upsertTrackingStateLocked(
+              incomingBefore?.withIdentity(identity) ??
+                  UserMediaState(
+                    identity: identity,
+                    mediaItem: mediaItem,
+                    status: AniListListStatus.planning,
+                    progress: 0,
+                    createdAt: operationAt,
+                    updatedAt: operationAt,
+                    source: TrackerSource.anilist,
                   ),
-                );
+            );
           }
+          await (database.update(database.canonicalLibraryRecords)..where(
+                (CanonicalLibraryRecords table) =>
+                    table.localId.equals(localId),
+              ))
+              .write(
+                CanonicalLibraryRecordsCompanion(
+                  inLibrary: const Value<bool>(false),
+                  tombstonedAtMs: Value<int>(
+                    operationAt.millisecondsSinceEpoch,
+                  ),
+                  updatedAtMs: Value<int>(operationAt.millisecondsSinceEpoch),
+                ),
+              );
           next = null;
         } else if (incomingAfter != null) {
+          final mergedIdentity =
+              current?.identity.merge(incomingAfter.identity) ??
+              incomingAfter.identity;
           final MediaIdentity translated = MediaIdentity(
             localId: localId,
-            kind: incomingAfter.identity.mediaKind,
-            anilistId: incomingAfter.identity.anilistId,
-            malId: incomingAfter.identity.malId,
-            shikimoriId: incomingAfter.identity.shikimoriId,
+            kind: mergedIdentity.mediaKind,
+            anilistId: mergedIdentity.anilistId,
+            malId: mergedIdentity.malId,
+            shikimoriId: mergedIdentity.shikimoriId,
           );
           if (current == null) {
             next = incomingAfter.withIdentity(translated);
@@ -3916,22 +4730,79 @@ class CanonicalLibraryRepository {
                   ? current.updatedAt
                   : operationAt,
             );
-            for (final ProviderUserMediaState provider
-                in incomingAfter.providerStates.values) {
-              next = next!.withProviderSnapshot(
-                provider,
-                identity: translated,
-                mediaItem: incomingAfter.mediaItem,
-              );
-            }
+            // Provider-specific editable fields were already patched above.
+            // A full stale provider payload must not replace independent
+            // priority/privacy/custom-list edits that were not accepted.
+            next = next.withIdentity(translated);
           }
-          await _upsertTrackingStateLocked(next!);
+          await _upsertTrackingStateLocked(next);
+          final bool legacyAdd =
+              currentRow == null &&
+              incomingBefore == null &&
+              const {
+                'add',
+                'remoteImport',
+                'migration',
+              }.contains(remoteOperation['intent']);
+          if (currentRow?.inLibrary != true &&
+              !accepted.contains('membership') &&
+              !legacyAdd) {
+            await (database.update(
+              database.canonicalLibraryRecords,
+            )..where((table) => table.localId.equals(localId))).write(
+              CanonicalLibraryRecordsCompanion(
+                inLibrary: const Value(false),
+                tombstonedAtMs: Value(currentRow?.tombstonedAtMs),
+              ),
+            );
+          }
         }
         final Map<String, dynamic> nextRevisions = <String, dynamic>{
           ...currentRevisions,
         };
         for (final String field in accepted) {
           nextRevisions[field] = resultingRevisions[field];
+          if (equivalent.contains(field)) {
+            nextRevisions[field] = _mergeEquivalentRevisions(
+              field == 'episodeProgress' && episodeRevisionKey != null
+                  ? currentRevisions[episodeRevisionKey] ??
+                        currentRevisions[field]
+                  : currentRevisions[field],
+              resultingRevisions[field],
+            );
+          }
+        }
+        if (accepted.contains('episodeProgress') &&
+            episodeRevisionKey != null) {
+          if (currentRow == null && next == null) {
+            await _ensureHiddenTrackingRowLocked(
+              localId,
+              mediaItem,
+              operationAt,
+            );
+          }
+          nextRevisions[episodeRevisionKey] = nextRevisions['episodeProgress'];
+          await _writeReceivedEpisodeCheckpointLocked(
+            localId,
+            _jsonMap(after['episode']),
+            operationAt,
+            currentEpisode,
+          );
+        }
+        if (accepted.contains('favorite') && after['favorite'] is bool) {
+          await _setFavoriteLocked(
+            localId: localId,
+            identity: MediaIdentity(
+              localId: localId,
+              kind: incomingIdentity.mediaKind,
+              anilistId: incomingIdentity.anilistId,
+              malId: incomingIdentity.malId,
+              shikimoriId: incomingIdentity.shikimoriId,
+            ),
+            favorite: after['favorite'] as bool,
+            at: operationAt,
+            mediaItem: mediaItem,
+          );
         }
         await (database.update(database.canonicalLibraryRecords)..where(
               (CanonicalLibraryRecords table) => table.localId.equals(localId),
@@ -3958,13 +4829,36 @@ class CanonicalLibraryRepository {
             .map(_fieldFromPersistedName)
             .whereType<UserMediaField>()
             .toSet();
-        final UserMediaPatch outboundPatch = removesMembership
+        UserMediaPatch outboundPatch = removesMembership
             ? UserMediaPatch(delete: true)
             : incomingAfter == null
             ? UserMediaPatch(fields: acceptedMediaFields)
-            : _patchFromState(incomingAfter, acceptedMediaFields);
+            : _patchFromState(incomingAfter, acceptedMediaFields).mergedWith(
+                accepted.contains('favorite') && after['favorite'] is bool
+                    ? UserMediaPatch(favorite: after['favorite'] as bool)
+                    : UserMediaPatch(fields: const {}),
+              );
+        if (!removesMembership &&
+            accepted.contains('favorite') &&
+            after['favorite'] is bool) {
+          outboundPatch = outboundPatch.mergedWith(
+            UserMediaPatch(favorite: after['favorite'] as bool),
+          );
+        }
+        final libraryRow = await (database.select(
+          database.canonicalLibraryRecords,
+        )..where((table) => table.localId.equals(localId))).getSingleOrNull();
+        if (!removesMembership && libraryRow?.inLibrary != true) {
+          outboundPatch = _patchSubset(
+            outboundPatch,
+            {...outboundPatch.fields}..retainAll({UserMediaField.favorite}),
+          );
+        }
+        if (!removesMembership && outboundPatch.fields.isEmpty) {
+          outboundTargets.clear();
+        }
         if (outboundTargets.isNotEmpty &&
-            (removesMembership || acceptedMediaFields.isNotEmpty)) {
+            (removesMembership || outboundPatch.fields.isNotEmpty)) {
           journal = _mergeJournalMutation(
             journal,
             SyncJournalEntry(
@@ -3989,7 +4883,7 @@ class CanonicalLibraryRepository {
                 originId: Value<String?>(originId),
                 intent:
                     '${remoteOperation['intent'] ?? LibraryMutationIntent.edit.name}',
-                fieldsJson: jsonEncode(accepted.toList()..sort()),
+                fieldsJson: jsonEncode(fields.toList()..sort()),
                 beforeJson: jsonEncode(before),
                 afterJson: jsonEncode(after),
                 baseRevisionsJson: jsonEncode(baseRevisions),
@@ -4032,8 +4926,15 @@ class CanonicalLibraryRepository {
         applied += 1;
       }
 
-      await _importDriveEpisodeRows(segment, translatedIds, importedAt);
+      await _importDriveEpisodeRows(
+        segment,
+        translatedIds,
+        importedAt,
+        handledEpisodes: handledEpisodes,
+      );
       await _importDriveStreamRows(segment, translatedIds, importedAt);
+      await _refreshActiveIdsLocked();
+      await _retireObsoleteConflictsLocked(knownOperations);
       await _writeBucketLocked(
         'tracking.journal',
         journal.map((SyncJournalEntry value) => value.toJson()).toList(),
@@ -4057,14 +4958,20 @@ class CanonicalLibraryRepository {
   Future<void> _importDriveEpisodeRows(
     DriveReplicaSegment segment,
     Map<String, String> translatedIds,
-    DateTime importedAt,
-  ) async {
+    DateTime importedAt, {
+    Set<String> handledEpisodes = const {},
+  }) async {
     for (final Map<String, dynamic> row in segment.episodeStates) {
       final String? localId = translatedIds['${row['localId'] ?? ''}'];
       if (localId == null) continue;
       final int season = (row['seasonNumber'] as num?)?.toInt() ?? 1;
       final double episode = (row['episodeNumber'] as num?)?.toDouble() ?? 0;
       final int watchCycle = (row['watchCycle'] as num?)?.toInt() ?? 0;
+      if (handledEpisodes.contains(
+        '$localId:episodeProgress:$watchCycle:$season:$episode',
+      )) {
+        continue;
+      }
       final int incomingUpdated =
           (row['updatedAtMs'] as num?)?.toInt() ??
           importedAt.millisecondsSinceEpoch;
@@ -4095,6 +5002,40 @@ class CanonicalLibraryRepository {
             ),
           );
     }
+  }
+
+  Future<void> _writeReceivedEpisodeCheckpointLocked(
+    String localId,
+    Map<String, dynamic> checkpoint,
+    DateTime at,
+    EpisodeStateRecord? previous,
+  ) async {
+    final season = (checkpoint['season'] as num?)?.toInt() ?? 1;
+    final episode = (checkpoint['episode'] as num?)?.toDouble() ?? 1;
+    final cycle = (checkpoint['watchCycle'] as num?)?.toInt() ?? 0;
+    await database
+        .into(database.episodeStateRecords)
+        .insertOnConflictUpdate(
+          EpisodeStateRecordsCompanion.insert(
+            episodeStateId: '$localId:$cycle:$season:$episode',
+            localId: localId,
+            seasonNumber: season,
+            episodeNumber: episode,
+            watchCycle: Value(cycle),
+            positionSeconds: Value(
+              ((checkpoint['positionSeconds'] as num?)?.toInt() ?? 0).clamp(
+                0,
+                0x7fffffff,
+              ),
+            ),
+            durationSeconds: Value(
+              (checkpoint['durationSeconds'] as num?)?.toInt() ??
+                  previous?.durationSeconds,
+            ),
+            completed: Value(checkpoint['completed'] == true),
+            updatedAtMs: at.toUtc().millisecondsSinceEpoch,
+          ),
+        );
   }
 
   Future<void> _importDriveStreamRows(
@@ -4146,16 +5087,34 @@ class CanonicalLibraryRepository {
     final String operationId = draft.operationId ?? _uuid.v7();
     final String currentDeviceId = await deviceId();
     final Set<String> deliveryTargets = <String>{'drive', ...draft.targets};
-    final CanonicalLibraryRecord? entry =
+    CanonicalLibraryRecord? entry =
         await (database.select(database.canonicalLibraryRecords)..where(
               (CanonicalLibraryRecords table) =>
                   table.localId.equals(draft.localId),
             ))
             .getSingleOrNull();
+    if (entry == null && draft.fields.contains('episodeProgress')) {
+      final media = await (database.select(
+        database.canonicalMediaRecords,
+      )..where((table) => table.localId.equals(draft.localId))).getSingle();
+      entry = await _ensureHiddenTrackingRowLocked(
+        draft.localId,
+        MediaItem.fromJson(_jsonMap(media.mediaJson)),
+        draft.occurredAt,
+      );
+    }
     final Map<String, dynamic> revisions = _jsonMap(entry?.fieldRevisionsJson);
     final Map<String, dynamic> beforeRevisions = Map<String, dynamic>.from(
       revisions,
     );
+    final episodeKey = draft.fields.contains('episodeProgress')
+        ? _episodeRevisionKey(draft.after['episode'])
+        : null;
+    if (episodeKey != null) {
+      // The next checkpoint depends on this episode, not the most recently
+      // touched episode elsewhere in the same title.
+      beforeRevisions['episodeProgress'] = revisions[episodeKey];
+    }
     for (final MapEntry<String, List<Object?>> alternate
         in draft.baseRevisionAlternatives.entries) {
       if (!draft.fields.contains(alternate.key)) continue;
@@ -4172,13 +5131,16 @@ class CanonicalLibraryRepository {
       beforeRevisions[alternate.key] = acceptedBases;
     }
     for (final String field in draft.fields) {
-      final Map<String, dynamic> previous = _jsonMap(revisions[field]);
       revisions[field] = <String, dynamic>{
-        'counter': ((previous['counter'] as num?)?.toInt() ?? 0) + 1,
+        'counter': _revisionCounter(beforeRevisions[field]) + 1,
         'deviceId': currentDeviceId,
         'operationId': operationId,
         'origin': draft.originKind.name,
+        'occurredAtMs': draft.occurredAt.toUtc().millisecondsSinceEpoch,
       };
+    }
+    if (episodeKey != null) {
+      revisions[episodeKey] = revisions['episodeProgress'];
     }
     if (entry != null) {
       await (database.update(database.canonicalLibraryRecords)..where(
@@ -4227,6 +5189,128 @@ class CanonicalLibraryRepository {
           );
     }
     return operationId;
+  }
+
+  Future<CanonicalLibraryRecord> _ensureHiddenTrackingRowLocked(
+    String localId,
+    MediaItem media,
+    DateTime at,
+  ) async {
+    final known = MediaIdentity.fromExternalIds(
+      media.externalIds,
+      mediaId: media.id,
+    );
+    await _upsertTrackingStateLocked(
+      UserMediaState(
+        identity: MediaIdentity(
+          localId: localId,
+          kind: known.mediaKind,
+          anilistId: known.anilistId,
+          malId: known.malId,
+          shikimoriId: known.shikimoriId,
+        ),
+        mediaItem: media,
+        status: AniListListStatus.planning,
+        progress: 0,
+        createdAt: at,
+        updatedAt: at,
+        source: TrackerSource.anilist,
+      ),
+    );
+    await (database.update(database.canonicalLibraryRecords)
+          ..where((table) => table.localId.equals(localId)))
+        .write(const CanonicalLibraryRecordsCompanion(inLibrary: Value(false)));
+    return (database.select(
+      database.canonicalLibraryRecords,
+    )..where((table) => table.localId.equals(localId))).getSingle();
+  }
+
+  Future<void> _refreshActiveIdsLocked() async {
+    final table = database.canonicalLibraryRecords;
+    final rows =
+        await (database.selectOnly(table)
+              ..addColumns([table.localId])
+              ..where(table.inLibrary.equals(true)))
+            .get();
+    await _writeBucketLocked(
+      'tracking.stateIds',
+      rows.map((row) => row.read(table.localId)!).toList()..sort(),
+    );
+  }
+
+  Future<Map<String, Map<String, dynamic>>> _readRevisionGraphLocked() async {
+    final table = database.libraryOperationRecords;
+    // Causal checks need small revision edges, not every title's rich media
+    // payload repeated throughout the entire operation history.
+    final rows =
+        await (database.selectOnly(table)..addColumns([
+              table.operationId,
+              table.baseRevisionsJson,
+              table.originKind,
+              table.fieldsJson,
+            ]))
+            .get();
+    final result = <String, Map<String, dynamic>>{};
+    for (final row in rows) {
+      final bases = _jsonMap(row.read(table.baseRevisionsJson));
+      result[row.read(table.operationId)!] = {
+        'originKind': row.read(table.originKind),
+        'baseRevisions': {
+          for (final field in _jsonStringSet(row.read(table.fieldsJson)!))
+            field: bases[field],
+        },
+      };
+    }
+    return result;
+  }
+
+  Future<void> _recordReceivedDriveOperationLocked(
+    Map<String, dynamic> operation,
+    String localId,
+    String deviceId,
+    DateTime at,
+    DateTime receivedAt,
+  ) async {
+    final String id = '${operation['operationId']}';
+    // Even a quarantined operation was received. Persist its original causal
+    // history so another checkpoint cannot create the same prompts again.
+    await database
+        .into(database.libraryOperationRecords)
+        .insertOnConflictUpdate(
+          LibraryOperationRecordsCompanion.insert(
+            operationId: id,
+            localId: localId,
+            deviceId: '${operation['deviceId'] ?? deviceId}',
+            originKind: '${operation['originKind'] ?? 'drive'}',
+            originId: Value(operation['originId']?.toString()),
+            intent: '${operation['intent'] ?? 'edit'}',
+            fieldsJson: jsonEncode(
+              _dynamicStringSet(operation['fields']).toList()..sort(),
+            ),
+            beforeJson: jsonEncode(_jsonMap(operation['before'])),
+            afterJson: jsonEncode(_jsonMap(operation['after'])),
+            baseRevisionsJson: jsonEncode(_jsonMap(operation['baseRevisions'])),
+            resultingRevisionsJson: jsonEncode(
+              _jsonMap(operation['resultingRevisions']),
+            ),
+            targetsJson: '[]',
+            title: Value(operation['title']?.toString()),
+            undoOf: Value(operation['undoOf']?.toString()),
+            occurredAtMs: at.millisecondsSinceEpoch,
+          ),
+        );
+    await database
+        .into(database.outboxDeliveryRecords)
+        .insertOnConflictUpdate(
+          OutboxDeliveryRecordsCompanion.insert(
+            deliveryId: '$id:drive',
+            operationId: id,
+            target: 'drive',
+            state: 'confirmed',
+            deliveredAtMs: Value(receivedAt.millisecondsSinceEpoch),
+            confirmedAtMs: Value(receivedAt.millisecondsSinceEpoch),
+          ),
+        );
   }
 
   Stream<List<CanonicalLibraryConflict>> watchConflicts() {
@@ -4289,6 +5373,12 @@ class CanonicalLibraryRepository {
               .getSingle();
       final UserMediaField? field = _fieldFromPersistedName(conflict.fieldName);
       final bool membership = conflict.fieldName == 'membership';
+      if (conflict.fieldName == 'episodeProgress') {
+        return _resolveEpisodeConflictLocked(
+          conflict,
+          takeIncoming: takeIncoming,
+        );
+      }
       if (field == null && !membership) {
         await _markConflictResolvedLocked(conflictId);
         return null;
@@ -4307,6 +5397,13 @@ class CanonicalLibraryRepository {
         conflict.incomingValueJson,
       );
       final UserMediaState? selected = takeIncoming ? incoming : current;
+      final incomingFavorite = _jsonMap(conflict.incomingValueJson)['favorite'];
+      final bool selectedFavorite =
+          field == UserMediaField.favorite &&
+              takeIncoming &&
+              incomingFavorite is bool
+          ? incomingFavorite
+          : currentRow?.favorite ?? false;
       UserMediaState? next = current;
       if (membership) {
         next = selected;
@@ -4412,7 +5509,7 @@ class CanonicalLibraryRepository {
           }
         }
       }
-      final UserMediaPatch patch = next == null
+      UserMediaPatch patch = next == null
           ? UserMediaPatch(delete: true)
           : _patchFromState(next, <UserMediaField>{
               ...fields,
@@ -4424,9 +5521,32 @@ class CanonicalLibraryRepository {
         await _markConflictResolvedLocked(conflictId);
         return null;
       }
+      if (fields.contains(UserMediaField.favorite)) {
+        patch = patch.mergedWith(UserMediaPatch(favorite: selectedFavorite));
+        await _setFavoriteLocked(
+          localId: conflict.localId,
+          identity: resolvedIdentity,
+          favorite: selectedFavorite,
+          at: now,
+          mediaItem: next?.mediaItem ?? current?.mediaItem,
+        );
+      }
+      if (!membership && currentRow?.inLibrary == false) {
+        await (database.update(
+          database.canonicalLibraryRecords,
+        )..where((table) => table.localId.equals(conflict.localId))).write(
+          CanonicalLibraryRecordsCompanion(
+            inLibrary: const Value(false),
+            tombstonedAtMs: Value(currentRow?.tombstonedAtMs),
+          ),
+        );
+      }
+      await _refreshActiveIdsLocked();
       final String operationId = const Uuid().v7();
       if (trackerTargets.isNotEmpty &&
-          (patch.delete || patch.touchesLibraryState)) {
+          (patch.delete ||
+              patch.touchesLibraryState ||
+              patch.touches(UserMediaField.favorite))) {
         List<SyncJournalEntry> journal = await loadJournal();
         journal = _mergeJournalMutation(
           journal,
@@ -4459,8 +5579,14 @@ class CanonicalLibraryRepository {
           },
           before: <String, dynamic>{
             if (current != null) 'state': current.toJson(),
+            if (fields.contains(UserMediaField.favorite))
+              'favorite': currentRow?.favorite ?? false,
           },
-          after: <String, dynamic>{if (next != null) 'state': next.toJson()},
+          after: <String, dynamic>{
+            if (next != null) 'state': next.toJson(),
+            if (fields.contains(UserMediaField.favorite))
+              'favorite': selectedFavorite,
+          },
           targets: <String>{
             'drive',
             ...trackerTargets.map((TrackerSource value) => value.name),
@@ -4473,6 +5599,75 @@ class CanonicalLibraryRepository {
       await _markConflictResolvedLocked(conflictId);
       return operationId;
     });
+  }
+
+  Future<String?> _resolveEpisodeConflictLocked(
+    LibraryConflictRecord conflict, {
+    required bool takeIncoming,
+  }) async {
+    final incoming = _jsonMap(conflict.incomingValueJson);
+    final operation = conflict.incomingOperationId == null
+        ? null
+        : await (database.select(database.libraryOperationRecords)..where(
+                (table) =>
+                    table.operationId.equals(conflict.incomingOperationId!),
+              ))
+              .getSingleOrNull();
+    final rawCheckpoint =
+        incoming['episode'] ?? _jsonMap(operation?.afterJson)['episode'];
+    if (rawCheckpoint is! Map) {
+      await _markConflictResolvedLocked(conflict.conflictId);
+      return null;
+    }
+    final checkpoint = Map<String, dynamic>.from(rawCheckpoint);
+    final cycle = (checkpoint['watchCycle'] as num?)?.toInt() ?? 0;
+    final season = (checkpoint['season'] as num?)?.toInt() ?? 1;
+    final episode = (checkpoint['episode'] as num?)?.toDouble() ?? 1;
+    final previous =
+        await (database.select(database.episodeStateRecords)..where(
+              (table) => table.episodeStateId.equals(
+                '${conflict.localId}:$cycle:$season:$episode',
+              ),
+            ))
+            .getSingleOrNull();
+    final selected = takeIncoming
+        ? checkpoint
+        : previous == null
+        ? null
+        : _episodeRowCheckpoint(previous);
+    if (selected == null) {
+      await _markConflictResolvedLocked(conflict.conflictId);
+      return null;
+    }
+    final now = DateTime.now().toUtc();
+    await _writeReceivedEpisodeCheckpointLocked(
+      conflict.localId,
+      selected,
+      now,
+      previous,
+    );
+    final id = await _appendOperationLocked(
+      LibraryOperationDraft(
+        localId: conflict.localId,
+        originKind: LibraryOriginKind.user,
+        intent: LibraryMutationIntent.progress,
+        fields: const {'episodeProgress'},
+        before: {
+          if (previous != null) 'episode': _episodeRowCheckpoint(previous),
+        },
+        after: {'episode': selected},
+        targets: const {'drive'},
+        occurredAt: now,
+        baseRevisionAlternatives: {
+          'episodeProgress': [
+            incoming['__incomingRevision'] ??
+                _jsonMap(operation?.resultingRevisionsJson)['episodeProgress'],
+          ],
+        },
+      ),
+    );
+    await _markConflictResolvedLocked(conflict.conflictId);
+    return id;
   }
 
   Future<void> _markConflictResolvedLocked(String conflictId) async {
@@ -4846,7 +6041,9 @@ class CanonicalLibraryRepository {
                   'season': previous.seasonNumber,
                   'episode': previous.episodeNumber,
                   'positionSeconds': previous.positionSeconds,
+                  'durationSeconds': previous.durationSeconds,
                   'completed': previous.completed,
+                  'watchCycle': previous.watchCycle,
                 },
             },
             after: <String, dynamic>{
@@ -4854,7 +6051,9 @@ class CanonicalLibraryRepository {
                 'season': season,
                 'episode': episode,
                 'positionSeconds': positionSeconds,
+                'durationSeconds': durationSeconds,
                 'completed': completed,
+                'watchCycle': watchCycle,
               },
             },
             targets: const <String>{'drive'},
@@ -5071,12 +6270,17 @@ class CanonicalLibraryRepository {
   }
 
   Future<void> _writeBucketLocked(String name, Object value) async {
+    final encoded = jsonEncode(value);
+    final existing = await (database.select(
+      database.legacyBucketRecords,
+    )..where((table) => table.bucket.equals(name))).getSingleOrNull();
+    if (existing?.valueJson == encoded) return;
     await database
         .into(database.legacyBucketRecords)
         .insertOnConflictUpdate(
           LegacyBucketRecordsCompanion.insert(
             bucket: name,
-            valueJson: jsonEncode(value),
+            valueJson: encoded,
             updatedAtMs: DateTime.now().toUtc().millisecondsSinceEpoch,
           ),
         );
@@ -5297,6 +6501,7 @@ Map<String, dynamic> _libraryRowJson(CanonicalLibraryRecord value) =>
     <String, dynamic>{
       'localId': value.localId,
       'inLibrary': value.inLibrary,
+      'favorite': value.favorite,
       'state': _jsonMap(value.canonicalStateJson),
       'fieldRevisions': _jsonMap(value.fieldRevisionsJson),
       'updatedAtMs': value.updatedAtMs,
@@ -5490,7 +6695,7 @@ UserMediaPatch _providerPatchBetween(
       UserMediaField.repeat,
       UserMediaField.startedAt,
       UserMediaField.completedAt,
-      UserMediaField.malPriority,
+      UserMediaField.priority,
       UserMediaField.private,
       UserMediaField.hiddenFromStatusLists,
       UserMediaField.customLists,
@@ -5505,7 +6710,7 @@ UserMediaPatch _providerPatchBetween(
       UserMediaField.repeat,
       UserMediaField.startedAt,
       UserMediaField.completedAt,
-      UserMediaField.priority,
+      UserMediaField.malPriority,
       UserMediaField.malRewatchValue,
       UserMediaField.malTags,
     },
@@ -5730,12 +6935,175 @@ UserMediaPatch _patchSubset(UserMediaPatch patch, Set<UserMediaField> fields) =>
       fields: fields,
     );
 
-bool _baseRevisionMatches(Object? current, Object? base) => base is List
-    ? base.any((Object? candidate) => _jsonEquivalent(current, candidate))
-    : _jsonEquivalent(current, base);
+List<Object?> _revisionLeaves(Object? value) =>
+    value is List ? value.expand(_revisionLeaves).toList() : <Object?>[value];
 
-bool _jsonEquivalent(Object? left, Object? right) =>
-    jsonEncode(left) == jsonEncode(right);
+bool _baseRevisionMatches(Object? current, Object? base) =>
+    _revisionLeaves(current).every(
+      (value) => _revisionLeaves(
+        base,
+      ).any((candidate) => _jsonEquivalent(value, candidate)),
+    );
+
+Object? _mergeEquivalentRevisions(Object? current, Object? incoming) {
+  final values = <Object?>[];
+  for (final value in [
+    ..._revisionLeaves(current),
+    ..._revisionLeaves(incoming),
+  ]) {
+    if (value != null && !values.any((v) => _jsonEquivalent(v, value))) {
+      values.add(value);
+    }
+  }
+  return values.length == 1 ? values.single : values;
+}
+
+int _revisionCounter(Object? value) =>
+    _revisionLeaves(value).fold(0, (count, revision) {
+      final next = (_jsonMap(revision)['counter'] as num?)?.toInt() ?? 0;
+      return count > next ? count : next;
+    });
+
+Iterable<String> _revisionOrigins(Object? value) =>
+    _revisionLeaves(value).map((v) => '${_jsonMap(v)['origin'] ?? ''}');
+
+bool _revisionDescendsFrom(
+  Object? revision,
+  String ancestor,
+  String field,
+  Map<String, Map<String, dynamic>> operations,
+) {
+  final pending = _revisionLeaves(revision)
+      .map((v) => _jsonMap(v)['operationId']?.toString())
+      .whereType<String>()
+      .toList();
+  final visited = <String>{};
+  while (pending.isNotEmpty) {
+    final id = pending.removeLast();
+    if (!visited.add(id)) continue;
+    if (id == ancestor) return true;
+    final base = _jsonMap(operations[id]?['baseRevisions'])[field];
+    pending.addAll(
+      _revisionLeaves(
+        base,
+      ).map((v) => _jsonMap(v)['operationId']?.toString()).whereType<String>(),
+    );
+  }
+  return false;
+}
+
+Object? _canonicalFieldValue(
+  String field,
+  UserMediaState? state, {
+  required bool membership,
+  required bool favorite,
+}) {
+  if (field == 'membership') return membership;
+  if (field == 'favorite') return favorite;
+  if (state == null) return null;
+  final mediaField = _fieldFromPersistedName(field);
+  if (mediaField == null) return null;
+  final value = _patchFromState(state, {mediaField}).toJson()[field];
+  return switch (mediaField) {
+    UserMediaField.score ||
+    UserMediaField.priority ||
+    UserMediaField.malPriority ||
+    UserMediaField.malRewatchValue => value ?? 0,
+    UserMediaField.private ||
+    UserMediaField.hiddenFromStatusLists => value ?? false,
+    UserMediaField.malTags => _providerStringList(value)..sort(),
+    _ => value,
+  };
+}
+
+Set<String> _canonicalProviderDataKeys(TrackerSource provider) =>
+    switch (provider) {
+      TrackerSource.anilist => const {
+        'priority',
+        'private',
+        'hiddenFromStatusLists',
+        'customLists',
+        'advancedScores',
+        'scoreFormat',
+      },
+      TrackerSource.mal => const {
+        'priority',
+        'rewatchValue',
+        'rereadValue',
+        'tags',
+      },
+      TrackerSource.shikimori => const {},
+    };
+
+Object? _operationFieldValue(
+  String field,
+  Map<String, dynamic> operation, {
+  UserMediaState? parsedState,
+}) {
+  if (field == 'favorite') return operation['favorite'];
+  if (field == 'episodeProgress') {
+    return _episodeCheckpointValue(operation['episode']);
+  }
+  final raw = operation['state'];
+  final state =
+      parsedState ??
+      (raw is Map
+          ? UserMediaState.fromJson(Map<String, dynamic>.from(raw))
+          : null);
+  return _canonicalFieldValue(
+    field,
+    state,
+    membership: state != null,
+    favorite: false,
+  );
+}
+
+Object? _episodeCheckpointValue(Object? value) {
+  if (value is! Map) return null;
+  return <String, dynamic>{
+    'season': (value['season'] as num?)?.toInt() ?? 1,
+    'episode': (value['episode'] as num?)?.toDouble() ?? 1,
+    'watchCycle': (value['watchCycle'] as num?)?.toInt() ?? 0,
+    'positionSeconds': (value['positionSeconds'] as num?)?.toInt() ?? 0,
+    'completed': value['completed'] == true,
+  };
+}
+
+String? _episodeRevisionKey(Object? value) {
+  if (value is! Map) return null;
+  final cycle = (value['watchCycle'] as num?)?.toInt() ?? 0;
+  final season = (value['season'] as num?)?.toInt() ?? 1;
+  final episode = (value['episode'] as num?)?.toDouble() ?? 1;
+  return 'episodeProgress:$cycle:$season:$episode';
+}
+
+Map<String, dynamic> _episodeRowCheckpoint(EpisodeStateRecord row) => {
+  'season': row.seasonNumber,
+  'episode': row.episodeNumber,
+  'positionSeconds': row.positionSeconds,
+  'durationSeconds': row.durationSeconds,
+  'completed': row.completed,
+  'watchCycle': row.watchCycle,
+};
+
+bool _jsonEquivalent(Object? left, Object? right) {
+  if (left is Map && right is Map) {
+    return left.length == right.length &&
+        left.entries.every(
+          (entry) =>
+              right.containsKey(entry.key) &&
+              _jsonEquivalent(entry.value, right[entry.key]),
+        );
+  }
+  if (left is List && right is List) {
+    if (left.length != right.length) return false;
+    for (int index = 0; index < left.length; index++) {
+      if (!_jsonEquivalent(left[index], right[index])) return false;
+    }
+    return true;
+  }
+  return left == right;
+}
 
 Map<String, bool> _providerBoolMap(Object? value) {
   if (value is! Map) return <String, bool>{};

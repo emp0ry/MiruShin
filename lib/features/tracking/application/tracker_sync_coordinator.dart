@@ -580,7 +580,6 @@ class TrackerSyncCoordinator {
                 },
                 completeSnapshot: true,
               );
-      await store.saveJournal(result.journal);
       _invalidateHealth();
       return foldersFromUserMediaStates(
         result.states
