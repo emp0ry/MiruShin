@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.9.13",
+          "date": "2026-10-05",
+          "localizedDescription": "- Fixed a macOS shutdown bug where closing the window could leave MiruShin running or crash on Quit.\n- Closing MiruShin now waits for the final playback checkpoint, background tasks, and all library databases before shutting down Flutter.\n- Interrupted tracker deliveries remain queued and are checked before retrying on the next launch.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.13/MiruShin-ios-v2.9.13.ipa",
+          "size": 31744812,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.9.12",
           "date": "2026-10-05",
           "localizedDescription": "- Fixed cross-device status, score, and Favorite inconsistencies; Library cards and Edit now read the same canonical local state.\n- Prevented stale provider previews, background queue writes, and rounded tracker scores from overwriting newer local changes.\n- Isolated per-episode checkpoint revisions and deduplicated false sync conflicts while preserving genuine concurrent edits.\n- Added safe, history-backed recovery for legacy library inconsistencies and 36 regression tests.\n- Improved reactive local-library updates and avoided redundant no-op database writes.",
@@ -767,11 +775,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.9.12",
+      "version": "2.9.13",
       "versionDate": "2026-10-05",
-      "versionDescription": "- Fixed cross-device status, score, and Favorite inconsistencies; Library cards and Edit now read the same canonical local state.\n- Prevented stale provider previews, background queue writes, and rounded tracker scores from overwriting newer local changes.\n- Isolated per-episode checkpoint revisions and deduplicated false sync conflicts while preserving genuine concurrent edits.\n- Added safe, history-backed recovery for legacy library inconsistencies and 36 regression tests.\n- Improved reactive local-library updates and avoided redundant no-op database writes.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.12/MiruShin-ios-v2.9.12.ipa",
-      "size": 31734708,
+      "versionDescription": "- Fixed a macOS shutdown bug where closing the window could leave MiruShin running or crash on Quit.\n- Closing MiruShin now waits for the final playback checkpoint, background tasks, and all library databases before shutting down Flutter.\n- Interrupted tracker deliveries remain queued and are checked before retrying on the next launch.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.13/MiruShin-ios-v2.9.13.ipa",
+      "size": 31744812,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
