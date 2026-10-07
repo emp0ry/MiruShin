@@ -77,8 +77,14 @@ bool shouldApplyFvpStartupPlaybackSpeed({
   required bool nativePlaying,
   required int previousPositionMs,
   required int currentPositionMs,
+  bool appliedBeforeInitialPositionSettled = false,
 }) {
   if (!initialized) return false;
+  if (appliedBeforeInitialPositionSettled) {
+    // Reassert once when the seek completes, not four times a second while
+    // MDK is already playing at the requested rate with a pending seek.
+    return initialPositionSettled;
+  }
   // A moving clock proves that MDK has decoded usable timestamps, which is the
   // important guard against the HLS startup freeze. The resume seek can still
   // be pending at this point (and in practice may take many seconds), so it
@@ -149,6 +155,9 @@ class FvpPlayerEngine extends PlayerEngine {
   bool _preserveStartupRetryCount = false;
   bool _requireVideoSurfaceDuringStartup = false;
   List<PlayerBufferedRange> _lastBufferedRanges = const <PlayerBufferedRange>[];
+  mdk.MediaInfo? _cachedMediaInfo;
+  final Stopwatch _mediaInfoClock = Stopwatch()..start();
+  Duration _nextMediaInfoRefresh = Duration.zero;
   Duration _knownSourceDuration = Duration.zero;
   DateTime? _invalidSince;
   bool _reportedInvalid = false;
@@ -922,6 +931,8 @@ class FvpPlayerEngine extends PlayerEngine {
         nativePlaying: nativePlaying,
         previousPositionMs: previousPositionMs,
         currentPositionMs: currentPositionMs,
+        appliedBeforeInitialPositionSettled:
+            appliedBeforeInitialPositionSettled,
       )) {
         _applyPlaybackSpeed(active, speed);
         _syncState();
@@ -1224,6 +1235,9 @@ class FvpPlayerEngine extends PlayerEngine {
       (dynamic _) => _syncState(),
     );
     _mediaStatusSubscription = player.onMediaStatus.listen((event) {
+      // Prepared/loaded/seek transitions can change metadata immediately.
+      // Stable playback still refreshes periodically for adaptive/live media.
+      _cachedMediaInfo = null;
       final bool freshNativeEnd =
           !event.oldValue.test(mdk.MediaStatus.end) &&
           event.newValue.test(mdk.MediaStatus.end);
@@ -1273,7 +1287,7 @@ class FvpPlayerEngine extends PlayerEngine {
     if (player == null) return;
 
     final mdk.MediaStatus status = player.mediaStatus;
-    final mdk.MediaInfo info = player.mediaInfo;
+    final mdk.MediaInfo info = _presentationMediaInfo(player);
     final Size videoSize = _videoSize(info);
     final mdk.VideoStreamInfo? video = _firstVideo(info);
     final double reportedAspectRatio = video == null
@@ -1487,6 +1501,17 @@ class FvpPlayerEngine extends PlayerEngine {
     _state.value = value;
   }
 
+  mdk.MediaInfo _presentationMediaInfo(mdk.Player player) {
+    final now = _mediaInfoClock.elapsed;
+    if (_cachedMediaInfo == null ||
+        !_state.value.isInitialized ||
+        now >= _nextMediaInfoRefresh) {
+      _cachedMediaInfo = player.mediaInfo;
+      _nextMediaInfoRefresh = now + const Duration(seconds: 1);
+    }
+    return _cachedMediaInfo!;
+  }
+
   Size _videoSize(mdk.MediaInfo info) {
     final mdk.VideoStreamInfo? video = _firstVideo(info);
     if (video == null) return _state.value.videoSize;
@@ -1586,6 +1611,8 @@ class FvpPlayerEngine extends PlayerEngine {
     _nativePlaybackUrl = null;
     _nativePlaybackHeaders = const <String, String>{};
     _lastBufferedRanges = const <PlayerBufferedRange>[];
+    _cachedMediaInfo = null;
+    _nextMediaInfoRefresh = Duration.zero;
     _knownSourceDuration = Duration.zero;
     _invalidSince = null;
     _reportedInvalid = false;

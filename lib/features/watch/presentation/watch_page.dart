@@ -41,6 +41,7 @@ import '../../catalog/application/catalog_repository.dart';
 import '../../downloads/application/download_episode_availability.dart';
 import '../../downloads/application/downloads_provider.dart';
 import '../../downloads/domain/download_models.dart';
+import '../../library/application/episode_progress_provider.dart';
 import '../../library/application/local_library_provider.dart';
 import '../../metadata/application/metadata_providers.dart';
 import '../../metadata/domain/anime_episode_metadata.dart';
@@ -828,33 +829,9 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     _preferredVoiceOverId = bundle.selectedVoiceOver?.id;
     _preferredVoiceOverLabel = bundle.selectedVoiceOver?.label;
 
-    // For auto-next always start from the beginning regardless of saved
-    // progress because startPosition remains zero below. Do not mark the episode
-    // ignoreProgress, or it would stop saving progress,
-    // never mark itself watched at 85%, and never chain the next auto-next.
-    // For manual opens, look up the saved position so the controller's async
-    // lookup doesn't race with the stop() call from the previous episode.
-    Duration startPosition = Duration.zero;
-    if (!isAutoNext) {
-      final String? mediaId = _lastItem?.id;
-      final int? seasonNum = _session?.seasonNumber;
-      if (mediaId != null && seasonNum != null) {
-        final String? progressMediaId = soraEpisodeProgressMediaId(
-          addonId: bundle.addonId,
-          episodeHref: bundle.episode.href,
-        );
-        final EpisodeProgress? prog = ref
-            .read(localLibraryProvider.notifier)
-            .episodeProgress(
-              progressMediaId ?? mediaId,
-              seasonNum,
-              bundle.episode.number,
-            );
-        if (prog != null && prog.positionSeconds > 0) {
-          startPosition = Duration(seconds: prog.positionSeconds);
-        }
-      }
-    }
+    // The controller waits for the previous final save and reads the shared
+    // media checkpoint. A source-specific UI prefill could override a reset.
+    const Duration startPosition = Duration.zero;
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || _lastItem == null || _session == null) {
@@ -3697,6 +3674,17 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
     final LocalLibraryController libraryNotifier = ref.read(
       localLibraryProvider.notifier,
     );
+    final checkpoints = currentEpisodeCheckpoints(
+      ref.watch(mediaEpisodeProgressProvider(widget.item.id)),
+    );
+    EpisodeProgress? progressFor(SoraEpisode episode) => _sourceEpisodeProgress(
+      checkpoints: checkpoints,
+      library: libraryNotifier,
+      item: widget.item,
+      source: widget.source,
+      season: widget.seasonNumber,
+      episode: episode,
+    );
 
     return GlassCard(
       padding: const EdgeInsets.all(AppSpacing.xl),
@@ -3881,7 +3869,7 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
                       result: widget.source,
                       episode: ep,
                     );
-                if (watchedSet.contains(key)) {
+                if (progressFor(ep) == null && watchedSet.contains(key)) {
                   final int n = ep.number.round();
                   if (n > maxLocalWatched) maxLocalWatched = n;
                 }
@@ -3890,17 +3878,7 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
               int maxPositionWatched = 0;
               for (final SoraEpisode ep in episodes) {
                 if (ep.number < 1) continue;
-                final String progressMediaId =
-                    soraEpisodeProgressMediaId(
-                      addonId: widget.source.addonId,
-                      episodeHref: ep.href,
-                    ) ??
-                    widget.item.id;
-                final EpisodeProgress? prog = libraryNotifier.episodeProgress(
-                  progressMediaId,
-                  widget.seasonNumber,
-                  ep.number,
-                );
+                final EpisodeProgress? prog = progressFor(ep);
                 if (prog?.isWatched == true) {
                   final int n = ep.number.round();
                   if (n > maxPositionWatched) maxPositionWatched = n;
@@ -3974,41 +3952,21 @@ class _EpisodePickerSectionState extends ConsumerState<_EpisodePickerSection> {
                         result: widget.source,
                         episode: episode,
                       );
-                  final String progressMediaId =
-                      soraEpisodeProgressMediaId(
-                        addonId: widget.source.addonId,
-                        episodeHref: episode.href,
-                      ) ??
-                      widget.item.id;
-                  final EpisodeProgress? localProg = libraryNotifier
-                      .episodeProgress(
-                        progressMediaId,
-                        widget.seasonNumber,
-                        episode.number,
-                      );
-                  // Episode 0 (number < 1): only its own local data,
-                  //   never derived from the range counter.
-                  // AniList mode: AniList is the sole source of truth. Local playback
-                  //   must not override decremented/reset AniList progress.
-                  // Local mode: full local data.
-                  final bool isWatched;
-                  if (epNum <= 0) {
-                    isWatched =
-                        watchedSet.contains(soraKey) ||
-                        (localProg?.isWatched ?? false);
-                  } else {
-                    isWatched =
-                        (effectiveContinued > 0 &&
-                            epNum <= effectiveContinued) ||
-                        watchedSet.contains(soraKey) ||
-                        (!useAniListProgress &&
-                            (localProg?.isWatched ?? false));
-                  }
+                  final EpisodeProgress? localProg = progressFor(episode);
+                  // An explicit checkpoint, including an unwatched/reset
+                  // one, takes precedence over older source range hints.
+                  final bool isWatched =
+                      localProg?.isWatched ??
+                      (watchedSet.contains(soraKey) ||
+                          (epNum > 0 &&
+                              effectiveContinued > 0 &&
+                              epNum <= effectiveContinued));
 
                   final bool isContinue =
                       !isWatched &&
-                      effectiveContinued > 0 &&
-                      epNum == effectiveContinued + 1;
+                      ((localProg?.positionSeconds ?? 0) > 0 ||
+                          (effectiveContinued > 0 &&
+                              epNum == effectiveContinued + 1));
 
                   final DownloadStatus? downloadStatus =
                       downloadKeys['${widget.source.addonId}|${episode.href}'];
@@ -5306,20 +5264,45 @@ bool _sourceEpisodeWatched({
   required SoraEpisode episode,
   required WidgetRef ref,
 }) {
+  final checkpoints = currentEpisodeCheckpoints(
+    ref.watch(mediaEpisodeProgressProvider(item.id)),
+  );
+  final progress = _sourceEpisodeProgress(
+    checkpoints: checkpoints,
+    library: libraryNotifier,
+    item: item,
+    source: source,
+    season: seasonNumber,
+    episode: episode,
+  );
+  if (progress != null) return progress.isWatched;
   final String watchedKey = ref
       .read(soraEpisodeProgressProvider.notifier)
       .keyFor(mediaId: item.id, result: source, episode: episode);
-  if (watchedSet.contains(watchedKey)) return true;
-  final String progressMediaId =
-      soraEpisodeProgressMediaId(
-        addonId: source.addonId,
-        episodeHref: episode.href,
-      ) ??
-      item.id;
-  return libraryNotifier
-          .episodeProgress(progressMediaId, seasonNumber, episode.number)
-          ?.isWatched ==
-      true;
+  return watchedSet.contains(watchedKey);
+}
+
+EpisodeProgress? _sourceEpisodeProgress({
+  required Map<(int, double), EpisodeProgress> checkpoints,
+  required LocalLibraryController library,
+  required MediaItem item,
+  required SoraSearchResult source,
+  required int season,
+  required SoraEpisode episode,
+}) {
+  final legacyId = soraEpisodeProgressMediaId(
+    addonId: source.addonId,
+    episodeHref: episode.href,
+  );
+  return sharedEpisodeProgress(
+    checkpoints: checkpoints,
+    season: season,
+    episode: episode.number,
+    compatible: library.episodeProgress(item.id, season, episode.number),
+    legacySource: legacyId == null
+        ? null
+        : library.episodeProgress(legacyId, season, episode.number),
+  );
 }
 
 int? _tmdbId(MediaItem item) {

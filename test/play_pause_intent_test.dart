@@ -14,6 +14,8 @@ import 'package:mirushin/features/player/domain/playback_end_decision.dart';
 import 'package:mirushin/features/player/domain/player_models.dart';
 import 'package:mirushin/features/player/engine/player_engine.dart';
 import 'package:mirushin/features/tracking/application/tracker_sync_coordinator.dart';
+import 'package:mirushin/features/tracking/domain/tracker_models.dart';
+import 'package:mirushin/features/tracking/domain/tracking_sync_models.dart';
 import 'package:mirushin/features/watch/domain/normalized_models.dart';
 import 'package:mirushin/shared/models/anilist_models.dart';
 import 'package:mirushin/shared/models/media_item.dart';
@@ -41,6 +43,296 @@ void main() {
   }
 
   group('PlaybackController play/pause intent', () {
+    for (final bool native in [false, true]) {
+      test(
+        'Auto Progress off preserves library state (${native ? 'native' : 'engine'})',
+        () async {
+          final c = container();
+          await c.read(playerSettingsProvider.future);
+          await c
+              .read(playerSettingsProvider.notifier)
+              .setAutoAnilistSync(false);
+          final controller = c.read(playbackControllerProvider.notifier);
+          final item = _testPlaybackItem(
+            'anilist:10',
+            episodeCount: 1,
+            mediaStatusLabel: 'FINISHED',
+            externalIds: const {'anilist': '10'},
+          );
+          final engine = _FakePlayerEngine(
+            const PlayerEngineState(
+              isInitialized: true,
+              position: Duration(seconds: 1440),
+              duration: Duration(seconds: 1440),
+              isCompleted: true,
+            ),
+          );
+          controller.debugSetPlaybackState(
+            PlaybackState(item: item, engine: engine),
+          );
+          if (native) {
+            await controller.saveNativeProgress(
+              positionMs: 1440000,
+              durationMs: 1440000,
+              completed: true,
+            );
+          } else {
+            controller.debugEvaluatePlaybackProgress(engine);
+          }
+          await controller.prepareForExit();
+          final checkpoint = await c
+              .read(localLibraryProvider.notifier)
+              .loadEpisodeProgress(item.id, 1, 1);
+          expect(checkpoint?.completed, isTrue);
+          final states = await c.read(trackingSyncStoreProvider).loadStates();
+          expect(
+            states,
+            isEmpty,
+            reason:
+                'Playback checkpoints must not add/complete a library entry',
+          );
+          final deliveries = await c
+              .read(canonicalLibraryDatabaseProvider)
+              .select(
+                c.read(canonicalLibraryDatabaseProvider).outboxDeliveryRecords,
+              )
+              .get();
+          expect(
+            deliveries.every((delivery) => delivery.target == 'drive'),
+            isTrue,
+          );
+        },
+      );
+      test(
+        'Auto Progress off leaves an existing Watching entry unchanged (${native ? 'native' : 'engine'})',
+        () async {
+          final c = container();
+          await c.read(playerSettingsProvider.future);
+          await c
+              .read(playerSettingsProvider.notifier)
+              .setAutoAnilistSync(false);
+          final repository = c.read(canonicalLibraryRepositoryProvider);
+          final media = MediaItem(
+            id: 'anilist:10',
+            title: 'Existing anime',
+            originalTitle: '',
+            overview: '',
+            type: MediaType.anime,
+            year: 2026,
+            posterUrl: '',
+            backdropUrl: '',
+            rating: 0,
+            genres: const [],
+            sourceProvider: 'AniList',
+            externalIds: const {'anilist': '10'},
+            episodeCount: 1,
+            statusLabel: 'FINISHED',
+          );
+          await repository.upsertLocalState(
+            UserMediaState(
+              identity: MediaIdentity.fromExternalIds(
+                media.externalIds,
+                mediaId: media.id,
+              ),
+              mediaItem: media,
+              status: AniListListStatus.current,
+              progress: 0,
+              source: TrackerSource.anilist,
+              createdAt: DateTime.now(),
+              updatedAt: DateTime.now(),
+            ),
+          );
+          final controller = c.read(playbackControllerProvider.notifier);
+          final item = _testPlaybackItem(
+            media.id,
+            episodeCount: 1,
+            mediaStatusLabel: 'FINISHED',
+            externalIds: media.externalIds,
+          );
+          final engine = _FakePlayerEngine(
+            const PlayerEngineState(
+              isInitialized: true,
+              position: Duration(seconds: 1230),
+              duration: Duration(seconds: 1440),
+            ),
+          );
+          controller.debugSetPlaybackState(
+            PlaybackState(item: item, engine: engine),
+          );
+          if (native) {
+            await controller.saveNativeProgress(
+              positionMs: 1230000,
+              durationMs: 1440000,
+            );
+            await controller.saveNativeProgress(
+              positionMs: 1440000,
+              durationMs: 1440000,
+              completed: true,
+            );
+          } else {
+            controller.debugEvaluatePlaybackProgress(engine);
+            engine.setState(
+              engine.value.copyWith(
+                position: const Duration(seconds: 1440),
+                isCompleted: true,
+              ),
+            );
+            controller.debugEvaluatePlaybackProgress(engine);
+          }
+          await controller.prepareForExit();
+          final entry = (await repository.loadTrackingStates()).single;
+          expect(entry.status, AniListListStatus.current);
+          expect(entry.progress, 0);
+          expect(entry.completedAt, isNull);
+          expect(
+            (await repository.loadEpisodeProgress(
+              mediaId: media.id,
+              season: 1,
+              episode: 1,
+            ))?.completed,
+            isTrue,
+          );
+        },
+      );
+    }
+
+    test('canonical zero checkpoint wins over an old UI resume position', () {
+      final controller = container().read(playbackControllerProvider.notifier);
+      expect(
+        controller.debugSafeResumePosition(
+          _testPlaybackItem(
+            'anilist:10',
+            startPosition: const Duration(seconds: 300),
+          ),
+          EpisodeProgress(positionSeconds: 0, updatedAt: DateTime.now()),
+        ),
+        Duration.zero,
+      );
+    });
+
+    for (final scenario in ['shared', 'reset', 'legacy', 'provider-reset']) {
+      test(
+        'another source resumes the shared anime checkpoint ($scenario)',
+        () async {
+          SharedPreferences.setMockInitialValues({
+            'mirushin.player.settings': '{"seekPreviewsEnabled":false}',
+          });
+          final database = CanonicalLibraryDatabase(NativeDatabase.memory());
+          final engine = _LifecyclePlayerEngine();
+          final c = ProviderContainer(
+            overrides: [
+              canonicalLibraryDatabaseProvider.overrideWithValue(database),
+              playerEngineBuilderProvider.overrideWithValue(
+                ({
+                  double? initialAspectRatio,
+                  required PlayerBackend backend,
+                  required bool youtubeEmbed,
+                  required String trailerBackLabel,
+                }) => engine,
+              ),
+            ],
+          );
+          addTearDown(() async {
+            c.dispose();
+            await database.close();
+            engine.disposeNotifier();
+          });
+          final library = c.read(localLibraryProvider.notifier);
+          if (scenario != 'legacy') {
+            await library.saveEpisodeProgress(
+              mediaId: 'anilist:10',
+              season: 1,
+              episode: 1,
+              positionSeconds: scenario.contains('reset') ? 0 : 95,
+            );
+          }
+          final sourceId = soraEpisodeProgressMediaId(
+            addonId: 'other',
+            episodeHref: '/episode/1',
+          )!;
+          await library.saveEpisodeProgress(
+            mediaId: sourceId,
+            season: 1,
+            episode: 1,
+            positionSeconds: scenario == 'legacy' ? 95 : 700,
+            persistCanonical: false,
+          );
+          await c
+              .read(playbackControllerProvider.notifier)
+              .load(
+                _testPlaybackItem(
+                  scenario == 'provider-reset'
+                      ? 'alternate-route-id'
+                      : 'anilist:10',
+                  externalIds: const {
+                    'anilist': '10',
+                    'sora_addon_id': 'other',
+                    'sora_episode_href': '/episode/1',
+                  },
+                ),
+              );
+          expect(
+            engine.openedAt,
+            scenario.contains('reset')
+                ? Duration.zero
+                : const Duration(seconds: 95),
+          );
+          expect(
+            (await library.loadEpisodeProgress(
+              scenario == 'provider-reset'
+                  ? 'alternate-route-id'
+                  : 'anilist:10',
+              1,
+              1,
+            ))?.positionSeconds,
+            scenario.contains('reset') ? 0 : 95,
+          );
+        },
+      );
+    }
+
+    test(
+      'playback writes one shared checkpoint, not new source aliases',
+      () async {
+        final c = container();
+        await c.read(playerSettingsProvider.future);
+        await c.read(playerSettingsProvider.notifier).setAutoAnilistSync(false);
+        final controller = c.read(playbackControllerProvider.notifier);
+        controller.debugSetPlaybackState(
+          PlaybackState(
+            item: _testPlaybackItem(
+              'anilist:10',
+              externalIds: const {
+                'anilist': '10',
+                'sora_addon_id': 'source-A',
+                'sora_episode_href': '/episode/1',
+              },
+            ),
+          ),
+        );
+        await controller.saveNativeProgress(
+          positionMs: 95000,
+          durationMs: 1440000,
+        );
+        final repo = c.read(canonicalLibraryRepositoryProvider);
+        expect((await repo.loadLocalEpisodeProgress()).keys, [
+          'anilist:10|S1E1.0',
+        ]);
+        expect(
+          await repo.database.select(repo.database.episodeStateRecords).get(),
+          hasLength(1),
+        );
+        expect(
+          (await repo.loadEpisodeProgress(
+            mediaId: 'anilist:10',
+            season: 1,
+            episode: 1,
+          ))?.positionSeconds,
+          95,
+        );
+      },
+    );
+
     test(
       'exit waits for the final SQLite checkpoint without abandoning it',
       () async {
@@ -2000,6 +2292,7 @@ class _LifecyclePlayerEngine extends PlayerEngine {
   int disposeCalls = 0;
   bool disposed = false;
   PlayerSource? openedSource;
+  Duration? openedAt;
 
   @override
   bool get managesStartupPlaybackSpeed => true;
@@ -2023,6 +2316,7 @@ class _LifecyclePlayerEngine extends PlayerEngine {
     bool autoplay = false,
   }) async {
     openedSource = source;
+    openedAt = startAt;
     if (!openStarted.isCompleted) openStarted.complete();
     await openGate?.future;
     if (disposed) return;

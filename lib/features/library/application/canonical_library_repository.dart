@@ -3345,6 +3345,37 @@ class CanonicalLibraryRepository {
   Future<void> saveLocalEpisodeProgress(Map<String, dynamic> values) =>
       _writeBucket('local.episodeProgress.v2', values);
 
+  /// Patch one compatibility checkpoint atomically in SQLite. Playback must
+  /// not copy/JSON-encode the entire episode history on the UI isolate for
+  /// every five-second tick or race another alias checkpoint's full save.
+  Future<void> saveLocalEpisodeCheckpoint(
+    String key,
+    Map<String, dynamic> checkpoint,
+  ) async {
+    await initialize();
+    // Replace this key before merging: EpisodeProgress.toJson omits false
+    // completion/unknown duration, which must not inherit the previous values.
+    await database.customUpdate(
+      '''INSERT INTO legacy_bucket_records (bucket, value_json, updated_at_ms)
+         VALUES (?, ?, ?)
+         ON CONFLICT(bucket) DO UPDATE SET
+           value_json = json_patch(
+             json_patch(
+               CASE WHEN json_valid(legacy_bucket_records.value_json)
+                 THEN legacy_bucket_records.value_json ELSE '{}' END,
+               json_object(?, NULL)),
+             excluded.value_json),
+           updated_at_ms = excluded.updated_at_ms''',
+      variables: [
+        const Variable<String>('local.episodeProgress.v2'),
+        Variable<String>(jsonEncode({key: checkpoint})),
+        Variable<int>(DateTime.now().toUtc().millisecondsSinceEpoch),
+        Variable<String>(key),
+      ],
+      updates: {database.legacyBucketRecords},
+    );
+  }
+
   Future<void> _applyFavoritesLocked(
     List<LocalMediaFavoriteState> favorites,
     List<UserMediaState> states,
@@ -5972,7 +6003,30 @@ class CanonicalLibraryRepository {
     int watchCycle = 0,
   }) async {
     await initialize();
-    final String? localId = await _localIdForAlias(mediaId);
+    final identity = MediaIdentity.fromExternalIds(const {}, mediaId: mediaId);
+    if (identity.hasProviderId) {
+      final blocked =
+          await (database.select(database.providerBindingRecords)..where(
+                (t) =>
+                    t.quarantined.equals(true) &
+                    t.mediaKind.equals(identity.mediaKind) &
+                    ((t.provider.equals('anilist') &
+                            t.externalMediaId.equals(
+                              identity.anilistId ?? -1,
+                            )) |
+                        (t.provider.equals('mal') &
+                            t.externalMediaId.equals(identity.malId ?? -1)) |
+                        (t.provider.equals('shikimori') &
+                            t.externalMediaId.equals(
+                              identity.shikimoriId ?? -1,
+                            ))),
+              ))
+              .get();
+      if (blocked.isNotEmpty) return null;
+    }
+    final String? localId =
+        await _localIdForAlias(mediaId) ??
+        await _localIdForIdentityLocked(identity);
     if (localId == null) return null;
     final EpisodeStateRecord? row =
         await (database.select(database.episodeStateRecords)..where(
@@ -5996,6 +6050,74 @@ class CanonicalLibraryRepository {
     );
   }
 
+  /// Observe only this title's checkpoints, not the whole playback history.
+  /// Exact, verified provider bindings also work before an alias is created.
+  Stream<Map<(int, double), CanonicalEpisodeProgress>> watchEpisodeProgress(
+    String mediaId, {
+    int watchCycle = 0,
+  }) async* {
+    await initialize();
+    final identity = MediaIdentity.fromExternalIds(const {}, mediaId: mediaId);
+    final query = database.customSelect(
+      '''SELECT e.* FROM episode_state_records e
+         WHERE e.watch_cycle = ? AND NOT EXISTS (
+           SELECT 1 FROM provider_binding_records
+           WHERE quarantined = 1 AND media_kind = ? AND (
+             (provider = 'anilist' AND external_media_id = ?) OR
+             (provider = 'mal' AND external_media_id = ?) OR
+             (provider = 'shikimori' AND external_media_id = ?)
+           )
+         ) AND (
+           e.local_id = ? OR e.local_id IN (
+             SELECT local_id FROM media_alias_records WHERE alias = ?
+           ) OR e.local_id IN (
+             SELECT local_id FROM provider_binding_records
+             WHERE quarantined = 0 AND media_kind = ? AND (
+               (provider = 'anilist' AND external_media_id = ?) OR
+               (provider = 'mal' AND external_media_id = ?) OR
+               (provider = 'shikimori' AND external_media_id = ?)
+             )
+           )
+         )''',
+      variables: [
+        Variable<int>(watchCycle),
+        Variable<String>(identity.mediaKind),
+        Variable<int>(identity.anilistId ?? -1),
+        Variable<int>(identity.malId ?? -1),
+        Variable<int>(identity.shikimoriId ?? -1),
+        Variable<String>(mediaId),
+        Variable<String>(mediaId),
+        Variable<String>(identity.mediaKind),
+        Variable<int>(identity.anilistId ?? -1),
+        Variable<int>(identity.malId ?? -1),
+        Variable<int>(identity.shikimoriId ?? -1),
+      ],
+      readsFrom: {
+        database.episodeStateRecords,
+        database.mediaAliasRecords,
+        database.providerBindingRecords,
+      },
+    );
+    yield* query.watch().map(
+      (rows) => {
+        for (final row in rows)
+          (
+            row.read<int>('season_number'),
+            row.read<double>('episode_number'),
+          ): CanonicalEpisodeProgress(
+            positionSeconds: row.read<int>('position_seconds'),
+            durationSeconds: row.readNullable<int>('duration_seconds'),
+            updatedAt: DateTime.fromMillisecondsSinceEpoch(
+              row.read<int>('updated_at_ms'),
+              isUtc: true,
+            ),
+            completed: row.read<bool>('completed'),
+            watchCycle: row.read<int>('watch_cycle'),
+          ),
+      },
+    );
+  }
+
   Future<void> saveEpisodeProgress({
     required String mediaId,
     required int season,
@@ -6006,6 +6128,7 @@ class CanonicalLibraryRepository {
     int watchCycle = 0,
     MediaItem? mediaItem,
     bool recordActivity = true,
+    bool onlyIfMissing = false,
   }) async {
     await initialize();
     await database.transaction(() async {
@@ -6027,6 +6150,9 @@ class CanonicalLibraryRepository {
                 (EpisodeStateRecords table) => table.episodeStateId.equals(id),
               ))
               .getSingleOrNull();
+      // Compatibility migration must not replay stale source/device state
+      // over a newer canonical checkpoint (including an intentional reset).
+      if (onlyIfMissing && previous != null) return;
       await database
           .into(database.episodeStateRecords)
           .insertOnConflictUpdate(

@@ -135,14 +135,19 @@ class LocalLibraryController extends Notifier<List<LibraryItem>> {
     }
     if (!ref.mounted || generation != _workspaceGeneration) return;
     final String key = _episodeKey(mediaId, season, episode);
-    _episodeProgress = Map<String, EpisodeProgress>.from(_episodeProgress)
-      ..[key] = EpisodeProgress(
-        positionSeconds: positionSeconds,
-        durationSeconds: durationSeconds,
-        updatedAt: DateTime.now(),
-        completed: completed,
-      );
-    await _persistEpisodeProgress(repository);
+    final checkpoint = EpisodeProgress(
+      positionSeconds: positionSeconds,
+      durationSeconds: durationSeconds,
+      updatedAt: DateTime.now(),
+      completed: completed,
+    );
+    _episodeProgress[key] = checkpoint;
+    try {
+      await repository.saveLocalEpisodeCheckpoint(key, checkpoint.toJson());
+    } on Object {
+      // Keep the compatibility cache best-effort during shutdown: the
+      // captured workspace database may already be closing. Never reread ref.
+    }
   }
 
   String _episodeKey(String mediaId, int season, double episode) =>
@@ -204,6 +209,7 @@ class LocalLibraryController extends Notifier<List<LibraryItem>> {
           durationSeconds: value.durationSeconds,
           completed: value.completed,
           recordActivity: false,
+          onlyIfMissing: true,
         );
       }
       await repository.saveLocalEpisodeProgress(_episodeProgressJson(loaded));
@@ -217,20 +223,6 @@ class LocalLibraryController extends Notifier<List<LibraryItem>> {
       // Ignore corrupt progress cache and start fresh instead of blocking playback.
     } finally {
       if (generation == _workspaceGeneration) _episodeProgressLoaded = true;
-    }
-  }
-
-  Future<void> _persistEpisodeProgress(
-    CanonicalLibraryRepository repository,
-  ) async {
-    try {
-      await repository.saveLocalEpisodeProgress(
-        _episodeProgressJson(_episodeProgress),
-      );
-    } on Object {
-      // A container can close while a final playback checkpoint is in flight.
-      // The canonical checkpoint above already owns durable progress; teardown
-      // must never turn this best-effort compatibility cache into a crash.
     }
   }
 

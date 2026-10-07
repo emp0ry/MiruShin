@@ -17,14 +17,8 @@ const Duration _kReadTimeout = Duration(seconds: 30);
 const int _kPlaylistRetries = 3;
 const int _kSegmentRetries = 4;
 const int _kRetryBackoffBaseMs = 150;
-const Duration _kIdleReset = Duration(seconds: 40);
-const int _kBufferedSegmentLimitBytes = 32 * 1024 * 1024;
 const int _kMaxPlaylistBytes = 4 * 1024 * 1024;
 const List<String> _kHttp11Protocols = <String>['http/1.1'];
-
-class _SegmentBufferTooLarge implements Exception {
-  const _SegmentBufferTooLarge();
-}
 
 class _DirectMediaResponse implements Exception {
   const _DirectMediaResponse();
@@ -118,7 +112,8 @@ String _safeFailure(Object error) {
 ///  - Reuses a single HttpClient connection pool -> fewer TCP handshakes.
 ///  - Forwards all necessary headers on every request (MPV drops them after
 ///    the first playlist fetch when URLs are rewritten to localhost).
-///  - Resets the connection after long idle to avoid stale keep-alive sockets.
+///  - Expires idle pooled sockets without interrupting active audio/video.
+///  - Streams bodies with backpressure instead of prebuffering whole segments.
 ///
 /// Architecture: one `LocalHlsProxy` instance per `MediaKitPlayerEngine`.
 /// The engine calls `start()` / `stop()` around each network stream open.
@@ -158,7 +153,6 @@ class LocalHlsProxy {
   // edge fails. This is scoped to one proxy session, never persisted.
   final Set<String> _dnsFallbackHosts = <String>{};
   final Set<String> _directMediaUrls = <String>{};
-  DateTime? _lastRequestAt;
   Map<String, String> _forwardHeaders = <String, String>{};
   final Set<String> _localRoots = <String>{};
   final Map<String, String> _inlineDashManifests = <String, String>{};
@@ -203,7 +197,6 @@ class LocalHlsProxy {
     _inlineDashManifests.clear();
     _inlineDashHeaders.clear();
     _dashHlsPresentations.clear();
-    _lastRequestAt = null;
     try {
       await s?.close(force: true);
     } catch (_) {}
@@ -329,11 +322,7 @@ class LocalHlsProxy {
         case '/media':
           await _serveSegment(req, preserveContentType: true);
         case '/dash-media':
-          await _serveSegment(
-            req,
-            preserveContentType: true,
-            forceStreaming: true,
-          );
+          await _serveSegment(req, preserveContentType: true);
         case '/mpd':
           await _serveRemoteDash(req);
         case '/dash':
@@ -612,7 +601,7 @@ class LocalHlsProxy {
     debugPrint('HlsProxy playlist ← ${_safeUpstream(src)}');
 
     if (_directMediaUrls.contains(src.toString())) {
-      return _serveSegment(req, forceStreaming: true);
+      return _serveSegment(req);
     }
 
     try {
@@ -642,12 +631,9 @@ class LocalHlsProxy {
                 req.response.contentLength = upstream.contentLength;
               }
               try {
-                req.response.add(firstBytes);
-                while (await remaining.moveNext()) {
-                  if (_stopping) break;
-                  _lastRequestAt = DateTime.now();
-                  req.response.add(remaining.current);
-                }
+                await req.response.addStream(
+                  _iteratorBody(remaining, firstBytes),
+                );
                 await req.response.close();
               } on Object catch (error) {
                 if (!_stopping || !_isShutdownError(error)) {
@@ -722,8 +708,7 @@ class LocalHlsProxy {
 
     for (int attempt = 1; attempt <= _kPlaylistRetries; attempt++) {
       try {
-        _resetIfIdle();
-        _lastRequestAt = DateTime.now();
+        if (_stopping) throw StateError('proxy stopping');
         final HttpClientRequest r = await _client()
             .getUrl(url)
             .timeout(_kConnectTimeout);
@@ -734,8 +719,9 @@ class LocalHlsProxy {
         final HttpClientResponse resp = await r.close().timeout(_kReadTimeout);
 
         if (resp.statusCode < 200 || resp.statusCode >= 300) {
-          // Drain body to free connection.
-          await resp.drain<void>().catchError((_) {});
+          // Cancel only this response. Draining an arbitrarily large/slow
+          // error page delays retry; closing the shared client aborts peers.
+          await _discardResponse(resp);
           throw HttpException('HTTP ${resp.statusCode}', uri: url);
         }
 
@@ -793,10 +779,7 @@ class LocalHlsProxy {
         );
         if (attempt == _kPlaylistRetries) rethrow;
         _switchToDnsAfterPinnedEdgeFailure(url);
-        _destroyClient();
-        await Future<void>.delayed(
-          Duration(milliseconds: _kRetryBackoffBaseMs * attempt),
-        );
+        await _beforeRetry(attempt);
       }
     }
     throw StateError('unreachable');
@@ -807,7 +790,6 @@ class LocalHlsProxy {
   Future<void> _serveSegment(
     HttpRequest req, {
     bool preserveContentType = true,
-    bool forceStreaming = false,
   }) async {
     final String? rawUrl = req.uri.queryParameters['u'];
     if (rawUrl == null) {
@@ -833,71 +815,12 @@ class LocalHlsProxy {
       );
     }
 
-    if (!forceStreaming && req.method != 'HEAD') {
-      return _serveBufferedSegment(
-        req,
-        uri,
-        range,
-        preserveContentType: preserveContentType,
-      );
-    }
-
     return _serveStreamingSegment(
       req,
       uri,
       range,
       preserveContentType: preserveContentType,
     );
-  }
-
-  Future<void> _serveBufferedSegment(
-    HttpRequest req,
-    Uri uri,
-    String? range, {
-    required bool preserveContentType,
-  }) async {
-    try {
-      final ({Uint8List body, HttpHeaders headers, int statusCode}) upstream =
-          await _fetchBufferedSegment(uri, range);
-
-      req.response.statusCode = upstream.statusCode;
-      req.response.bufferOutput = false;
-      _copyResponseHeaders(
-        upstream.headers,
-        req.response.headers,
-        defaultContentType: 'application/octet-stream',
-        preserveContentType: preserveContentType,
-      );
-      req.response.contentLength = upstream.body.length;
-      req.response.add(upstream.body);
-      return req.response.close();
-    } on _SegmentBufferTooLarge {
-      debugPrint(
-        'HlsProxy seg too large for prebuffer, streaming '
-        '${_safeUpstream(uri)}',
-      );
-      return _serveStreamingSegment(
-        req,
-        uri,
-        range,
-        preserveContentType: preserveContentType,
-      );
-    } on Object catch (error) {
-      if (_stopping && _isShutdownError(error)) {
-        try {
-          await req.response.close();
-        } catch (_) {}
-        return;
-      }
-      debugPrint(
-        'HlsProxy seg FAIL ${_safeUpstream(uri)} '
-        '(${_safeFailure(error)})',
-      );
-      req.response.statusCode = HttpStatus.badGateway;
-      req.response.headers.set(HttpHeaders.contentTypeHeader, 'text/plain');
-      req.response.write('upstream media request failed');
-      return req.response.close();
-    }
   }
 
   Future<void> _serveLocalFileSegment(
@@ -1003,80 +926,6 @@ class LocalHlsProxy {
     return 'application/octet-stream';
   }
 
-  Future<({Uint8List body, HttpHeaders headers, int statusCode})>
-  _fetchBufferedSegment(Uri uri, String? range) async {
-    for (int attempt = 1; attempt <= _kSegmentRetries; attempt++) {
-      _resetIfIdle();
-      _lastRequestAt = DateTime.now();
-      if (_stopping) throw StateError('proxy stopping');
-
-      try {
-        final HttpClientRequest r = await _client()
-            .getUrl(uri)
-            .timeout(_kConnectTimeout);
-        r.persistentConnection = true;
-        _applyUpstreamHeaders(r, uri);
-        if (range != null && range.trim().isNotEmpty) {
-          r.headers.set(HttpHeaders.rangeHeader, range.trim());
-        }
-
-        final HttpClientResponse upstream = await r.close().timeout(
-          _kReadTimeout,
-        );
-
-        final bool changedEdge =
-            upstream.statusCode >= 400 &&
-            _switchToDnsAfterPinnedEdgeFailure(uri);
-        if (attempt < _kSegmentRetries &&
-            (_isRetriableStatus(upstream.statusCode) || changedEdge)) {
-          await upstream.drain<void>().catchError((_) {});
-          debugPrint(
-            'HlsProxy seg retry $attempt '
-            '(HTTP ${upstream.statusCode}) ${_safeUpstream(uri)}',
-          );
-          await _beforeRetry(attempt);
-          continue;
-        }
-
-        if (upstream.contentLength > _kBufferedSegmentLimitBytes) {
-          await upstream.drain<void>().catchError((_) {});
-          throw const _SegmentBufferTooLarge();
-        }
-
-        final BytesBuilder body = BytesBuilder(copy: false);
-        await for (final List<int> chunk in upstream.timeout(_kReadTimeout)) {
-          if (_stopping) throw StateError('proxy stopping');
-          body.add(chunk);
-          if (body.length > _kBufferedSegmentLimitBytes) {
-            throw const _SegmentBufferTooLarge();
-          }
-        }
-
-        return (
-          body: body.takeBytes(),
-          headers: upstream.headers,
-          statusCode: upstream.statusCode,
-        );
-      } on _SegmentBufferTooLarge {
-        rethrow;
-      } on Object catch (error) {
-        final bool canRetry =
-            _isRetriableError(error) && attempt < _kSegmentRetries;
-        if (canRetry) {
-          _switchToDnsAfterPinnedEdgeFailure(uri);
-          debugPrint(
-            'HlsProxy seg retry $attempt (${_safeFailure(error)}) '
-            '${_safeUpstream(uri)}',
-          );
-          await _beforeRetry(attempt);
-          continue;
-        }
-        rethrow;
-      }
-    }
-    throw StateError('unreachable');
-  }
-
   Future<void> _serveStreamingSegment(
     HttpRequest req,
     Uri uri,
@@ -1084,8 +933,6 @@ class LocalHlsProxy {
     required bool preserveContentType,
   }) async {
     for (int attempt = 1; attempt <= _kSegmentRetries; attempt++) {
-      _resetIfIdle();
-      _lastRequestAt = DateTime.now();
       if (_stopping) {
         try {
           await req.response.close();
@@ -1093,13 +940,17 @@ class LocalHlsProxy {
         return;
       }
 
+      HttpClientRequest? outbound;
+      StreamIterator<List<int>>? body;
+      bool committed = false;
       try {
         final HttpClientRequest r =
             await (req.method == 'HEAD'
                     ? _client().headUrl(uri)
                     : _client().getUrl(uri))
                 .timeout(_kConnectTimeout);
-        r.persistentConnection = true;
+        outbound = r;
+        r.persistentConnection = attempt == 1;
         _applyUpstreamHeaders(r, uri);
         if (range != null && range.trim().isNotEmpty) {
           r.headers.set(HttpHeaders.rangeHeader, range.trim());
@@ -1114,13 +965,22 @@ class LocalHlsProxy {
             _switchToDnsAfterPinnedEdgeFailure(uri);
         if (attempt < _kSegmentRetries &&
             (_isRetriableStatus(upstream.statusCode) || changedEdge)) {
-          await upstream.drain<void>().catchError((_) {});
+          await _discardResponse(upstream);
           debugPrint(
             'HlsProxy seg retry $attempt '
             '(HTTP ${upstream.statusCode}) ${_safeUpstream(uri)}',
           );
           await _beforeRetry(attempt);
           continue;
+        }
+
+        // Prime at most one chunk before committing the response. A failed
+        // connection may still retry here, but a partial media response must
+        // never be silently replayed/appended from byte zero.
+        List<int> firstBytes = const <int>[];
+        if (req.method != 'HEAD') {
+          body = StreamIterator<List<int>>(_activeStream(upstream));
+          if (await body.moveNext()) firstBytes = body.current;
         }
 
         req.response.statusCode = upstream.statusCode;
@@ -1134,31 +994,29 @@ class LocalHlsProxy {
         if (upstream.contentLength >= 0) {
           req.response.contentLength = upstream.contentLength;
         }
-        if (req.method == 'HEAD') {
-          await upstream.drain<void>().catchError((_) {});
-          return req.response.close();
+        committed = true;
+        if (body != null) {
+          await req.response.addStream(_iteratorBody(body, firstBytes));
+        } else {
+          await _discardResponse(upstream);
         }
-        try {
-          await req.response.addStream(_activeStream(upstream));
-          return req.response.close();
-        } on Object catch (error) {
-          if (_stopping && _isShutdownError(error)) {
-            try {
-              await req.response.close();
-            } catch (_) {}
-            return;
-          }
-          debugPrint(
-            'HlsProxy seg stream FAIL ${_safeUpstream(uri)} '
-            '(${_safeFailure(error)})',
-          );
+        return await req.response.close();
+      } on Object catch (error) {
+        // Abort only this request, never the pooled client's other streams.
+        outbound?.abort();
+        if (_stopping && _isShutdownError(error)) {
           try {
             await req.response.close();
           } catch (_) {}
           return;
         }
-      } on Object catch (error) {
-        if (_stopping && _isShutdownError(error)) {
+        if (committed) {
+          debugPrint(
+            'HlsProxy seg stream FAIL ${_safeUpstream(uri)} '
+            '(${_safeFailure(error)})',
+          );
+          // Signal a truncated HTTP body to the backend. It may reconnect
+          // using a new Range request; the proxy must not concatenate bodies.
           try {
             await req.response.close();
           } catch (_) {}
@@ -1183,6 +1041,10 @@ class LocalHlsProxy {
         req.response.headers.set(HttpHeaders.contentTypeHeader, 'text/plain');
         req.response.write('upstream media request failed');
         return req.response.close();
+      } finally {
+        try {
+          await body?.cancel();
+        } catch (_) {}
       }
     }
   }
@@ -1309,13 +1171,28 @@ class LocalHlsProxy {
     try {
       await for (final List<int> chunk in upstream.timeout(_kReadTimeout)) {
         if (_stopping) break;
-        _lastRequestAt = DateTime.now();
         yield chunk;
       }
     } on Object catch (e) {
       if (_stopping && _isShutdownError(e)) return;
       rethrow;
     }
+  }
+
+  Stream<List<int>> _iteratorBody(
+    StreamIterator<List<int>> remaining,
+    List<int> firstBytes,
+  ) async* {
+    if (firstBytes.isNotEmpty) yield firstBytes;
+    while (!_stopping && await remaining.moveNext()) {
+      yield remaining.current;
+    }
+  }
+
+  Future<void> _discardResponse(HttpClientResponse response) async {
+    try {
+      await response.listen(null).cancel();
+    } catch (_) {}
   }
 
   // HttpClient helpers
@@ -1387,15 +1264,6 @@ class LocalHlsProxy {
     }
     debugPrint('HlsProxy: pinned edge failed; retrying host via DNS');
     return true;
-  }
-
-  void _resetIfIdle() {
-    if (_stopping) return;
-    final DateTime? last = _lastRequestAt;
-    if (last != null && DateTime.now().difference(last) >= _kIdleReset) {
-      debugPrint('HlsProxy: resetting idle HttpClient');
-      _destroyClient();
-    }
   }
 
   void _applyUpstreamHeaders(HttpClientRequest r, Uri url) {
@@ -1549,7 +1417,6 @@ class LocalHlsProxy {
 
   Future<void> _beforeRetry(int attempt) async {
     if (_stopping) return;
-    _destroyClient();
     await Future<void>.delayed(
       Duration(milliseconds: _kRetryBackoffBaseMs * attempt),
     );

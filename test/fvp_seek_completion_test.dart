@@ -3,41 +3,74 @@ import 'package:mirushin/features/player/engine/fvp_player_engine.dart';
 
 void main() {
   group('FVP staged startup speed', () {
-    test('uses a moving native clock without waiting for a slow resume seek', () {
-      bool shouldApply({
-        bool initialized = true,
-        bool settled = true,
-        bool playing = true,
-        int previous = 1000,
-        int current = 1250,
-      }) => shouldApplyFvpStartupPlaybackSpeed(
-        initialized: initialized,
-        initialPositionSettled: settled,
-        nativePlaying: playing,
-        previousPositionMs: previous,
-        currentPositionMs: current,
-      );
-
-      expect(shouldApply(), isTrue);
-      expect(shouldApply(initialized: false), isFalse);
-      expect(shouldApply(settled: false), isTrue);
-      expect(shouldApply(current: 1000), isFalse);
-    });
-
-    test('applies to an initialized paused engine only after resume settles', () {
-      bool shouldApply({bool initialized = true, bool settled = true}) =>
+    test(
+      'a pending resume seek applies speed once then confirms after settling',
+      () {
+        expect(
           shouldApplyFvpStartupPlaybackSpeed(
-            initialized: initialized,
-            initialPositionSettled: settled,
-            nativePlaying: false,
+            initialized: true,
+            initialPositionSettled: false,
+            nativePlaying: true,
             previousPositionMs: 1000,
-            currentPositionMs: 1000,
-          );
+            currentPositionMs: 1250,
+            appliedBeforeInitialPositionSettled: true,
+          ),
+          isFalse,
+        );
+        expect(
+          shouldApplyFvpStartupPlaybackSpeed(
+            initialized: true,
+            initialPositionSettled: true,
+            nativePlaying: true,
+            previousPositionMs: 1000,
+            currentPositionMs: 1250,
+            appliedBeforeInitialPositionSettled: true,
+          ),
+          isTrue,
+        );
+      },
+    );
+    test(
+      'uses a moving native clock without waiting for a slow resume seek',
+      () {
+        bool shouldApply({
+          bool initialized = true,
+          bool settled = true,
+          bool playing = true,
+          int previous = 1000,
+          int current = 1250,
+        }) => shouldApplyFvpStartupPlaybackSpeed(
+          initialized: initialized,
+          initialPositionSettled: settled,
+          nativePlaying: playing,
+          previousPositionMs: previous,
+          currentPositionMs: current,
+        );
 
-      expect(shouldApply(), isTrue);
-      expect(shouldApply(settled: false), isFalse);
-      expect(shouldApply(initialized: false), isFalse);
-    });
+        expect(shouldApply(), isTrue);
+        expect(shouldApply(initialized: false), isFalse);
+        expect(shouldApply(settled: false), isTrue);
+        expect(shouldApply(current: 1000), isFalse);
+      },
+    );
+
+    test(
+      'applies to an initialized paused engine only after resume settles',
+      () {
+        bool shouldApply({bool initialized = true, bool settled = true}) =>
+            shouldApplyFvpStartupPlaybackSpeed(
+              initialized: initialized,
+              initialPositionSettled: settled,
+              nativePlaying: false,
+              previousPositionMs: 1000,
+              currentPositionMs: 1000,
+            );
+
+        expect(shouldApply(), isTrue);
+        expect(shouldApply(settled: false), isFalse);
+        expect(shouldApply(initialized: false), isFalse);
+      },
+    );
   });
 
   group('FVP native completion plausibility', () {

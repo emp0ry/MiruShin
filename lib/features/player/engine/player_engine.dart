@@ -39,6 +39,13 @@ class PlayerBufferedRange {
 
   final Duration start;
   final Duration end;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PlayerBufferedRange && start == other.start && end == other.end;
+
+  @override
+  int get hashCode => Object.hash(start, end);
 }
 
 double videoDisplayAspectRatio({
@@ -94,6 +101,43 @@ class PlayerEngineState {
   final bool hasVideoSurface;
   final bool hasError;
   final String? errorDescription;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PlayerEngineState &&
+          position == other.position &&
+          duration == other.duration &&
+          volume == other.volume &&
+          playbackSpeed == other.playbackSpeed &&
+          aspectRatio == other.aspectRatio &&
+          videoSize == other.videoSize &&
+          listEquals(buffered, other.buffered) &&
+          isInitialized == other.isInitialized &&
+          isPlaying == other.isPlaying &&
+          isBuffering == other.isBuffering &&
+          isCompleted == other.isCompleted &&
+          hasVideoSurface == other.hasVideoSurface &&
+          hasError == other.hasError &&
+          errorDescription == other.errorDescription;
+
+  @override
+  int get hashCode => Object.hash(
+    position,
+    duration,
+    volume,
+    playbackSpeed,
+    aspectRatio,
+    videoSize,
+    Object.hashAll(buffered),
+    isInitialized,
+    isPlaying,
+    isBuffering,
+    isCompleted,
+    hasVideoSurface,
+    hasError,
+    errorDescription,
+  );
 
   PlayerEngineState copyWith({
     Duration? position,

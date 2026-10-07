@@ -27,6 +27,7 @@ import '../../../core/widgets/neutral_placeholder.dart';
 import '../../../core/widgets/page_back_button.dart';
 import '../../../core/widgets/section_header.dart';
 import '../../../shared/models/media_item.dart';
+import '../../library/application/episode_progress_provider.dart';
 import '../../library/application/local_library_provider.dart';
 import '../../metadata/application/metadata_providers.dart';
 import '../../player/domain/player_models.dart';
@@ -106,6 +107,7 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
       downloads.any((DownloadedEpisode episode) => episode.isActive),
     );
     ref.watch(localLibraryProvider);
+    ref.watch(mediaEpisodeProgressProvider(widget.mediaId));
     final DownloadController controller = ref.read(downloadsProvider.notifier);
     final List<DownloadedEpisode> episodes = controller.episodesFor(
       widget.mediaId,
@@ -381,18 +383,24 @@ class _OfflineTitlePageState extends ConsumerState<OfflineTitlePage> {
       addonId: ep.addonId,
       episodeHref: ep.episodeHref,
     );
-    if (soraMediaId != null) {
-      final EpisodeProgress? progress = library.episodeProgress(
-        soraMediaId,
+    return sharedEpisodeProgress(
+      checkpoints: currentEpisodeCheckpoints(
+        ref.read(mediaEpisodeProgressProvider(ep.mediaId)),
+      ),
+      season: ep.seasonNumber,
+      episode: ep.episodeNumber,
+      compatible: library.episodeProgress(
+        ep.mediaId,
         ep.seasonNumber,
         ep.episodeNumber,
-      );
-      if (progress != null) return progress;
-    }
-    return library.episodeProgress(
-      ep.mediaId,
-      ep.seasonNumber,
-      ep.episodeNumber,
+      ),
+      legacySource: soraMediaId == null
+          ? null
+          : library.episodeProgress(
+              soraMediaId,
+              ep.seasonNumber,
+              ep.episodeNumber,
+            ),
     );
   }
 

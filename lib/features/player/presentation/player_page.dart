@@ -29,6 +29,7 @@ import '../engine/seek_thumbnail.dart';
 import 'widgets/auto_next_overlay.dart';
 import 'widgets/gesture_overlay.dart';
 import 'widgets/player_shortcuts_view.dart';
+import 'widgets/player_video_surface.dart';
 
 ButtonStyle _overlayActionButtonStyle() {
   return FilledButton.styleFrom(
@@ -1820,7 +1821,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
                           child: Stack(
                             fit: StackFit.expand,
                             children: <Widget>[
-                              _VideoSurface(
+                              PlayerVideoSurface(
                                 controller: _exitingPlayer
                                     ? null
                                     : state.engine,
@@ -2092,7 +2093,7 @@ class _YoutubeTrailerSurface extends StatelessWidget {
         child: Stack(
           fit: StackFit.expand,
           children: <Widget>[
-            _VideoSurface(
+            PlayerVideoSurface(
               controller: controller,
               stretchVertical: false,
               fillSurface: true,
@@ -2175,78 +2176,6 @@ class _TrailerCircleButton extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
-}
-
-class _VideoSurface extends StatelessWidget {
-  const _VideoSurface({
-    required this.controller,
-    required this.stretchVertical,
-    this.fillSurface = false,
-  });
-
-  final PlayerEngine? controller;
-  final bool stretchVertical;
-  final bool fillSurface;
-
-  @override
-  Widget build(BuildContext context) {
-    final PlayerEngine? active = controller;
-    if (active == null) {
-      return const ColoredBox(color: Colors.black);
-    }
-
-    return ValueListenableBuilder<PlayerEngineState>(
-      valueListenable: active.state,
-      child: active.buildVideoSurface(context),
-      builder:
-          (
-            BuildContext context,
-            PlayerEngineState engineState,
-            Widget? videoSurface,
-          ) {
-            if (!engineState.isInitialized) {
-              return const ColoredBox(color: Colors.black);
-            }
-            if (fillSurface) {
-              return videoSurface ?? const ColoredBox(color: Colors.black);
-            }
-
-            final Size videoSize = engineState.videoSize;
-            final double fallbackAspectRatio = engineState.aspectRatio == 0
-                ? 16 / 9
-                : engineState.aspectRatio;
-            final double videoWidth = videoSize.width > 0
-                ? videoSize.width
-                : 1920;
-            final double videoHeight = videoSize.height > 0
-                ? videoSize.height
-                : videoWidth / fallbackAspectRatio;
-
-            if (!stretchVertical) {
-              return Center(
-                child: AspectRatio(
-                  aspectRatio: fallbackAspectRatio,
-                  child: videoSurface,
-                ),
-              );
-            }
-
-            return ClipRect(
-              child: SizedBox.expand(
-                child: FittedBox(
-                  fit: BoxFit.cover,
-                  alignment: Alignment.center,
-                  child: SizedBox(
-                    width: videoWidth,
-                    height: videoHeight,
-                    child: videoSurface,
-                  ),
-                ),
-              ),
-            );
-          },
     );
   }
 }

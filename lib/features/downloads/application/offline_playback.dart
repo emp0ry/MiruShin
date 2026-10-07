@@ -7,9 +7,9 @@ import '../domain/download_models.dart';
 import 'download_episode_display.dart';
 
 /// Builds a [MediaPlaybackItem] that plays a downloaded episode entirely from
-/// local files through the existing player. The `sora_addon_id` /
-/// `sora_episode_href` external ids match the online watch flow so offline
-/// playback shares the same saved progress.
+/// local files through the existing player. The anime/media ID is preserved
+/// for shared online/offline progress. Sora IDs remain available for source
+/// selection and legacy checkpoint recovery.
 MediaPlaybackItem buildOfflinePlaybackItem({
   required DownloadedEpisode episode,
   required String rootPath,

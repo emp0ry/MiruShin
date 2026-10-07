@@ -10,13 +10,13 @@ import '../../../app/localization/app_localizations.dart';
 import '../../../core/platform/tv_platform.dart';
 import '../../../shared/models/media_item.dart';
 import '../../addons/data/anime_titles_service.dart';
+import '../../library/application/canonical_library_repository.dart';
 import '../../library/application/local_library_provider.dart';
 import '../../profile/application/anilist_user_settings_provider.dart';
 import '../../settings/application/settings_state.dart';
 import '../../tracking/application/tracker_library_provider.dart';
 import '../../tracking/application/tracker_sync_coordinator.dart';
 import '../../tracking/data/tracking_sync_store.dart';
-import '../../tracking/domain/tracker_models.dart';
 import '../../watch/application/stream_selection_preferences.dart';
 import '../../watch/domain/normalized_models.dart';
 import '../data/discord_rpc_service.dart';
@@ -973,6 +973,17 @@ class PlaybackController extends Notifier<PlaybackState> {
   }
 
   Future<EpisodeProgress?> _loadProgressForItem(MediaPlaybackItem item) async {
+    final LocalLibraryController library = ref.read(
+      localLibraryProvider.notifier,
+    );
+    // The media checkpoint is authoritative, including an intentional 0:00
+    // reset. Source/old alias checkpoints are only a migration fallback.
+    final EpisodeProgress? shared = await library.loadEpisodeProgress(
+      item.id,
+      item.seasonNumber,
+      item.episodeNumber,
+    );
+    if (shared != null) return shared;
     EpisodeProgress? best;
 
     final List<String> ids = _progressMediaIds(item);
@@ -981,17 +992,22 @@ class PlaybackController extends Notifier<PlaybackState> {
     );
 
     for (final String mediaId in ids) {
-      final EpisodeProgress? progress = await ref
-          .read(localLibraryProvider.notifier)
-          .loadEpisodeProgress(mediaId, item.seasonNumber, item.episodeNumber);
+      if (mediaId == item.id) continue;
+      final EpisodeProgress? progress = await library.loadEpisodeProgress(
+        mediaId,
+        item.seasonNumber,
+        item.episodeNumber,
+      );
 
       debugPrint(
         '[DEBUG]   mediaId=$mediaId => ${progress == null ? 'null' : 'pos=${progress.positionSeconds}s completed=${progress.completed}'}',
       );
 
-      if (progress == null ||
-          (progress.positionSeconds <= 0 && !progress.completed)) {
-        continue;
+      if (progress == null) continue;
+
+      if (!mediaId.startsWith('sora:') && !mediaId.startsWith('external:')) {
+        best = progress;
+        break;
       }
 
       if (best == null || progress.updatedAt.isAfter(best.updatedAt)) {
@@ -1002,6 +1018,17 @@ class PlaybackController extends Notifier<PlaybackState> {
     debugPrint(
       '[DEBUG] _loadProgressForItem: best=${best == null ? 'null' : 'pos=${best.positionSeconds}s'}',
     );
+    if (best != null && ref.mounted) {
+      await library.saveEpisodeProgress(
+        mediaId: item.id,
+        season: item.seasonNumber,
+        episode: item.episodeNumber,
+        positionSeconds: best.positionSeconds,
+        durationSeconds: best.durationSeconds,
+        completed: best.completed,
+        mediaItem: _trackingMediaItem(item),
+      );
+    }
     return best;
   }
 
@@ -1033,9 +1060,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     final Duration saved = savedSeconds > 0
         ? Duration(seconds: savedSeconds)
         : Duration.zero;
-    final Duration start = saved > item.startPosition
-        ? saved
-        : item.startPosition;
+    final Duration start = progress != null ? saved : item.startPosition;
 
     debugPrint(
       '[DEBUG] _safeResumePosition: savedSeconds=$savedSeconds item.startPosition=${item.startPosition} -> start=$start',
@@ -1048,6 +1073,7 @@ class PlaybackController extends Notifier<PlaybackState> {
   static const Set<String> _identifierKeys = <String>{
     'anilist',
     'mal',
+    'shikimori',
     'tmdb',
     'imdb',
     'kitsu',
@@ -1064,17 +1090,16 @@ class PlaybackController extends Notifier<PlaybackState> {
       }
     }
 
-    final String? soraMediaId = soraEpisodeProgressMediaId(
-      addonId: item.externalIds['sora_addon_id'] ?? '',
-      episodeHref: item.externalIds['sora_episode_href'] ?? '',
-    );
-    if (soraMediaId != null) {
-      add(soraMediaId);
-      return ids.toList(growable: false);
-    }
-
     add(item.id);
-
+    // Check verified media identities before legacy source/alias values.
+    item.externalIds.forEach((String key, String value) {
+      final String cleanKey = key.trim().toLowerCase();
+      final String cleanValue = value.trim();
+      if (<String>{'anilist', 'mal', 'shikimori'}.contains(cleanKey) &&
+          cleanValue.isNotEmpty) {
+        add('$cleanKey:$cleanValue');
+      }
+    });
     item.externalIds.forEach((String key, String value) {
       final String cleanKey = key.trim().toLowerCase();
       final String cleanValue = value.trim();
@@ -1082,11 +1107,11 @@ class PlaybackController extends Notifier<PlaybackState> {
         add('external:$cleanKey:$cleanValue');
       }
     });
-
-    final String titleKey = item.originalTitle.isNotEmpty
-        ? item.originalTitle
-        : item.title;
-    add('title:$titleKey|season:${item.seasonNumber}');
+    final String? soraMediaId = soraEpisodeProgressMediaId(
+      addonId: item.externalIds['sora_addon_id'] ?? '',
+      episodeHref: item.externalIds['sora_episode_href'] ?? '',
+    );
+    if (soraMediaId != null) add(soraMediaId);
 
     return ids.toList(growable: false);
   }
@@ -2542,25 +2567,23 @@ class PlaybackController extends Notifier<PlaybackState> {
       state = state.copyWith(confirmedEnded: true);
     }
 
-    final List<String> progressIds = _progressMediaIds(item);
-    for (int index = 0; index < progressIds.length; index += 1) {
-      final String mediaId = progressIds[index];
+    final bool syncEnabled =
+        (ref.read(playerSettingsProvider).value ?? const PlayerSettings())
+            .autoAnilistSync;
+    await ref
+        .read(localLibraryProvider.notifier)
+        .saveEpisodeProgress(
+          mediaId: item.id,
+          season: item.seasonNumber,
+          episode: item.episodeNumber,
+          positionSeconds: savePosition,
+          durationSeconds: durationSeconds > 0 ? durationSeconds : null,
+          completed: saveCompleted,
+          mediaItem: _trackingMediaItem(item),
+        );
+    if (!ref.mounted) return;
+    if (syncEnabled) {
       await ref
-          .read(localLibraryProvider.notifier)
-          .saveEpisodeProgress(
-            mediaId: mediaId,
-            season: item.seasonNumber,
-            episode: item.episodeNumber,
-            positionSeconds: savePosition,
-            durationSeconds: durationSeconds > 0 ? durationSeconds : null,
-            completed: saveCompleted,
-            mediaItem: index == 0 ? _trackingMediaItem(item) : null,
-            persistCanonical: index == 0,
-          );
-    }
-
-    unawaited(
-      ref
           .read(localLibraryProvider.notifier)
           .updateWatchProgress(
             mediaId: item.id,
@@ -2571,19 +2594,14 @@ class PlaybackController extends Notifier<PlaybackState> {
                 : (durationSeconds > 0
                       ? positionSeconds / durationSeconds
                       : null),
-          ),
-    );
+          );
+    }
 
-    if (saveCompleted) {
-      final bool syncEnabled =
-          (ref.read(playerSettingsProvider).value ?? const PlayerSettings())
-              .autoAnilistSync;
-      unawaited(
-        _trySyncTrackers(
-          item,
-          item.episodeNumber.round(),
-          syncToProviders: syncEnabled,
-        ),
+    if (saveCompleted && syncEnabled) {
+      await _trySyncTrackers(
+        item,
+        item.episodeNumber.round(),
+        syncToProviders: syncEnabled,
       );
     }
   }
@@ -4234,7 +4252,7 @@ class PlaybackController extends Notifier<PlaybackState> {
         (ref.read(playerSettingsProvider).value ?? const PlayerSettings())
             .autoAnilistSync;
 
-    final bool atomicCheckpointCommitted = watched
+    final bool atomicCheckpointCommitted = watched && syncEnabled
         ? await _trySyncTrackers(
             item,
             item.episodeNumber.round(),
@@ -4250,25 +4268,21 @@ class PlaybackController extends Notifier<PlaybackState> {
           )
         : false;
 
-    final List<String> progressIds = _progressMediaIds(item);
-    for (int index = 0; index < progressIds.length; index += 1) {
-      final String mediaId = progressIds[index];
-      if (!ref.mounted) return;
-      await ref
-          .read(localLibraryProvider.notifier)
-          .saveEpisodeProgress(
-            mediaId: mediaId,
-            season: item.seasonNumber,
-            episode: item.episodeNumber,
-            positionSeconds: savePosition,
-            durationSeconds: savedDurationSeconds,
-            completed: watched,
-            mediaItem: index == 0 ? _trackingMediaItem(item) : null,
-            persistCanonical: index == 0 && !atomicCheckpointCommitted,
-          );
-    }
-
     if (!ref.mounted) return;
+    await ref
+        .read(localLibraryProvider.notifier)
+        .saveEpisodeProgress(
+          mediaId: item.id,
+          season: item.seasonNumber,
+          episode: item.episodeNumber,
+          positionSeconds: savePosition,
+          durationSeconds: savedDurationSeconds,
+          completed: watched,
+          mediaItem: _trackingMediaItem(item),
+          persistCanonical: !atomicCheckpointCommitted,
+        );
+
+    if (!ref.mounted || !syncEnabled) return;
     await ref
         .read(localLibraryProvider.notifier)
         .updateWatchProgress(
@@ -4289,12 +4303,19 @@ class PlaybackController extends Notifier<PlaybackState> {
     required bool syncToProviders,
     TrackingEpisodeCheckpoint? checkpoint,
   }) async {
-    final String identity =
-        item.externalIds['anilist'] ??
-        item.externalIds['mal'] ??
-        item.externalIds['shikimori'] ??
-        item.id;
-    final String key = '$identity:$episodeNumber';
+    // Empty provider targets still mutate the canonical library in the
+    // coordinator. Auto Progress off must bypass the mutation itself.
+    if (!ref.mounted ||
+        !syncToProviders ||
+        !(ref.read(playerSettingsProvider).value ?? const PlayerSettings())
+            .autoAnilistSync) {
+      return false;
+    }
+    final String workspace = ref
+        .read(libraryWorkspaceScopeProvider)
+        .workspaceId;
+    final String key =
+        '$workspace:${item.id}:${item.seasonNumber}:$episodeNumber';
     if (!_syncedTrackerProgress.add(key)) return false;
     if (!ref.mounted) {
       _syncedTrackerProgress.remove(key);
@@ -4316,7 +4337,6 @@ class PlaybackController extends Notifier<PlaybackState> {
             mediaItem: trackingItem,
             episode: episodeNumber,
             total: trackingItem.episodeCount,
-            targets: syncToProviders ? null : const <TrackerSource>{},
             episodeCheckpoint: checkpoint,
           );
       if (!ref.mounted) return true;

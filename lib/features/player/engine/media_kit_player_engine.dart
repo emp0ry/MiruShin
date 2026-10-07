@@ -10,6 +10,7 @@ import '../domain/player_models.dart';
 import 'local_hls_metadata.dart';
 import 'local_hls_proxy.dart';
 import 'media_kit_runtime.dart';
+import 'player_buffer_ranges.dart';
 import 'player_engine.dart';
 import 'startup_seek.dart';
 import 'stream_url_policy.dart';
@@ -58,11 +59,9 @@ const int _seekVerificationAttempts = 4;
   return (maxBytes: 400 * 1024 * 1024, readaheadSecs: 30);
 }
 
-// I/O buffer handed to MPV via PlayerConfiguration.bufferSize.
-// This is the FFmpeg I/O buffer beneath the demuxer cache, which affects how
-// much data MPV reads per syscall.  Use a larger value on desktop (Windows /
-// macOS / Linux) for HLS CDN links that send large TCP payloads.
-int _mkIoBufferBytes() {
+// media_kit maps this to initial demuxer forward/back cache limits, not an
+// FFmpeg I/O buffer. The source-specific limits below supersede it before open.
+int _initialDemuxerCacheBytes() {
   if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
     return 128 * 1024 * 1024; // 128 MB
   }
@@ -211,7 +210,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
     final mk.Player player = mk.Player(
       configuration: mk.PlayerConfiguration(
         title: 'MiruShin',
-        bufferSize: _mkIoBufferBytes(),
+        bufferSize: _initialDemuxerCacheBytes(),
         ready: () {
           _syncState();
         },
@@ -438,8 +437,9 @@ class MediaKitPlayerEngine extends PlayerEngine {
   Future<void> _applyMpvProperties(
     mk.Player player,
     PlayerSource source,
-    double speed,
-  ) async {
+    double speed, {
+    bool bufferOnly = false,
+  }) async {
     if (player.platform is! mk.NativePlayer) return;
     final mk.NativePlayer native = player.platform as mk.NativePlayer;
 
@@ -462,10 +462,12 @@ class MediaKitPlayerEngine extends PlayerEngine {
     //   - stream-timeout / vd-lavc-software-fallback: uncertain availability.
     final List<(String, String)> props = <(String, String)>[
       // Demuxer cache
-      ('cache', 'yes'),
-      ('cache-secs', '30'),
-      ('demuxer-seekable-cache', 'yes'),
-      ('demuxer-max-back-bytes', '${64 * 1024 * 1024}'),
+      if (!bufferOnly) ...[
+        ('cache', 'yes'),
+        ('cache-secs', '30'),
+        ('demuxer-seekable-cache', 'yes'),
+        ('demuxer-max-back-bytes', '${64 * 1024 * 1024}'),
+      ],
 
       // Speed-scaled forward buffer
       ('demuxer-max-bytes', '$maxBytes'),
@@ -475,13 +477,13 @@ class MediaKitPlayerEngine extends PlayerEngine {
       // mpv's platform-tested defaults (`framedrop=vo`, `video-sync=audio`).
       // Forcing `framedrop=no` can leave the last video frame on screen while
       // the audio clock continues when decoding or rendering falls behind.
-      ('hr-seek-framedrop', 'no'),
+      if (!bufferOnly) ('hr-seek-framedrop', 'no'),
 
       // Hardware decoding
-      ('hwdec', Platform.isWindows ? 'no' : 'auto-safe'),
+      if (!bufferOnly) ('hwdec', Platform.isWindows ? 'no' : 'auto-safe'),
     ];
 
-    if (isNetwork) {
+    if (isNetwork && !bufferOnly) {
       props.add(('network-timeout', '15'));
     }
 
@@ -1052,11 +1054,13 @@ class MediaKitPlayerEngine extends PlayerEngine {
     final mk.Player? player = _player;
     if (player != null) {
       await _setNativePlaybackSpeed(player, _playbackSpeed);
-      // Reapply buffer config scaled for the new speed, mirroring FVP's
-      // _configureNetworkAndBuffering call in setPlaybackSpeed.
+      // Change only speed-dependent limits. Reasserting hwdec/cache/seek
+      // policy on a live source can disturb an otherwise stable decoder.
       final PlayerSource? source = _currentSource;
       if (source != null) {
-        unawaited(_applyMpvProperties(player, source, _playbackSpeed));
+        unawaited(
+          _applyMpvProperties(player, source, _playbackSpeed, bufferOnly: true),
+        );
       }
     }
     _syncState();
@@ -1158,14 +1162,12 @@ class MediaKitPlayerEngine extends PlayerEngine {
       _startupRetryTimer = null;
     }
 
-    final List<PlayerBufferedRange> buffered = _bufferedRanges(
+    final List<PlayerBufferedRange> buffered = rangesFromAbsoluteBufferEnd(
       position: position,
-      buffer: buffer,
+      bufferEnd: buffer,
       duration: duration,
     );
-    if (buffered.isNotEmpty) {
-      _lastBufferedRanges = buffered;
-    }
+    _lastBufferedRanges = buffered;
 
     final bool initialized = _hasMedia && startupRequirementSatisfied;
     final bool hasError = _lastError != null;
@@ -1181,7 +1183,7 @@ class MediaKitPlayerEngine extends PlayerEngine {
         playbackSpeed: _appliedPlaybackSpeed,
         aspectRatio: aspectRatio,
         videoSize: _lastVideoSize,
-        buffered: buffered.isNotEmpty ? buffered : _lastBufferedRanges,
+        buffered: buffered,
         isInitialized: initialized,
         isPlaying: native.playing,
         isBuffering: !initialized || native.buffering,
@@ -1199,25 +1201,6 @@ class MediaKitPlayerEngine extends PlayerEngine {
       position: position,
       initialized: initialized,
     );
-  }
-
-  List<PlayerBufferedRange> _bufferedRanges({
-    required Duration position,
-    required Duration buffer,
-    required Duration duration,
-  }) {
-    if (duration > Duration.zero && buffer > position) {
-      return <PlayerBufferedRange>[
-        PlayerBufferedRange(start: position, end: buffer),
-      ];
-    }
-    if (buffer > Duration.zero) {
-      final Duration end = position + buffer;
-      return <PlayerBufferedRange>[
-        PlayerBufferedRange(start: position, end: end),
-      ];
-    }
-    return const <PlayerBufferedRange>[];
   }
 
   Map<String, String> _normalizedHeaders(
