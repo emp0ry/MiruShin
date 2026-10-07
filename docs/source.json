@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.9.14",
+          "date": "2026-10-07",
+          "localizedDescription": "- Share episode resume positions and Continue/Watched state across sources, servers, voiceovers, and downloaded episodes.\n- Keep library progress and status unchanged when Auto Progress is disabled, while preserving playback resume positions.\n- Restore shared episode progress from Google Drive and protect intentional resets from stale legacy checkpoints.\n- Improve playback responsiveness with progressive proxy streaming and request-isolated retries.\n- Reduce player UI rebuilds, repeated FVP metadata reads, and playback checkpoint overhead.\n- Correct buffer range reporting and preserve existing seek, startup, and fallback behavior.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.14/MiruShin-ios-v2.9.14.ipa",
+          "size": 31746451,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.9.13",
           "date": "2026-10-05",
           "localizedDescription": "- Fixed a macOS shutdown bug where closing the window could leave MiruShin running or crash on Quit.\n- Closing MiruShin now waits for the final playback checkpoint, background tasks, and all library databases before shutting down Flutter.\n- Interrupted tracker deliveries remain queued and are checked before retrying on the next launch.",
@@ -775,11 +783,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.9.13",
-      "versionDate": "2026-10-05",
-      "versionDescription": "- Fixed a macOS shutdown bug where closing the window could leave MiruShin running or crash on Quit.\n- Closing MiruShin now waits for the final playback checkpoint, background tasks, and all library databases before shutting down Flutter.\n- Interrupted tracker deliveries remain queued and are checked before retrying on the next launch.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.13/MiruShin-ios-v2.9.13.ipa",
-      "size": 31744812,
+      "version": "2.9.14",
+      "versionDate": "2026-10-07",
+      "versionDescription": "- Share episode resume positions and Continue/Watched state across sources, servers, voiceovers, and downloaded episodes.\n- Keep library progress and status unchanged when Auto Progress is disabled, while preserving playback resume positions.\n- Restore shared episode progress from Google Drive and protect intentional resets from stale legacy checkpoints.\n- Improve playback responsiveness with progressive proxy streaming and request-isolated retries.\n- Reduce player UI rebuilds, repeated FVP metadata reads, and playback checkpoint overhead.\n- Correct buffer range reporting and preserve existing seek, startup, and fallback behavior.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.14/MiruShin-ios-v2.9.14.ipa",
+      "size": 31746451,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
