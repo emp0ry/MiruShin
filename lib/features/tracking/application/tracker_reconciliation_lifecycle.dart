@@ -120,6 +120,7 @@ final trackerReconciliationLifecycleProvider = Provider<Future<void> Function()>
           settings.shikimoriViewerId,
           settings.shikimoriAccessToken,
           settings.hasShikimoriSession,
+          settings.primaryTrackerSource,
         ),
       ),
       (previous, next) {

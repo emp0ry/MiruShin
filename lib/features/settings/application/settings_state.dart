@@ -284,23 +284,9 @@ class SettingsState {
       (effectiveShikimoriClientId.isNotEmpty &&
           effectiveShikimoriClientSecret.isNotEmpty);
 
-  /// Deterministic presentation source for legacy UI paths. Local Library is
-  /// canonical and every connected tracker is reconciled independently, so
-  /// the old user-selected preferred tracker no longer affects sync.
-  TrackerSource get effectivePrimaryTrackerSource {
-    bool connected(TrackerSource source) {
-      return switch (source) {
-        TrackerSource.anilist => hasAniListSession,
-        TrackerSource.mal => hasMalSession,
-        TrackerSource.shikimori => hasShikimoriSession,
-      };
-    }
-
-    for (final TrackerSource source in TrackerSource.values) {
-      if (connected(source)) return source;
-    }
-    return TrackerSource.anilist;
-  }
+  /// Only this catalog may import tracking edits. An outage or disconnected
+  /// session never silently promotes another catalog to an inbound source.
+  TrackerSource get effectivePrimaryTrackerSource => primaryTrackerSource;
 
   /// The token actually used for TMDB requests: the user's custom token when
   /// [tmdbUseCustomKey] is enabled, otherwise the bundled default key.

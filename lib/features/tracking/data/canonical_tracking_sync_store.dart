@@ -18,6 +18,7 @@ class CanonicalTrackingSyncStore
   CanonicalTrackingSyncStore({
     required CanonicalLibraryRepository repository,
     Map<TrackerSource, String> healthAccountIds = const {},
+    this.authoritativeSource,
     SharedPreferencesTrackingSyncStore legacy =
         const SharedPreferencesTrackingSyncStore(),
   }) : _repository = repository,
@@ -25,12 +26,21 @@ class CanonicalTrackingSyncStore
        _legacy = legacy;
 
   final CanonicalLibraryRepository _repository;
+
+  /// The app always binds its persisted selection. Null is reserved for
+  /// migration/reconciliation tools that explicitly work without a sync policy.
+  final TrackerSource? authoritativeSource;
   final Map<TrackerSource, String> _healthAccountIds;
   final SharedPreferencesTrackingSyncStore _legacy;
   Future<void>? _migration;
   bool _migrationSafeMode = false;
 
-  Future<void> _ensureMigrated() => _migration ??= _migrate();
+  Future<void> _ensureMigrated() => _migration ??= () async {
+    await _migrate();
+    if (!_migrationSafeMode && authoritativeSource != null) {
+      await _repository.configureLibrarySource(authoritativeSource!);
+    }
+  }();
 
   Future<void> _migrate() async {
     Future<void> recoverOldDeliveries() async {
@@ -259,6 +269,7 @@ class CanonicalTrackingSyncStore
       propagationTargets: propagationTargets,
       completeSnapshot: completeSnapshot,
       propagationAccountIds: propagationAccountIds,
+      authoritativeSource: authoritativeSource,
     );
   }
 

@@ -2261,6 +2261,76 @@ class CanonicalLibraryRepository {
         );
   }
 
+  /// Changing the inbound catalog retires its predecessors' unresolved
+  /// proposals/queued imports, not the user's canonical data or audit history.
+  Future<void> configureLibrarySource(TrackerSource source) async {
+    await initialize();
+    await database.transaction(() async {
+      const scope = 'sync:library-source';
+      final previous = await (database.select(
+        database.syncCursorRecords,
+      )..where((table) => table.scope.equals(scope))).getSingleOrNull();
+      if (previous?.cursor == source.name) return;
+      final conflicts = await (database.select(
+        database.libraryConflictRecords,
+      )..where((table) => table.state.equals('open'))).get();
+      for (final conflict in conflicts) {
+        final provider = _jsonMap(conflict.incomingValueJson)['provider'];
+        if (provider is String &&
+            provider != source.name &&
+            conflict.fieldName != 'identity') {
+          await _markConflictResolvedLocked(conflict.conflictId);
+        }
+      }
+      final foreignImports = await (database.select(
+        database.libraryOperationRecords,
+      )..where((table) => table.originKind.equals('provider'))).get();
+      final retired = foreignImports
+          .where((op) => op.originId?.split(':').first != source.name)
+          .map((op) => op.operationId)
+          .toSet();
+      final journal = await loadJournal();
+      for (final job in journal.where(
+        (job) => retired.contains(job.operationId),
+      )) {
+        await (database.update(database.outboxDeliveryRecords)..where(
+              (table) =>
+                  table.operationId.equals(job.operationId!) &
+                  table.target.isNotValue('drive') &
+                  table.state.isNotIn([
+                    'confirmed',
+                    'unsupported',
+                    'superseded',
+                  ]),
+            ))
+            .write(
+              const OutboxDeliveryRecordsCompanion(
+                state: Value('superseded'),
+                lastError: Value(
+                  'This catalog is now an outgoing mirror, not a library source.',
+                ),
+              ),
+            );
+      }
+      await _writeBucketLocked(
+        'tracking.journal',
+        journal
+            .where((job) => !retired.contains(job.operationId))
+            .map((job) => job.toJson())
+            .toList(),
+      );
+      await database
+          .into(database.syncCursorRecords)
+          .insertOnConflictUpdate(
+            SyncCursorRecordsCompanion.insert(
+              scope: scope,
+              cursor: source.name,
+              updatedAtMs: DateTime.now().toUtc().millisecondsSinceEpoch,
+            ),
+          );
+    });
+  }
+
   Future<ProviderReconciliationResult> reconcileProviderSnapshot({
     required TrackerSource source,
     required String accountId,
@@ -2269,6 +2339,7 @@ class CanonicalLibraryRepository {
     required List<SyncJournalEntry> journal,
     required Set<TrackerSource> propagationTargets,
     required bool completeSnapshot,
+    TrackerSource? authoritativeSource,
     Map<TrackerSource, String> propagationAccountIds =
         const <TrackerSource, String>{},
   }) async {
@@ -2374,6 +2445,17 @@ class CanonicalLibraryRepository {
       liveJournal
         ..clear()
         ..addAll(await loadJournal());
+      if (authoritativeSource != null && source != authoritativeSource) {
+        return _reconcileOutgoingMirrorLocked(
+          source: source,
+          accountId: accountId,
+          mediaKind: mediaKind,
+          incomingByLocal: incomingByLocal,
+          states: states,
+          journal: liveJournal,
+          now: now,
+        );
+      }
       if (accountCursor == null) {
         for (final MapEntry<String, UserMediaState> incoming
             in incomingByLocal.entries) {
@@ -2469,6 +2551,21 @@ class CanonicalLibraryRepository {
       int pendingDeletions = 0;
       int pendingChanges = 0;
       final observedEditTimes = <String, Map<String, int>>{};
+      final mirrorOperationIds = authoritativeSource == null
+          ? <String>{}
+          : (await (database.select(
+                  database.libraryOperationRecords,
+                )..where((table) => table.originId.like('mirror:%'))).get())
+                .map((op) => op.operationId)
+                .toSet();
+      final foreignOperationIds = authoritativeSource == null
+          ? <String>{}
+          : (await (database.select(
+                  database.libraryOperationRecords,
+                )..where((table) => table.originKind.equals('provider'))).get())
+                .where((op) => op.originId?.split(':').first != source.name)
+                .map((op) => op.operationId)
+                .toSet();
 
       for (final MapEntry<String, UserMediaState> incomingEntry
           in incomingByLocal.entries) {
@@ -2583,6 +2680,29 @@ class CanonicalLibraryRepository {
             database.canonicalLibraryRecords,
           )..where((table) => table.localId.equals(localId))).getSingleOrNull();
           final revisions = _jsonMap(row?.fieldRevisionsJson);
+          bool importedFromOtherCatalog(UserMediaField field) {
+            final leaves = _revisionLeaves(
+              revisions[field.name],
+            ).map(_jsonMap).toList();
+            return leaves.isNotEmpty &&
+                leaves.every(
+                  (leaf) =>
+                      leaf['origin'] == 'provider' &&
+                      foreignOperationIds.contains(leaf['operationId']),
+                );
+          }
+
+          if (authoritativeSource != null) {
+            // Revisit data previously imported from an outgoing catalog even
+            // if our chosen source's snapshot itself has not changed. Its older
+            // entry date cannot let a non-source catalog remain canonical.
+            changed = changed.mergedWith(
+              _patchSubset(
+                _providerPatchBetween(current, incoming, source),
+                UserMediaField.values.where(importedFromOtherCatalog).toSet(),
+              ),
+            );
+          }
           final acceptedFields = <UserMediaField>{};
           final acceptedEditTimes = <UserMediaField, int>{};
           bool needsReview = false;
@@ -2641,11 +2761,24 @@ class CanonicalLibraryRepository {
               );
               continue;
             }
+            if (authoritativeSource != null &&
+                importedFromOtherCatalog(field)) {
+              acceptedFields.add(field);
+              acceptedEditTimes[field] = remoteMs;
+              await _resolveProviderReviewsLocked(
+                localId,
+                field.name,
+                source,
+                accountId,
+              );
+              continue;
+            }
             final firstObservation =
                 revisions[field.name] == null &&
                 !liveJournal.any(
                   (job) =>
                       job.identity.matches(current.identity) &&
+                      !mirrorOperationIds.contains(job.operationId) &&
                       job.patch.touches(field),
                 ) &&
                 ((current.providerStates[source] != null &&
@@ -2671,6 +2804,7 @@ class CanonicalLibraryRepository {
             int localMs = _revisionEditTime(revisions[field.name]);
             for (final job in liveJournal) {
               if (revisions[field.name] == null &&
+                  !mirrorOperationIds.contains(job.operationId) &&
                   job.identity.matches(incoming.identity) &&
                   job.patch.touches(field) &&
                   job.updatedAt.millisecondsSinceEpoch > localMs) {
@@ -2909,7 +3043,9 @@ class CanonicalLibraryRepository {
           for (int i = nextJournal.length - 1; i >= 0; i--) {
             final job = nextJournal[i];
             if (!job.identity.matches(after.identity) ||
-                !job.updatedAt.isBefore(editAt) ||
+                (!mirrorOperationIds.contains(job.operationId) &&
+                    !foreignOperationIds.contains(job.operationId) &&
+                    !job.updatedAt.isBefore(editAt)) ||
                 job.patch.delete) {
               continue;
             }
@@ -3030,6 +3166,236 @@ class CanonicalLibraryRepository {
         destructiveChangesPending: pendingDeletions + pendingChanges,
       );
     });
+  }
+
+  /// Destination snapshots are observations/acknowledgments only. Even newer
+  /// external values cannot edit local fields or create library entries.
+  Future<ProviderReconciliationResult> _reconcileOutgoingMirrorLocked({
+    required TrackerSource source,
+    required String accountId,
+    required String mediaKind,
+    required Map<String, UserMediaState> incomingByLocal,
+    required List<UserMediaState> states,
+    required List<SyncJournalEntry> journal,
+    required DateTime now,
+  }) async {
+    final revisionsByLocal = {
+      for (final row
+          in await database.select(database.canonicalLibraryRecords).get())
+        row.localId: _jsonMap(row.fieldRevisionsJson),
+    };
+    for (final entry in incomingByLocal.entries) {
+      await _writeFullProviderSnapshotLocked(
+        localId: entry.key,
+        source: source,
+        accountId: accountId,
+        state: entry.value,
+        destructiveConfirmationCount: 0,
+        fetchedAt: now,
+      );
+      final current = states
+          .where((state) => state.identity.localId == entry.key)
+          .firstOrNull;
+      if (current == null) {
+        final deleted = await (database.select(
+          database.canonicalLibraryRecords,
+        )..where((table) => table.localId.equals(entry.key))).getSingleOrNull();
+        // Remote-only titles are not imported or removed. Only a local
+        // tombstone with exact identity evidence authorizes a remote deletion.
+        if (deleted != null && !deleted.inLibrary) {
+          await _queueMirrorMutationLocked(
+            current: UserMediaState.fromJson(
+              _jsonMap(deleted.canonicalStateJson),
+            ),
+            patch: UserMediaPatch(delete: true),
+            source: source,
+            accountId: accountId,
+            journal: journal,
+            now: now,
+          );
+        }
+      }
+    }
+    for (final current in states.where(
+      (state) => state.identity.mediaKind == mediaKind,
+    )) {
+      final incoming = incomingByLocal[current.identity.localId];
+      final originalFields = providerEntryFields(
+        current.source,
+        mediaKind: mediaKind,
+      );
+      final revisions = revisionsByLocal[current.identity.localId] ?? const {};
+      final providerData = current.providerStates[source]?.data ?? const {};
+      bool knownLocally(UserMediaField field) {
+        final key = switch (field) {
+          UserMediaField.malPriority => 'priority',
+          UserMediaField.malRewatchValue =>
+            mediaKind == 'manga' ? 'rereadValue' : 'rewatchValue',
+          UserMediaField.malTags => 'tags',
+          _ => field.name,
+        };
+        return revisions.containsKey(field.name) ||
+            (originalFields.contains(field) &&
+                providerReturnedField(current, current.source, field)) ||
+            providerData.containsKey(key) ||
+            (field == UserMediaField.startedAt && current.startedAt != null) ||
+            (field == UserMediaField.completedAt &&
+                current.completedAt != null);
+      }
+
+      final fields = providerEntryFields(source, mediaKind: mediaKind)
+          .where(
+            (field) =>
+                knownLocally(field) &&
+                (incoming == null ||
+                    (providerReturnedField(incoming, source, field) &&
+                        !providerConfirmsPatch(
+                          _patchFromState(current, {field}),
+                          incoming,
+                          source,
+                        ))),
+          )
+          .toSet();
+      if (fields.isNotEmpty) {
+        await _queueMirrorMutationLocked(
+          current: current,
+          patch: _patchFromState(current, fields),
+          source: source,
+          accountId: accountId,
+          journal: journal,
+          now: now,
+        );
+      }
+    }
+    await _writeBucketLocked(
+      'tracking.journal',
+      journal.map((job) => job.toJson()).toList(),
+    );
+    await database
+        .into(database.syncCursorRecords)
+        .insertOnConflictUpdate(
+          SyncCursorRecordsCompanion.insert(
+            scope: 'provider-account:${source.name}:$accountId',
+            cursor: 'approved',
+            metadataJson: Value(jsonEncode({'outgoingOnly': true})),
+            updatedAtMs: now.millisecondsSinceEpoch,
+          ),
+        );
+    return ProviderReconciliationResult(states: states, journal: journal);
+  }
+
+  Future<void> _queueMirrorMutationLocked({
+    required UserMediaState current,
+    required UserMediaPatch patch,
+    required TrackerSource source,
+    required String accountId,
+    required List<SyncJournalEntry> journal,
+    required DateTime now,
+  }) async {
+    final pending = journal
+        .where(
+          (job) =>
+              job.identity.matches(current.identity) &&
+              job.tracks(source) &&
+              (job.targetAccountIds[source] == null ||
+                  job.targetAccountIds[source] == accountId),
+        )
+        .toList();
+    if (patch.delete && pending.any((job) => job.patch.delete)) return;
+    if (patch.delete) {
+      // A verified local tombstone wins over older queued additions/updates.
+      // Retire only this account's transport lane, preserving every operation.
+      for (final job in pending) {
+        final index = journal.indexOf(job);
+        journal[index] = job.confirmedBy(source);
+        if (job.operationId != null) {
+          await (database.update(database.outboxDeliveryRecords)..where(
+                (table) =>
+                    table.operationId.equals(job.operationId!) &
+                    table.target.equals(source.name) &
+                    (table.accountId.equals(accountId) |
+                        table.accountId.isNull()) &
+                    table.state.isNotIn([
+                      'confirmed',
+                      'superseded',
+                      'unsupported',
+                    ]),
+              ))
+              .write(
+                const OutboxDeliveryRecordsCompanion(
+                  state: Value('superseded'),
+                  lastError: Value('Replaced by the current local deletion.'),
+                ),
+              );
+        }
+      }
+      journal.removeWhere((job) => job.isSettled);
+    }
+    if (!patch.delete) {
+      final queuedFields = pending.expand((job) => job.patch.fields).toSet();
+      patch = _patchSubset(patch, patch.fields.difference(queuedFields));
+      if (patch.fields.isEmpty) return;
+    }
+    final operationId = const Uuid().v7();
+    final row =
+        await (database.select(
+              database.canonicalLibraryRecords,
+            )..where((table) => table.localId.equals(current.identity.localId)))
+            .getSingle();
+    // This is transport work, not a new edit: preserve all canonical values,
+    // revision clocks and Drive history. The durable payload survives restart.
+    await database
+        .into(database.libraryOperationRecords)
+        .insert(
+          LibraryOperationRecordsCompanion.insert(
+            operationId: operationId,
+            localId: current.identity.localId,
+            deviceId: await deviceId(),
+            originKind: LibraryOriginKind.system.name,
+            originId: Value('mirror:${source.name}:$accountId'),
+            intent: patch.delete
+                ? LibraryMutationIntent.remove.name
+                : LibraryMutationIntent.edit.name,
+            fieldsJson: jsonEncode(
+              patch.delete
+                  ? ['membership']
+                  : patch.fields.map((field) => field.name).toList(),
+            ),
+            beforeJson: jsonEncode({'state': current.toJson()}),
+            afterJson: jsonEncode(
+              patch.delete ? <String, dynamic>{} : {'state': current.toJson()},
+            ),
+            baseRevisionsJson: row.fieldRevisionsJson,
+            resultingRevisionsJson: row.fieldRevisionsJson,
+            targetsJson: jsonEncode([source.name]),
+            title: Value(current.mediaItem.title),
+            visibleInLog: const Value(false),
+            occurredAtMs: now.millisecondsSinceEpoch,
+          ),
+        );
+    await database
+        .into(database.outboxDeliveryRecords)
+        .insert(
+          OutboxDeliveryRecordsCompanion.insert(
+            deliveryId: '$operationId:${source.name}:$accountId:mirror',
+            operationId: operationId,
+            target: source.name,
+            accountId: Value(accountId),
+            state: 'pending',
+          ),
+        );
+    journal.add(
+      SyncJournalEntry(
+        operationId: operationId,
+        identity: current.identity,
+        patch: patch,
+        pendingTargets: {source},
+        targetAccountIds: {source: accountId},
+        createdAt: now,
+        updatedAt: now,
+        mediaTitle: current.mediaItem.title,
+      ),
+    );
   }
 
   Future<void> _writeFullProviderSnapshotLocked({
@@ -4929,7 +5295,10 @@ class CanonicalLibraryRepository {
     final List<LibraryOperationRecord> operations = localIds.isEmpty
         ? const <LibraryOperationRecord>[]
         : await (database.select(database.libraryOperationRecords)..where(
-                (LibraryOperationRecords table) => table.localId.isIn(localIds),
+                (LibraryOperationRecords table) =>
+                    table.localId.isIn(localIds) &
+                    (table.originId.isNull() |
+                        table.originId.like('mirror:%').not()),
               ))
               .get();
     return compute(

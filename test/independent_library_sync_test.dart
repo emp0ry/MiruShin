@@ -181,8 +181,9 @@ class Adapter
 
 Future<TrackerSyncCoordinator> coordinator(
   CanonicalLibraryRepository repo,
-  Map<TrackerSource, Adapter> adapters,
-) async {
+  Map<TrackerSource, Adapter> adapters, {
+  TrackerSource? authoritativeSource,
+}) async {
   final container = ProviderContainer();
   final settings = SettingsState(
     anilistAccessToken: adapters.containsKey(TrackerSource.anilist)
@@ -196,13 +197,17 @@ Future<TrackerSyncCoordinator> coordinator(
         ? 'test'
         : '',
     shikimoriViewerId: 3,
+    primaryTrackerSource: authoritativeSource ?? TrackerSource.anilist,
   );
   // The adapter's account IDs deliberately match the repository approvals.
   final provider = Provider(
     (ref) => TrackerSyncCoordinator(
       ref,
       repository: repo,
-      store: CanonicalTrackingSyncStore(repository: repo),
+      store: CanonicalTrackingSyncStore(
+        repository: repo,
+        authoritativeSource: authoritativeSource,
+      ),
       settings: settings,
       beforeTrackerNetwork: () async => true,
       adapterFactory: (source) async => adapters[source],
@@ -284,6 +289,153 @@ void main() {
   );
 
   for (final source in TrackerSource.values) {
+    test(
+      '$source is the only inbound source; destinations cannot demote Watching',
+      () async {
+        final repo = memory();
+        await approve(repo, source);
+        await ingest(repo, source, [sample(source: source, progress: 0)]);
+        final store = CanonicalTrackingSyncStore(
+          repository: repo,
+          authoritativeSource: source,
+        );
+        await store.loadStates();
+        final before = await repo.database
+            .select(repo.database.canonicalLibraryRecords)
+            .getSingle();
+        final destinations = TrackerSource.values.where(
+          (target) => target != source,
+        );
+        final adapters = <TrackerSource, Adapter>{};
+        for (final target in destinations) {
+          final remote = sample(source: target, hour: 10, progress: 0).apply(
+            UserMediaPatch(
+              status: AniListListStatus.planning,
+              score: 0,
+              notes: 'External destination note',
+            ),
+            epoch.add(const Duration(hours: 10)),
+            providerSource: target,
+          );
+          final result = await store.reconcileProviderSnapshot(
+            source: target,
+            accountId: target.name,
+            mediaKind: 'anime',
+            remote: [
+              remote,
+              sample(source: target, id: 99),
+            ],
+            journal: const [],
+            propagationTargets: {source},
+            completeSnapshot: true,
+          );
+          expect(result.importedChanges, 0);
+          expect(result.requiresAccountApproval, isFalse);
+          expect(result.states, hasLength(1));
+          expect(result.states.single.status, AniListListStatus.current);
+          expect(result.states.single.score, 8.7);
+          expect(result.states.single.notes, '');
+          expect(await repo.watchConflicts().first, isEmpty);
+          adapters[target] = Adapter(target, entries: [remote]);
+        }
+        await LocalFirstSyncEngine(store: store, adapters: adapters).flush();
+        for (final adapter in adapters.values) {
+          expect(
+            adapter.applied.single.patch.status,
+            AniListListStatus.current,
+          );
+          expect(adapter.entries.single.status, AniListListStatus.current);
+        }
+        final after = await repo.database
+            .select(repo.database.canonicalLibraryRecords)
+            .getSingle();
+        expect(after.fieldRevisionsJson, before.fieldRevisionsJson);
+        expect(after.canonicalStateJson, before.canonicalStateJson);
+        expect((await repo.watchActivity().first), hasLength(1));
+      },
+    );
+
+    test(
+      '$source accepts real source edits and propagates to all destinations',
+      () async {
+        final repo = memory();
+        await approve(repo, source);
+        final store = CanonicalTrackingSyncStore(
+          repository: repo,
+          authoritativeSource: source,
+        );
+        final targets = TrackerSource.values.toSet()..remove(source);
+        for (final hour in [0, 2]) {
+          await store.reconcileProviderSnapshot(
+            source: source,
+            accountId: source.name,
+            mediaKind: 'anime',
+            remote: [sample(source: source, hour: hour, progress: hour + 1)],
+            journal: const [],
+            propagationTargets: targets,
+            propagationAccountIds: {
+              for (final target in targets) target: target.name,
+            },
+            completeSnapshot: true,
+          );
+        }
+        expect((await repo.loadTrackingStates()).single.progress, 3);
+        final adapters = {
+          for (final target in targets) target: Adapter(target),
+        };
+        await LocalFirstSyncEngine(store: store, adapters: adapters).flush();
+        for (final adapter in adapters.values) {
+          expect(adapter.applied.last.patch.progress, 3);
+        }
+      },
+    );
+
+    test(
+      '$source unavailable never promotes a destination into a source',
+      () async {
+        final repo = memory();
+        await approve(repo, source);
+        await ingest(repo, source, [sample(source: source)]);
+        final adapters = {
+          for (final target in TrackerSource.values)
+            target: Adapter(
+              target,
+              entries: [
+                sample(source: target, hour: 9, progress: 0).apply(
+                  UserMediaPatch(status: AniListListStatus.planning),
+                  epoch.add(const Duration(hours: 9)),
+                  providerSource: target,
+                ),
+              ],
+            ),
+        };
+        adapters[source]!.failures = 2;
+        final sync = await coordinator(
+          repo,
+          adapters,
+          authoritativeSource: source,
+        );
+        final result = await sync.refreshAllConnectedLibraries();
+        expect(result.fromCache, isTrue);
+        expect(result.remoteSource, isNull);
+        expect(
+          (await repo.loadTrackingStates()).single.status,
+          AniListListStatus.current,
+        );
+        for (final target in TrackerSource.values.where(
+          (target) => target != source,
+        )) {
+          expect(
+            adapters[target]!.applied.single.patch.status,
+            AniListListStatus.current,
+          );
+        }
+        final fallback = await sync.refreshAnimeLibrary(preferred: source);
+        expect(fallback.fromCache, isTrue);
+        expect(fallback.remoteSource, isNull);
+      },
+    );
+
     test(
       '$source newer catalog edit supersedes older queued local fields',
       () async {
@@ -652,6 +804,344 @@ void main() {
         sample(hour: 3, present: ['progress', 'completedAt']),
       ]);
       expect((await repo.loadTrackingStates()).single.completedAt, isNull);
+    },
+  );
+
+  test(
+    'switching source corrects former catalog imports but preserves genuine local edits',
+    () async {
+      final repo = memory();
+      await approve(repo, TrackerSource.anilist);
+      await ingest(repo, TrackerSource.anilist, [sample()]);
+      await approve(repo, TrackerSource.mal);
+      await ingest(
+        repo,
+        TrackerSource.mal,
+        [
+          sample(source: TrackerSource.mal, hour: 5).apply(
+            UserMediaPatch(status: AniListListStatus.planning),
+            epoch.add(const Duration(hours: 5)),
+            providerSource: TrackerSource.mal,
+          ),
+        ],
+        targets: {TrackerSource.anilist},
+      );
+      expect(
+        (await repo.loadTrackingStates()).single.status,
+        AniListListStatus.planning,
+      );
+      await edit(repo, UserMediaPatch(notes: 'Keep my local edit'), 6);
+      final store = CanonicalTrackingSyncStore(
+        repository: repo,
+        authoritativeSource: TrackerSource.anilist,
+      );
+      await store.loadStates();
+      expect(
+        (await store.loadJournal()).any(
+          (job) => job.tracks(TrackerSource.anilist),
+        ),
+        isFalse,
+      );
+      await store.reconcileProviderSnapshot(
+        source: TrackerSource.anilist,
+        accountId: 'anilist',
+        mediaKind: 'anime',
+        remote: [sample()],
+        journal: const [],
+        propagationTargets: const {TrackerSource.mal},
+        completeSnapshot: true,
+      );
+      final saved = (await repo.loadTrackingStates()).single;
+      expect(saved.status, AniListListStatus.current);
+      expect(saved.notes, 'Keep my local edit');
+      final next = CanonicalTrackingSyncStore(
+        repository: repo,
+        authoritativeSource: TrackerSource.mal,
+      );
+      await next.reconcileProviderSnapshot(
+        source: TrackerSource.mal,
+        accountId: 'mal',
+        mediaKind: 'anime',
+        remote: [
+          sample(source: TrackerSource.mal, hour: 5).apply(
+            UserMediaPatch(status: AniListListStatus.planning),
+            epoch.add(const Duration(hours: 5)),
+            providerSource: TrackerSource.mal,
+          ),
+        ],
+        journal: const [],
+        propagationTargets: const {},
+        completeSnapshot: true,
+      );
+      expect(
+        (await repo.loadTrackingStates()).single.status,
+        AniListListStatus.planning,
+      );
+      expect(
+        (await repo.loadTrackingStates()).single.notes,
+        'Keep my local edit',
+      );
+    },
+  );
+
+  test(
+    'outgoing mirror repairs are idempotent and recover after a lost journal without editing clocks',
+    () async {
+      final repo = memory();
+      await approve(repo, TrackerSource.anilist);
+      await ingest(repo, TrackerSource.anilist, [sample()]);
+      final store = CanonicalTrackingSyncStore(
+        repository: repo,
+        authoritativeSource: TrackerSource.anilist,
+      );
+      await store.loadStates();
+      final before = await repo.database
+          .select(repo.database.canonicalLibraryRecords)
+          .getSingle();
+      for (var pass = 0; pass < 2; pass++) {
+        await store.reconcileProviderSnapshot(
+          source: TrackerSource.mal,
+          accountId: 'mal',
+          mediaKind: 'anime',
+          remote: const [],
+          journal: const [],
+          propagationTargets: const {},
+          completeSnapshot: true,
+        );
+      }
+      expect(await repo.loadJournal(), hasLength(1));
+      final pending = (await repo.loadJournal()).single;
+      await repo.saveJournal([]);
+      await repo.database.customStatement(
+        "DELETE FROM sync_cursor_records WHERE scope = 'migration:sync.independent.v3'",
+      );
+      await repo.recoverIndependentSyncBacklog();
+      expect(
+        (await repo.loadJournal()).single.operationId,
+        pending.operationId,
+      );
+      final adapter = Adapter(TrackerSource.mal, entries: []);
+      await LocalFirstSyncEngine(
+        store: store,
+        adapters: {TrackerSource.mal: adapter},
+      ).flush();
+      expect(adapter.entries.single.status, AniListListStatus.current);
+      expect(await repo.loadJournal(), isEmpty);
+      final after = await repo.database
+          .select(repo.database.canonicalLibraryRecords)
+          .getSingle();
+      expect(after.fieldRevisionsJson, before.fieldRevisionsJson);
+      expect(after.updatedAtMs, before.updatedAtMs);
+      final drive = await repo.buildPendingDriveSegment();
+      expect(
+        drive!.operations.any(
+          (operation) => operation['operationId'] == pending.operationId,
+        ),
+        isFalse,
+      );
+      expect(
+        (await repo.buildDriveSnapshot()).operations.any(
+          (operation) => operation['operationId'] == pending.operationId,
+        ),
+        isFalse,
+      );
+    },
+  );
+
+  test(
+    'mirror transport timestamps cannot suppress a selected-source edit to legacy data',
+    () async {
+      final repo = memory();
+      await repo.saveTrackingStates([sample()]);
+      await approve(repo, TrackerSource.anilist);
+      final store = CanonicalTrackingSyncStore(
+        repository: repo,
+        authoritativeSource: TrackerSource.anilist,
+      );
+      await store.reconcileProviderSnapshot(
+        source: TrackerSource.mal,
+        accountId: 'mal',
+        mediaKind: 'anime',
+        remote: [sample(source: TrackerSource.mal, progress: 0)],
+        journal: const [],
+        propagationTargets: const {},
+        completeSnapshot: true,
+      );
+      expect((await repo.loadJournal()).single.patch.progress, 3);
+      await store.reconcileProviderSnapshot(
+        source: TrackerSource.anilist,
+        accountId: 'anilist',
+        mediaKind: 'anime',
+        remote: [sample(hour: 3, progress: 8)],
+        journal: const [],
+        propagationTargets: const {TrackerSource.mal},
+        propagationAccountIds: const {TrackerSource.mal: 'mal'},
+        completeSnapshot: true,
+      );
+      expect((await repo.loadTrackingStates()).single.progress, 8);
+      final adapter = Adapter(
+        TrackerSource.mal,
+        entries: [sample(source: TrackerSource.mal, progress: 0)],
+      );
+      await LocalFirstSyncEngine(
+        store: store,
+        adapters: {TrackerSource.mal: adapter},
+      ).flush();
+      expect(adapter.applied.single.patch.progress, 8);
+    },
+  );
+
+  test(
+    'source selection retires destination conflicts without changing their local values',
+    () async {
+      final repo = memory();
+      await approve(repo, TrackerSource.mal);
+      await ingest(repo, TrackerSource.mal, [
+        sample(source: TrackerSource.mal),
+      ]);
+      await edit(repo, UserMediaPatch(progress: 8), 1);
+      await ingest(repo, TrackerSource.mal, [
+        sample(source: TrackerSource.mal, hour: 1, progress: 5),
+      ]);
+      expect(await repo.watchConflicts().first, hasLength(1));
+      final store = CanonicalTrackingSyncStore(
+        repository: repo,
+        authoritativeSource: TrackerSource.anilist,
+      );
+      await store.loadStates();
+      expect(await repo.watchConflicts().first, isEmpty);
+      expect((await repo.loadTrackingStates()).single.progress, 8);
+      await store.reconcileProviderSnapshot(
+        source: TrackerSource.mal,
+        accountId: 'mal',
+        mediaKind: 'anime',
+        remote: [sample(source: TrackerSource.mal, hour: 9, progress: 2)],
+        journal: const [],
+        propagationTargets: const {},
+        completeSnapshot: true,
+      );
+      expect(await repo.watchConflicts().first, isEmpty);
+      expect((await repo.loadTrackingStates()).single.progress, 8);
+      expect(
+        (await repo.loadJournal())
+            .where((job) => job.tracks(TrackerSource.mal))
+            .single
+            .patch
+            .progress,
+        8,
+      );
+    },
+  );
+
+  test(
+    'outgoing sync does not clear unknown catalog-specific fields',
+    () async {
+      final repo = memory();
+      await approve(repo, TrackerSource.mal);
+      await ingest(repo, TrackerSource.mal, [
+        sample(source: TrackerSource.mal),
+      ]);
+      final store = CanonicalTrackingSyncStore(
+        repository: repo,
+        authoritativeSource: TrackerSource.mal,
+      );
+      final remote = sample(progress: 0).apply(
+        UserMediaPatch(
+          private: true,
+          priority: 5,
+          customLists: {'Personal': true},
+          advancedScores: {'Story': 9},
+        ),
+        epoch,
+        providerSource: TrackerSource.anilist,
+      );
+      await store.reconcileProviderSnapshot(
+        source: TrackerSource.anilist,
+        accountId: 'anilist',
+        mediaKind: 'anime',
+        remote: [remote],
+        journal: const [],
+        propagationTargets: const {},
+        completeSnapshot: true,
+      );
+      final adapter = Adapter(TrackerSource.anilist, entries: [remote]);
+      await LocalFirstSyncEngine(
+        store: store,
+        adapters: {TrackerSource.anilist: adapter},
+      ).flush();
+      expect(adapter.applied.single.patch.fields, {UserMediaField.progress});
+      expect(
+        adapter
+            .entries
+            .single
+            .providerStates[TrackerSource.anilist]!
+            .data['private'],
+        isTrue,
+      );
+      expect(
+        adapter
+            .entries
+            .single
+            .providerStates[TrackerSource.anilist]!
+            .data['customLists'],
+        {'Personal': true},
+      );
+    },
+  );
+
+  test(
+    'destination removals do not delete local manga and local deletion is mirrored exactly',
+    () async {
+      final repo = memory();
+      await approve(repo, TrackerSource.anilist);
+      final manga = sample(kind: 'manga');
+      await repo.reconcileProviderSnapshot(
+        source: TrackerSource.anilist,
+        accountId: 'anilist',
+        mediaKind: 'manga',
+        remote: [manga],
+        journal: const [],
+        propagationTargets: const {},
+        completeSnapshot: true,
+      );
+      final store = CanonicalTrackingSyncStore(
+        repository: repo,
+        authoritativeSource: TrackerSource.anilist,
+      );
+      await store.reconcileProviderSnapshot(
+        source: TrackerSource.mal,
+        accountId: 'mal',
+        mediaKind: 'manga',
+        remote: const [],
+        journal: const [],
+        propagationTargets: const {},
+        completeSnapshot: true,
+      );
+      expect(
+        (await repo.loadTrackingStates()).single.identity.mediaKind,
+        'manga',
+      );
+      expect((await repo.loadJournal()).single.patch.progressVolumes, 0);
+      await repo.saveJournal([]);
+      await edit(repo, UserMediaPatch(delete: true), 5);
+      await store.reconcileProviderSnapshot(
+        source: TrackerSource.mal,
+        accountId: 'mal',
+        mediaKind: 'manga',
+        remote: [sample(source: TrackerSource.mal, kind: 'manga', hour: 10)],
+        journal: const [],
+        propagationTargets: const {},
+        completeSnapshot: true,
+      );
+      expect(await repo.loadTrackingStates(), isEmpty);
+      expect(
+        (await repo.loadJournal())
+            .where((job) => job.tracks(TrackerSource.mal))
+            .single
+            .patch
+            .delete,
+        isTrue,
+      );
     },
   );
 

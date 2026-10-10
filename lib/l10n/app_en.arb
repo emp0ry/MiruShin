@@ -1,5 +1,7 @@
 {
   "@@locale": "en",
+  "Library sync source": "Library sync source",
+  "Only this catalog can update your local anime and manga library. MiruShin sends local changes to every connected catalog. If this source is unavailable, your local library is kept.": "Only this catalog can update your local anime and manga library. MiruShin sends local changes to every connected catalog. If this source is unavailable, your local library is kept.",
   "Local edit date is unknown; review this change.": "Local edit date is unknown; review this change.",
   "Retry sync": "Retry sync",
   "Sync details": "Sync details",

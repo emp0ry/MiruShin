@@ -129,6 +129,7 @@ Just install and open the app. Discovery and metadata work right away. No setup 
 Want more? Two optional steps unlock the rest:
 
 - **Sign in to AniList, MyAnimeList, or Shikimori** to sync library status and progress. AniList also unlocks profile pages, social surfaces, exports, and the AniList catalog.
+- **Choose Library sync source** in Settings → Library Log. AniList is the default; only the selected catalog imports tracking changes. Local edits are sent to all connected catalogs, and an outage never silently changes the source.
 - **Add modules to watch** by opening the **Addons** page and pasting a trusted module manifest URL, then install and enable it. Need modules? Join the [Sora Discord](https://discord.gg/XR3SrmUbpd) to find them.
 - **Watch with friends** from Settings or the player. The host creates a short-lived room code/QR, guests join on their own device, and playback events sync after pairing.
 - **Connect Google Drive Sync** to restore a complete, render-ready Local Library checkpoint—including titles, artwork URLs, filters, airing metadata and progress—before trackers respond, together with per-account Library settings, playback preferences, addons, API connections, persistent Watch with Friends relay preferences, AniList accounts, and their MAL/Shikimori sessions. Tracker sessions and user-provided API credentials are stored in the selected Google account's private `appDataFolder`; Google Drive OAuth tokens, temporary Watch Party credentials, and MiruShin's own OAuth secrets stay out of those synced records.

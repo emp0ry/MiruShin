@@ -27,11 +27,13 @@ final trackingSyncStoreProvider = Provider<TrackingSyncStore>((Ref ref) {
         settings.anilistViewerId,
         settings.malViewerId,
         settings.shikimoriViewerId,
+        settings.primaryTrackerSource,
       ),
     ),
   );
   return CanonicalTrackingSyncStore(
     repository: ref.watch(canonicalLibraryRepositoryProvider),
+    authoritativeSource: accounts.$4,
     healthAccountIds: {
       if (accounts.$1 != null) TrackerSource.anilist: '${accounts.$1}',
       if (accounts.$2 != null) TrackerSource.mal: '${accounts.$2}',
@@ -530,7 +532,9 @@ class TrackerSyncCoordinator {
     String kind,
   ) async {
     if (!await _canContactTrackers()) return _cachedSnapshot(kind);
-    for (final source in {preferred, ...TrackerSource.values}) {
+    // Library fallback is local-only. A destination catalog must never become
+    // an inbound source just because the selected catalog is unavailable.
+    for (final source in {_settings.primaryTrackerSource}) {
       if (excluded.contains(source) || !_accountIds.containsKey(source)) {
         continue;
       }
@@ -591,8 +595,8 @@ class TrackerSyncCoordinator {
         ),
       );
 
-  /// Reconciles a complete authenticated snapshot from every connected
-  /// tracker instead of stopping after the first provider that responds.
+  /// Imports only the selected catalog; other independent lanes observe and
+  /// repair outgoing mirrors without changing the canonical local library.
   Future<TrackerLibrarySnapshot> refreshAllConnectedLibraries({
     String mediaKind = 'anime',
     Set<TrackerSource> excluded = const <TrackerSource>{},
@@ -613,7 +617,13 @@ class TrackerSyncCoordinator {
           .where(_accountIds.containsKey)
           .map((source) => _refreshSource(source, mediaKind, force: force)),
     );
-    final success = results.where((result) => !result.fromCache).firstOrNull;
+    final success = results
+        .where(
+          (result) =>
+              !result.fromCache &&
+              result.remoteSource == _settings.primaryTrackerSource,
+        )
+        .firstOrNull;
     _invalidateHealth();
     final List<UserMediaState> states = (await _store.loadStates())
         .where((UserMediaState state) => state.identity.mediaKind == mediaKind)

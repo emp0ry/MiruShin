@@ -58,6 +58,7 @@ import '../application/mirushin_backup_service.dart';
 import '../application/settings_state.dart';
 import '../application/update_checker_provider.dart';
 import 'mirushin_backup_file.dart';
+import 'widgets/library_sync_source_row.dart';
 import 'widgets/settings_widgets.dart';
 import 'widgets/support_mirushin_card.dart';
 
@@ -499,6 +500,7 @@ class _LibrarySyncSection extends StatelessWidget {
       title: context.t('Library Log'),
       icon: Icons.history_rounded,
       children: <Widget>[
+        const LibrarySyncSourceRow(),
         SettingsRow(
           title: context.t('Library history'),
           subtitle: context.t(

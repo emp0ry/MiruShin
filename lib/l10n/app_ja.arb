@@ -1,5 +1,7 @@
 {
   "@@locale": "ja",
+  "Library sync source": "ライブラリ同期元",
+  "Only this catalog can update your local anime and manga library. MiruShin sends local changes to every connected catalog. If this source is unavailable, your local library is kept.": "選択したカタログだけがローカルのアニメ・マンガライブラリを更新できます。MiruShinでの変更は接続済みのすべてのカタログに送信されます。同期元が利用できない場合、ローカルライブラリを維持します。",
   "Local edit date is unknown; review this change.": "ローカルの編集日時が不明です。この変更を確認してください。",
   "Retry sync": "同期を再試行",
   "Sync details": "同期の詳細",

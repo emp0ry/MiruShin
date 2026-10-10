@@ -1,5 +1,7 @@
 {
   "@@locale": "ru",
+  "Library sync source": "Источник синхронизации библиотеки",
+  "Only this catalog can update your local anime and manga library. MiruShin sends local changes to every connected catalog. If this source is unavailable, your local library is kept.": "Только этот каталог может обновлять локальную библиотеку аниме и манги. MiruShin отправляет локальные изменения во все подключённые каталоги. Если выбранный источник недоступен, локальная библиотека сохраняется.",
   "Local edit date is unknown; review this change.": "Дата локального изменения неизвестна; проверьте это изменение.",
   "Retry sync": "Повторить синхронизацию",
   "Sync details": "Подробности синхронизации",

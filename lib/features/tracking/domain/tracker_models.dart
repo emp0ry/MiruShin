@@ -1,7 +1,7 @@
 import '../../../shared/models/anilist_models.dart';
 
-/// The tracker whose library feeds the in-app Library view. Progress is still
-/// pushed to every connected tracker regardless of this selection.
+/// The selected tracker is the only inbound library source. Local changes are
+/// still pushed to every connected tracker regardless of this selection.
 enum TrackerSource {
   anilist,
   mal,
