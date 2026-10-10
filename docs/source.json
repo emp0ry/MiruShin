@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.9.17",
+          "date": "2026-10-10",
+          "localizedDescription": "- Choose AniList, MyAnimeList, or Shikimori as the only incoming library sync source; AniList is the default.\n- Keep other connected catalogs as outgoing mirrors without allowing their edits or outages to overwrite the local library or switch the source.\n- Safely retire obsolete destination conflicts and queued imports when changing the source, preserving local edits and audit history.\n- Recover outgoing updates independently after restart and preserve unknown catalog-specific fields.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.17/MiruShin-ios-v2.9.17.ipa",
+          "size": 31857074,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.9.16",
           "date": "2026-10-10",
           "localizedDescription": "- Prevent unrelated catalog write echoes from downgrading Completed entries or clearing disputed dates and notes.\n- Save conflict choices immediately and sync in the background without locking other entries.\n- Fix duplicate sync delivery records and safely reconcile legacy account aliases and Google Drive confirmations.\n- Report local database errors correctly without marking healthy catalogs unavailable.",
@@ -799,11 +807,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.9.16",
+      "version": "2.9.17",
       "versionDate": "2026-10-10",
-      "versionDescription": "- Prevent unrelated catalog write echoes from downgrading Completed entries or clearing disputed dates and notes.\n- Save conflict choices immediately and sync in the background without locking other entries.\n- Fix duplicate sync delivery records and safely reconcile legacy account aliases and Google Drive confirmations.\n- Report local database errors correctly without marking healthy catalogs unavailable.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.16/MiruShin-ios-v2.9.16.ipa",
-      "size": 31851396,
+      "versionDescription": "- Choose AniList, MyAnimeList, or Shikimori as the only incoming library sync source; AniList is the default.\n- Keep other connected catalogs as outgoing mirrors without allowing their edits or outages to overwrite the local library or switch the source.\n- Safely retire obsolete destination conflicts and queued imports when changing the source, preserving local edits and audit history.\n- Recover outgoing updates independently after restart and preserve unknown catalog-specific fields.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.17/MiruShin-ios-v2.9.17.ipa",
+      "size": 31857074,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
