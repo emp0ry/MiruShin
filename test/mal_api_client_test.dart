@@ -8,6 +8,67 @@ import 'package:mirushin/shared/models/anilist_models.dart';
 import 'package:mirushin/shared/models/media_item.dart';
 
 void main() {
+  test(
+    'MAL notes absent from bulk lists use bounded, durable detail hydration',
+    () async {
+      final adapter = _FakeMalAdapter()..omitListNotes = true;
+      var cached = <String, dynamic>{};
+      MalApiClient makeClient() => MalApiClient(
+        accessToken: 'token',
+        dio: Dio()..httpClientAdapter = adapter,
+        readListStatusCache: (_) async => cached,
+        writeListStatusCache: (_, values) async => cached = Map.of(values),
+      );
+      final first = (await makeClient().fetchAnimeList()).single.entries.single;
+      expect(first.notes, 'remote note');
+      expect(first.providerData['presentFields'], contains('notes'));
+      expect(adapter.detailCalls, 1);
+      await makeClient().fetchAnimeList();
+      expect(
+        adapter.detailCalls,
+        1,
+        reason: 'Restart reuses the account-specific cache.',
+      );
+      adapter.stamp = '2026-09-02T00:00:00Z';
+      await makeClient().fetchAnimeList();
+      expect(
+        adapter.detailCalls,
+        2,
+        reason: 'Only a genuine updated entry refetches details.',
+      );
+      expect(adapter.lastQuery?['fields'], contains('comments'));
+    },
+  );
+  test(
+    'MAL hydrates queued note titles first while keeping readbacks bounded',
+    () async {
+      final adapter = _FakeMalAdapter()
+        ..omitListNotes = true
+        ..listEntries = 12;
+      final client = MalApiClient(
+        accessToken: 'token',
+        dio: Dio()..httpClientAdapter = adapter,
+        priorityListStatusIds: (_) async => {5125},
+      );
+      final entries = (await client.fetchAnimeList()).single.entries;
+      expect(adapter.detailCalls, 10);
+      expect(adapter.detailIds.first, 5125);
+      expect(entries.last.providerData['presentFields'], contains('notes'));
+      expect(
+        entries[10].providerData['presentFields'],
+        isNot(contains('notes')),
+      );
+    },
+  );
+
+  test('MAL malformed bulk response is rejected as incomplete', () async {
+    final adapter = _FakeMalAdapter()..malformedList = true;
+    final client = MalApiClient(
+      accessToken: 'token',
+      dio: Dio()..httpClientAdapter = adapter,
+    );
+    await expectLater(client.fetchAnimeList(), throwsFormatException);
+  });
   test('MAL catalog search maps ids and detail metadata', () async {
     final _FakeMalAdapter adapter = _FakeMalAdapter();
     final Dio dio = Dio()..httpClientAdapter = adapter;
@@ -73,6 +134,12 @@ void main() {
 }
 
 class _FakeMalAdapter implements HttpClientAdapter {
+  bool omitListNotes = false;
+  bool malformedList = false;
+  String stamp = '2026-09-01T00:00:00Z';
+  int detailCalls = 0;
+  int listEntries = 1;
+  final detailIds = <int>[];
   final List<String?> authorizationHeaders = <String?>[];
   Map<String, dynamic>? lastQuery;
 
@@ -85,27 +152,44 @@ class _FakeMalAdapter implements HttpClientAdapter {
     authorizationHeaders.add(options.headers['Authorization']?.toString());
     lastQuery = Map<String, dynamic>.from(options.queryParameters);
     if (options.uri.path == '/users/@me/animelist') {
+      if (malformedList) return _json('{"data":null}');
       return _json(
         jsonEncode(<String, dynamic>{
           'data': <Map<String, dynamic>>[
-            <String, dynamic>{
-              'node': _node(),
-              'list_status': <String, dynamic>{
-                'status': 'watching',
-                'score': 9,
-                'num_episodes_watched': 3,
-                'comments': 'offline note',
-                'num_times_rewatched': 1,
-                'start_date': '2026-08-01',
-                'finish_date': '2026-08-31',
-                'updated_at': '2026-09-01T00:00:00Z',
+            for (int index = 0; index < listEntries; index++)
+              <String, dynamic>{
+                'node': {..._node(), 'id': 5114 + index},
+                'list_status': <String, dynamic>{
+                  'status': 'watching',
+                  'score': 9,
+                  'num_episodes_watched': 3,
+                  if (!omitListNotes) 'comments': 'offline note',
+                  'num_times_rewatched': 1,
+                  'start_date': '2026-08-01',
+                  'finish_date': '2026-08-31',
+                  'updated_at': stamp,
+                },
               },
-            },
           ],
         }),
       );
     }
-    if (options.uri.path == '/anime/5114') {
+    if (options.uri.path.startsWith('/anime/')) {
+      if ('${options.queryParameters['fields']}'.startsWith('my_list_status')) {
+        detailCalls++;
+        detailIds.add(int.parse(options.uri.path.split('/').last));
+        return _json(
+          jsonEncode({
+            'my_list_status': {
+              'status': 'watching',
+              'score': 9,
+              'num_episodes_watched': 3,
+              'comments': 'remote note',
+              'updated_at': stamp,
+            },
+          }),
+        );
+      }
       return _json(jsonEncode(_node()));
     }
     return _json(

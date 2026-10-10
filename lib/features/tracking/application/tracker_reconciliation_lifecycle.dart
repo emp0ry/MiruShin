@@ -1,16 +1,17 @@
 import 'dart:async';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../library/application/canonical_library_repository.dart';
 import '../../library/application/google_drive_sync_controller.dart';
 import '../../settings/application/settings_state.dart';
 import 'tracker_library_provider.dart';
 import 'tracker_sync_coordinator.dart';
 
 /// Runs one complete, provider-independent reconciliation after account
-/// restoration and when the app returns to the foreground. There is no
-/// periodic tracker polling: local mutations still use their own outboxes.
+/// restoration, on resume, and once a minute while the app is foregrounded.
 final trackerReconciliationLifecycleProvider = Provider<Future<void> Function()>(
   (Ref ref) {
     Timer? debounce;
@@ -18,6 +19,7 @@ final trackerReconciliationLifecycleProvider = Provider<Future<void> Function()>
     bool runAgain = false;
     bool disposed = false;
     DateTime? lastCompletedAt;
+    bool foreground = true;
 
     Future<void> reconcile({bool force = false}) async {
       if (disposed) return;
@@ -44,15 +46,10 @@ final trackerReconciliationLifecycleProvider = Provider<Future<void> Function()>
           // snapshot can be interpreted as a new local mutation on this device.
           final bool driveReady = await ref
               .read(googleDriveSyncControllerProvider.notifier)
-              .syncBeforeTrackerReconciliation();
+              .ensureWorkspaceReadyForTrackerDelivery(
+                ref.read(canonicalLibraryRepositoryProvider).replicaNamespace,
+              );
           if (disposed || !driveReady) return;
-          final GoogleDriveSyncState? refreshed = ref
-              .read(googleDriveSyncControllerProvider)
-              .value;
-          if (refreshed?.lastError ==
-              'Google Drive sync failed. Please try again.') {
-            return;
-          }
         }
         final SettingsState settings = ref.read(settingsProvider);
         if (!settings.hasAniListSession &&
@@ -63,14 +60,18 @@ final trackerReconciliationLifecycleProvider = Provider<Future<void> Function()>
         final TrackerSyncCoordinator coordinator = ref.read(
           trackerSyncCoordinatorProvider,
         );
-        await coordinator.refreshAllConnectedLibraries();
-        if (disposed) return;
-        await coordinator.refreshAllConnectedLibraries(mediaKind: 'manga');
+        // Queue both kinds on each provider's lane immediately. A stalled
+        // catalog must not hold up another catalog's manga reconciliation.
+        await Future.wait([
+          coordinator.refreshAllConnectedLibraries(force: force),
+          coordinator.refreshAllConnectedLibraries(
+            mediaKind: 'manga',
+            force: force,
+          ),
+        ]);
         if (disposed) return;
         ref.invalidate(trackerLocalAnimeLibraryProvider);
         ref.invalidate(trackerLocalMangaLibraryProvider);
-        ref.invalidate(trackerAnimeListProvider);
-        ref.invalidate(trackerMangaListProvider);
         lastCompletedAt = DateTime.now().toUtc();
       }();
       active = operation;
@@ -111,10 +112,13 @@ final trackerReconciliationLifecycleProvider = Provider<Future<void> Function()>
       settingsProvider.select(
         (SettingsState settings) => (
           settings.anilistViewerId,
+          settings.anilistAccessToken,
           settings.hasAniListSession,
           settings.malViewerId,
+          settings.malAccessToken,
           settings.hasMalSession,
           settings.shikimoriViewerId,
+          settings.shikimoriAccessToken,
           settings.hasShikimoriSession,
         ),
       ),
@@ -124,8 +128,36 @@ final trackerReconciliationLifecycleProvider = Provider<Future<void> Function()>
       },
     );
 
+    final periodic = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (foreground && !disposed && active == null) schedule();
+    });
+    bool? connected;
+    final connectivity = Connectivity().onConnectivityChanged.listen(
+      (values) {
+        final available = values.any(
+          (value) => value != ConnectivityResult.none,
+        );
+        if (available && connected == false && foreground && !disposed) {
+          schedule(force: true, delay: const Duration(milliseconds: 150));
+        }
+        connected = available;
+      },
+      onError: (Object error) {
+        // Network observation is only a wake-up hint; timed retries still work.
+        debugPrint('Network-change observation unavailable: $error');
+      },
+    );
     final AppLifecycleListener lifecycle = AppLifecycleListener(
-      onResume: schedule,
+      onResume: () {
+        foreground = true;
+        schedule(force: true);
+      },
+      onPause: () {
+        foreground = false;
+      },
+      onHide: () {
+        foreground = false;
+      },
     );
     Future<void> stop() async {
       if (disposed) {
@@ -137,6 +169,8 @@ final trackerReconciliationLifecycleProvider = Provider<Future<void> Function()>
       disposed = true;
       runAgain = false;
       debounce?.cancel();
+      periodic.cancel();
+      await connectivity.cancel();
       lifecycle.dispose();
       try {
         await active;

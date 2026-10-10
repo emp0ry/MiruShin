@@ -3,6 +3,37 @@ import 'package:mirushin/features/library/domain/canonical_library_models.dart';
 import 'package:mirushin/features/library/presentation/library_sync_page.dart';
 
 void main() {
+  test(
+    'targeted warning identifies catalog, values, IDs and actual edit dates',
+    () {
+      final conflict = CanonicalLibraryConflict(
+        conflictId: 'review',
+        localId: 'title',
+        fieldName: 'progress',
+        localValue: const {
+          'state': {'progress': 8},
+        },
+        incomingValue: const {
+          'provider': 'mal',
+          'accountId': '42',
+          'reason': 'Different values have the same edit date.',
+          'editAt': '2026-10-01T02:00:00Z',
+          'localEditAt': '2026-10-01T02:00:00Z',
+          'catalogIds': {'malId': 110},
+          'state': {'progress': 4},
+        },
+        createdAt: DateTime.utc(2026, 10, 1),
+        state: 'open',
+        title: 'Example anime',
+      );
+      final text = libraryConflictDetails(conflict);
+      expect(text, contains('MyAnimeList · 42'));
+      expect(text, contains('Local: 8'));
+      expect(text, contains('Incoming: 4'));
+      expect(text, contains('110'));
+      expect(text, contains('2026-10-01T02:00:00Z'));
+    },
+  );
   test('Library Log summarizes more than four fields without throwing', () {
     final LibraryActivityEvent event = LibraryActivityEvent(
       operationId: 'operation-1',

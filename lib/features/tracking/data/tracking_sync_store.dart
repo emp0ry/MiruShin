@@ -105,7 +105,25 @@ abstract class DeliveryTrackingSyncStore {
     required TrackerSource target,
     required String state,
     String? error,
+    DateTime? nextAttemptAt,
   });
+}
+
+abstract interface class ProviderHealthTrackingSyncStore {
+  Future<void> saveProviderHealth(TrackerProviderHealth health);
+}
+
+abstract interface class CompactDeliveryTrackingSyncStore {
+  Future<void> compactPendingDeliveries(TrackerSource source, String accountId);
+}
+
+/// A partial field snapshot is not permission to overwrite an unseen value.
+abstract interface class ObservedFieldsTrackingSyncStore {
+  Future<Set<UserMediaField>> unobservedDeliveryFields(
+    SyncJournalEntry mutation,
+    TrackerSource source,
+    String accountId,
+  );
 }
 
 /// Optional guard exposed by stores that migrate a legacy library into a new

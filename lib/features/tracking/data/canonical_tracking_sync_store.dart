@@ -11,15 +11,21 @@ class CanonicalTrackingSyncStore
         PresentationTrackingSyncStore,
         ReconciliationTrackingSyncStore,
         DeliveryTrackingSyncStore,
+        ProviderHealthTrackingSyncStore,
+        CompactDeliveryTrackingSyncStore,
+        ObservedFieldsTrackingSyncStore,
         MigrationSafeModeTrackingSyncStore {
   CanonicalTrackingSyncStore({
     required CanonicalLibraryRepository repository,
+    Map<TrackerSource, String> healthAccountIds = const {},
     SharedPreferencesTrackingSyncStore legacy =
         const SharedPreferencesTrackingSyncStore(),
   }) : _repository = repository,
+       _healthAccountIds = Map.unmodifiable(healthAccountIds),
        _legacy = legacy;
 
   final CanonicalLibraryRepository _repository;
+  final Map<TrackerSource, String> _healthAccountIds;
   final SharedPreferencesTrackingSyncStore _legacy;
   Future<void>? _migration;
   bool _migrationSafeMode = false;
@@ -31,6 +37,7 @@ class CanonicalTrackingSyncStore
       try {
         await _repository.recoverLegacyOperationDeliveries();
         await _repository.repairSyncConsistency();
+        await _repository.recoverIndependentSyncBacklog();
       } on Object {
         // Recovery is best-effort. Existing journal entries are untouched by
         // a failed transaction and require provider read-back before writing.
@@ -152,7 +159,7 @@ class CanonicalTrackingSyncStore
   Future<Map<TrackerSource, TrackerProviderHealth>> loadHealth() async {
     await _ensureMigrated();
     if (_migrationSafeMode) return _legacy.loadHealth();
-    return _repository.loadHealth();
+    return _repository.loadHealth(accountIds: _healthAccountIds);
   }
 
   @override
@@ -162,6 +169,32 @@ class CanonicalTrackingSyncStore
     await _ensureMigrated();
     if (_migrationSafeMode) return _legacy.saveHealth(health);
     await _repository.saveHealth(health);
+  }
+
+  @override
+  Future<void> saveProviderHealth(TrackerProviderHealth health) =>
+      saveHealth({health.provider: health});
+
+  @override
+  Future<Set<UserMediaField>> unobservedDeliveryFields(
+    SyncJournalEntry mutation,
+    TrackerSource source,
+    String accountId,
+  ) async {
+    await _ensureMigrated();
+    if (_migrationSafeMode) return mutation.patch.fields;
+    return _repository.unobservedDeliveryFields(mutation, source, accountId);
+  }
+
+  @override
+  Future<void> compactPendingDeliveries(
+    TrackerSource source,
+    String accountId,
+  ) async {
+    await _ensureMigrated();
+    if (!_migrationSafeMode) {
+      await _repository.compactPendingDeliveries(source, accountId);
+    }
   }
 
   @override
@@ -237,6 +270,7 @@ class CanonicalTrackingSyncStore
     required TrackerSource target,
     required String state,
     String? error,
+    DateTime? nextAttemptAt,
   }) async {
     await _ensureMigrated();
     if (_migrationSafeMode) return;
@@ -247,6 +281,7 @@ class CanonicalTrackingSyncStore
       target: target,
       state: state,
       error: error,
+      nextAttemptAt: nextAttemptAt,
     );
   }
 }

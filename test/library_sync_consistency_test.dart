@@ -512,7 +512,7 @@ void main() {
   });
 
   test(
-    'Divergent concurrent user edits remain a single real conflict on replay',
+    'Divergent equal-time user edits remain a single real conflict on replay',
     () async {
       final a = memory(), b = memory();
       await a.saveTrackingStates([example()]);
@@ -529,7 +529,7 @@ void main() {
         b,
         example().apply(
           UserMediaPatch(progress: 5),
-          DateTime.utc(2026, 10, 5, 14),
+          DateTime.utc(2026, 10, 5, 13),
         ),
         UserMediaPatch(progress: 5),
       );
@@ -959,7 +959,7 @@ void main() {
         b,
         example().apply(
           UserMediaPatch(progress: 5),
-          DateTime.utc(2026, 10, 5, 14),
+          DateTime.utc(2026, 10, 5, 13),
         ),
         UserMediaPatch(progress: 5),
       );
@@ -1134,7 +1134,7 @@ void main() {
   );
 
   test(
-    'A real same-episode conflict preserves the local position until resolved',
+    'An equal-time same-episode conflict preserves the local position until resolved',
     () async {
       final a = memory(), b = memory();
       await a.saveTrackingStates([example()]);
@@ -1146,6 +1146,7 @@ void main() {
         positionSeconds: 90,
         durationSeconds: 1400,
         mediaItem: example().mediaItem,
+        occurredAt: DateTime.utc(2026, 10, 5, 15),
       );
       await b.saveEpisodeProgress(
         mediaId: example().mediaItem.id,
@@ -1154,6 +1155,7 @@ void main() {
         positionSeconds: 150,
         durationSeconds: 1400,
         mediaItem: example().mediaItem,
+        occurredAt: DateTime.utc(2026, 10, 5, 15),
       );
       await b.applyDriveSegment(
         (await a.buildPendingDriveSegment())!,
@@ -1265,6 +1267,7 @@ void main() {
         positionSeconds: 90,
         durationSeconds: 1400,
         mediaItem: example().mediaItem,
+        occurredAt: DateTime.utc(2026, 10, 5, 15),
       );
       await b.saveEpisodeProgress(
         mediaId: example().mediaItem.id,
@@ -1273,6 +1276,7 @@ void main() {
         positionSeconds: 150,
         durationSeconds: 1400,
         mediaItem: example().mediaItem,
+        occurredAt: DateTime.utc(2026, 10, 5, 15),
       );
       await b.applyDriveSegment(
         (await a.buildPendingDriveSegment())!,

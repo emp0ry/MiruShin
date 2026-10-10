@@ -12,6 +12,7 @@ import '../../../shared/models/library_item.dart';
 import '../../../shared/models/media_item.dart';
 import '../../settings/application/settings_state.dart';
 import '../../tracking/data/tracking_sync_store.dart';
+import '../../tracking/domain/provider_field_projection.dart';
 import '../../tracking/domain/tracker_models.dart';
 import '../../tracking/domain/tracking_sync_models.dart';
 import '../data/canonical_library_database.dart';
@@ -1296,7 +1297,7 @@ class CanonicalLibraryRepository {
                     table.localId.equals(identity.localId),
               ))
               .getSingleOrNull();
-      if (direct != null) matches.add(direct.localId);
+      if (direct != null && alias == null) matches.add(direct.localId);
     }
     if (mediaItem.id.trim().isNotEmpty) {
       final MediaAliasRecord? mediaAlias =
@@ -1685,7 +1686,6 @@ class CanonicalLibraryRepository {
                   table.localId.equals(shellLocalId),
             ))
             .getSingleOrNull();
-    if (shellLibrary != null) return;
 
     final LibraryOperationRecord? shellOperation =
         await (database.select(database.libraryOperationRecords)
@@ -1711,9 +1711,10 @@ class CanonicalLibraryRepository {
               )
               ..limit(1))
             .getSingleOrNull();
-    if (shellOperation != null ||
-        shellEpisode != null ||
-        shellPreference != null) {
+    if (shellLibrary == null &&
+        (shellOperation != null ||
+            shellEpisode != null ||
+            shellPreference != null)) {
       return;
     }
 
@@ -1752,6 +1753,14 @@ class CanonicalLibraryRepository {
     if (targetSourceBinding != null &&
         targetSourceBinding.externalMediaId != sourceId) {
       return;
+    }
+
+    if (shellLibrary != null) {
+      await _mergeVerifiedMediaHistoryLocked(
+        targetLibrary,
+        shellLibrary,
+        source,
+      );
     }
 
     await (database.delete(database.providerSnapshotRecords)..where(
@@ -1825,8 +1834,11 @@ class CanonicalLibraryRepository {
             ),
           );
     }
+    final latestTarget = await (database.select(
+      database.canonicalLibraryRecords,
+    )..where((table) => table.localId.equals(targetLocalId))).getSingle();
     final UserMediaState targetState = UserMediaState.fromJson(
-      _jsonMap(targetLibrary.canonicalStateJson),
+      _jsonMap(latestTarget.canonicalStateJson),
     );
     await (database.update(database.canonicalLibraryRecords)..where(
           (CanonicalLibraryRecords table) =>
@@ -1871,6 +1883,210 @@ class CanonicalLibraryRepository {
             ),
           );
     }
+  }
+
+  Future<void> _mergeVerifiedMediaHistoryLocked(
+    CanonicalLibraryRecord target,
+    CanonicalLibraryRecord duplicate,
+    TrackerSource source,
+  ) async {
+    final root = target.localId;
+    final old = duplicate.localId;
+    var state = UserMediaState.fromJson(_jsonMap(target.canonicalStateJson));
+    final other = UserMediaState.fromJson(
+      _jsonMap(duplicate.canonicalStateJson),
+    );
+    final revisions = _jsonMap(target.fieldRevisionsJson);
+    final otherRevisions = _jsonMap(duplicate.fieldRevisionsJson);
+    for (final field in providerEntryFields(
+      source,
+      mediaKind: state.identity.mediaKind,
+    )) {
+      final left = revisions[field.name];
+      final right = otherRevisions[field.name];
+      if (_jsonEquivalent(
+        providerFieldValue(state, field),
+        providerFieldValue(other, field),
+      )) {
+        revisions[field.name] = _mergeEquivalentRevisions(left, right);
+      } else if (_revisionEditTime(right) > _revisionEditTime(left)) {
+        state = state.apply(
+          _patchFromState(other, {field}),
+          state.updatedAt.isAfter(other.updatedAt)
+              ? state.updatedAt
+              : other.updatedAt,
+          providerSource: source,
+        );
+        revisions[field.name] = right;
+      } else if (_revisionEditTime(right) == _revisionEditTime(left)) {
+        await _recordProviderReviewLocked(
+          localId: root,
+          field: field.name,
+          source: source,
+          accountId:
+              (await (database.select(database.providerSnapshotRecords)
+                        ..where(
+                          (table) =>
+                              table.localId.equals(old) &
+                              table.provider.equals(source.name),
+                        )
+                        ..limit(1))
+                      .getSingleOrNull())
+                  ?.accountId ??
+              '',
+          current: state,
+          incoming: other,
+          reason:
+              'Verified duplicate has divergent values without an unambiguous newer edit date.',
+        );
+      }
+    }
+    for (final item in otherRevisions.entries) {
+      if (!revisions.containsKey(item.key)) {
+        revisions[item.key] = item.value;
+      } else if (item.key == 'membership') {
+        revisions[item.key] = _mergeEquivalentRevisions(
+          revisions[item.key],
+          item.value,
+        );
+      } else if (item.key.startsWith('episodeProgress:') &&
+          _revisionEditTime(item.value) >
+              _revisionEditTime(revisions[item.key])) {
+        revisions[item.key] = item.value;
+      }
+    }
+    // Move audit records intact; revisions continue referring to their original IDs.
+    await (database.update(database.libraryOperationRecords)
+          ..where((t) => t.localId.equals(old)))
+        .write(LibraryOperationRecordsCompanion(localId: Value(root)));
+    await (database.update(database.libraryConflictRecords)
+          ..where((t) => t.localId.equals(old)))
+        .write(LibraryConflictRecordsCompanion(localId: Value(root)));
+    final episodes = await (database.select(
+      database.episodeStateRecords,
+    )..where((t) => t.localId.equals(old))).get();
+    for (final episode in episodes) {
+      final existing =
+          await (database.select(database.episodeStateRecords)..where(
+                (t) =>
+                    t.localId.equals(root) &
+                    t.seasonNumber.equals(episode.seasonNumber) &
+                    t.episodeNumber.equals(episode.episodeNumber) &
+                    t.watchCycle.equals(episode.watchCycle),
+              ))
+              .getSingleOrNull();
+      if (existing == null) {
+        await (database.update(
+          database.episodeStateRecords,
+        )..where((t) => t.episodeStateId.equals(episode.episodeStateId))).write(
+          EpisodeStateRecordsCompanion(
+            localId: Value(root),
+            episodeStateId: Value(
+              '$root:${episode.watchCycle}:${episode.seasonNumber}:${episode.episodeNumber}',
+            ),
+          ),
+        );
+      } else {
+        if (episode.updatedAtMs > existing.updatedAtMs) {
+          await (database.update(
+                database.episodeStateRecords,
+              )..where((t) => t.episodeStateId.equals(existing.episodeStateId)))
+              .write(
+                EpisodeStateRecordsCompanion(
+                  positionSeconds: Value(episode.positionSeconds),
+                  durationSeconds: Value(episode.durationSeconds),
+                  completed: Value(episode.completed || existing.completed),
+                  updatedAtMs: Value(episode.updatedAtMs),
+                ),
+              );
+        }
+        await (database.delete(
+          database.episodeStateRecords,
+        )..where((t) => t.episodeStateId.equals(episode.episodeStateId))).go();
+      }
+    }
+    await (database.update(database.streamPreferenceRecords)
+          ..where((t) => t.localId.equals(old)))
+        .write(StreamPreferenceRecordsCompanion(localId: Value(root)));
+    final snapshots = await (database.select(
+      database.providerSnapshotRecords,
+    )..where((t) => t.localId.equals(old))).get();
+    for (final snapshot in snapshots) {
+      final existing =
+          await (database.select(database.providerSnapshotRecords)..where(
+                (t) =>
+                    t.localId.equals(root) &
+                    t.provider.equals(snapshot.provider) &
+                    t.accountId.equals(snapshot.accountId),
+              ))
+              .getSingleOrNull();
+      final remote = _providerStateFromSnapshot(snapshot);
+      if (remote != null &&
+          (existing == null || snapshot.fetchedAtMs > existing.fetchedAtMs)) {
+        await _writeFullProviderSnapshotLocked(
+          localId: root,
+          source: TrackerSource.fromName(snapshot.provider),
+          accountId: snapshot.accountId,
+          state: remote.withIdentity(remote.identity.withLocalId(root)),
+          destructiveConfirmationCount: snapshot.destructiveConfirmationCount,
+          fetchedAt: DateTime.fromMillisecondsSinceEpoch(
+            snapshot.fetchedAtMs,
+            isUtc: true,
+          ),
+        );
+      }
+    }
+    // Keep the old media row as an alias anchor for old Drive segments/devices.
+    await database
+        .into(database.mediaAliasRecords)
+        .insertOnConflictUpdate(
+          MediaAliasRecordsCompanion.insert(
+            alias: old,
+            localId: root,
+            createdAtMs: DateTime.now().toUtc().millisecondsSinceEpoch,
+          ),
+        );
+    final journal = await loadJournal();
+    await _writeBucketLocked('tracking.journal', [
+      for (final job in journal)
+        (job.identity.localId == old
+                ? job.withIdentity(job.identity.withLocalId(root))
+                : job)
+            .toJson(),
+    ]);
+    final favorites = await loadFavorites();
+    final byIdentity = <String, LocalMediaFavoriteState>{};
+    for (var favorite in favorites) {
+      if (favorite.identity.localId == old) {
+        favorite = favorite.withIdentity(favorite.identity.withLocalId(root));
+      }
+      final key = favorite.identity.localId;
+      if (byIdentity[key] == null ||
+          favorite.updatedAt.isAfter(byIdentity[key]!.updatedAt)) {
+        byIdentity[key] = favorite;
+      }
+    }
+    await _writeBucketLocked(
+      'tracking.favorites',
+      byIdentity.values.map((f) => f.toJson()).toList(),
+    );
+    await (database.update(
+      database.canonicalLibraryRecords,
+    )..where((t) => t.localId.equals(root))).write(
+      CanonicalLibraryRecordsCompanion(
+        canonicalStateJson: Value(jsonEncode(state.toJson())),
+        fieldRevisionsJson: Value(jsonEncode(revisions)),
+        watchCycle: Value(
+          target.watchCycle > duplicate.watchCycle
+              ? target.watchCycle
+              : duplicate.watchCycle,
+        ),
+        favorite: Value(byIdentity[root]?.favorite ?? target.favorite),
+      ),
+    );
+    await (database.delete(
+      database.canonicalLibraryRecords,
+    )..where((t) => t.localId.equals(old))).go();
   }
 
   Future<void> _upsertProviderSnapshotLocked({
@@ -2111,6 +2327,21 @@ class CanonicalLibraryRepository {
           identity: incoming.identity,
           mediaItem: incoming.mediaItem,
         );
+        bool ambiguous = false;
+        for (final provider in TrackerSource.values) {
+          final id = incoming.identity.idFor(provider);
+          if (id == null) continue;
+          final binding =
+              await (database.select(database.providerBindingRecords)..where(
+                    (table) =>
+                        table.provider.equals(provider.name) &
+                        table.mediaKind.equals(mediaKind) &
+                        table.externalMediaId.equals(id),
+                  ))
+                  .getSingleOrNull();
+          if (binding != null && binding.localId != localId) ambiguous = true;
+        }
+        if (ambiguous) continue;
         final MediaIdentity identity = MediaIdentity(
           localId: localId,
           kind: incoming.identity.mediaKind,
@@ -2135,6 +2366,14 @@ class CanonicalLibraryRepository {
         }
       }
 
+      // Exact-identity repair may have merged rows and re-pointed journal aliases.
+      // Never save the pre-repair list back over those verified changes.
+      states
+        ..clear()
+        ..addAll(await loadTrackingStates());
+      liveJournal
+        ..clear()
+        ..addAll(await loadJournal());
       if (accountCursor == null) {
         for (final MapEntry<String, UserMediaState> incoming
             in incomingByLocal.entries) {
@@ -2215,17 +2454,20 @@ class CanonicalLibraryRepository {
         return ProviderReconciliationResult(
           states: states,
           journal: liveJournal,
-          requiresAccountApproval: accountCursor.cursor == 'pending',
+          requiresAccountApproval: true,
         );
       }
 
-      final bool forceInitialImport = accountMetadata['initialImport'] == true;
+      final importedKinds = _dynamicStringSet(
+        accountMetadata['importedMediaKinds'],
+      );
+      final bool forceInitialImport =
+          accountMetadata['initialImport'] == true ||
+          !importedKinds.contains(mediaKind);
       final List<_ReconciliationProposal> safeProposals =
           <_ReconciliationProposal>[];
-      final List<_ReconciliationProposal> destructiveProposals =
-          <_ReconciliationProposal>[];
-      final Map<String, int> confirmationCounts = <String, int>{};
-      final Map<String, String> incomingHashes = <String, String>{};
+      int pendingDeletions = 0;
+      int pendingChanges = 0;
 
       for (final MapEntry<String, UserMediaState> incomingEntry
           in incomingByLocal.entries) {
@@ -2246,22 +2488,55 @@ class CanonicalLibraryRepository {
           incoming,
           source,
         );
-        if (changed.fields.isEmpty &&
-            (previousRow?.destructiveConfirmationCount ?? 0) > 0 &&
-            current != null) {
-          changed = _providerPatchBetween(current, incoming, source);
+        if (current == null) {
+          final deleted = await (database.select(
+            database.canonicalLibraryRecords,
+          )..where((table) => table.localId.equals(localId))).getSingleOrNull();
+          if (deleted != null && !deleted.inLibrary) {
+            final remoteMs =
+                (incoming.providerStates[source]?.updatedAt ??
+                        incoming.updatedAt)
+                    .toUtc()
+                    .millisecondsSinceEpoch;
+            final deletedMs = _revisionEditTime(
+              _jsonMap(deleted.fieldRevisionsJson)['membership'],
+            );
+            if (remoteMs <= 0 || deletedMs <= 0 || remoteMs == deletedMs) {
+              await _recordProviderReviewLocked(
+                localId: localId,
+                field: 'membership',
+                source: source,
+                accountId: accountId,
+                current: null,
+                incoming: incoming,
+                reason:
+                    'Catalog membership conflicts with a local deletion without a newer edit date.',
+              );
+              continue;
+            }
+            if (remoteMs < deletedMs) continue;
+          }
         }
-        final SyncJournalEntry? pending = _pendingForProvider(
-          liveJournal,
-          incoming.identity,
-          source,
-        );
-        if (pending != null && !pending.patch.delete) {
-          changed = _patchSubset(
-            changed,
-            <UserMediaField>{...changed.fields}
-              ..removeAll(pending.patch.fields),
-          );
+        final reviews =
+            await (database.select(database.libraryConflictRecords)..where(
+                  (table) =>
+                      table.localId.equals(localId) &
+                      table.state.equals('open'),
+                ))
+                .get();
+        final reviewedFields = reviews
+            .where(
+              (row) =>
+                  _jsonMap(row.incomingValueJson)['provider'] == source.name &&
+                  _jsonMap(row.incomingValueJson)['accountId'] == accountId,
+            )
+            .map((row) => _fieldFromPersistedName(row.fieldName))
+            .whereType<UserMediaField>()
+            .toSet();
+        if (current != null &&
+            ((previousRow?.destructiveConfirmationCount ?? 0) > 0 ||
+                reviewedFields.isNotEmpty)) {
+          changed = _providerPatchBetween(current, incoming, source);
         }
 
         if (current != null &&
@@ -2299,65 +2574,110 @@ class CanonicalLibraryRepository {
             database.canonicalLibraryRecords,
           )..where((table) => table.localId.equals(localId))).getSingleOrNull();
           final revisions = _jsonMap(row?.fieldRevisionsJson);
-          changed = _patchSubset(
-            changed,
-            changed.fields.where((field) {
-              if (forceInitialImport &&
-                  _revisionOrigins(
-                    revisions[field.name],
-                  ).any((origin) => origin == 'user' || origin == 'undo')) {
-                return false;
-              }
-              return !_jsonEquivalent(
-                _canonicalFieldValue(
-                  field.name,
-                  current,
-                  membership: true,
-                  favorite: row?.favorite ?? false,
-                ),
-                _canonicalFieldValue(
-                  field.name,
-                  incoming,
-                  membership: true,
-                  favorite: row?.favorite ?? false,
-                ),
+          final remoteEdit =
+              incoming.providerStates[source]?.updatedAt ?? incoming.updatedAt;
+          final remoteMs = remoteEdit.toUtc().millisecondsSinceEpoch;
+          final acceptedFields = <UserMediaField>{};
+          bool needsReview = false;
+          for (final field in changed.fields) {
+            if (providerConfirmsPatch(
+              _patchFromState(current, {field}),
+              incoming,
+              source,
+            )) {
+              await _resolveProviderReviewsLocked(
+                localId,
+                field.name,
+                source,
+                accountId,
               );
-            }).toSet(),
-          );
+              continue;
+            }
+            final firstObservation =
+                revisions[field.name] == null &&
+                !liveJournal.any(
+                  (job) =>
+                      job.identity.matches(current.identity) &&
+                      job.patch.touches(field),
+                ) &&
+                ((current.providerStates[source] != null &&
+                        !providerReturnedField(current, source, field)) ||
+                    (current.providerStates[source] == null &&
+                        !providerEntryFields(
+                          current.source,
+                          mediaKind: current.identity.mediaKind,
+                        ).contains(field)));
+            if (firstObservation && remoteMs > 0) {
+              // A previously absent field has no local edit to supersede.
+              // Another field's edit time must not turn a default into a clear.
+              acceptedFields.add(field);
+              await _resolveProviderReviewsLocked(
+                localId,
+                field.name,
+                source,
+                accountId,
+              );
+              continue;
+            }
+            int localMs = _revisionEditTime(revisions[field.name]);
+            for (final job in liveJournal) {
+              if (revisions[field.name] == null &&
+                  job.identity.matches(incoming.identity) &&
+                  job.patch.touches(field) &&
+                  job.updatedAt.millisecondsSinceEpoch > localMs) {
+                localMs = job.updatedAt.millisecondsSinceEpoch;
+              }
+            }
+            if (localMs == 0 && revisions[field.name] == null) {
+              localMs = current.updatedAt.millisecondsSinceEpoch;
+            }
+            if (remoteMs > 0 && localMs > 0 && remoteMs > localMs) {
+              acceptedFields.add(field);
+              await _resolveProviderReviewsLocked(
+                localId,
+                field.name,
+                source,
+                accountId,
+              );
+            } else if (remoteMs <= 0 || localMs <= 0 || remoteMs == localMs) {
+              needsReview = true;
+              await _recordProviderReviewLocked(
+                localId: localId,
+                field: field.name,
+                source: source,
+                accountId: accountId,
+                current: current,
+                incoming: incoming,
+                reason: remoteMs <= 0
+                    ? 'Catalog did not provide an edit date.'
+                    : localMs <= 0
+                    ? 'Local edit date is unknown; review this change.'
+                    : 'Different values have the same edit date.',
+              );
+            } else {
+              await _queueCanonicalRepairLocked(
+                current,
+                field,
+                revisions[field.name],
+                source,
+                accountId,
+                liveJournal,
+              );
+            }
+          }
+          if (needsReview) pendingChanges++;
+          changed = _patchSubset(changed, acceptedFields);
         }
 
-        final String hash = _stateHash(incoming);
-        incomingHashes[localId] = hash;
-        final Set<UserMediaField> destructiveFields = current == null
-            ? <UserMediaField>{}
-            : _destructiveFields(current, changed);
-        final Set<UserMediaField> safeFields = <UserMediaField>{
-          ...changed.fields,
-        }..removeAll(destructiveFields);
-        if (safeFields.isNotEmpty ||
-            (current == null && changed.fields.isNotEmpty)) {
+        // A verified newer edit is valid even when progress decreases or a
+        // date is explicitly cleared. Counts do not establish data loss.
+        if (changed.fields.isNotEmpty) {
           safeProposals.add(
             _ReconciliationProposal(
               localId: localId,
               current: current,
               incoming: incoming,
-              patch: _patchSubset(changed, safeFields),
-            ),
-          );
-        }
-        if (destructiveFields.isNotEmpty) {
-          final int confirmations = previousRow?.contentHash == hash
-              ? previousRow!.destructiveConfirmationCount + 1
-              : 1;
-          confirmationCounts[localId] = confirmations;
-          destructiveProposals.add(
-            _ReconciliationProposal(
-              localId: localId,
-              current: current,
-              incoming: incoming,
-              patch: _patchSubset(changed, destructiveFields),
-              destructive: true,
-              confirmationCount: confirmations,
+              patch: changed,
             ),
           );
         }
@@ -2377,50 +2697,34 @@ class CanonicalLibraryRepository {
           source,
         );
         if (pending != null && !pending.patch.delete) continue;
-        final int confirmations = previousRow.contentHash == '__missing__'
-            ? previousRow.destructiveConfirmationCount + 1
-            : 1;
-        confirmationCounts[previousRow.localId] = confirmations;
-        incomingHashes[previousRow.localId] = '__missing__';
-        destructiveProposals.add(
-          _ReconciliationProposal(
-            localId: previousRow.localId,
-            current: current,
-            patch: UserMediaPatch(delete: true),
-            destructive: true,
-            remove: true,
-            confirmationCount: confirmations,
-          ),
+        await _recordProviderReviewLocked(
+          localId: previousRow.localId,
+          field: 'membership',
+          source: source,
+          accountId: accountId,
+          current: current,
+          incoming: null,
+          reason:
+              'Missing from the complete catalog list; deletion has no edit date.',
         );
+        pendingDeletions++;
+        continue;
       }
 
-      final int totalChanges =
-          safeProposals.length + destructiveProposals.length;
-      final bool massQuarantine =
-          !forceInitialImport &&
-          (destructiveProposals.length >= 10 || totalChanges >= 25);
-      if (massQuarantine) {
-        final String localId = (safeProposals.isNotEmpty
-            ? safeProposals.first.localId
-            : destructiveProposals.first.localId);
-        await database
-            .into(database.libraryConflictRecords)
-            .insert(
-              LibraryConflictRecordsCompanion.insert(
-                conflictId: _uuid.v7(),
-                localId: localId,
-                fieldName: 'massProviderChange',
-                localValueJson: jsonEncode(<String, dynamic>{
-                  'provider': source.name,
-                  'accountId': accountId,
-                }),
-                incomingValueJson: jsonEncode(<String, dynamic>{
-                  'changes': totalChanges,
-                  'destructive': destructiveProposals.length,
-                }),
-                createdAtMs: nowMs,
-              ),
-            );
+      // Old count-only warnings are superseded by the per-entry review above.
+      final legacyWarnings =
+          await (database.select(database.libraryConflictRecords)..where(
+                (table) =>
+                    table.fieldName.equals('massProviderChange') &
+                    table.state.equals('open'),
+              ))
+              .get();
+      for (final warning in legacyWarnings) {
+        final scope = _jsonMap(warning.localValueJson);
+        if (scope['provider'] == source.name &&
+            scope['accountId'] == accountId) {
+          await _markConflictResolvedLocked(warning.conflictId);
+        }
       }
 
       for (final MapEntry<String, UserMediaState> incoming
@@ -2430,64 +2734,34 @@ class CanonicalLibraryRepository {
           source: source,
           accountId: accountId,
           state: incoming.value,
-          destructiveConfirmationCount: confirmationCounts[incoming.key] ?? 0,
+          destructiveConfirmationCount: 0,
           fetchedAt: now,
         );
-      }
-      for (final ProviderSnapshotRecord previousRow in previousRows) {
-        if (incomingHashes[previousRow.localId] != '__missing__') continue;
-        await (database.update(database.providerSnapshotRecords)..where(
-              (ProviderSnapshotRecords table) =>
-                  table.snapshotId.equals(previousRow.snapshotId),
-            ))
-            .write(
-              ProviderSnapshotRecordsCompanion(
-                normalizedJson: const Value<String>('{"deleted":true}'),
-                rawJson: const Value<String>('{"deleted":true}'),
-                contentHash: const Value<String>('__missing__'),
-                fetchedAtMs: Value<int>(nowMs),
-                destructiveConfirmationCount: Value<int>(
-                  confirmationCounts[previousRow.localId] ?? 1,
-                ),
-              ),
-            );
       }
 
       List<SyncJournalEntry> nextJournal = <SyncJournalEntry>[...liveJournal];
       int importedChanges = 0;
-      if (!massQuarantine) {
-        final List<_ReconciliationProposal> accepted =
-            <_ReconciliationProposal>[
-              ...safeProposals,
-              ...destructiveProposals.where(
-                (_ReconciliationProposal proposal) =>
-                    proposal.confirmationCount >= 2,
-              ),
-            ];
-        for (final _ReconciliationProposal proposal in accepted) {
+      {
+        for (final _ReconciliationProposal proposal in safeProposals) {
           final UserMediaState? before = proposal.current;
           UserMediaState? after;
           final int? knownTotal =
               proposal.incoming?.mediaItem.episodeCount ??
               before?.mediaItem.episodeCount;
           final bool repairsCompletedProgress =
-              !proposal.remove &&
               proposal.incoming?.identity.mediaKind == 'anime' &&
               proposal.incoming?.status == AniListListStatus.completed &&
               knownTotal != null &&
               knownTotal > 0 &&
               (proposal.incoming?.progress ?? 0) < knownTotal;
-          final bool addsFinishDate =
-              !proposal.remove &&
-              proposal.incoming?.status == AniListListStatus.completed &&
-              proposal.incoming?.completedAt == null &&
-              before?.completedAt == null;
-          final UserMediaPatch acceptedPatch =
-              repairsCompletedProgress || addsFinishDate
+          final DateTime editAt =
+              proposal.incoming?.providerStates[source]?.updatedAt ??
+              proposal.incoming?.updatedAt ??
+              now;
+          final UserMediaPatch acceptedPatch = repairsCompletedProgress
               ? proposal.patch.mergedWith(
                   UserMediaPatch(
                     progress: repairsCompletedProgress ? knownTotal : null,
-                    completedAt: addsFinishDate ? now : null,
                   ),
                 )
               : proposal.patch;
@@ -2495,21 +2769,20 @@ class CanonicalLibraryRepository {
             ...propagationTargets,
             if (repairsCompletedProgress) source,
           };
-          if (proposal.remove) {
-            states.removeWhere(
-              (UserMediaState state) =>
-                  state.identity.localId == proposal.localId,
-            );
-          } else if (before == null) {
+          if (before == null) {
             after = proposal.incoming;
-            if (repairsCompletedProgress || addsFinishDate) {
-              after = after!.apply(acceptedPatch, now, providerSource: source);
+            if (repairsCompletedProgress) {
+              after = after!.apply(
+                acceptedPatch,
+                editAt,
+                providerSource: source,
+              );
             }
             states.add(after!);
           } else {
             final ProviderUserMediaState? providerSnapshot =
                 proposal.incoming?.providerStates[source];
-            after = before.apply(acceptedPatch, now, providerSource: source);
+            after = before.apply(acceptedPatch, editAt, providerSource: source);
             if (providerSnapshot != null) {
               final MediaIdentity mergedIdentity = before.identity.merge(
                 proposal.incoming!.identity,
@@ -2543,25 +2816,56 @@ class CanonicalLibraryRepository {
             );
             states[index] = after;
           }
-          final UserMediaPatch outboundPatch = proposal.remove
-              ? UserMediaPatch(delete: true)
-              : acceptedPatch;
+          final UserMediaPatch outboundPatch = acceptedPatch;
           final String operationId = const Uuid().v7();
+          // Retire only older fields actually superseded by this catalog edit.
+          for (int i = nextJournal.length - 1; i >= 0; i--) {
+            final job = nextJournal[i];
+            if (!job.identity.matches(after.identity) ||
+                !job.updatedAt.isBefore(editAt) ||
+                job.patch.delete) {
+              continue;
+            }
+            final remaining = job.patch.fields.difference(acceptedPatch.fields);
+            if (remaining.length == job.patch.fields.length) continue;
+            if (remaining.isEmpty) {
+              nextJournal.removeAt(i);
+              if (job.operationId != null) {
+                await (database.update(database.outboxDeliveryRecords)..where(
+                      (table) =>
+                          table.operationId.equals(job.operationId!) &
+                          table.target.isNotValue('drive') &
+                          table.state.isNotValue('confirmed'),
+                    ))
+                    .write(
+                      const OutboxDeliveryRecordsCompanion(
+                        state: Value('superseded'),
+                        lastError: Value('Replaced by a newer catalog edit.'),
+                      ),
+                    );
+              }
+            } else {
+              nextJournal[i] = SyncJournalEntry.fromJson({
+                ...job.toJson(),
+                'patch': _patchSubset(job.patch, remaining).toJson(),
+              });
+            }
+          }
           // The first import must have a row BEFORE assigning its revisions.
           // Otherwise the next user action gets a null causal base on A while
           // B has already received the initial import's revision.
-          if (after != null) await _upsertTrackingStateLocked(after);
+          await _upsertTrackingStateLocked(after);
           if (outboundTargets.isNotEmpty) {
             nextJournal = _mergeJournalMutation(
               nextJournal,
               SyncJournalEntry(
                 operationId: operationId,
-                identity: after?.identity ?? before!.identity,
+                identity: after.identity,
                 patch: outboundPatch,
                 pendingTargets: outboundTargets,
-                createdAt: now,
-                updatedAt: now,
-                mediaTitle: after?.mediaItem.title ?? before?.mediaItem.title,
+                createdAt: editAt,
+                updatedAt: editAt,
+                mediaTitle: after.mediaItem.title,
                 targetAccountIds: <TrackerSource, String>{
                   for (final TrackerSource target in outboundTargets)
                     if (target == source)
@@ -2578,27 +2882,23 @@ class CanonicalLibraryRepository {
               localId: proposal.localId,
               originKind: LibraryOriginKind.provider,
               originId: '${source.name}:$accountId',
-              intent: proposal.remove
-                  ? LibraryMutationIntent.remove
-                  : LibraryMutationIntent.remoteImport,
+              intent: LibraryMutationIntent.remoteImport,
               fields: <String>{
                 ...acceptedPatch.fields.map(
                   (UserMediaField field) => field.name,
                 ),
-                if (before == null && after != null) 'membership',
-                if (proposal.remove) 'membership',
+                if (before == null) 'membership',
               },
               before: <String, dynamic>{
                 if (before != null) 'state': before.toJson(),
               },
-              after: <String, dynamic>{
-                if (after != null) 'state': after.toJson(),
-              },
+              after: <String, dynamic>{'state': after.toJson()},
               targets: outboundTargets
                   .map((TrackerSource target) => target.name)
                   .toSet(),
-              occurredAt: now,
-              title: after?.mediaItem.title ?? before?.mediaItem.title,
+              occurredAt: editAt,
+              editTimeVerified: editAt.millisecondsSinceEpoch > 0,
+              title: after.mediaItem.title,
               targetAccountIds: <String, String>{
                 for (final TrackerSource target in outboundTargets)
                   if (target == source)
@@ -2618,9 +2918,13 @@ class CanonicalLibraryRepository {
       }
 
       accountMetadata['initialImport'] = false;
+      accountMetadata['importedMediaKinds'] = ({
+        ...importedKinds,
+        mediaKind,
+      }.toList()..sort());
       accountMetadata['lastEntryCount'] = incomingByLocal.length;
       accountMetadata['lastSyncAt'] = now.toIso8601String();
-      accountMetadata['quarantined'] = massQuarantine;
+      accountMetadata['quarantined'] = false;
       await database
           .into(database.syncCursorRecords)
           .insertOnConflictUpdate(
@@ -2634,14 +2938,9 @@ class CanonicalLibraryRepository {
       return ProviderReconciliationResult(
         states: states,
         journal: nextJournal,
-        quarantined: massQuarantine,
+        quarantined: false,
         importedChanges: importedChanges,
-        destructiveChangesPending: destructiveProposals
-            .where(
-              (_ReconciliationProposal proposal) =>
-                  proposal.confirmationCount < 2,
-            )
-            .length,
+        destructiveChangesPending: pendingDeletions + pendingChanges,
       );
     });
   }
@@ -2654,6 +2953,54 @@ class CanonicalLibraryRepository {
     required int destructiveConfirmationCount,
     required DateTime fetchedAt,
   }) async {
+    final fields = providerEntryFields(
+      source,
+      mediaKind: state.identity.mediaKind,
+    );
+    final fresh = fields
+        .where((field) => providerReturnedField(state, source, field))
+        .toSet();
+    final previousRow =
+        await (database.select(database.providerSnapshotRecords)..where(
+              (table) =>
+                  table.snapshotId.equals('${source.name}:$accountId:$localId'),
+            ))
+            .getSingleOrNull();
+    final previous = previousRow == null
+        ? null
+        : _providerStateFromSnapshot(previousRow);
+    final known = previous == null
+        ? <UserMediaField>{}
+        : fields
+              .where(
+                (field) =>
+                    _providerPreviouslyObservedField(previous, source, field),
+              )
+              .toSet();
+    // Preserve previously observed values across partial responses, but keep
+    // their freshness separate so delivery waits for a current observation.
+    if (previous != null) {
+      state = state.apply(
+        _patchFromState(previous, known.difference(fresh)),
+        state.updatedAt,
+        providerSource: source,
+      );
+    }
+    final json = state.toJson();
+    final providerJson = Map<String, dynamic>.from(
+      (json['providerStates'] as Map)[source.name] as Map? ?? {},
+    );
+    providerJson['provider'] = source.name;
+    providerJson['data'] = <String, dynamic>{
+      ...?providerJson['data'] as Map?,
+      'presentFields': fresh.map((field) => field.name).toList(),
+      'knownFields': {...known, ...fresh}.map((field) => field.name).toList(),
+    };
+    json['providerStates'] = <String, dynamic>{
+      ...json['providerStates'] as Map,
+      source.name: providerJson,
+    };
+    state = UserMediaState.fromJson(json);
     final String normalized = jsonEncode(state.toJson());
     final ProviderUserMediaState? providerState = state.providerStates[source];
     final String raw = jsonEncode(providerState?.toJson() ?? state.toJson());
@@ -2678,12 +3025,479 @@ class CanonicalLibraryRepository {
         );
   }
 
+  Future<Set<UserMediaField>> unobservedDeliveryFields(
+    SyncJournalEntry mutation,
+    TrackerSource source,
+    String accountId,
+  ) async {
+    await initialize();
+    if (mutation.patch.delete) return const {};
+    final localId = await _localIdForIdentityLocked(mutation.identity);
+    if (localId == null) return const {};
+    final row =
+        await (database.select(database.providerSnapshotRecords)..where(
+              (table) =>
+                  table.localId.equals(localId) &
+                  table.provider.equals(source.name) &
+                  table.accountId.equals(accountId),
+            ))
+            .getSingleOrNull();
+    final snapshot = row == null ? null : _providerStateFromSnapshot(row);
+    // A title absent from a complete reconciled list is a legitimate new add.
+    if (snapshot == null) return const {};
+    return mutation.patch.fields
+        .intersection(
+          providerEntryFields(source, mediaKind: mutation.identity.mediaKind),
+        )
+        .where((field) => !providerReturnedField(snapshot, source, field))
+        .toSet();
+  }
+
   Future<List<SyncJournalEntry>> loadJournal() =>
       _loadBucket('tracking.journal', SyncJournalEntry.fromJson);
+
+  Future<Map<String, dynamic>> loadProviderFieldCache(
+    String provider,
+    String accountId,
+    String kind,
+  ) async {
+    await initialize();
+    final row =
+        await (database.select(database.legacyBucketRecords)..where(
+              (table) => table.bucket.equals(
+                'provider-fields:$provider:$accountId:$kind',
+              ),
+            ))
+            .getSingleOrNull();
+    return _jsonMap(row?.valueJson);
+  }
+
+  Future<void> saveProviderFieldCache(
+    String provider,
+    String accountId,
+    String kind,
+    Map<String, dynamic> fields,
+  ) => _writeBucket('provider-fields:$provider:$accountId:$kind', fields);
 
   /// One-time best-effort recovery of the pre-v2 title-coalesced queue. Old
   /// SQLite operation/outbox rows are authoritative when they still exist;
   /// otherwise the old journal remains intact and is read back before write.
+  Future<void> _resolveProviderReviewsLocked(
+    String localId,
+    String field,
+    TrackerSource source,
+    String accountId,
+  ) async {
+    final rows =
+        await (database.select(database.libraryConflictRecords)..where(
+              (table) =>
+                  table.localId.equals(localId) &
+                  table.fieldName.equals(field) &
+                  table.state.equals('open'),
+            ))
+            .get();
+    for (final row in rows) {
+      final value = _jsonMap(row.incomingValueJson);
+      if (value['provider'] == source.name && value['accountId'] == accountId) {
+        await _markConflictResolvedLocked(row.conflictId);
+      }
+    }
+  }
+
+  Future<void> _recordProviderReviewLocked({
+    required String localId,
+    required String field,
+    required TrackerSource source,
+    required String accountId,
+    required UserMediaState? current,
+    required UserMediaState? incoming,
+    required String reason,
+  }) async {
+    final rows =
+        await (database.select(database.libraryConflictRecords)..where(
+              (table) =>
+                  table.localId.equals(localId) &
+                  table.fieldName.equals(field) &
+                  table.state.equals('open'),
+            ))
+            .get();
+    final canonical = await (database.select(
+      database.canonicalLibraryRecords,
+    )..where((table) => table.localId.equals(localId))).getSingleOrNull();
+    final localMs = _revisionEditTime(
+      _jsonMap(canonical?.fieldRevisionsJson)[field],
+    );
+    final value = <String, dynamic>{
+      'provider': source.name,
+      'accountId': accountId,
+      'reason': reason,
+      'title': incoming?.mediaItem.title ?? current?.mediaItem.title,
+      if (incoming != null) 'state': incoming.toJson(),
+      'editAt':
+          (incoming?.providerStates[source]?.updatedAt ?? incoming?.updatedAt)
+              ?.toIso8601String(),
+      if (localMs > 0)
+        'localEditAt': DateTime.fromMillisecondsSinceEpoch(
+          localMs,
+          isUtc: true,
+        ).toIso8601String(),
+      if (incoming != null) 'catalogIds': incoming.identity.toJson(),
+    };
+    final existing = rows.where((row) {
+      final scope = _jsonMap(row.incomingValueJson);
+      return scope['provider'] == source.name &&
+          scope['accountId'] == accountId;
+    }).firstOrNull;
+    if (existing != null) {
+      await (database.update(
+        database.libraryConflictRecords,
+      )..where((table) => table.conflictId.equals(existing.conflictId))).write(
+        LibraryConflictRecordsCompanion(
+          incomingValueJson: Value(jsonEncode(value)),
+        ),
+      );
+      return;
+    }
+    await database
+        .into(database.libraryConflictRecords)
+        .insert(
+          LibraryConflictRecordsCompanion.insert(
+            conflictId: _uuid.v7(),
+            localId: localId,
+            fieldName: field,
+            localValueJson: jsonEncode({'state': current?.toJson()}),
+            incomingValueJson: jsonEncode(value),
+            createdAtMs: DateTime.now().toUtc().millisecondsSinceEpoch,
+          ),
+        );
+  }
+
+  // Re-send the winning operation, without stamping a repair as a new edit.
+  Future<void> _queueCanonicalRepairLocked(
+    UserMediaState current,
+    UserMediaField field,
+    Object? revision,
+    TrackerSource source,
+    String accountId,
+    List<SyncJournalEntry> journal,
+  ) async {
+    if (journal.any(
+      (job) =>
+          job.identity.matches(current.identity) &&
+          job.tracks(source) &&
+          (job.targetAccountIds[source] == null ||
+              job.targetAccountIds[source] == accountId) &&
+          job.patch.touches(field),
+    )) {
+      return;
+    }
+    final leaves = _revisionLeaves(revision).map(_jsonMap).toList()
+      ..sort((a, b) => _revisionEditTime(b).compareTo(_revisionEditTime(a)));
+    if (leaves.isEmpty) return;
+    final operationId = leaves.first['operationId']?.toString();
+    final operation = operationId == null
+        ? null
+        : await (database.select(database.libraryOperationRecords)
+                ..where((table) => table.operationId.equals(operationId)))
+              .getSingleOrNull();
+    if (operation == null) return;
+    final at = DateTime.fromMillisecondsSinceEpoch(
+      _revisionEditTime(revision),
+      isUtc: true,
+    );
+    final existing = journal.indexWhere(
+      (job) =>
+          job.operationId == operationId &&
+          (job.targetAccountIds[source] == null ||
+              job.targetAccountIds[source] == accountId),
+    );
+    final patch = _patchFromState(current, {field});
+    if (existing < 0) {
+      journal.add(
+        SyncJournalEntry(
+          operationId: operationId,
+          identity: current.identity,
+          patch: patch,
+          pendingTargets: {source},
+          createdAt: at,
+          updatedAt: at,
+          mediaTitle: current.mediaItem.title,
+          targetAccountIds: {source: accountId},
+        ),
+      );
+    } else {
+      final job = journal[existing];
+      journal[existing] = SyncJournalEntry.fromJson({
+        ...job.toJson(),
+        'patch': job.patch.mergedWith(patch).toJson(),
+        'pendingTargets': {
+          ...job.pendingTargets,
+          source,
+        }.map((target) => target.name).toList(),
+        'targetAccountIds': {
+          ...job.targetAccountIds.map(
+            (key, value) => MapEntry(key.name, value),
+          ),
+          source.name: accountId,
+        },
+      });
+    }
+    await database
+        .into(database.outboxDeliveryRecords)
+        .insertOnConflictUpdate(
+          OutboxDeliveryRecordsCompanion.insert(
+            deliveryId: '$operationId:${source.name}:$accountId:reconcile',
+            operationId: operation.operationId,
+            target: source.name,
+            accountId: Value(accountId),
+            state: 'pending',
+            lastError: const Value(
+              'Catalog has an older edit; queued the current canonical value.',
+            ),
+          ),
+        );
+  }
+
+  Future<void> compactPendingDeliveries(
+    TrackerSource source,
+    String accountId,
+  ) async {
+    await initialize();
+    await database.transaction(() async {
+      final journal = await loadJournal();
+      final states = {
+        for (final state in await loadTrackingStates())
+          state.identity.localId: state,
+      };
+      final blocked = await unresolvedProviderDeliveryBlocks({
+        source: accountId,
+      });
+      final conflicts = await unresolvedConflictLocalOperationIds();
+      final groups = <String, int>{};
+      for (int i = 0; i < journal.length; i++) {
+        final job = journal[i];
+        final id = await _localIdForIdentityLocked(job.identity);
+        if (id == null || !job.tracks(source)) continue;
+        if (job.patch.delete ||
+            job.patch.touches(UserMediaField.favorite) ||
+            job.awaitingRemoteTargets.contains(source) ||
+            job.readbackBeforeWrite ||
+            job.operationId == null ||
+            conflicts.contains(job.operationId) ||
+            blocked.contains((id, source)) ||
+            (job.targetAccountIds[source] != null &&
+                job.targetAccountIds[source] != accountId)) {
+          groups.remove(id);
+          continue;
+        }
+        final previous = groups[id];
+        final state = states[id];
+        if (previous != null && state != null) {
+          final old = journal[previous];
+          final patch = _patchFromState(state, {
+            ...old.patch.fields,
+            ...job.patch.fields,
+          });
+          journal[i] = SyncJournalEntry.fromJson({
+            ...job.toJson(),
+            'patch': patch.toJson(),
+          });
+          journal[previous] = old.deliveredTo(source).confirmedBy(source);
+          await (database.update(database.outboxDeliveryRecords)..where(
+                (table) =>
+                    table.operationId.equals(old.operationId!) &
+                    table.target.equals(source.name) &
+                    (table.accountId.equals(accountId) |
+                        table.accountId.isNull()) &
+                    table.state.isNotValue('confirmed'),
+              ))
+              .write(
+                const OutboxDeliveryRecordsCompanion(
+                  state: Value('superseded'),
+                  lastError: Value(
+                    'Combined into the newest queued edit for this title.',
+                  ),
+                ),
+              );
+        }
+        groups[id] = i;
+      }
+      await _writeBucketLocked(
+        'tracking.journal',
+        journal
+            .where((job) => !job.isSettled)
+            .map((job) => job.toJson())
+            .toList(),
+      );
+    });
+  }
+
+  /// Rebuild missing transport jobs only from durable operations and current
+  /// field revisions. Obsolete values are never replayed merely to clear a log.
+  Future<void> recoverIndependentSyncBacklog() async {
+    await initialize();
+    if (await hasMigration('sync.independent.v3')) return;
+    await database.transaction(() async {
+      final journal = await loadJournal();
+      final claimed = journal
+          .map((job) => job.operationId)
+          .whereType<String>()
+          .toSet();
+      final history = await database
+          .select(database.libraryOperationRecords)
+          .get();
+      final byId = {for (final op in history) op.operationId: op};
+      Object? normalize(Object? value) {
+        if (value is List) return value.map(normalize).toList();
+        if (value is! Map) return value;
+        final leaf = Map<String, dynamic>.from(value);
+        if (leaf['origin'] != 'provider' ||
+            leaf.containsKey('editTimeVerified')) {
+          return leaf;
+        }
+        final op = byId[leaf['operationId']];
+        final after = _jsonMap(op?.afterJson)['state'];
+        final provider = op?.originId?.split(':').first;
+        final providers = after is Map ? after['providerStates'] : null;
+        final data = providers is Map ? providers[provider] : null;
+        final time = data is Map
+            ? DateTime.tryParse('${data['updatedAt'] ?? ''}')
+            : null;
+        leaf['occurredAtMs'] = time?.toUtc().millisecondsSinceEpoch ?? 0;
+        leaf['editTimeVerified'] = time != null;
+        return leaf;
+      }
+
+      for (final op in history) {
+        final before = _jsonMap(
+          op.baseRevisionsJson,
+        ).map((key, value) => MapEntry(key, normalize(value)));
+        final after = _jsonMap(
+          op.resultingRevisionsJson,
+        ).map((key, value) => MapEntry(key, normalize(value)));
+        if (!_jsonEquivalent(before, _jsonMap(op.baseRevisionsJson)) ||
+            !_jsonEquivalent(after, _jsonMap(op.resultingRevisionsJson))) {
+          await (database.update(
+            database.libraryOperationRecords,
+          )..where((table) => table.operationId.equals(op.operationId))).write(
+            LibraryOperationRecordsCompanion(
+              baseRevisionsJson: Value(jsonEncode(before)),
+              resultingRevisionsJson: Value(jsonEncode(after)),
+            ),
+          );
+        }
+      }
+      final rows = await database
+          .select(database.canonicalLibraryRecords)
+          .get();
+      for (final row in rows) {
+        final revisions = _jsonMap(
+          row.fieldRevisionsJson,
+        ).map((key, value) => MapEntry(key, normalize(value)));
+        if (!_jsonEquivalent(revisions, _jsonMap(row.fieldRevisionsJson))) {
+          await (database.update(
+            database.canonicalLibraryRecords,
+          )..where((table) => table.localId.equals(row.localId))).write(
+            CanonicalLibraryRecordsCompanion(
+              fieldRevisionsJson: Value(jsonEncode(revisions)),
+            ),
+          );
+        }
+      }
+      final byLocal = {
+        for (final row
+            in await database.select(database.canonicalLibraryRecords).get())
+          row.localId: row,
+      };
+      final pending =
+          await (database.select(database.outboxDeliveryRecords)..where(
+                (table) =>
+                    table.target.isNotValue('drive') &
+                    table.state.isNotIn([
+                      'confirmed',
+                      'superseded',
+                      'unsupported',
+                    ]),
+              ))
+              .get();
+      for (final op
+          in history
+            ..sort((a, b) => a.occurredAtMs.compareTo(b.occurredAtMs))) {
+        if (claimed.contains(op.operationId)) continue;
+        final deliveries = pending
+            .where((delivery) => delivery.operationId == op.operationId)
+            .toList();
+        final row = byLocal[op.localId];
+        if (deliveries.isEmpty || row == null) continue;
+        final current = UserMediaState.fromJson(
+          _jsonMap(row.canonicalStateJson),
+        );
+        final recovered = _recoverOperationJournalEntry(
+          op,
+          deliveries,
+          current.identity,
+        );
+        if (recovered == null) continue;
+        final after = _jsonMap(op.afterJson)['state'];
+        final intended = after is Map
+            ? UserMediaState.fromJson(Map<String, dynamic>.from(after))
+            : null;
+        final fields = recovered.patch.fields
+            .where(
+              (field) =>
+                  intended == null ||
+                  _jsonEquivalent(
+                    _canonicalFieldValue(
+                      field.name,
+                      current,
+                      membership: row.inLibrary,
+                      favorite: row.favorite,
+                    ),
+                    _canonicalFieldValue(
+                      field.name,
+                      intended,
+                      membership: true,
+                      favorite: row.favorite,
+                    ),
+                  ),
+            )
+            .toSet();
+        if (recovered.patch.delete && row.inLibrary) {
+          fields.clear();
+        }
+        if ((recovered.patch.delete && row.inLibrary) ||
+            (!recovered.patch.delete && fields.isEmpty)) {
+          for (final delivery in deliveries) {
+            await (database.update(database.outboxDeliveryRecords)..where(
+                  (table) => table.deliveryId.equals(delivery.deliveryId),
+                ))
+                .write(
+                  const OutboxDeliveryRecordsCompanion(
+                    state: Value('superseded'),
+                    lastError: Value(
+                      'Newer canonical edits replaced this operation.',
+                    ),
+                  ),
+                );
+          }
+        } else {
+          journal.add(
+            SyncJournalEntry.fromJson({
+              ...recovered.toJson(),
+              'patch': _patchSubset(recovered.patch, fields).toJson(),
+              'readbackBeforeWrite': true,
+            }),
+          );
+        }
+      }
+      await _writeBucketLocked(
+        'tracking.journal',
+        journal.map((job) => job.toJson()).toList(),
+      );
+      await markMigrationComplete('sync.independent.v3');
+    });
+  }
+
   Future<void> recoverLegacyOperationDeliveries() async {
     await initialize();
     if (await hasMigration('journal.operationReplay.v2')) return;
@@ -2889,17 +3703,42 @@ class CanonicalLibraryRepository {
       };
       for (final entry in before) {
         final current = live[key(entry)];
-        // A concurrent delivery/repair may have updated this operation too.
-        // Never replace it with an older network pass's result.
-        if (current == null ||
-            !_jsonEquivalent(current.toJson(), entry.toJson())) {
-          continue;
-        }
         final changed = next.remove(key(entry));
-        if (changed == null) {
+        if (current == null) continue;
+        // Independent workers may settle different targets of the same job.
+        // Apply only transport deltas; never overwrite a concurrently rebased patch.
+        final removedPending = entry.pendingTargets.difference(
+          changed?.pendingTargets ?? {},
+        );
+        final removedAwaiting = entry.awaitingRemoteTargets.difference(
+          changed?.awaitingRemoteTargets ?? {},
+        );
+        final addedAwaiting =
+            (changed?.awaitingRemoteTargets ?? <TrackerSource>{})
+                .difference(entry.awaitingRemoteTargets)
+                .intersection(current.pendingTargets);
+        final merged = SyncJournalEntry(
+          operationId: current.operationId,
+          identity: current.identity,
+          patch: current.patch,
+          createdAt: current.createdAt,
+          updatedAt: current.updatedAt,
+          mediaTitle: current.mediaTitle,
+          providerEntryIds: current.providerEntryIds,
+          targetAccountIds: current.targetAccountIds,
+          readbackBeforeWrite:
+              current.readbackBeforeWrite ||
+              (changed?.readbackBeforeWrite ?? false),
+          pendingTargets: current.pendingTargets.difference(removedPending),
+          awaitingRemoteTargets: {
+            ...current.awaitingRemoteTargets,
+            ...addedAwaiting,
+          }..removeAll(removedAwaiting),
+        );
+        if (merged.isSettled) {
           live.remove(key(entry));
         } else {
-          live[key(entry)] = changed;
+          live[key(entry)] = merged;
         }
       }
       final Set<String> baselineIds = before.map(key).toSet();
@@ -2922,6 +3761,7 @@ class CanonicalLibraryRepository {
     required TrackerSource target,
     required String state,
     String? error,
+    DateTime? nextAttemptAt,
   }) async {
     await initialize();
     await database.transaction(() async {
@@ -2966,8 +3806,14 @@ class CanonicalLibraryRepository {
               OutboxDeliveryRecordsCompanion(
                 accountId: Value<String?>(accountId ?? delivery.accountId),
                 state: Value<String>(state),
+                lastAttemptAtMs: state == 'sending'
+                    ? Value(now)
+                    : const Value.absent(),
+                nextAttemptAtMs: Value(
+                  nextAttemptAt?.toUtc().millisecondsSinceEpoch,
+                ),
                 attempts: Value<int>(
-                  delivery.attempts + (state == 'retry' ? 1 : 0),
+                  delivery.attempts + (state == 'sending' ? 1 : 0),
                 ),
                 deliveredAtMs: state == 'delivered' || state == 'confirmed'
                     ? Value<int>(delivery.deliveredAtMs ?? now)
@@ -3404,11 +4250,13 @@ class CanonicalLibraryRepository {
     }
   }
 
-  Future<Map<TrackerSource, TrackerProviderHealth>> loadHealth() async {
+  Future<Map<TrackerSource, TrackerProviderHealth>> loadHealth({
+    Map<TrackerSource, String> accountIds = const {},
+  }) async {
     await initialize();
-    final List<ProviderHealthRecord> rows = await database
-        .select(database.providerHealthRecords)
-        .get();
+    final List<ProviderHealthRecord> rows = await (database.select(
+      database.providerHealthRecords,
+    )..orderBy([(table) => OrderingTerm.asc(table.updatedAtMs)])).get();
     final Map<TrackerSource, TrackerProviderHealth> result =
         <TrackerSource, TrackerProviderHealth>{};
     for (final ProviderHealthRecord row in rows) {
@@ -3418,6 +4266,18 @@ class CanonicalLibraryRepository {
         final TrackerProviderHealth value = TrackerProviderHealth.fromJson(
           decoded,
         );
+        final expectedAccount = accountIds[value.provider];
+        if (expectedAccount != null &&
+            value.accountId != null &&
+            value.accountId != expectedAccount) {
+          continue;
+        }
+        // A legacy unscoped row must not override this account's own state.
+        if (expectedAccount != null &&
+            value.accountId == null &&
+            result[value.provider]?.accountId == expectedAccount) {
+          continue;
+        }
         result[value.provider] = value;
       } on Object {
         // Keep other providers available when one health row is corrupt.
@@ -3436,7 +4296,9 @@ class CanonicalLibraryRepository {
             .into(database.providerHealthRecords)
             .insertOnConflictUpdate(
               ProviderHealthRecordsCompanion.insert(
-                provider: value.provider.name,
+                provider: value.accountId == null
+                    ? value.provider.name
+                    : '${value.provider.name}:${value.accountId}',
                 healthJson: jsonEncode(value.toJson()),
                 updatedAtMs: DateTime.now().toUtc().millisecondsSinceEpoch,
               ),
@@ -3517,9 +4379,38 @@ class CanonicalLibraryRepository {
       final UserMediaState? canonicalBefore = before?.withIdentity(
         canonicalIdentity(before.identity),
       );
-      final UserMediaState? canonicalAfter = after?.withIdentity(
+      UserMediaState? canonicalAfter = after?.withIdentity(
         canonicalIdentity(after.identity),
       );
+      final effectiveFields = canonicalBefore == null
+          ? patch.fields
+          : patch.fields.where((field) {
+              if (field == UserMediaField.favorite) {
+                return (liveRow?.favorite ?? false) != patch.favorite;
+              }
+              return !_jsonEquivalent(
+                _canonicalFieldValue(
+                  field.name,
+                  canonicalBefore,
+                  membership: true,
+                  favorite: liveRow?.favorite ?? false,
+                ),
+                _canonicalFieldValue(
+                  field.name,
+                  canonicalAfter,
+                  membership: true,
+                  favorite: liveRow?.favorite ?? false,
+                ),
+              );
+            }).toSet();
+      if (effectiveFields.isEmpty &&
+          canonicalBefore != null &&
+          canonicalAfter != null) {
+        canonicalAfter = canonicalAfter.apply(
+          UserMediaPatch(fields: {}),
+          canonicalBefore.updatedAt,
+        );
+      }
       if (canonicalAfter != null) {
         await _upsertTrackingStateLocked(canonicalAfter);
       } else if (before != null && patch.delete) {
@@ -3545,7 +4436,16 @@ class CanonicalLibraryRepository {
             !liveJournal.any(
               (value) => value.operationId == entry.operationId,
             )) {
-          liveJournal.add(entry);
+          if (effectiveFields.isNotEmpty ||
+              patch.delete ||
+              (canonicalBefore == null && canonicalAfter != null)) {
+            liveJournal.add(
+              SyncJournalEntry.fromJson({
+                ...entry.toJson(),
+                'patch': _patchSubset(entry.patch, effectiveFields).toJson(),
+              }),
+            );
+          }
         }
       }
       await _writeBucketLocked(
@@ -3600,6 +4500,12 @@ class CanonicalLibraryRepository {
       final bool completedEpisodeNow =
           episodeCheckpoint?.completed == true &&
           previousEpisode?.completed != true;
+      if (effectiveFields.isEmpty &&
+          !addsMembership &&
+          !patch.delete &&
+          episodeCheckpoint == null) {
+        return;
+      }
       await _appendOperationLocked(
         LibraryOperationDraft(
           operationId: operationId,
@@ -3616,7 +4522,7 @@ class CanonicalLibraryRepository {
               ? LibraryMutationIntent.progress
               : LibraryMutationIntent.edit,
           fields: <String>{
-            ...patch.fields.map((UserMediaField field) => field.name),
+            ...effectiveFields.map((UserMediaField field) => field.name),
             if (episodeCheckpoint != null) 'episodeProgress',
             if (addsMembership) 'membership',
             if (patch.delete) 'membership',
@@ -3649,7 +4555,12 @@ class CanonicalLibraryRepository {
                 'watchCycle': episodeCheckpoint.watchCycle,
               },
           },
-          targets: targets.map((TrackerSource source) => source.name).toSet(),
+          targets:
+              (effectiveFields.isEmpty && !addsMembership && !patch.delete
+                      ? <TrackerSource>{}
+                      : targets)
+                  .map((TrackerSource source) => source.name)
+                  .toSet(),
           occurredAt: occurredAt,
           title:
               mediaTitle ?? after?.mediaItem.title ?? before?.mediaItem.title,
@@ -4613,16 +5524,27 @@ class CanonicalLibraryRepository {
           )) {
             continue;
           }
-          if (_baseRevisionMatches(currentRevision, baseRevisions[field]) ||
+          if (field != 'metadata' &&
+              _jsonEquivalent(currentValue, afterValue)) {
+            accepted.add(field);
+            equivalent.add(field);
+          } else if (_baseRevisionMatches(
+                currentRevision,
+                baseRevisions[field],
+              ) ||
               _jsonEquivalent(currentRevision, resultingRevisions[field]) ||
               (field == 'episodeProgress' && currentEpisode == null) ||
               (field != 'metadata' &&
                   _jsonEquivalent(currentValue, beforeValue))) {
             accepted.add(field);
-          } else if (field != 'metadata' &&
-              _jsonEquivalent(currentValue, afterValue)) {
-            accepted.add(field);
-            equivalent.add(field);
+          } else if (_revisionEditTime(resultingRevisions[field]) > 0 &&
+              _revisionEditTime(currentRevision) > 0 &&
+              _revisionEditTime(resultingRevisions[field]) !=
+                  _revisionEditTime(currentRevision)) {
+            if (_revisionEditTime(resultingRevisions[field]) >
+                _revisionEditTime(currentRevision)) {
+              accepted.add(field);
+            }
           } else if ('${remoteOperation['originKind']}' ==
                   LibraryOriginKind.provider.name &&
               _revisionOrigins(currentRevisions[field]).any(
@@ -5191,6 +6113,9 @@ class CanonicalLibraryRepository {
         'operationId': operationId,
         'origin': draft.originKind.name,
         'occurredAtMs': draft.occurredAt.toUtc().millisecondsSinceEpoch,
+        'editTimeVerified':
+            draft.originKind != LibraryOriginKind.provider ||
+            draft.editTimeVerified,
       };
     }
     if (episodeKey != null) {
@@ -5373,8 +6298,18 @@ class CanonicalLibraryRepository {
       ..orderBy(<OrderClauseGenerator<LibraryConflictRecords>>[
         (LibraryConflictRecords table) => OrderingTerm.desc(table.createdAtMs),
       ]);
-    return query.watch().map(
-      (List<LibraryConflictRecord> rows) => rows
+    return query.watch().asyncMap((rows) async {
+      final media = rows.isEmpty
+          ? const <CanonicalMediaRecord>[]
+          : await (database.select(database.canonicalMediaRecords)..where(
+                  (table) => table.localId.isIn(rows.map((row) => row.localId)),
+                ))
+                .get();
+      final titles = {
+        for (final row in media)
+          row.localId: _jsonMap(row.mediaJson)['title']?.toString(),
+      };
+      return rows
           .map(
             (LibraryConflictRecord row) => CanonicalLibraryConflict(
               conflictId: row.conflictId,
@@ -5387,10 +6322,11 @@ class CanonicalLibraryRepository {
                 isUtc: true,
               ),
               state: row.state,
+              title: titles[row.localId],
             ),
           )
-          .toList(growable: false),
-    );
+          .toList(growable: false);
+    });
   }
 
   /// A conflicting stale-device operation must not be sent to a tracker while
@@ -5409,6 +6345,33 @@ class CanonicalLibraryRepository {
         .whereType<String>()
         .where((String id) => id.isNotEmpty)
         .toSet();
+  }
+
+  Future<Set<(String, TrackerSource)>> unresolvedProviderDeliveryBlocks(
+    Map<TrackerSource, String> accounts,
+  ) async {
+    await initialize();
+    final rows = await (database.select(
+      database.libraryConflictRecords,
+    )..where((table) => table.state.equals('open'))).get();
+    final result = <(String, TrackerSource)>{};
+    for (final row in rows) {
+      final value = _jsonMap(row.incomingValueJson);
+      if (value['provider'] is String) {
+        final provider = TrackerSource.fromName(value['provider'] as String);
+        if (accounts[provider] == value['accountId']) {
+          result.add((row.localId, provider));
+        }
+      } else if (row.fieldName == 'identity') {
+        final matches = _dynamicStringSet(_decodeJsonValue(row.localValueJson));
+        for (final id in {...matches, row.localId}) {
+          for (final provider in accounts.keys) {
+            result.add((id, provider));
+          }
+        }
+      }
+    }
+    return result;
   }
 
   Future<String?> resolveConflict({
@@ -5450,7 +6413,9 @@ class CanonicalLibraryRepository {
       final UserMediaState? incoming = _stateFromConflictJson(
         conflict.incomingValueJson,
       );
-      final UserMediaState? selected = takeIncoming ? incoming : current;
+      final UserMediaState? selected = takeIncoming
+          ? incoming
+          : (membership && currentRow?.inLibrary == false ? null : current);
       final incomingFavorite = _jsonMap(conflict.incomingValueJson)['favorite'];
       final bool selectedFavorite =
           field == UserMediaField.favorite &&
@@ -5760,13 +6725,25 @@ class CanonicalLibraryRepository {
                 ..limit(limit))
               .get();
       final List<LibraryActivityEvent> result = <LibraryActivityEvent>[];
-      for (final LibraryOperationRecord row in rows) {
-        final List<OutboxDeliveryRecord> deliveries =
+      final deliveriesByOperation = <String, List<OutboxDeliveryRecord>>{};
+      if (rows.isNotEmpty) {
+        final deliveries =
             await (database.select(database.outboxDeliveryRecords)..where(
-                  (OutboxDeliveryRecords table) =>
-                      table.operationId.equals(row.operationId),
+                  (table) => table.operationId.isIn(
+                    rows.map((row) => row.operationId),
+                  ),
                 ))
                 .get();
+        for (final delivery in deliveries) {
+          deliveriesByOperation
+              .putIfAbsent(delivery.operationId, () => [])
+              .add(delivery);
+        }
+      }
+      for (final LibraryOperationRecord row in rows) {
+        final deliveries =
+            deliveriesByOperation[row.operationId] ??
+            const <OutboxDeliveryRecord>[];
         result.add(_activityFromRow(row, deliveries));
       }
       return result;
@@ -6129,6 +7106,7 @@ class CanonicalLibraryRepository {
     MediaItem? mediaItem,
     bool recordActivity = true,
     bool onlyIfMissing = false,
+    DateTime? occurredAt,
   }) async {
     await initialize();
     await database.transaction(() async {
@@ -6143,7 +7121,9 @@ class CanonicalLibraryRepository {
           mediaItem: mediaItem ?? _placeholderMedia(identity, mediaId: mediaId),
         );
       }
-      final int now = DateTime.now().toUtc().millisecondsSinceEpoch;
+      final int now = (occurredAt ?? DateTime.now())
+          .toUtc()
+          .millisecondsSinceEpoch;
       final String id = '$localId:$watchCycle:$season:$episode';
       final EpisodeStateRecord? previous =
           await (database.select(database.episodeStateRecords)..where(
@@ -6343,17 +7323,17 @@ class CanonicalLibraryRepository {
   }
 
   Future<String?> _localIdForAlias(String alias) async {
+    final mapped = await (database.select(
+      database.mediaAliasRecords,
+    )..where((table) => table.alias.equals(alias))).getSingleOrNull();
+    if (mapped != null) return mapped.localId;
     final CanonicalMediaRecord? direct =
         await (database.select(database.canonicalMediaRecords)..where(
               (CanonicalMediaRecords table) => table.localId.equals(alias),
             ))
             .getSingleOrNull();
     if (direct != null) return direct.localId;
-    final MediaAliasRecord? mapped =
-        await (database.select(database.mediaAliasRecords)
-              ..where((MediaAliasRecords table) => table.alias.equals(alias)))
-            .getSingleOrNull();
-    return mapped?.localId;
+    return null;
   }
 
   Future<String?> _localIdForIdentityLocked(MediaIdentity identity) async {
@@ -6465,6 +7445,26 @@ class CanonicalLibraryRepository {
       for (final OutboxDeliveryRecord value in deliveries)
         value.target: value.state,
     },
+    deliveryDetails: {
+      for (final value in deliveries)
+        value.target: LibraryDeliveryDetail(
+          error: value.lastError,
+          attempts: value.attempts,
+          accountId: value.accountId,
+          lastAttemptAt: value.lastAttemptAtMs == null
+              ? null
+              : DateTime.fromMillisecondsSinceEpoch(
+                  value.lastAttemptAtMs!,
+                  isUtc: true,
+                ),
+          nextAttemptAt: value.nextAttemptAtMs == null
+              ? null
+              : DateTime.fromMillisecondsSinceEpoch(
+                  value.nextAttemptAtMs!,
+                  isUtc: true,
+                ),
+        ),
+    },
   );
 
   MediaItem _placeholderMedia(MediaIdentity identity, {String? mediaId}) =>
@@ -6521,6 +7521,15 @@ UserMediaState? _stateFromConflictJson(String source) {
   final Object? decoded = _decodeJsonValue(source);
   if (decoded is! Map) return null;
   if (decoded['__deleted'] == true) return null;
+  if (decoded.containsKey('state')) {
+    final state = decoded['state'];
+    return state is Map
+        ? UserMediaState.fromJson(Map<String, dynamic>.from(state))
+        : null;
+  }
+  if (decoded.containsKey('provider') && !decoded.containsKey('identity')) {
+    return null;
+  }
   try {
     return UserMediaState.fromJson(Map<String, dynamic>.from(decoded));
   } on Object {
@@ -6768,18 +7777,12 @@ class _ReconciliationProposal {
     required this.current,
     required this.patch,
     this.incoming,
-    this.destructive = false,
-    this.remove = false,
-    this.confirmationCount = 0,
   });
 
   final String localId;
   final UserMediaState? current;
   final UserMediaState? incoming;
   final UserMediaPatch patch;
-  final bool destructive;
-  final bool remove;
-  final int confirmationCount;
 }
 
 UserMediaState? _providerStateFromSnapshot(ProviderSnapshotRecord row) {
@@ -6794,8 +7797,30 @@ UserMediaState? _providerStateFromSnapshot(ProviderSnapshotRecord row) {
   }
 }
 
-String _stateHash(UserMediaState state) =>
-    sha256.convert(utf8.encode(jsonEncode(state.toJson()))).toString();
+String _stateHash(UserMediaState state) => sha256
+    .convert(
+      utf8.encode(
+        jsonEncode({
+          for (final field in providerEntryFields(
+            state.source,
+            mediaKind: state.identity.mediaKind,
+          ))
+            if (providerReturnedField(state, state.source, field))
+              field.name: providerFieldValue(state, field),
+        }),
+      ),
+    )
+    .toString();
+
+int _revisionEditTime(Object? revision) =>
+    _revisionLeaves(revision).fold<int>(0, (latest, leaf) {
+      final data = _jsonMap(leaf);
+      final value =
+          data['origin'] == 'provider' && data['editTimeVerified'] != true
+          ? 0
+          : (data['occurredAtMs'] as num?)?.toInt() ?? 0;
+      return value > latest ? value : latest;
+    });
 
 SyncJournalEntry? _pendingForProvider(
   List<SyncJournalEntry> journal,
@@ -6833,223 +7858,46 @@ UserMediaPatch _providerPatchBetween(
   UserMediaState incoming,
   TrackerSource source,
 ) {
-  final ProviderUserMediaState? provider = incoming.providerStates[source];
-  final Set<UserMediaField> supported = switch (source) {
-    TrackerSource.anilist => <UserMediaField>{
-      UserMediaField.status,
-      UserMediaField.progress,
-      UserMediaField.progressVolumes,
-      UserMediaField.score,
-      UserMediaField.notes,
-      UserMediaField.repeat,
-      UserMediaField.startedAt,
-      UserMediaField.completedAt,
-      UserMediaField.priority,
-      UserMediaField.private,
-      UserMediaField.hiddenFromStatusLists,
-      UserMediaField.customLists,
-      UserMediaField.advancedScores,
-    },
-    TrackerSource.mal => <UserMediaField>{
-      UserMediaField.status,
-      UserMediaField.progress,
-      UserMediaField.progressVolumes,
-      UserMediaField.score,
-      UserMediaField.notes,
-      UserMediaField.repeat,
-      UserMediaField.startedAt,
-      UserMediaField.completedAt,
-      UserMediaField.malPriority,
-      UserMediaField.malRewatchValue,
-      UserMediaField.malTags,
-    },
-    TrackerSource.shikimori => <UserMediaField>{
-      UserMediaField.status,
-      UserMediaField.progress,
-      UserMediaField.progressVolumes,
-      UserMediaField.score,
-      UserMediaField.notes,
-      UserMediaField.repeat,
-    },
-  };
-  final Set<UserMediaField> changed = <UserMediaField>{};
-  bool differs(UserMediaField field, Object? before, Object? after) {
-    if (!supported.contains(field)) return false;
-    return previous == null || !_jsonEquivalent(before, after);
-  }
-
-  if (differs(
-    UserMediaField.status,
-    previous?.status.name,
-    incoming.status.name,
-  )) {
-    changed.add(UserMediaField.status);
-  }
-  if (differs(UserMediaField.progress, previous?.progress, incoming.progress)) {
-    changed.add(UserMediaField.progress);
-  }
-  if (differs(
-    UserMediaField.progressVolumes,
-    previous?.progressVolumes,
-    incoming.progressVolumes,
-  )) {
-    changed.add(UserMediaField.progressVolumes);
-  }
-  if (differs(UserMediaField.score, previous?.score, incoming.score)) {
-    changed.add(UserMediaField.score);
-  }
-  if (differs(UserMediaField.notes, previous?.notes, incoming.notes)) {
-    changed.add(UserMediaField.notes);
-  }
-  if (differs(UserMediaField.repeat, previous?.repeat, incoming.repeat)) {
-    changed.add(UserMediaField.repeat);
-  }
-  if (differs(
-    UserMediaField.startedAt,
-    previous?.startedAt?.toIso8601String(),
-    incoming.startedAt?.toIso8601String(),
-  )) {
-    changed.add(UserMediaField.startedAt);
-  }
-  if (differs(
-    UserMediaField.completedAt,
-    previous?.completedAt?.toIso8601String(),
-    incoming.completedAt?.toIso8601String(),
-  )) {
-    changed.add(UserMediaField.completedAt);
-  }
-  final ProviderUserMediaState? oldProvider = previous?.providerStates[source];
-  final int priority = (provider?.data['priority'] as num?)?.toInt() ?? 0;
-  final int previousPriority =
-      (oldProvider?.data['priority'] as num?)?.toInt() ?? 0;
-  if (differs(UserMediaField.priority, previousPriority, priority)) {
-    changed.add(UserMediaField.priority);
-  }
-  final int malPriority = (provider?.data['priority'] as num?)?.toInt() ?? 0;
-  final int previousMalPriority =
-      (oldProvider?.data['priority'] as num?)?.toInt() ?? 0;
-  if (differs(UserMediaField.malPriority, previousMalPriority, malPriority)) {
-    changed.add(UserMediaField.malPriority);
-  }
-  final bool private = provider?.data['private'] == true;
-  final bool previousPrivate = oldProvider?.data['private'] == true;
-  if (differs(UserMediaField.private, previousPrivate, private)) {
-    changed.add(UserMediaField.private);
-  }
-  final bool hidden = provider?.data['hiddenFromStatusLists'] == true;
-  final bool previousHidden =
-      oldProvider?.data['hiddenFromStatusLists'] == true;
-  if (differs(UserMediaField.hiddenFromStatusLists, previousHidden, hidden)) {
-    changed.add(UserMediaField.hiddenFromStatusLists);
-  }
-  final Map<String, bool> customLists = _providerBoolMap(
-    provider?.data['customLists'],
-  );
-  final Map<String, bool> previousCustomLists = _providerBoolMap(
-    oldProvider?.data['customLists'],
-  );
-  if (differs(UserMediaField.customLists, previousCustomLists, customLists)) {
-    changed.add(UserMediaField.customLists);
-  }
-  final Map<String, double> advancedScores = _providerDoubleMap(
-    provider?.data['advancedScores'],
-  );
-  final Map<String, double> previousAdvancedScores = _providerDoubleMap(
-    oldProvider?.data['advancedScores'],
-  );
-  if (differs(
-    UserMediaField.advancedScores,
-    previousAdvancedScores,
-    advancedScores,
-  )) {
-    changed.add(UserMediaField.advancedScores);
-  }
-  final String malRewatchKey = incoming.identity.mediaKind == 'manga'
-      ? 'rereadValue'
-      : 'rewatchValue';
-  final int malRewatchValue =
-      (provider?.data[malRewatchKey] as num?)?.toInt() ?? 0;
-  final int previousMalRewatchValue =
-      (oldProvider?.data[malRewatchKey] as num?)?.toInt() ?? 0;
-  if (differs(
-    UserMediaField.malRewatchValue,
-    previousMalRewatchValue,
-    malRewatchValue,
-  )) {
-    changed.add(UserMediaField.malRewatchValue);
-  }
-  final List<String> malTags = _providerStringList(provider?.data['tags'])
-    ..sort();
-  final List<String> previousMalTags = _providerStringList(
-    oldProvider?.data['tags'],
-  )..sort();
-  if (differs(UserMediaField.malTags, previousMalTags, malTags)) {
-    changed.add(UserMediaField.malTags);
-  }
-  return UserMediaPatch(
-    status: incoming.status,
-    progress: incoming.progress,
-    progressVolumes: incoming.progressVolumes,
-    score: incoming.score,
-    notes: incoming.notes,
-    repeat: incoming.repeat,
-    startedAt: incoming.startedAt,
-    completedAt: incoming.completedAt,
-    priority: priority,
-    private: private,
-    hiddenFromStatusLists: hidden,
-    customLists: customLists,
-    advancedScores: advancedScores,
-    malPriority: malPriority,
-    malRewatchValue: malRewatchValue,
-    malTags: malTags,
-    fields: changed,
-  );
+  final changed =
+      providerEntryFields(source, mediaKind: incoming.identity.mediaKind)
+          .where(
+            (field) =>
+                providerReturnedField(incoming, source, field) &&
+                (previous == null ||
+                    !_providerPreviouslyObservedField(
+                      previous,
+                      source,
+                      field,
+                    ) ||
+                    !_jsonEquivalent(
+                      _canonicalFieldValue(
+                        field.name,
+                        previous,
+                        membership: true,
+                        favorite: false,
+                      ),
+                      _canonicalFieldValue(
+                        field.name,
+                        incoming,
+                        membership: true,
+                        favorite: false,
+                      ),
+                    )),
+          )
+          .toSet();
+  return _patchFromState(incoming, changed);
 }
 
-Set<UserMediaField> _destructiveFields(
-  UserMediaState current,
-  UserMediaPatch patch,
+bool _providerPreviouslyObservedField(
+  UserMediaState state,
+  TrackerSource source,
+  UserMediaField field,
 ) {
-  final Set<UserMediaField> result = <UserMediaField>{};
-  if (patch.touches(UserMediaField.progress) &&
-      (patch.progress ?? 0) < current.progress) {
-    result.add(UserMediaField.progress);
-  }
-  if (patch.touches(UserMediaField.progressVolumes) &&
-      (patch.progressVolumes ?? 0) < current.progressVolumes) {
-    result.add(UserMediaField.progressVolumes);
-  }
-  if (patch.touches(UserMediaField.repeat) &&
-      (patch.repeat ?? 0) < current.repeat) {
-    result.add(UserMediaField.repeat);
-  }
-  if (patch.touches(UserMediaField.status) &&
-      _statusRank(patch.status ?? current.status) <
-          _statusRank(current.status)) {
-    result.add(UserMediaField.status);
-  }
-  if (patch.touches(UserMediaField.startedAt) &&
-      current.startedAt != null &&
-      patch.startedAt == null) {
-    result.add(UserMediaField.startedAt);
-  }
-  if (patch.touches(UserMediaField.completedAt) &&
-      current.completedAt != null &&
-      patch.completedAt == null) {
-    result.add(UserMediaField.completedAt);
-  }
-  return result;
+  final known = state.providerStates[source]?.data['knownFields'];
+  return known is List
+      ? known.contains(field.name)
+      : providerReturnedField(state, source, field);
 }
-
-int _statusRank(AniListListStatus status) => switch (status) {
-  AniListListStatus.planning => 0,
-  AniListListStatus.current => 1,
-  AniListListStatus.paused => 1,
-  AniListListStatus.dropped => 1,
-  AniListListStatus.repeating => 2,
-  AniListListStatus.completed => 3,
-};
 
 AniListListStatus _canonicalStatus(LibraryStatus status) => switch (status) {
   LibraryStatus.watching => AniListListStatus.current,
@@ -7089,9 +7937,13 @@ List<Object?> _revisionLeaves(Object? value) =>
 
 bool _baseRevisionMatches(Object? current, Object? base) =>
     _revisionLeaves(current).every(
-      (value) => _revisionLeaves(
-        base,
-      ).any((candidate) => _jsonEquivalent(value, candidate)),
+      (value) => _revisionLeaves(base).any(
+        (candidate) =>
+            _jsonEquivalent(value, candidate) ||
+            (_jsonMap(value)['operationId'] != null &&
+                _jsonMap(value)['operationId'] ==
+                    _jsonMap(candidate)['operationId']),
+      ),
     );
 
 Object? _mergeEquivalentRevisions(Object? current, Object? incoming) {
@@ -7161,6 +8013,13 @@ Object? _canonicalFieldValue(
     UserMediaField.private ||
     UserMediaField.hiddenFromStatusLists => value ?? false,
     UserMediaField.malTags => _providerStringList(value)..sort(),
+    UserMediaField.startedAt ||
+    UserMediaField.completedAt => providerFieldValue(state, mediaField),
+    UserMediaField.customLists || UserMediaField.advancedScores => {
+      if (value is Map)
+        for (final entry in value.entries)
+          if (entry.value != false && entry.value != 0) entry.key: entry.value,
+    },
     _ => value,
   };
 }

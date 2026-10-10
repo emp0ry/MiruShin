@@ -1,7 +1,7 @@
 name: mirushin
 description: "New way to watch and discover media."
 publish_to: 'none'
-version: 2.9.14+95
+version: 2.9.15+96
 
 environment:
   sdk: ^3.11.4
@@ -9,6 +9,8 @@ environment:
 dependencies:
   app_links: 7.0.0
   cached_network_image: ^3.4.1
+  collection: ^1.19.1
+  connectivity_plus: 6.1.5
   crypto: ^3.0.7
   dio: ^5.9.2
   drift: 2.34.0
@@ -39,6 +41,7 @@ dependencies:
   fvp: ^0.36.2
   go_router: ^17.2.2
   google_sign_in: ^7.2.0
+  http_parser: ^4.1.2
   image: ^4.8.0
   intl: ^0.20.2
   media_kit: ^1.2.6

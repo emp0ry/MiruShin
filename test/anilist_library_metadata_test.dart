@@ -6,6 +6,34 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mirushin/features/tracking/data/anilist_api_client.dart';
 
 void main() {
+  test(
+    'AniList fetches every list chunk before returning a complete snapshot',
+    () async {
+      final adapter = _AniListLibraryAdapter()..chunks = 2;
+      final client = AniListApiClient(
+        accessToken: 'token',
+        dio: Dio()..httpClientAdapter = adapter,
+      );
+      final folders = await client.fetchAnimeListCollection(userId: 7);
+      expect(adapter.calls, 2);
+      expect(folders.single.entries.map((entry) => entry.id), [99, 100]);
+      expect(adapter.query, contains('hasNextChunk'));
+    },
+  );
+  test(
+    'AniList rejects malformed pages rather than silently deleting missing entries',
+    () async {
+      final adapter = _AniListLibraryAdapter()..malformed = true;
+      final client = AniListApiClient(
+        accessToken: 'token',
+        dio: Dio()..httpClientAdapter = adapter,
+      );
+      await expectLater(
+        client.fetchAnimeListCollection(userId: 7),
+        throwsFormatException,
+      );
+    },
+  );
   test('AniList library snapshot contains offline detail metadata', () async {
     final _AniListLibraryAdapter adapter = _AniListLibraryAdapter();
     final Dio dio = Dio()..httpClientAdapter = adapter;
@@ -40,6 +68,9 @@ void main() {
 
 class _AniListLibraryAdapter implements HttpClientAdapter {
   String query = '';
+  int chunks = 1;
+  int calls = 0;
+  bool malformed = false;
 
   @override
   Future<ResponseBody> fetch(
@@ -48,18 +79,20 @@ class _AniListLibraryAdapter implements HttpClientAdapter {
     Future<void>? cancelFuture,
   ) async {
     final Object? data = options.data;
+    calls++;
     if (data is Map) query = '${data['query'] ?? ''}';
     return ResponseBody.fromString(
       jsonEncode(<String, dynamic>{
         'data': <String, dynamic>{
           'MediaListCollection': <String, dynamic>{
+            'hasNextChunk': calls < chunks,
             'lists': <Map<String, dynamic>>[
               <String, dynamic>{
                 'name': 'Watching',
                 'status': 'CURRENT',
                 'entries': <Map<String, dynamic>>[
                   <String, dynamic>{
-                    'id': 99,
+                    'id': malformed ? 0 : 98 + calls,
                     'status': 'CURRENT',
                     'progress': 3,
                     'score': 8,

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -11,6 +13,7 @@ import '../../../core/widgets/glass_card.dart';
 import '../../../core/widgets/page_back_button.dart';
 import '../../../core/widgets/section_header.dart';
 import '../../settings/application/settings_state.dart';
+import '../../tracking/application/tracker_sync_coordinator.dart';
 import '../../tracking/domain/tracker_models.dart';
 import '../application/canonical_library_repository.dart';
 import '../domain/canonical_library_models.dart';
@@ -57,6 +60,14 @@ class _LibrarySyncPageState extends ConsumerState<LibrarySyncPage> {
             ),
           ),
           const SizedBox(height: AppSpacing.lg),
+          Align(
+            alignment: AlignmentDirectional.centerEnd,
+            child: TextButton.icon(
+              onPressed: _busy ? null : _retrySync,
+              icon: const Icon(Icons.sync),
+              label: Text(context.t('Retry sync')),
+            ),
+          ),
           ...previews.when(
             data: (List<ProviderAccountPreview> values) =>
                 values.map(_accountPreviewCard).toList(growable: false),
@@ -292,6 +303,36 @@ class _LibrarySyncPageState extends ConsumerState<LibrarySyncPage> {
               Divider(color: Theme.of(context).colorScheme.outlineVariant),
               const SizedBox(height: AppSpacing.sm),
               _activityRoute(event),
+              if (event.deliveryDetails.isNotEmpty)
+                ExpansionTile(
+                  tilePadding: EdgeInsets.zero,
+                  title: Text(context.t('Sync details')),
+                  children: [
+                    for (final entry in event.deliveryDetails.entries)
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(
+                          '${_targetLabel(entry.key)} · ${context.t(_deliveryStateLabel(event.deliveryStates[entry.key] ?? 'pending'))}',
+                        ),
+                        subtitle: Text(
+                          [
+                            entry.value.error ??
+                                context.t(
+                                  _deliveryStateLabel(
+                                    event.deliveryStates[entry.key] ??
+                                        'pending',
+                                  ),
+                                ),
+                            '${context.t('Attempts')}: ${entry.value.attempts}',
+                            if (entry.value.lastAttemptAt != null)
+                              '${context.t('Last attempt')}: ${_formatTime(entry.value.lastAttemptAt!)}',
+                            if (entry.value.nextAttemptAt != null)
+                              '${context.t('Next retry')}: ${_formatTime(entry.value.nextAttemptAt!)}',
+                          ].join('\n'),
+                        ),
+                      ),
+                  ],
+                ),
               if (changes.isNotEmpty) ...<Widget>[
                 const SizedBox(height: AppSpacing.md),
                 Text(
@@ -376,6 +417,7 @@ class _LibrarySyncPageState extends ConsumerState<LibrarySyncPage> {
                       (String target) => _deliveryPill(
                         target,
                         event.deliveryStates[target] ?? 'pending',
+                        event.deliveryDetails[target],
                       ),
                     )
                     .toList(growable: false),
@@ -451,10 +493,13 @@ class _LibrarySyncPageState extends ConsumerState<LibrarySyncPage> {
     ),
   );
 
-  Widget _deliveryPill(String target, String state) {
+  Widget _deliveryPill(
+    String target,
+    String state,
+    LibraryDeliveryDetail? details,
+  ) {
     final String normalized = state.toLowerCase();
-    final bool complete =
-        normalized == 'confirmed' || normalized == 'delivered';
+    final bool complete = normalized == 'confirmed';
     final bool error = normalized == 'failed' || normalized == 'blocked';
     final bool retry = normalized == 'retry' || normalized == 'retrying';
     final bool superseded = normalized == 'superseded';
@@ -476,11 +521,25 @@ class _LibrarySyncPageState extends ConsumerState<LibrarySyncPage> {
         : superseded
         ? Icons.history_rounded
         : Icons.schedule_rounded;
-    return _routePill(
-      icon: icon,
-      label: _targetLabel(target),
-      status: context.t(_deliveryStateLabel(normalized)),
-      color: color,
+    final tooltip = [
+      if (details?.error != null) details!.error!,
+      if (details?.lastAttemptAt != null)
+        '${context.t('Last attempt')}: ${_formatTime(details!.lastAttemptAt!)}',
+      if (details?.nextAttemptAt != null)
+        '${context.t('Next retry')}: ${_formatTime(details!.nextAttemptAt!)}',
+      if (details != null && details.attempts > 0)
+        '${context.t('Attempts')}: ${details.attempts}',
+    ].join('\n');
+    return Tooltip(
+      message: tooltip.isEmpty
+          ? context.t(_deliveryStateLabel(normalized))
+          : tooltip,
+      child: _routePill(
+        icon: icon,
+        label: _targetLabel(target),
+        status: context.t(_deliveryStateLabel(normalized)),
+        color: color,
+      ),
     );
   }
 
@@ -614,6 +673,7 @@ class _LibrarySyncPageState extends ConsumerState<LibrarySyncPage> {
                   Expanded(
                     child: Text(
                       '${context.t('Library conflict')}: '
+                      '${conflict.title ?? context.t('Library entry')} · '
                       '${context.t(_fieldLabel(conflict.fieldName))}',
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
@@ -624,7 +684,7 @@ class _LibrarySyncPageState extends ConsumerState<LibrarySyncPage> {
               Text(
                 choose
                     ? context.t(
-                        'This field changed differently on two devices. Choose which value becomes canonical.',
+                        'This field has conflicting edits. Choose which value becomes canonical.',
                       )
                     : context.t(
                         'MiruShin paused this change because it may be unsafe. Your trackers were not changed.',
@@ -634,6 +694,10 @@ class _LibrarySyncPageState extends ConsumerState<LibrarySyncPage> {
               Text(
                 _formatTime(conflict.createdAt),
                 style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              SelectableText(
+                libraryConflictDetails(conflict, translate: context.t),
               ),
               const SizedBox(height: AppSpacing.md),
               Wrap(
@@ -656,6 +720,12 @@ class _LibrarySyncPageState extends ConsumerState<LibrarySyncPage> {
                           : () =>
                                 _resolveConflict(conflict, takeIncoming: true),
                       child: Text(context.t('Use incoming value')),
+                    ),
+                  if (!choose)
+                    TextButton.icon(
+                      onPressed: _busy ? null : _retrySync,
+                      icon: const Icon(Icons.sync),
+                      label: Text(context.t('Recheck mapping and sync')),
                     ),
                 ],
               ),
@@ -737,6 +807,25 @@ class _LibrarySyncPageState extends ConsumerState<LibrarySyncPage> {
     );
   }
 
+  Future<void> _retrySync() async {
+    setState(() => _busy = true);
+    try {
+      final coordinator = ref.read(trackerSyncCoordinatorProvider);
+      await Future.wait([
+        coordinator.refreshAllConnectedLibraries(force: true),
+        coordinator.refreshAllConnectedLibraries(
+          mediaKind: 'manga',
+          force: true,
+        ),
+      ]);
+      await coordinator.flushPending();
+    } on Object catch (error) {
+      debugPrint('Library retry failed safely: $error');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   Future<void> _approve(ProviderAccountPreview preview) async {
     setState(() => _busy = true);
     try {
@@ -747,11 +836,19 @@ class _LibrarySyncPageState extends ConsumerState<LibrarySyncPage> {
             accountId: preview.accountId,
           );
       ref.invalidate(pendingProviderAccountPreviewsProvider);
+      final coordinator = ref.read(trackerSyncCoordinatorProvider);
+      await Future.wait([
+        coordinator.refreshAllConnectedLibraries(force: true),
+        coordinator.refreshAllConnectedLibraries(
+          mediaKind: 'manga',
+          force: true,
+        ),
+      ]);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              context.t('Approved. Refresh Library to perform the merge.'),
+              context.t('Approved. Library reconciliation started.'),
             ),
           ),
         );
@@ -908,6 +1005,7 @@ class _LibrarySyncPageState extends ConsumerState<LibrarySyncPage> {
               if (settings.hasShikimoriSession) TrackerSource.shikimori,
             },
           );
+      await ref.read(trackerSyncCoordinatorProvider).flushPending();
     } on Object catch (error) {
       debugPrint('Library conflict resolution failed: $error');
       if (mounted) {
@@ -1272,13 +1370,57 @@ int _targetOrder(String target) => switch (target.toLowerCase()) {
 };
 
 String _deliveryStateLabel(String state) => switch (state) {
-  'confirmed' || 'delivered' => 'Synced',
+  'confirmed' => 'Synced',
+  'sending' => 'Sending',
+  'delivered' => 'Sent — awaiting confirmation',
+  'unsupported' => 'Local only — not supported',
   'retry' || 'retrying' => 'Retrying',
   'failed' => 'Failed',
   'blocked' => 'Needs attention',
   'superseded' => 'Replaced by newer change',
   _ => 'Waiting',
 };
+
+@visibleForTesting
+String libraryConflictDetails(
+  CanonicalLibraryConflict conflict, {
+  String Function(String)? translate,
+}) {
+  final t = translate ?? (String text) => text;
+  final incoming = conflict.incomingValue;
+  final lines = <String>[];
+  if (incoming is Map) {
+    if (incoming['provider'] != null) {
+      lines.add(
+        '${_targetLabel('${incoming['provider']}')} · ${incoming['accountId'] ?? ''}',
+      );
+    }
+    if (incoming['reason'] != null) lines.add(t('${incoming['reason']}'));
+    if (incoming['editAt'] != null) {
+      lines.add('${t('Catalog edit')}: ${incoming['editAt']}');
+    }
+    if (incoming['localEditAt'] != null) {
+      lines.add('${t('Local edit')}: ${incoming['localEditAt']}');
+    }
+    if (incoming['catalogIds'] != null) {
+      lines.add('${t('Catalog IDs')}: ${jsonEncode(incoming['catalogIds'])}');
+    }
+  }
+  if (conflict.fieldName == 'identity') {
+    lines.add('${t('Conflicting local records')}: ${conflict.localValue}');
+    lines.add('${t('Catalog IDs')}: ${jsonEncode(incoming)}');
+  } else {
+    Object? value(Object? snapshot) => snapshot is Map
+        ? _operationValue(
+            Map<String, dynamic>.from(snapshot),
+            conflict.fieldName,
+          )
+        : snapshot;
+    lines.add('${t('Local')}: ${jsonEncode(value(conflict.localValue))}');
+    lines.add('${t('Incoming')}: ${jsonEncode(value(incoming))}');
+  }
+  return lines.join('\n');
+}
 
 bool _isSmileyFormat(Object? value) {
   final String format = '$value'.trim().toUpperCase();

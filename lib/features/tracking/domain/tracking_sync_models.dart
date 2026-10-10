@@ -27,6 +27,13 @@ enum UserMediaField {
 /// identity has been persisted; newly discovered provider ids are merged into
 /// the same record.
 class MediaIdentity {
+  MediaIdentity withLocalId(String id) => MediaIdentity(
+    localId: id,
+    kind: mediaKind,
+    anilistId: anilistId,
+    malId: malId,
+    shikimoriId: shikimoriId,
+  );
   const MediaIdentity({
     required this.localId,
     this.kind,
@@ -303,10 +310,7 @@ class UserMediaState {
         ? patch.status ?? status
         : status;
     final int nextProgress = patch.touches(UserMediaField.progress)
-        ? canonicalEpisodeProgress(
-            patch.progress ?? progress,
-            mediaItem.episodeCount,
-          )
+        ? canonicalEpisodeProgress(patch.progress ?? 0, mediaItem.episodeCount)
         : canonicalEpisodeProgress(progress, mediaItem.episodeCount);
     final bool hasStarted =
         nextProgress > 0 ||
@@ -314,8 +318,8 @@ class UserMediaState {
         nextStatus == AniListListStatus.repeating ||
         nextStatus == AniListListStatus.completed;
     final bool touchesStartedState =
-        patch.touches(UserMediaField.status) ||
-        patch.touches(UserMediaField.progress);
+        (patch.touches(UserMediaField.status) && nextStatus != status) ||
+        (patch.touches(UserMediaField.progress) && nextProgress != progress);
     final TrackerSource snapshotSource = providerSource ?? source;
     final ProviderUserMediaState? currentProvider =
         providerStates[snapshotSource];
@@ -397,24 +401,31 @@ class UserMediaState {
       status: nextStatus,
       progress: nextProgress,
       progressVolumes: patch.touches(UserMediaField.progressVolumes)
-          ? (patch.progressVolumes ?? progressVolumes).clamp(0, 0x7fffffff)
+          ? (patch.progressVolumes ?? 0).clamp(0, 0x7fffffff)
           : progressVolumes,
       score: patch.touches(UserMediaField.score)
           ? normalizeCanonicalScore(patch.score)
           : score,
-      notes: patch.touches(UserMediaField.notes) ? patch.notes ?? notes : notes,
+      notes: patch.touches(UserMediaField.notes) ? patch.notes ?? '' : notes,
       repeat: patch.touches(UserMediaField.repeat)
-          ? (patch.repeat ?? repeat).clamp(0, 0x7fffffff)
+          ? (patch.repeat ?? 0).clamp(0, 0x7fffffff)
           : repeat,
       createdAt: createdAt,
-      updatedAt: timestamp,
+      updatedAt: providerSource != null && updatedAt.isAfter(timestamp)
+          ? updatedAt
+          : timestamp,
       startedAt: patch.touches(UserMediaField.startedAt)
           ? patch.startedAt
-          : startedAt ?? (touchesStartedState && hasStarted ? timestamp : null),
+          : startedAt ??
+                (providerSource == null && touchesStartedState && hasStarted
+                    ? timestamp
+                    : null),
       completedAt: patch.touches(UserMediaField.completedAt)
           ? patch.completedAt
           : completedAt ??
-                (patch.touches(UserMediaField.status) &&
+                (providerSource == null &&
+                        patch.touches(UserMediaField.status) &&
+                        nextStatus != status &&
                         nextStatus == AniListListStatus.completed
                     ? timestamp
                     : null),
@@ -1084,16 +1095,19 @@ enum TrackerProviderAvailability {
 class TrackerProviderHealth {
   const TrackerProviderHealth({
     required this.provider,
+    this.accountId,
     this.availability = TrackerProviderAvailability.unknown,
     this.consecutiveFailures = 0,
     this.lastSuccessAt,
     this.lastFailureAt,
     this.lastError,
+    this.nextRetryAt,
   });
 
   factory TrackerProviderHealth.fromJson(Map<String, dynamic> json) {
     return TrackerProviderHealth(
       provider: TrackerSource.fromName(json['provider']?.toString()),
+      accountId: json['accountId']?.toString(),
       availability: TrackerProviderAvailability.values.firstWhere(
         (TrackerProviderAvailability value) =>
             value.name == json['availability'],
@@ -1103,18 +1117,22 @@ class TrackerProviderHealth {
       lastSuccessAt: DateTime.tryParse('${json['lastSuccessAt'] ?? ''}'),
       lastFailureAt: DateTime.tryParse('${json['lastFailureAt'] ?? ''}'),
       lastError: json['lastError']?.toString(),
+      nextRetryAt: DateTime.tryParse('${json['nextRetryAt'] ?? ''}'),
     );
   }
 
   final TrackerSource provider;
+  final String? accountId;
   final TrackerProviderAvailability availability;
   final int consecutiveFailures;
   final DateTime? lastSuccessAt;
   final DateTime? lastFailureAt;
   final String? lastError;
+  final DateTime? nextRetryAt;
 
   TrackerProviderHealth success(DateTime now) => TrackerProviderHealth(
     provider: provider,
+    accountId: accountId,
     availability: TrackerProviderAvailability.healthy,
     lastSuccessAt: now,
     lastFailureAt: lastFailureAt,
@@ -1124,8 +1142,10 @@ class TrackerProviderHealth {
     DateTime now,
     Object error, {
     bool authentication = false,
+    DateTime? retryAt,
   }) => TrackerProviderHealth(
     provider: provider,
+    accountId: accountId,
     availability: authentication
         ? TrackerProviderAvailability.authRequired
         : TrackerProviderAvailability.unavailable,
@@ -1133,10 +1153,22 @@ class TrackerProviderHealth {
     lastSuccessAt: lastSuccessAt,
     lastFailureAt: now,
     lastError: '$error',
+    nextRetryAt: authentication
+        ? null
+        : retryAt ??
+              now.add(
+                Duration(
+                  seconds: (1 << (consecutiveFailures + 1).clamp(1, 9)).clamp(
+                    2,
+                    300,
+                  ),
+                ),
+              ),
   );
 
   Map<String, dynamic> toJson() => <String, dynamic>{
     'provider': provider.name,
+    if (accountId != null) 'accountId': accountId,
     'availability': availability.name,
     'consecutiveFailures': consecutiveFailures,
     if (lastSuccessAt != null)
@@ -1144,6 +1176,7 @@ class TrackerProviderHealth {
     if (lastFailureAt != null)
       'lastFailureAt': lastFailureAt!.toIso8601String(),
     if (lastError != null) 'lastError': lastError,
+    if (nextRetryAt != null) 'nextRetryAt': nextRetryAt!.toIso8601String(),
   };
 }
 
@@ -1441,7 +1474,7 @@ UserMediaState _stateFromEntry(
     mediaId: entry.mediaItem.id,
   );
   final DateTime updatedAt = entry.updatedAt == null
-      ? fallbackTime
+      ? DateTime.fromMillisecondsSinceEpoch(0, isUtc: true)
       : DateTime.fromMillisecondsSinceEpoch(
           entry.updatedAt! * 1000,
           isUtc: true,
@@ -1483,7 +1516,7 @@ UserMediaState _stateFromEntry(
         entryId: entry.id > 0 ? entry.id : null,
         rawStatus: rawStatus,
         rawScore: entry.score,
-        updatedAt: updatedAt,
+        updatedAt: entry.updatedAt == null ? null : updatedAt,
         data: <String, dynamic>{
           ...entry.providerData,
           'notes': entry.notes,

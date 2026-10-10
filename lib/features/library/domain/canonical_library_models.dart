@@ -106,6 +106,7 @@ class LibraryOperationDraft {
     this.title,
     this.undoOf,
     this.visibleInLog = true,
+    this.editTimeVerified = false,
     this.targetAccountIds = const <String, String>{},
     this.baseRevisionAlternatives = const <String, List<Object?>>{},
   });
@@ -123,6 +124,7 @@ class LibraryOperationDraft {
   final String? title;
   final String? undoOf;
   final bool visibleInLog;
+  final bool editTimeVerified;
   final Map<String, String> targetAccountIds;
 
   /// Other revisions explicitly seen while resolving a concurrent edit.
@@ -146,6 +148,7 @@ class LibraryActivityEvent {
     this.originId,
     this.title,
     this.undoOf,
+    this.deliveryDetails = const {},
   });
 
   final String operationId;
@@ -162,6 +165,22 @@ class LibraryActivityEvent {
   final String? title;
   final String? undoOf;
   final Map<String, String> deliveryStates;
+  final Map<String, LibraryDeliveryDetail> deliveryDetails;
+}
+
+class LibraryDeliveryDetail {
+  const LibraryDeliveryDetail({
+    this.error,
+    this.attempts = 0,
+    this.lastAttemptAt,
+    this.nextAttemptAt,
+    this.accountId,
+  });
+  final String? error;
+  final int attempts;
+  final DateTime? lastAttemptAt;
+  final DateTime? nextAttemptAt;
+  final String? accountId;
 }
 
 class LibraryUndoPreview {
@@ -275,6 +294,7 @@ class CanonicalLibraryConflict {
     required this.incomingValue,
     required this.createdAt,
     required this.state,
+    this.title,
   });
 
   final String conflictId;
@@ -284,6 +304,7 @@ class CanonicalLibraryConflict {
   final Object? incomingValue;
   final DateTime createdAt;
   final String state;
+  final String? title;
 
   bool get canChooseValue =>
       fieldName != 'identity' && fieldName != 'massProviderChange';

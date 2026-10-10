@@ -15,6 +15,9 @@ class MalApiClient {
     Future<String?> Function()? onRefreshToken,
     Dio? dio,
     this.cancelToken,
+    this.readListStatusCache,
+    this.writeListStatusCache,
+    this.priorityListStatusIds,
   }) : _accessToken = accessToken,
        _onRefreshToken = onRefreshToken,
        _dio =
@@ -31,9 +34,14 @@ class MalApiClient {
   final CancelToken? cancelToken;
   String _accessToken;
   final Future<String?> Function()? _onRefreshToken;
+  final Future<Map<String, dynamic>> Function(String kind)? readListStatusCache;
+  final Future<void> Function(String kind, Map<String, dynamic> values)?
+  writeListStatusCache;
+  final Future<Set<int>> Function(String kind)? priorityListStatusIds;
+  final Map<String, Map<String, dynamic>> _listStatusCache = {};
 
   static const String _listFields =
-      'list_status,num_episodes,media_type,main_picture,alternative_titles,'
+      'num_episodes,media_type,main_picture,alternative_titles,'
       'start_season,start_date,end_date,mean,synopsis,genres,status,source,'
       'nsfw,average_episode_duration,pictures,num_chapters,num_volumes,'
       'rank,popularity,num_list_users,num_scoring_users';
@@ -42,6 +50,11 @@ class MalApiClient {
       'start_date,end_date,mean,synopsis,genres,status,source,nsfw,'
       'average_episode_duration,pictures,num_chapters,num_volumes,'
       'rank,popularity,num_list_users,num_scoring_users';
+
+  static String _statusSelection(bool manga, {bool details = false}) =>
+      '${details ? 'my_list_status' : 'list_status'}{status,score,'
+      '${manga ? 'num_chapters_read,num_volumes_read,is_rereading,num_times_reread,reread_value' : 'num_episodes_watched,is_rewatching,num_times_rewatched,rewatch_value'},'
+      'start_date,finish_date,priority,tags,updated_at${details ? ',comments' : ''}}';
 
   Future<TrackerViewer> fetchViewer() async {
     final Response<dynamic> response = await _get(
@@ -63,14 +76,14 @@ class MalApiClient {
   /// folder/entry model so the existing library UI can render it unchanged.
   Future<List<AniListAnimeListFolder>> fetchAnimeList() async {
     return _fetchUserList(
-      '/users/@me/animelist?fields=$_listFields&limit=1000&nsfw=true',
+      '/users/@me/animelist?fields=${Uri.encodeQueryComponent('${_statusSelection(false)},$_listFields')}&limit=1000&nsfw=true',
       manga: false,
     );
   }
 
   Future<List<AniListAnimeListFolder>> fetchMangaList() async {
     return _fetchUserList(
-      '/users/@me/mangalist?fields=$_listFields&limit=1000&nsfw=true',
+      '/users/@me/mangalist?fields=${Uri.encodeQueryComponent('${_statusSelection(true)},$_listFields')}&limit=1000&nsfw=true',
       manga: true,
     );
   }
@@ -86,19 +99,98 @@ class MalApiClient {
       guard++;
       final Response<dynamic> response = await _get(path);
       final Object? data = response.data;
-      if (data is! Map<String, dynamic>) break;
-      final Object? list = data['data'];
-      if (list is List<dynamic>) {
-        nodes.addAll(list.whereType<Map<String, dynamic>>());
+      if (data is! Map<String, dynamic>) {
+        throw const FormatException('MAL returned a malformed list page.');
       }
+      final Object? list = data['data'];
+      if (list is! List ||
+          list.any(
+            (node) =>
+                node is! Map<String, dynamic> ||
+                node['node'] is! Map ||
+                node['list_status'] is! Map,
+          )) {
+        throw const FormatException('MAL returned an incomplete list page.');
+      }
+      nodes.addAll(list.cast<Map<String, dynamic>>());
       final Object? paging = data['paging'];
       final String? next = paging is Map<String, dynamic>
           ? paging['next'] as String?
           : null;
       if (next == null || next.trim().isEmpty) break;
+      if (guard == 20) {
+        throw const FormatException('MAL list pagination is incomplete.');
+      }
       path = next;
     }
+    await _hydrateOmittedListFields(nodes, manga: manga);
     return _foldersFromNodes(nodes, manga: manga);
+  }
+
+  /// MAL excludes comments from list responses. Fetch only changed/missing
+  /// notes, with a bounded batch and a durable account/kind-specific cache.
+  /// Membership and the other bulk fields remain available immediately.
+  Future<void> _hydrateOmittedListFields(
+    List<Map<String, dynamic>> nodes, {
+    required bool manga,
+  }) async {
+    final kind = manga ? 'manga' : 'anime';
+    final cache = _listStatusCache[kind] ??=
+        await readListStatusCache?.call(kind) ?? {};
+    int budget = 10;
+    final priority = await priorityListStatusIds?.call(kind) ?? const <int>{};
+    final ordered = [...nodes]
+      ..sort(
+        (first, second) =>
+            (priority.contains(_int((second['node'] as Map)['id'])) ? 1 : 0)
+                .compareTo(
+                  priority.contains(_int((first['node'] as Map)['id'])) ? 1 : 0,
+                ),
+      );
+    for (final node in ordered) {
+      final id = _int((node['node'] as Map)['id']);
+      var status = Map<String, dynamic>.from(node['list_status'] as Map);
+      final stamp = status['updated_at'];
+      final cached = cache['$id'];
+      if (!status.containsKey('comments') &&
+          stamp != null &&
+          cached is Map &&
+          cached['updated_at'] == stamp &&
+          cached.containsKey('comments')) {
+        status['comments'] = cached['comments'];
+      }
+      if (!status.containsKey('comments') && budget > 0) {
+        budget--;
+        final response = await _get(
+          '/$kind/$id',
+          queryParameters: {'fields': _statusSelection(manga, details: true)},
+        );
+        final data = response.data;
+        final details = data is Map ? data['my_list_status'] : null;
+        if (details is! Map ||
+            !details.containsKey('comments') ||
+            !details.containsKey('updated_at')) {
+          throw const FormatException(
+            'MAL returned incomplete list-status details.',
+          );
+        }
+        // A detail request may observe a later edit than the preceding list.
+        status = Map<String, dynamic>.from(details);
+        cache['$id'] = status;
+        await writeListStatusCache?.call(kind, cache);
+      }
+      // These nullable dates were explicitly requested. MAL may omit unset
+      // dates from an otherwise complete list-status object.
+      if (status.containsKey('updated_at') &&
+          status.containsKey('score') &&
+          status.containsKey(
+            manga ? 'num_chapters_read' : 'num_episodes_watched',
+          )) {
+        status.putIfAbsent('start_date', () => null);
+        status.putIfAbsent('finish_date', () => null);
+      }
+      node['list_status'] = status;
+    }
   }
 
   /// Search/read endpoints used only when AniList reads are unavailable.
@@ -161,7 +253,7 @@ class MalApiClient {
     return _mediaFromNode(data, malId, manga: true);
   }
 
-  Future<void> updateStatus({
+  Future<Map<String, dynamic>?> updateStatus({
     required int malId,
     String mediaKind = 'anime',
     AniListListStatus? status,
@@ -176,6 +268,8 @@ class MalApiClient {
     String? comments,
     DateTime? startDate,
     DateTime? finishDate,
+    bool clearStartDate = false,
+    bool clearFinishDate = false,
   }) async {
     final bool? effectiveRewatching = isRewatching ?? status?.malIsRewatching;
     final bool manga = mediaKind == 'manga';
@@ -204,15 +298,20 @@ class MalApiClient {
       if (tags != null) 'tags': tags.join(','),
       'comments': ?comments,
       if (startDate != null) 'start_date': _apiDate(startDate),
+      if (clearStartDate) 'start_date': '',
       if (finishDate != null) 'finish_date': _apiDate(finishDate),
+      if (clearFinishDate) 'finish_date': '',
     };
-    if (form.isEmpty) return;
-    await _request(
+    if (form.isEmpty) return null;
+    final response = await _request(
       'PATCH',
       '/${manga ? 'manga' : 'anime'}/$malId/my_list_status',
       data: form,
       contentType: Headers.formUrlEncodedContentType,
     );
+    return response.data is Map
+        ? Map<String, dynamic>.from(response.data as Map)
+        : null;
   }
 
   Future<void> deleteEntry(int malId, {String mediaKind = 'anime'}) async {
@@ -325,6 +424,22 @@ class MalApiClient {
       ),
       priority: _int(listStatus['priority']),
       providerData: <String, dynamic>{
+        'presentFields': [
+          for (final entry in {
+            'status': 'status',
+            'score': 'score',
+            'notes': 'comments',
+            'progress': manga ? 'num_chapters_read' : 'num_episodes_watched',
+            'progressVolumes': 'num_volumes_read',
+            'repeat': manga ? 'num_times_reread' : 'num_times_rewatched',
+            'malPriority': 'priority',
+            'malTags': 'tags',
+            'malRewatchValue': manga ? 'reread_value' : 'rewatch_value',
+            'startedAt': 'start_date',
+            'completedAt': 'finish_date',
+          }.entries)
+            if (listStatus.containsKey(entry.value)) entry.key,
+        ],
         'status': _string(listStatus['status']),
         manga ? 'isRereading' : 'isRewatching':
             (manga

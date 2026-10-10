@@ -171,6 +171,7 @@ class OutboxDeliveryRecords extends Table {
   TextColumn get state => text()();
   IntColumn get attempts => integer().withDefault(const Constant(0))();
   IntColumn get nextAttemptAtMs => integer().nullable()();
+  IntColumn get lastAttemptAtMs => integer().nullable()();
   IntColumn get deliveredAtMs => integer().nullable()();
   IntColumn get confirmedAtMs => integer().nullable()();
   TextColumn get lastError => text().nullable()();
@@ -260,7 +261,7 @@ class CanonicalLibraryDatabase extends _$CanonicalLibraryDatabase {
        );
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -272,6 +273,19 @@ class CanonicalLibraryDatabase extends _$CanonicalLibraryDatabase {
       // v2 changes only the lookup path. Existing v1 rows, operation history,
       // and old Drive-file identity remain untouched.
       if (from < 2) await _createOperationDeliveryIndexes();
+      if (from < 3) {
+        final columns = await customSelect(
+          'PRAGMA table_info(outbox_delivery_records)',
+        ).get();
+        if (!columns.any(
+          (column) => column.read<String>('name') == 'last_attempt_at_ms',
+        )) {
+          await migrator.addColumn(
+            outboxDeliveryRecords,
+            outboxDeliveryRecords.lastAttemptAtMs,
+          );
+        }
+      }
     },
     beforeOpen: (OpeningDetails details) async {
       await customStatement('PRAGMA foreign_keys = ON');

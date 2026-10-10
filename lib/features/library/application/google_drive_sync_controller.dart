@@ -31,7 +31,6 @@ import '../domain/cloud_replica_models.dart';
 import 'canonical_library_repository.dart';
 
 const String _googleDriveLastFullSyncAtKey = 'google.drive.lastFullSyncAt.v1';
-const Duration _trackerDeliveryPullFreshness = Duration(seconds: 5);
 
 class GoogleDriveSyncState {
   const GoogleDriveSyncState({
@@ -269,22 +268,30 @@ final googleDriveSyncLifecycleProvider = Provider<VoidCallback>((Ref ref) {
     if (previous != null && pending <= previousPending) return;
     scheduleLocalPush();
   }, fireImmediately: true);
-  final Timer timer = Timer.periodic(const Duration(minutes: 15), (_) {
-    if (disposed) return;
+  bool foreground = true;
+  final Timer timer = Timer.periodic(const Duration(minutes: 1), (_) {
+    if (disposed || !foreground) return;
     unawaited(
       ref
           .read(googleDriveSyncControllerProvider.notifier)
-          .syncNow(background: true),
+          .syncNow(background: true, remoteChangesOnly: true),
     );
   });
   final AppLifecycleListener lifecycle = AppLifecycleListener(
     onResume: () {
+      foreground = true;
       if (disposed) return;
       unawaited(
         ref
             .read(googleDriveSyncControllerProvider.notifier)
             .syncNow(background: true),
       );
+    },
+    onPause: () {
+      foreground = false;
+    },
+    onHide: () {
+      foreground = false;
     },
   );
   void stop() {
@@ -421,7 +428,6 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
   bool _shuttingDown = false;
   bool _accountsRestored = false;
   final Set<String> _pulledLibraryWorkspaces = <String>{};
-  final Map<String, DateTime> _lastLibraryPullAt = <String, DateTime>{};
   final Set<String> _trackerOutboxResumedWorkspaces = <String>{};
   int _localRetryAttempt = 0;
   int _fullRetryAttempt = 0;
@@ -434,7 +440,6 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
     _shuttingDown = false;
     _accountsRestored = false;
     _pulledLibraryWorkspaces.clear();
-    _lastLibraryPullAt.clear();
     _trackerOutboxResumedWorkspaces.clear();
     ref.onDispose(() {
       _disposed = true;
@@ -502,7 +507,6 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
   Future<void> connect(GoogleDriveTokenBundle tokens) async {
     _accountsRestored = false;
     _pulledLibraryWorkspaces.clear();
-    _lastLibraryPullAt.clear();
     _trackerOutboxResumedWorkspaces.clear();
     await (await SharedPreferences.getInstance()).remove(
       _googleDriveLastFullSyncAtKey,
@@ -526,7 +530,6 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
   Future<void> disconnect() async {
     _accountsRestored = false;
     _pulledLibraryWorkspaces.clear();
-    _lastLibraryPullAt.clear();
     _trackerOutboxResumedWorkspaces.clear();
     _localCheckpointRetry?.cancel();
     _localCheckpointRetry = null;
@@ -669,17 +672,20 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
     final GoogleDriveSyncState? current = state.value;
     if (current == null) return false;
     if (!current.configured) return true;
+    // Readiness is a startup barrier, not a continuing dependency on Drive.
+    if (_accountsRestored &&
+        _pulledLibraryWorkspaces.contains(replicaNamespace)) {
+      return true;
+    }
     if (!current.connected) {
       // A deliberate disconnect releases the tracker queue, but an expired
       // Drive session must not make a stale device publish its old state.
       return current.lastError == null;
     }
-    if (_accountsRestored && _libraryPullIsFresh(replicaNamespace)) {
-      return true;
-    }
     for (var attempt = 0; attempt < 2; attempt += 1) {
       await syncNow(background: true, remoteChangesOnly: _accountsRestored);
-      if (_accountsRestored && _libraryPullIsFresh(replicaNamespace)) {
+      if (_accountsRestored &&
+          _pulledLibraryWorkspaces.contains(replicaNamespace)) {
         return true;
       }
       if (_disposed ||
@@ -1416,7 +1422,6 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
 
   void _markLibraryPulled(String workspace) {
     _pulledLibraryWorkspaces.add(workspace);
-    _lastLibraryPullAt[workspace] = DateTime.now().toUtc();
     if (!_accountsRestored || !_trackerOutboxResumedWorkspaces.add(workspace)) {
       return;
     }
@@ -1432,13 +1437,6 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
         }
       }),
     );
-  }
-
-  bool _libraryPullIsFresh(String workspace) {
-    final DateTime? last = _lastLibraryPullAt[workspace];
-    return last != null &&
-        DateTime.now().toUtc().difference(last) <=
-            _trackerDeliveryPullFreshness;
   }
 
   void _scheduleLocalCheckpointRetry() {

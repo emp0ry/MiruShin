@@ -161,12 +161,20 @@ class ShikimoriApiClient {
         },
       );
       final Object? data = response.data;
-      if (data is! List<dynamic>) break;
+      if (data is! List<dynamic> ||
+          data.any((rate) => rate is! Map || _int(rate['target_id']) <= 0)) {
+        throw const FormatException(
+          'Shikimori returned a malformed list page.',
+        );
+      }
       final List<Map<String, dynamic>> batch = data
           .whereType<Map<String, dynamic>>()
           .toList();
       rates.addAll(batch);
       if (batch.length < 1000) break;
+      if (page == 50) {
+        throw const FormatException('Shikimori list pagination is incomplete.');
+      }
       page++;
     }
     if (rates.isEmpty) return const <AniListAnimeListFolder>[];
@@ -206,6 +214,17 @@ class ShikimoriApiClient {
               notes: _string(rate['text']),
               repeat: _int(rate['rewatches']),
               providerData: <String, dynamic>{
+                'presentFields': [
+                  for (final entry in {
+                    'status': 'status',
+                    'score': 'score',
+                    'notes': 'text',
+                    'progress': manga ? 'chapters' : 'episodes',
+                    'progressVolumes': 'volumes',
+                    'repeat': 'rewatches',
+                  }.entries)
+                    if (rate.containsKey(entry.value)) entry.key,
+                ],
                 'rateId': _int(rate['id']),
                 'targetId': targetId,
                 'status': _string(rate['status']),
@@ -243,7 +262,7 @@ class ShikimoriApiClient {
   }
 
   /// Creates or updates the user's rate for the exact [targetId].
-  Future<void> updateUserRate({
+  Future<Map<String, dynamic>?> updateUserRate({
     required int targetId,
     String mediaKind = 'anime',
     AniListListStatus? status,
@@ -266,15 +285,16 @@ class ShikimoriApiClient {
       'rewatches': ?rewatches,
       'text': ?text,
     };
+    final Response<dynamic> response;
     if (existingId != null) {
-      if (rate.isEmpty) return;
-      await _request(
+      if (rate.isEmpty) return null;
+      response = await _request(
         'PATCH',
         '/api/v2/user_rates/$existingId',
         data: <String, dynamic>{'user_rate': rate},
       );
     } else {
-      await _request(
+      response = await _request(
         'POST',
         '/api/v2/user_rates',
         data: <String, dynamic>{
@@ -287,6 +307,9 @@ class ShikimoriApiClient {
         },
       );
     }
+    return response.data is Map
+        ? Map<String, dynamic>.from(response.data as Map)
+        : null;
   }
 
   Future<void> deleteUserRate(
@@ -312,12 +335,18 @@ class ShikimoriApiClient {
         },
       );
       final Object? data = response.data;
-      if (data is List<dynamic> && data.isNotEmpty) {
-        final Object? first = data.first;
-        if (first is Map<String, dynamic>) return _int(first['id']);
+      if (data is! List) {
+        throw const FormatException('Incomplete Shikimori rate lookup.');
       }
-    } catch (_) {
-      // Treat as "no existing rate"; the caller will create one.
+      if (data.isNotEmpty) {
+        final Object? first = data.first;
+        if (first is! Map<String, dynamic> || _int(first['id']) <= 0) {
+          throw const FormatException('Invalid Shikimori rate identity.');
+        }
+        return _int(first['id']);
+      }
+    } on DioException {
+      rethrow;
     }
     return null;
   }

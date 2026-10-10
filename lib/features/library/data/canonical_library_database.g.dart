@@ -5671,6 +5671,17 @@ class $OutboxDeliveryRecordsTable extends OutboxDeliveryRecords
     type: DriftSqlType.int,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _lastAttemptAtMsMeta = const VerificationMeta(
+    'lastAttemptAtMs',
+  );
+  @override
+  late final GeneratedColumn<int> lastAttemptAtMs = GeneratedColumn<int>(
+    'last_attempt_at_ms',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _deliveredAtMsMeta = const VerificationMeta(
     'deliveredAtMs',
   );
@@ -5713,6 +5724,7 @@ class $OutboxDeliveryRecordsTable extends OutboxDeliveryRecords
     state,
     attempts,
     nextAttemptAtMs,
+    lastAttemptAtMs,
     deliveredAtMs,
     confirmedAtMs,
     lastError,
@@ -5785,6 +5797,15 @@ class $OutboxDeliveryRecordsTable extends OutboxDeliveryRecords
         ),
       );
     }
+    if (data.containsKey('last_attempt_at_ms')) {
+      context.handle(
+        _lastAttemptAtMsMeta,
+        lastAttemptAtMs.isAcceptableOrUnknown(
+          data['last_attempt_at_ms']!,
+          _lastAttemptAtMsMeta,
+        ),
+      );
+    }
     if (data.containsKey('delivered_at_ms')) {
       context.handle(
         _deliveredAtMsMeta,
@@ -5850,6 +5871,10 @@ class $OutboxDeliveryRecordsTable extends OutboxDeliveryRecords
         DriftSqlType.int,
         data['${effectivePrefix}next_attempt_at_ms'],
       ),
+      lastAttemptAtMs: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}last_attempt_at_ms'],
+      ),
       deliveredAtMs: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}delivered_at_ms'],
@@ -5880,6 +5905,7 @@ class OutboxDeliveryRecord extends DataClass
   final String state;
   final int attempts;
   final int? nextAttemptAtMs;
+  final int? lastAttemptAtMs;
   final int? deliveredAtMs;
   final int? confirmedAtMs;
   final String? lastError;
@@ -5891,6 +5917,7 @@ class OutboxDeliveryRecord extends DataClass
     required this.state,
     required this.attempts,
     this.nextAttemptAtMs,
+    this.lastAttemptAtMs,
     this.deliveredAtMs,
     this.confirmedAtMs,
     this.lastError,
@@ -5908,6 +5935,9 @@ class OutboxDeliveryRecord extends DataClass
     map['attempts'] = Variable<int>(attempts);
     if (!nullToAbsent || nextAttemptAtMs != null) {
       map['next_attempt_at_ms'] = Variable<int>(nextAttemptAtMs);
+    }
+    if (!nullToAbsent || lastAttemptAtMs != null) {
+      map['last_attempt_at_ms'] = Variable<int>(lastAttemptAtMs);
     }
     if (!nullToAbsent || deliveredAtMs != null) {
       map['delivered_at_ms'] = Variable<int>(deliveredAtMs);
@@ -5934,6 +5964,9 @@ class OutboxDeliveryRecord extends DataClass
       nextAttemptAtMs: nextAttemptAtMs == null && nullToAbsent
           ? const Value.absent()
           : Value(nextAttemptAtMs),
+      lastAttemptAtMs: lastAttemptAtMs == null && nullToAbsent
+          ? const Value.absent()
+          : Value(lastAttemptAtMs),
       deliveredAtMs: deliveredAtMs == null && nullToAbsent
           ? const Value.absent()
           : Value(deliveredAtMs),
@@ -5959,6 +5992,7 @@ class OutboxDeliveryRecord extends DataClass
       state: serializer.fromJson<String>(json['state']),
       attempts: serializer.fromJson<int>(json['attempts']),
       nextAttemptAtMs: serializer.fromJson<int?>(json['nextAttemptAtMs']),
+      lastAttemptAtMs: serializer.fromJson<int?>(json['lastAttemptAtMs']),
       deliveredAtMs: serializer.fromJson<int?>(json['deliveredAtMs']),
       confirmedAtMs: serializer.fromJson<int?>(json['confirmedAtMs']),
       lastError: serializer.fromJson<String?>(json['lastError']),
@@ -5975,6 +6009,7 @@ class OutboxDeliveryRecord extends DataClass
       'state': serializer.toJson<String>(state),
       'attempts': serializer.toJson<int>(attempts),
       'nextAttemptAtMs': serializer.toJson<int?>(nextAttemptAtMs),
+      'lastAttemptAtMs': serializer.toJson<int?>(lastAttemptAtMs),
       'deliveredAtMs': serializer.toJson<int?>(deliveredAtMs),
       'confirmedAtMs': serializer.toJson<int?>(confirmedAtMs),
       'lastError': serializer.toJson<String?>(lastError),
@@ -5989,6 +6024,7 @@ class OutboxDeliveryRecord extends DataClass
     String? state,
     int? attempts,
     Value<int?> nextAttemptAtMs = const Value.absent(),
+    Value<int?> lastAttemptAtMs = const Value.absent(),
     Value<int?> deliveredAtMs = const Value.absent(),
     Value<int?> confirmedAtMs = const Value.absent(),
     Value<String?> lastError = const Value.absent(),
@@ -6002,6 +6038,9 @@ class OutboxDeliveryRecord extends DataClass
     nextAttemptAtMs: nextAttemptAtMs.present
         ? nextAttemptAtMs.value
         : this.nextAttemptAtMs,
+    lastAttemptAtMs: lastAttemptAtMs.present
+        ? lastAttemptAtMs.value
+        : this.lastAttemptAtMs,
     deliveredAtMs: deliveredAtMs.present
         ? deliveredAtMs.value
         : this.deliveredAtMs,
@@ -6025,6 +6064,9 @@ class OutboxDeliveryRecord extends DataClass
       nextAttemptAtMs: data.nextAttemptAtMs.present
           ? data.nextAttemptAtMs.value
           : this.nextAttemptAtMs,
+      lastAttemptAtMs: data.lastAttemptAtMs.present
+          ? data.lastAttemptAtMs.value
+          : this.lastAttemptAtMs,
       deliveredAtMs: data.deliveredAtMs.present
           ? data.deliveredAtMs.value
           : this.deliveredAtMs,
@@ -6045,6 +6087,7 @@ class OutboxDeliveryRecord extends DataClass
           ..write('state: $state, ')
           ..write('attempts: $attempts, ')
           ..write('nextAttemptAtMs: $nextAttemptAtMs, ')
+          ..write('lastAttemptAtMs: $lastAttemptAtMs, ')
           ..write('deliveredAtMs: $deliveredAtMs, ')
           ..write('confirmedAtMs: $confirmedAtMs, ')
           ..write('lastError: $lastError')
@@ -6061,6 +6104,7 @@ class OutboxDeliveryRecord extends DataClass
     state,
     attempts,
     nextAttemptAtMs,
+    lastAttemptAtMs,
     deliveredAtMs,
     confirmedAtMs,
     lastError,
@@ -6076,6 +6120,7 @@ class OutboxDeliveryRecord extends DataClass
           other.state == this.state &&
           other.attempts == this.attempts &&
           other.nextAttemptAtMs == this.nextAttemptAtMs &&
+          other.lastAttemptAtMs == this.lastAttemptAtMs &&
           other.deliveredAtMs == this.deliveredAtMs &&
           other.confirmedAtMs == this.confirmedAtMs &&
           other.lastError == this.lastError);
@@ -6090,6 +6135,7 @@ class OutboxDeliveryRecordsCompanion
   final Value<String> state;
   final Value<int> attempts;
   final Value<int?> nextAttemptAtMs;
+  final Value<int?> lastAttemptAtMs;
   final Value<int?> deliveredAtMs;
   final Value<int?> confirmedAtMs;
   final Value<String?> lastError;
@@ -6102,6 +6148,7 @@ class OutboxDeliveryRecordsCompanion
     this.state = const Value.absent(),
     this.attempts = const Value.absent(),
     this.nextAttemptAtMs = const Value.absent(),
+    this.lastAttemptAtMs = const Value.absent(),
     this.deliveredAtMs = const Value.absent(),
     this.confirmedAtMs = const Value.absent(),
     this.lastError = const Value.absent(),
@@ -6115,6 +6162,7 @@ class OutboxDeliveryRecordsCompanion
     required String state,
     this.attempts = const Value.absent(),
     this.nextAttemptAtMs = const Value.absent(),
+    this.lastAttemptAtMs = const Value.absent(),
     this.deliveredAtMs = const Value.absent(),
     this.confirmedAtMs = const Value.absent(),
     this.lastError = const Value.absent(),
@@ -6131,6 +6179,7 @@ class OutboxDeliveryRecordsCompanion
     Expression<String>? state,
     Expression<int>? attempts,
     Expression<int>? nextAttemptAtMs,
+    Expression<int>? lastAttemptAtMs,
     Expression<int>? deliveredAtMs,
     Expression<int>? confirmedAtMs,
     Expression<String>? lastError,
@@ -6144,6 +6193,7 @@ class OutboxDeliveryRecordsCompanion
       if (state != null) 'state': state,
       if (attempts != null) 'attempts': attempts,
       if (nextAttemptAtMs != null) 'next_attempt_at_ms': nextAttemptAtMs,
+      if (lastAttemptAtMs != null) 'last_attempt_at_ms': lastAttemptAtMs,
       if (deliveredAtMs != null) 'delivered_at_ms': deliveredAtMs,
       if (confirmedAtMs != null) 'confirmed_at_ms': confirmedAtMs,
       if (lastError != null) 'last_error': lastError,
@@ -6159,6 +6209,7 @@ class OutboxDeliveryRecordsCompanion
     Value<String>? state,
     Value<int>? attempts,
     Value<int?>? nextAttemptAtMs,
+    Value<int?>? lastAttemptAtMs,
     Value<int?>? deliveredAtMs,
     Value<int?>? confirmedAtMs,
     Value<String?>? lastError,
@@ -6172,6 +6223,7 @@ class OutboxDeliveryRecordsCompanion
       state: state ?? this.state,
       attempts: attempts ?? this.attempts,
       nextAttemptAtMs: nextAttemptAtMs ?? this.nextAttemptAtMs,
+      lastAttemptAtMs: lastAttemptAtMs ?? this.lastAttemptAtMs,
       deliveredAtMs: deliveredAtMs ?? this.deliveredAtMs,
       confirmedAtMs: confirmedAtMs ?? this.confirmedAtMs,
       lastError: lastError ?? this.lastError,
@@ -6203,6 +6255,9 @@ class OutboxDeliveryRecordsCompanion
     if (nextAttemptAtMs.present) {
       map['next_attempt_at_ms'] = Variable<int>(nextAttemptAtMs.value);
     }
+    if (lastAttemptAtMs.present) {
+      map['last_attempt_at_ms'] = Variable<int>(lastAttemptAtMs.value);
+    }
     if (deliveredAtMs.present) {
       map['delivered_at_ms'] = Variable<int>(deliveredAtMs.value);
     }
@@ -6228,6 +6283,7 @@ class OutboxDeliveryRecordsCompanion
           ..write('state: $state, ')
           ..write('attempts: $attempts, ')
           ..write('nextAttemptAtMs: $nextAttemptAtMs, ')
+          ..write('lastAttemptAtMs: $lastAttemptAtMs, ')
           ..write('deliveredAtMs: $deliveredAtMs, ')
           ..write('confirmedAtMs: $confirmedAtMs, ')
           ..write('lastError: $lastError, ')
@@ -12473,6 +12529,7 @@ typedef $$OutboxDeliveryRecordsTableCreateCompanionBuilder =
       required String state,
       Value<int> attempts,
       Value<int?> nextAttemptAtMs,
+      Value<int?> lastAttemptAtMs,
       Value<int?> deliveredAtMs,
       Value<int?> confirmedAtMs,
       Value<String?> lastError,
@@ -12487,6 +12544,7 @@ typedef $$OutboxDeliveryRecordsTableUpdateCompanionBuilder =
       Value<String> state,
       Value<int> attempts,
       Value<int?> nextAttemptAtMs,
+      Value<int?> lastAttemptAtMs,
       Value<int?> deliveredAtMs,
       Value<int?> confirmedAtMs,
       Value<String?> lastError,
@@ -12563,6 +12621,11 @@ class $$OutboxDeliveryRecordsTableFilterComposer
 
   ColumnFilters<int> get nextAttemptAtMs => $composableBuilder(
     column: $table.nextAttemptAtMs,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get lastAttemptAtMs => $composableBuilder(
+    column: $table.lastAttemptAtMs,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -12645,6 +12708,11 @@ class $$OutboxDeliveryRecordsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<int> get lastAttemptAtMs => $composableBuilder(
+    column: $table.lastAttemptAtMs,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<int> get deliveredAtMs => $composableBuilder(
     column: $table.deliveredAtMs,
     builder: (column) => ColumnOrderings(column),
@@ -12713,6 +12781,11 @@ class $$OutboxDeliveryRecordsTableAnnotationComposer
 
   GeneratedColumn<int> get nextAttemptAtMs => $composableBuilder(
     column: $table.nextAttemptAtMs,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get lastAttemptAtMs => $composableBuilder(
+    column: $table.lastAttemptAtMs,
     builder: (column) => column,
   );
 
@@ -12800,6 +12873,7 @@ class $$OutboxDeliveryRecordsTableTableManager
                 Value<String> state = const Value.absent(),
                 Value<int> attempts = const Value.absent(),
                 Value<int?> nextAttemptAtMs = const Value.absent(),
+                Value<int?> lastAttemptAtMs = const Value.absent(),
                 Value<int?> deliveredAtMs = const Value.absent(),
                 Value<int?> confirmedAtMs = const Value.absent(),
                 Value<String?> lastError = const Value.absent(),
@@ -12812,6 +12886,7 @@ class $$OutboxDeliveryRecordsTableTableManager
                 state: state,
                 attempts: attempts,
                 nextAttemptAtMs: nextAttemptAtMs,
+                lastAttemptAtMs: lastAttemptAtMs,
                 deliveredAtMs: deliveredAtMs,
                 confirmedAtMs: confirmedAtMs,
                 lastError: lastError,
@@ -12826,6 +12901,7 @@ class $$OutboxDeliveryRecordsTableTableManager
                 required String state,
                 Value<int> attempts = const Value.absent(),
                 Value<int?> nextAttemptAtMs = const Value.absent(),
+                Value<int?> lastAttemptAtMs = const Value.absent(),
                 Value<int?> deliveredAtMs = const Value.absent(),
                 Value<int?> confirmedAtMs = const Value.absent(),
                 Value<String?> lastError = const Value.absent(),
@@ -12838,6 +12914,7 @@ class $$OutboxDeliveryRecordsTableTableManager
                 state: state,
                 attempts: attempts,
                 nextAttemptAtMs: nextAttemptAtMs,
+                lastAttemptAtMs: lastAttemptAtMs,
                 deliveredAtMs: deliveredAtMs,
                 confirmedAtMs: confirmedAtMs,
                 lastError: lastError,

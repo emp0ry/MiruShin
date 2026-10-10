@@ -1531,18 +1531,23 @@ class AniListApiClient {
     }
     final String sortDecl = sort != null ? r', $sort: [MediaListSort]' : '';
     final String sortArg = sort != null ? r', sort: $sort' : '';
-    final Map<String, dynamic> data = await _post(
-      '''
+    final query =
+        '''
       query MediaListCollection(
         \$userId: Int,
         \$type: MediaType$sortDecl,
-        \$statusIn: [MediaListStatus]
+        \$statusIn: [MediaListStatus],
+        \$chunk: Int,
+        \$perChunk: Int
       ) {
         MediaListCollection(
           userId: \$userId,
           type: \$type$sortArg,
-          status_in: \$statusIn
+          status_in: \$statusIn,
+          chunk: \$chunk,
+          perChunk: \$perChunk
         ) {
+          hasNextChunk
           lists {
             name
             status
@@ -1571,24 +1576,62 @@ class AniListApiClient {
           }
         }
       }
-      ''',
-      variables,
-      authenticated: true,
+      ''';
+    final folders = <String, AniListAnimeListFolder>{};
+    for (int chunk = 1; chunk <= 50; chunk++) {
+      final data = await _post(query, {
+        ...variables,
+        'chunk': chunk,
+        'perChunk': 500,
+      }, authenticated: true);
+      final Object? collection = data['MediaListCollection'];
+      if (collection is! Map<String, dynamic> ||
+          collection['hasNextChunk'] is! bool) {
+        throw const FormatException(
+          'AniList returned an incomplete list collection.',
+        );
+      }
+      final Object? lists = collection['lists'];
+      if (lists is! List<dynamic>) {
+        throw const FormatException(
+          'AniList returned an incomplete list collection.',
+        );
+      }
+      if (lists.any((list) => list is! Map || list['entries'] is! List)) {
+        throw const FormatException('AniList returned a malformed list.');
+      }
+      for (final list in lists.cast<Map<String, dynamic>>()) {
+        for (final entry in list['entries'] as List) {
+          if (entry is! Map ||
+              entry['media'] is! Map ||
+              _int(entry['id']) <= 0 ||
+              _int((entry['media'] as Map)['id']) <= 0) {
+            throw const FormatException(
+              'AniList returned a malformed list entry.',
+            );
+          }
+        }
+        final folder = _folderFromJson(list);
+        final key = '${folder.status?.name}:${folder.name}';
+        final previous = folders[key];
+        folders[key] = AniListAnimeListFolder(
+          name: folder.name,
+          status: folder.status,
+          entries: {
+            for (final entry in [...?previous?.entries, ...folder.entries])
+              entry.id: entry,
+          }.values.toList(),
+        );
+      }
+      if (collection['hasNextChunk'] == false) {
+        return folders.values
+            .where((folder) => folder.entries.isNotEmpty)
+            .toList();
+      }
+    }
+    throw const FormatException(
+      'AniList pagination did not complete; cached library preserved.',
     );
-
-    final Object? collection = data['MediaListCollection'];
-    if (collection is! Map<String, dynamic>) {
-      return <AniListAnimeListFolder>[];
-    }
-    final Object? lists = collection['lists'];
-    if (lists is! List<dynamic>) {
-      return <AniListAnimeListFolder>[];
-    }
-    return lists
-        .whereType<Map<String, dynamic>>()
-        .map(_folderFromJson)
-        .where((AniListAnimeListFolder folder) => folder.entries.isNotEmpty)
-        .toList();
   }
 
   Future<AniListAnimeListEntry?> fetchMediaListEntry({
@@ -1639,7 +1682,7 @@ class AniListApiClient {
     await updateListEntry(mediaId: mediaId, progress: progress, status: status);
   }
 
-  Future<void> updateListEntry({
+  Future<Map<String, dynamic>?> updateListEntry({
     required int mediaId,
     AniListListStatus? status,
     int? progress,
@@ -1679,7 +1722,7 @@ class AniListApiClient {
     if (startedAt != null) variables['startedAt'] = startedAt;
     if (completedAt != null) variables['completedAt'] = completedAt;
 
-    await _post(
+    final response = await _post(
       '''
       mutation SaveListEntry(
         \$mediaId: Int,
@@ -1728,12 +1771,16 @@ class AniListApiClient {
           hiddenFromStatusLists
           customLists
           advancedScores
+          startedAt { year month day }
+          completedAt { year month day }
         }
       }
       ''',
       variables,
       authenticated: true,
     );
+    final saved = response['SaveMediaListEntry'];
+    return saved is Map<String, dynamic> ? saved : null;
   }
 
   Future<void> addToList(int mediaId, AniListListStatus status) async {
@@ -2474,6 +2521,24 @@ class AniListApiClient {
       customLists: _boolMap(json['customLists']),
       advancedScores: _doubleMap(json['advancedScores']),
       providerData: <String, dynamic>{
+        'presentFields': [
+          for (final field in [
+            'status',
+            'progress',
+            'progressVolumes',
+            'score',
+            'notes',
+            'repeat',
+            'priority',
+            'private',
+            'hiddenFromStatusLists',
+            'customLists',
+            'advancedScores',
+            'startedAt',
+            'completedAt',
+          ])
+            if (json.containsKey(field)) field,
+        ],
         'status': _string(json['status']),
         'progress': _int(json['progress']),
         'progressVolumes': _int(json['progressVolumes']),

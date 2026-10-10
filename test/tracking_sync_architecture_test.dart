@@ -2054,6 +2054,11 @@ UserMediaState _state({
     airingAt: airingAt,
     createdAt: updatedAt.subtract(const Duration(days: 30)),
     updatedAt: updatedAt,
+    // A complete catalog acknowledgment includes the dates sent on creation.
+    startedAt: DateTime.utc(updatedAt.year, updatedAt.month, updatedAt.day),
+    completedAt: status == AniListListStatus.completed
+        ? DateTime.utc(updatedAt.year, updatedAt.month, updatedAt.day)
+        : null,
     source: source,
     providerStates: <TrackerSource, ProviderUserMediaState>{
       source: ProviderUserMediaState(

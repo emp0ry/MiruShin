@@ -156,7 +156,7 @@ void main() {
             final version = await upgraded
                 .customSelect('PRAGMA user_version')
                 .getSingle();
-            expect(version.read<int>('user_version'), 2);
+            expect(version.read<int>('user_version'), 3);
           } finally {
             await upgraded.close();
           }
@@ -694,7 +694,7 @@ void main() {
     );
 
     test(
-      'Drive checkpoint recovery never overwrites a concurrent local field edit',
+      'Drive checkpoint preserves a divergent equal-time local edit for review',
       () async {
         final UserMediaState initial = _state(progress: 2);
         await repository.saveTrackingStates(<UserMediaState>[initial]);
@@ -742,7 +742,7 @@ void main() {
           identity: remoteEdit.identity,
           patch: remotePatch,
           targets: const <TrackerSource>{},
-          occurredAt: DateTime.utc(2026, 9, 24, 2),
+          occurredAt: DateTime.utc(2026, 9, 24, 1),
           mediaTitle: remoteEdit.mediaItem.title,
         );
 
@@ -1562,65 +1562,73 @@ void main() {
       },
     );
 
-    test('destructive remote progress needs two matching snapshots', () async {
-      final UserMediaState initial = _state(progress: 10);
-      await repository.reconcileProviderSnapshot(
-        source: TrackerSource.anilist,
-        accountId: 'viewer-safe',
-        mediaKind: 'anime',
-        remote: <UserMediaState>[initial],
-        journal: const <SyncJournalEntry>[],
-        propagationTargets: const <TrackerSource>{TrackerSource.mal},
-        completeSnapshot: true,
-      );
-      await repository.approveProviderAccount(
-        provider: 'anilist',
-        accountId: 'viewer-safe',
-      );
-      await repository.reconcileProviderSnapshot(
-        source: TrackerSource.anilist,
-        accountId: 'viewer-safe',
-        mediaKind: 'anime',
-        remote: <UserMediaState>[initial],
-        journal: const <SyncJournalEntry>[],
-        propagationTargets: const <TrackerSource>{TrackerSource.mal},
-        completeSnapshot: true,
-      );
+    test(
+      'equal-time catalog divergence stays in targeted review on repeated snapshots',
+      () async {
+        final UserMediaState initial = _state(progress: 10);
+        await repository.reconcileProviderSnapshot(
+          source: TrackerSource.anilist,
+          accountId: 'viewer-safe',
+          mediaKind: 'anime',
+          remote: <UserMediaState>[initial],
+          journal: const <SyncJournalEntry>[],
+          propagationTargets: const <TrackerSource>{TrackerSource.mal},
+          completeSnapshot: true,
+        );
+        await repository.approveProviderAccount(
+          provider: 'anilist',
+          accountId: 'viewer-safe',
+        );
+        await repository.reconcileProviderSnapshot(
+          source: TrackerSource.anilist,
+          accountId: 'viewer-safe',
+          mediaKind: 'anime',
+          remote: <UserMediaState>[initial],
+          journal: const <SyncJournalEntry>[],
+          propagationTargets: const <TrackerSource>{TrackerSource.mal},
+          completeSnapshot: true,
+        );
 
-      final UserMediaState reset = _state(progress: 4);
-      final ProviderReconciliationResult first = await repository
-          .reconcileProviderSnapshot(
-            source: TrackerSource.anilist,
-            accountId: 'viewer-safe',
-            mediaKind: 'anime',
-            remote: <UserMediaState>[reset],
-            journal: const <SyncJournalEntry>[],
-            propagationTargets: const <TrackerSource>{TrackerSource.mal},
-            completeSnapshot: true,
-          );
-      expect(first.destructiveChangesPending, 1);
-      expect(first.states.single.progress, 10);
+        final UserMediaState reset = _state(progress: 4);
+        final ProviderReconciliationResult first = await repository
+            .reconcileProviderSnapshot(
+              source: TrackerSource.anilist,
+              accountId: 'viewer-safe',
+              mediaKind: 'anime',
+              remote: <UserMediaState>[reset],
+              journal: const <SyncJournalEntry>[],
+              propagationTargets: const <TrackerSource>{TrackerSource.mal},
+              completeSnapshot: true,
+            );
+        expect(first.destructiveChangesPending, 1);
+        expect(first.states.single.progress, 10);
 
-      final ProviderReconciliationResult second = await repository
-          .reconcileProviderSnapshot(
-            source: TrackerSource.anilist,
-            accountId: 'viewer-safe',
-            mediaKind: 'anime',
-            remote: <UserMediaState>[reset],
-            journal: const <SyncJournalEntry>[],
-            propagationTargets: const <TrackerSource>{TrackerSource.mal},
-            completeSnapshot: true,
-          );
-      expect(second.destructiveChangesPending, 0);
-      expect(second.states.single.progress, 4);
-      expect(second.journal, hasLength(2));
-      expect(second.journal.last.pendingTargets, <TrackerSource>{
-        TrackerSource.mal,
-      });
-    });
+        final ProviderReconciliationResult second = await repository
+            .reconcileProviderSnapshot(
+              source: TrackerSource.anilist,
+              accountId: 'viewer-safe',
+              mediaKind: 'anime',
+              remote: <UserMediaState>[reset],
+              journal: const <SyncJournalEntry>[],
+              propagationTargets: const <TrackerSource>{TrackerSource.mal},
+              completeSnapshot: true,
+            );
+        expect(second.destructiveChangesPending, 1);
+        expect(second.states.single.progress, 10);
+        final reviews = await repository.watchConflicts().first;
+        expect(reviews, hasLength(1));
+        expect(reviews.single.fieldName, 'progress');
+        await repository.resolveConflict(
+          conflictId: reviews.single.conflictId,
+          takeIncoming: true,
+          trackerTargets: {TrackerSource.anilist, TrackerSource.mal},
+        );
+        expect((await repository.loadTrackingStates()).single.progress, 4);
+      },
+    );
 
     test(
-      'Shikimori removal needs two snapshots before Local Library and Log change',
+      'undated Shikimori removal needs explicit review, not repeated snapshots',
       () async {
         final UserMediaState initial = _state(progress: 6);
         await repository.reconcileProviderSnapshot(
@@ -1687,11 +1695,19 @@ void main() {
               },
               completeSnapshot: true,
             );
-        expect(second.destructiveChangesPending, 0);
-        expect(second.states, isEmpty);
-        expect(second.journal, hasLength(2));
-        expect(second.journal.last.patch.delete, isTrue);
-        expect(second.journal.last.pendingTargets, <TrackerSource>{
+        expect(second.destructiveChangesPending, 1);
+        expect(second.states, hasLength(1));
+        final reviews = await repository.watchConflicts().first;
+        expect(reviews, hasLength(1));
+        await repository.resolveConflict(
+          conflictId: reviews.single.conflictId,
+          takeIncoming: true,
+          trackerTargets: {TrackerSource.anilist, TrackerSource.mal},
+        );
+        expect(await repository.loadTrackingStates(), isEmpty);
+        final journal = await repository.loadJournal();
+        expect(journal.last.patch.delete, isTrue);
+        expect(journal.last.pendingTargets, <TrackerSource>{
           TrackerSource.anilist,
           TrackerSource.mal,
         });
@@ -1704,8 +1720,7 @@ void main() {
         );
         final LibraryActivityEvent event = activityAfterRemoval.first;
         expect(event.intent, LibraryMutationIntent.remove);
-        expect(event.originKind, LibraryOriginKind.provider);
-        expect(event.originId, 'shikimori:shiki-viewer');
+        expect(event.originKind, LibraryOriginKind.user);
       },
     );
 
