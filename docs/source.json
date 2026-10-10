@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.9.15",
+          "date": "2026-10-10",
+          "localizedDescription": "- Reliable, independent library sync across AniList, MyAnimeList, Shikimori, and Google Drive, with immediate local saves.\n- Automatic retries and catch-up after outages, reconnects, and app resume, without one unavailable catalog blocking others.\n- Safer per-field reconciliation using genuine edit times, preserving precise scores, explicit clears, local-only fields, and change history.\n- Clear per-anime conflict warnings and delivery details, including retry timing and sent-versus-confirmed status.\n- Improved catalog pagination, write confirmation, and recovery of existing queued changes and verified duplicate records.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.15/MiruShin-ios-v2.9.15.ipa",
+          "size": 31841940,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.9.14",
           "date": "2026-10-07",
           "localizedDescription": "- Share episode resume positions and Continue/Watched state across sources, servers, voiceovers, and downloaded episodes.\n- Keep library progress and status unchanged when Auto Progress is disabled, while preserving playback resume positions.\n- Restore shared episode progress from Google Drive and protect intentional resets from stale legacy checkpoints.\n- Improve playback responsiveness with progressive proxy streaming and request-isolated retries.\n- Reduce player UI rebuilds, repeated FVP metadata reads, and playback checkpoint overhead.\n- Correct buffer range reporting and preserve existing seek, startup, and fallback behavior.",
@@ -783,11 +791,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.9.14",
-      "versionDate": "2026-10-07",
-      "versionDescription": "- Share episode resume positions and Continue/Watched state across sources, servers, voiceovers, and downloaded episodes.\n- Keep library progress and status unchanged when Auto Progress is disabled, while preserving playback resume positions.\n- Restore shared episode progress from Google Drive and protect intentional resets from stale legacy checkpoints.\n- Improve playback responsiveness with progressive proxy streaming and request-isolated retries.\n- Reduce player UI rebuilds, repeated FVP metadata reads, and playback checkpoint overhead.\n- Correct buffer range reporting and preserve existing seek, startup, and fallback behavior.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.14/MiruShin-ios-v2.9.14.ipa",
-      "size": 31746451,
+      "version": "2.9.15",
+      "versionDate": "2026-10-10",
+      "versionDescription": "- Reliable, independent library sync across AniList, MyAnimeList, Shikimori, and Google Drive, with immediate local saves.\n- Automatic retries and catch-up after outages, reconnects, and app resume, without one unavailable catalog blocking others.\n- Safer per-field reconciliation using genuine edit times, preserving precise scores, explicit clears, local-only fields, and change history.\n- Clear per-anime conflict warnings and delivery details, including retry timing and sent-versus-confirmed status.\n- Improved catalog pagination, write confirmation, and recovery of existing queued changes and verified duplicate records.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.15/MiruShin-ios-v2.9.15.ipa",
+      "size": 31841940,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
