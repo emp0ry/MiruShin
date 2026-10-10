@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:sqlite3/sqlite3.dart' show SqliteException;
 import 'package:uuid/uuid.dart';
 
 import '../../../shared/models/anilist_models.dart';
@@ -1421,6 +1422,9 @@ class LocalFirstSyncEngine {
     Object error, {
     bool authentication = false,
   }) async {
+    // Storage failures are actionable local errors, not provider outages.
+    // Do not poison a healthy account's retry/authentication state with them.
+    if (error is SqliteException) return;
     final Map<TrackerSource, TrackerProviderHealth> health = await _store
         .loadHealth();
     final TrackerProviderHealth current = _healthForAccount(

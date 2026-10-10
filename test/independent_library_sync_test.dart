@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:drift/drift.dart' show driftRuntimeOptions;
+import 'package:drift/drift.dart' show Value, driftRuntimeOptions;
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -368,7 +368,267 @@ void main() {
         expect(adapter.applied.single.patch.progress, 8);
       },
     );
+
+    test(
+      '$source unrelated write echo cannot reopen Completed or clear a reviewed date',
+      () async {
+        final repo = memory();
+        await approve(repo, source);
+        final initial = sample(source: source).apply(
+          UserMediaPatch(completedAt: epoch, notes: 'Original note'),
+          epoch,
+          providerSource: source,
+        );
+        await ingest(repo, source, [initial]);
+        final finish = epoch.add(const Duration(days: 1));
+        await edit(
+          repo,
+          UserMediaPatch(
+            status: AniListListStatus.completed,
+            progress: 6,
+            completedAt: finish,
+            notes: 'Local note',
+          ),
+          1,
+        );
+        final disputed = sample(source: source, hour: 1);
+        await ingest(repo, source, [disputed]);
+        expect(
+          (await repo.watchConflicts().first).map((c) => c.fieldName),
+          unorderedEquals([
+            'notes',
+            if (source != TrackerSource.shikimori) 'completedAt',
+          ]),
+        );
+        await edit(repo, UserMediaPatch(score: 8), 2, targets: {source});
+        final adapter = Adapter(source, entries: [disputed]);
+        await LocalFirstSyncEngine(
+          store: CanonicalTrackingSyncStore(repository: repo),
+          adapters: {source: adapter},
+        ).flush();
+        final echo = sample(source: source, hour: 5).apply(
+          UserMediaPatch(score: 8),
+          epoch.add(const Duration(hours: 5)),
+          providerSource: source,
+        );
+        await ingest(repo, source, [echo]);
+        final saved = (await repo.loadTrackingStates()).single;
+        expect(saved.status, AniListListStatus.completed);
+        expect(saved.progress, 6);
+        expect(saved.completedAt, finish);
+        expect(saved.notes, 'Local note');
+        final review = (await repo.watchConflicts().first).singleWhere(
+          (c) => c.fieldName == 'notes',
+        );
+        expect(
+          (review.incomingValue as Map)['editAt'],
+          epoch.add(const Duration(hours: 1)).toIso8601String(),
+        );
+        // A 2.9.15 backlog already has entry-wide echo dates, but no per-field
+        // timestamps. Its pending proposal is still valid evidence of the date.
+        for (final row
+            in await repo.database
+                .select(repo.database.providerSnapshotRecords)
+                .get()) {
+          if (row.provider != source.name || row.accountId != source.name) {
+            continue;
+          }
+          final json = jsonDecode(row.normalizedJson) as Map<String, dynamic>;
+          ((json['providerStates'] as Map)[source.name]['data'] as Map).remove(
+            'fieldEditTimesMs',
+          );
+          await (repo.database.update(
+            repo.database.providerSnapshotRecords,
+          )..where((table) => table.snapshotId.equals(row.snapshotId))).write(
+            ProviderSnapshotRecordsCompanion(
+              normalizedJson: Value(jsonEncode(json)),
+            ),
+          );
+        }
+        await ingest(repo, source, [
+          echo.apply(
+            UserMediaPatch(score: 8),
+            epoch.add(const Duration(hours: 6)),
+            providerSource: source,
+          ),
+        ]);
+        expect(
+          (await repo.loadTrackingStates()).single.status,
+          AniListListStatus.completed,
+        );
+        expect((await repo.loadTrackingStates()).single.completedAt, finish);
+        expect((await repo.loadTrackingStates()).single.notes, 'Local note');
+        // A genuine later status change still wins; it is not blanket protection.
+        await ingest(repo, source, [
+          echo.apply(
+            UserMediaPatch(status: AniListListStatus.planning),
+            epoch.add(const Duration(hours: 7)),
+            providerSource: source,
+          ),
+        ]);
+        expect(
+          (await repo.loadTrackingStates()).single.status,
+          AniListListStatus.planning,
+        );
+        expect((await repo.loadTrackingStates()).single.completedAt, finish);
+      },
+    );
+
+    test(
+      '$source canonical repair reuses a confirmed account delivery',
+      () async {
+        final repo = memory();
+        await approve(repo, source);
+        await ingest(repo, source, [sample(source: source)]);
+        await edit(repo, UserMediaPatch(progress: 8), 3, targets: {source});
+        final adapter = Adapter(source);
+        final engine = LocalFirstSyncEngine(
+          store: CanonicalTrackingSyncStore(repository: repo),
+          adapters: {source: adapter},
+        );
+        await engine.flush();
+        final original =
+            (await repo.database
+                    .select(repo.database.outboxDeliveryRecords)
+                    .get())
+                .where((row) => row.target == source.name)
+                .single;
+        expect(original.state, 'confirmed');
+        await ingest(repo, source, [
+          sample(source: source, progress: 5, hour: 2),
+        ]);
+        await ingest(repo, source, [
+          sample(source: source, progress: 5, hour: 2),
+        ]);
+        final deliveries =
+            (await repo.database
+                    .select(repo.database.outboxDeliveryRecords)
+                    .get())
+                .where((row) => row.target == source.name)
+                .toList();
+        expect(deliveries, hasLength(1));
+        expect(deliveries.single.deliveryId, original.deliveryId);
+        expect(deliveries.single.state, 'pending');
+        await repo.applyRemoteDeliveryLedger({
+          original.deliveryId: {
+            'state': 'confirmed',
+            'accountId': source.name,
+            'confirmedAt': epoch.toIso8601String(),
+          },
+        });
+        expect((await repo.loadJournal()).single.tracks(source), isTrue);
+        await engine.flush();
+        expect(adapter.applied, hasLength(2));
+        expect((await repo.loadTrackingStates()).single.progress, 8);
+      },
+    );
+
+    test(
+      '$source account binding and Drive confirmation tolerate an old unbound alias',
+      () async {
+        final repo = memory();
+        await approve(repo, source);
+        await ingest(repo, source, [sample(source: source)]);
+        await edit(repo, UserMediaPatch(progress: 8), 3, targets: {source});
+        final original =
+            (await repo.database
+                    .select(repo.database.outboxDeliveryRecords)
+                    .get())
+                .singleWhere((row) => row.target == source.name);
+        await repo.database
+            .into(repo.database.outboxDeliveryRecords)
+            .insert(
+              OutboxDeliveryRecordsCompanion.insert(
+                deliveryId: 'old-unbound-alias',
+                operationId: original.operationId,
+                target: source.name,
+                state: 'pending',
+              ),
+            );
+        await repo.database
+            .into(repo.database.outboxDeliveryRecords)
+            .insert(
+              OutboxDeliveryRecordsCompanion.insert(
+                deliveryId: 'other-account',
+                operationId: original.operationId,
+                target: source.name,
+                accountId: const Value('other-account'),
+                state: 'pending',
+              ),
+            );
+        await repo.updateTrackerDelivery(
+          operationId: original.operationId,
+          identity: (await repo.loadTrackingStates()).single.identity,
+          target: source,
+          accountId: source.name,
+          state: 'sending',
+        );
+        var rows = await repo.database
+            .select(repo.database.outboxDeliveryRecords)
+            .get();
+        expect(
+          rows
+              .singleWhere((row) => row.deliveryId == original.deliveryId)
+              .attempts,
+          1,
+        );
+        expect(
+          rows
+              .singleWhere((row) => row.deliveryId == 'old-unbound-alias')
+              .state,
+          'superseded',
+        );
+        final ledger = {
+          'old-unbound-alias': {'state': 'confirmed', 'accountId': source.name},
+        };
+        await repo.applyRemoteDeliveryLedger(ledger);
+        await repo.applyRemoteDeliveryLedger(ledger);
+        rows = await repo.database
+            .select(repo.database.outboxDeliveryRecords)
+            .get();
+        expect(
+          rows
+              .singleWhere((row) => row.deliveryId == original.deliveryId)
+              .state,
+          'confirmed',
+        );
+        expect(
+          rows
+              .singleWhere((row) => row.deliveryId == 'old-unbound-alias')
+              .accountId,
+          isNull,
+        );
+        expect(
+          rows.singleWhere((row) => row.deliveryId == 'other-account').state,
+          'pending',
+        );
+        expect(await repo.loadJournal(), isEmpty);
+      },
+    );
   }
+
+  test(
+    'local SQLite failure does not mark a healthy catalog as unavailable',
+    () async {
+      final repo = memory();
+      final adapter = Adapter(TrackerSource.mal)
+        ..failures = 1
+        ..failure = SqliteException(
+          extendedResultCode: 2067,
+          message: 'local constraint',
+        );
+      final store = CanonicalTrackingSyncStore(repository: repo);
+      await LocalFirstSyncEngine(
+        store: store,
+        adapters: {TrackerSource.mal: adapter},
+      ).refreshAllProviderSnapshots(providerOrder: [TrackerSource.mal]);
+      expect((await store.loadHealth())[TrackerSource.mal]?.lastError, isNull);
+      expect(
+        (await store.loadHealth())[TrackerSource.mal]?.consecutiveFailures ?? 0,
+        0,
+      );
+    },
+  );
 
   test(
     'newer explicit date clear imports; absent field preserves local date',

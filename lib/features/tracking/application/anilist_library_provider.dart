@@ -1062,6 +1062,7 @@ Future<List<AniListAnimeListFolder>> _fetchCollection(
 
   List<AniListAnimeListFolder>? fetchedFolders;
   Object? fetchError;
+  bool receivedRemoteLibrary = false;
   final TrackerSyncCoordinator sync = ref.read(trackerSyncCoordinatorProvider);
   try {
     if (flushQueue || statuses == null) {
@@ -1074,6 +1075,7 @@ Future<List<AniListAnimeListFolder>> _fetchCollection(
           ?.map((AniListListStatus status) => status.graphQlValue)
           .toList(growable: false),
     );
+    receivedRemoteLibrary = true;
     final List<AniListAnimeListFolder> merged = await sync.ingestAnimeLibrary(
       source: TrackerSource.anilist,
       folders: fetchedFolders,
@@ -1102,7 +1104,9 @@ Future<List<AniListAnimeListFolder>> _fetchCollection(
   }
 
   if (fetchError != null) {
-    await sync.recordProviderFailure(TrackerSource.anilist, fetchError);
+    if (!receivedRemoteLibrary) {
+      await sync.recordProviderFailure(TrackerSource.anilist, fetchError);
+    }
     final Map<String, dynamic>? cached = await cache.read(cacheKey);
     List<AniListAnimeListFolder> fallback = cached == null
         ? <AniListAnimeListFolder>[]
@@ -1139,6 +1143,7 @@ Future<List<AniListAnimeListFolder>> _fetchCollection(
         usingCache: fallback.isNotEmpty && fallbackSource == null,
         error: fetchError,
         fallbackSourceName: fallbackSource?.label,
+        localProcessingFailure: receivedRemoteLibrary,
       );
     }
     _setAniListLibraryLoadStatus(

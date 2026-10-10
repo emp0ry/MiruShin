@@ -63,7 +63,9 @@ class CatalogOfflineBanner extends ConsumerWidget {
               ),
               const SizedBox(width: AppSpacing.sm),
               Icon(
-                notice.usingCache || notice.fallbackSourceName != null
+                notice.isLocalFailure
+                    ? Icons.sync_problem_rounded
+                    : notice.usingCache || notice.fallbackSourceName != null
                     ? Icons.cloud_sync_rounded
                     : Icons.cloud_off_rounded,
                 color: colorScheme.onErrorContainer,
@@ -97,7 +99,7 @@ class CatalogOfflineBanner extends ConsumerWidget {
                         ),
                       ),
                     ],
-                    if (notice.isAniList) ...<Widget>[
+                    if (notice.isAniList && !notice.isLocalFailure) ...<Widget>[
                       const SizedBox(height: AppSpacing.sm),
                       Align(
                         alignment: Alignment.centerLeft,

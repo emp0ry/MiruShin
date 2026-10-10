@@ -28,6 +28,7 @@ class LibrarySyncPage extends ConsumerStatefulWidget {
 class _LibrarySyncPageState extends ConsumerState<LibrarySyncPage> {
   LibraryOriginKind? _origin;
   bool _busy = false;
+  final Set<String> _resolvingConflicts = <String>{};
 
   @override
   Widget build(BuildContext context) {
@@ -655,6 +656,7 @@ class _LibrarySyncPageState extends ConsumerState<LibrarySyncPage> {
 
   Widget _conflictCard(CanonicalLibraryConflict conflict) {
     final bool choose = conflict.canChooseValue;
+    final bool resolving = _resolvingConflicts.contains(conflict.conflictId);
     return Padding(
       padding: const EdgeInsets.only(bottom: AppSpacing.sm),
       child: GlassCard(
@@ -704,7 +706,7 @@ class _LibrarySyncPageState extends ConsumerState<LibrarySyncPage> {
                 spacing: AppSpacing.sm,
                 children: <Widget>[
                   FilledButton(
-                    onPressed: _busy
+                    onPressed: resolving
                         ? null
                         : () => _resolveConflict(conflict, takeIncoming: false),
                     child: Text(
@@ -715,7 +717,7 @@ class _LibrarySyncPageState extends ConsumerState<LibrarySyncPage> {
                   ),
                   if (choose)
                     OutlinedButton(
-                      onPressed: _busy
+                      onPressed: resolving
                           ? null
                           : () =>
                                 _resolveConflict(conflict, takeIncoming: true),
@@ -991,7 +993,8 @@ class _LibrarySyncPageState extends ConsumerState<LibrarySyncPage> {
     CanonicalLibraryConflict conflict, {
     required bool takeIncoming,
   }) async {
-    setState(() => _busy = true);
+    if (!_resolvingConflicts.add(conflict.conflictId)) return;
+    setState(() {});
     try {
       final SettingsState settings = ref.read(settingsProvider);
       await ref
@@ -1005,7 +1008,9 @@ class _LibrarySyncPageState extends ConsumerState<LibrarySyncPage> {
               if (settings.hasShikimoriSession) TrackerSource.shikimori,
             },
           );
-      await ref.read(trackerSyncCoordinatorProvider).flushPending();
+      // A choice is durable once the local transaction commits. Delivery and
+      // retries run in the background; other cards never wait for the network.
+      if (mounted) ref.read(trackerSyncCoordinatorProvider).requestDelivery();
     } on Object catch (error) {
       debugPrint('Library conflict resolution failed: $error');
       if (mounted) {
@@ -1018,7 +1023,9 @@ class _LibrarySyncPageState extends ConsumerState<LibrarySyncPage> {
         );
       }
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() => _resolvingConflicts.remove(conflict.conflictId));
+      }
     }
   }
 }

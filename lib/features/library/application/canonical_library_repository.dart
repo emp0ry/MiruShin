@@ -2468,6 +2468,7 @@ class CanonicalLibraryRepository {
           <_ReconciliationProposal>[];
       int pendingDeletions = 0;
       int pendingChanges = 0;
+      final observedEditTimes = <String, Map<String, int>>{};
 
       for (final MapEntry<String, UserMediaState> incomingEntry
           in incomingByLocal.entries) {
@@ -2536,7 +2537,15 @@ class CanonicalLibraryRepository {
         if (current != null &&
             ((previousRow?.destructiveConfirmationCount ?? 0) > 0 ||
                 reviewedFields.isNotEmpty)) {
-          changed = _providerPatchBetween(current, incoming, source);
+          final differences = _providerPatchBetween(current, incoming, source);
+          changed = changed.mergedWith(
+            _patchSubset(
+              differences,
+              (previousRow?.destructiveConfirmationCount ?? 0) > 0
+                  ? differences.fields
+                  : reviewedFields,
+            ),
+          );
         }
 
         if (current != null &&
@@ -2574,12 +2583,51 @@ class CanonicalLibraryRepository {
             database.canonicalLibraryRecords,
           )..where((table) => table.localId.equals(localId))).getSingleOrNull();
           final revisions = _jsonMap(row?.fieldRevisionsJson);
-          final remoteEdit =
-              incoming.providerStates[source]?.updatedAt ?? incoming.updatedAt;
-          final remoteMs = remoteEdit.toUtc().millisecondsSinceEpoch;
           final acceptedFields = <UserMediaField>{};
+          final acceptedEditTimes = <UserMediaField, int>{};
           bool needsReview = false;
           for (final field in changed.fields) {
+            var remoteMs = _providerFieldEditTime(
+              incoming,
+              previousProvider,
+              source,
+              field,
+            );
+            final review = reviews.where((row) {
+              final scope = _jsonMap(row.incomingValueJson);
+              return row.fieldName == field.name &&
+                  scope['provider'] == source.name &&
+                  scope['accountId'] == accountId;
+            }).firstOrNull;
+            if (review != null &&
+                previousProvider != null &&
+                providerConfirmsPatch(
+                  _patchFromState(previousProvider, {field}),
+                  incoming,
+                  source,
+                )) {
+              final proposal = _stateFromConflictJson(review.incomingValueJson);
+              final proposalMs =
+                  DateTime.tryParse(
+                    _jsonMap(review.incomingValueJson)['editAt']?.toString() ??
+                        '',
+                  )?.millisecondsSinceEpoch ??
+                  0;
+              if (proposal != null &&
+                  proposalMs > 0 &&
+                  remoteMs > proposalMs &&
+                  providerConfirmsPatch(
+                    _patchFromState(proposal, {field}),
+                    incoming,
+                    source,
+                  )) {
+                // Older snapshots have only an entry-wide timestamp. The
+                // pending proposal retains the field date from before an echo.
+                remoteMs = proposalMs;
+              }
+            }
+            observedEditTimes.putIfAbsent(localId, () => {})[field.name] =
+                remoteMs;
             if (providerConfirmsPatch(
               _patchFromState(current, {field}),
               incoming,
@@ -2611,6 +2659,7 @@ class CanonicalLibraryRepository {
               // A previously absent field has no local edit to supersede.
               // Another field's edit time must not turn a default into a clear.
               acceptedFields.add(field);
+              acceptedEditTimes[field] = remoteMs;
               await _resolveProviderReviewsLocked(
                 localId,
                 field.name,
@@ -2633,6 +2682,7 @@ class CanonicalLibraryRepository {
             }
             if (remoteMs > 0 && localMs > 0 && remoteMs > localMs) {
               acceptedFields.add(field);
+              acceptedEditTimes[field] = remoteMs;
               await _resolveProviderReviewsLocked(
                 localId,
                 field.name,
@@ -2648,6 +2698,10 @@ class CanonicalLibraryRepository {
                 accountId: accountId,
                 current: current,
                 incoming: incoming,
+                incomingEditAt: DateTime.fromMillisecondsSinceEpoch(
+                  remoteMs,
+                  isUtc: true,
+                ),
                 reason: remoteMs <= 0
                     ? 'Catalog did not provide an edit date.'
                     : localMs <= 0
@@ -2663,10 +2717,39 @@ class CanonicalLibraryRepository {
                 accountId,
                 liveJournal,
               );
+              await _resolveProviderReviewsLocked(
+                localId,
+                field.name,
+                source,
+                accountId,
+              );
             }
           }
           if (needsReview) pendingChanges++;
           changed = _patchSubset(changed, acceptedFields);
+          // A pending proposal retains its own field edit date. An unrelated
+          // write can change the catalog entry timestamp, not this field's date.
+          final byEditTime = <int, Set<UserMediaField>>{};
+          for (final field in changed.fields) {
+            byEditTime
+                .putIfAbsent(acceptedEditTimes[field]!, () => {})
+                .add(field);
+          }
+          for (final group in byEditTime.entries) {
+            safeProposals.add(
+              _ReconciliationProposal(
+                localId: localId,
+                current: current,
+                incoming: incoming,
+                patch: _patchSubset(changed, group.value),
+                editAt: DateTime.fromMillisecondsSinceEpoch(
+                  group.key,
+                  isUtc: true,
+                ),
+              ),
+            );
+          }
+          continue;
         }
 
         // A verified newer edit is valid even when progress decreases or a
@@ -2736,6 +2819,7 @@ class CanonicalLibraryRepository {
           state: incoming.value,
           destructiveConfirmationCount: 0,
           fetchedAt: now,
+          fieldEditTimesMs: observedEditTimes[incoming.key] ?? const {},
         );
       }
 
@@ -2743,7 +2827,9 @@ class CanonicalLibraryRepository {
       int importedChanges = 0;
       {
         for (final _ReconciliationProposal proposal in safeProposals) {
-          final UserMediaState? before = proposal.current;
+          final UserMediaState? before = states
+              .where((state) => state.identity.localId == proposal.localId)
+              .firstOrNull;
           UserMediaState? after;
           final int? knownTotal =
               proposal.incoming?.mediaItem.episodeCount ??
@@ -2755,6 +2841,7 @@ class CanonicalLibraryRepository {
               knownTotal > 0 &&
               (proposal.incoming?.progress ?? 0) < knownTotal;
           final DateTime editAt =
+              proposal.editAt ??
               proposal.incoming?.providerStates[source]?.updatedAt ??
               proposal.incoming?.updatedAt ??
               now;
@@ -2952,6 +3039,7 @@ class CanonicalLibraryRepository {
     required UserMediaState state,
     required int destructiveConfirmationCount,
     required DateTime fetchedAt,
+    Map<String, int> fieldEditTimesMs = const {},
   }) async {
     final fields = providerEntryFields(
       source,
@@ -2995,6 +3083,14 @@ class CanonicalLibraryRepository {
       ...?providerJson['data'] as Map?,
       'presentFields': fresh.map((field) => field.name).toList(),
       'knownFields': {...known, ...fresh}.map((field) => field.name).toList(),
+      'fieldEditTimesMs': <String, int>{
+        for (final field in {...known, ...fresh})
+          field.name:
+              fieldEditTimesMs[field.name] ??
+              (fresh.contains(field)
+                  ? _providerFieldEditTime(state, previous, source, field)
+                  : _providerFieldEditTime(previous!, previous, source, field)),
+      },
     };
     json['providerStates'] = <String, dynamic>{
       ...json['providerStates'] as Map,
@@ -3112,6 +3208,7 @@ class CanonicalLibraryRepository {
     required UserMediaState? current,
     required UserMediaState? incoming,
     required String reason,
+    DateTime? incomingEditAt,
   }) async {
     final rows =
         await (database.select(database.libraryConflictRecords)..where(
@@ -3134,7 +3231,9 @@ class CanonicalLibraryRepository {
       'title': incoming?.mediaItem.title ?? current?.mediaItem.title,
       if (incoming != null) 'state': incoming.toJson(),
       'editAt':
-          (incoming?.providerStates[source]?.updatedAt ?? incoming?.updatedAt)
+          (incomingEditAt ??
+                  incoming?.providerStates[source]?.updatedAt ??
+                  incoming?.updatedAt)
               ?.toIso8601String(),
       if (localMs > 0)
         'localEditAt': DateTime.fromMillisecondsSinceEpoch(
@@ -3153,6 +3252,7 @@ class CanonicalLibraryRepository {
         database.libraryConflictRecords,
       )..where((table) => table.conflictId.equals(existing.conflictId))).write(
         LibraryConflictRecordsCompanion(
+          localValueJson: Value(jsonEncode({'state': current?.toJson()})),
           incomingValueJson: Value(jsonEncode(value)),
         ),
       );
@@ -3242,6 +3342,41 @@ class CanonicalLibraryRepository {
         },
       });
     }
+    final deliveries =
+        await (database.select(database.outboxDeliveryRecords)..where(
+              (table) =>
+                  table.operationId.equals(operation.operationId) &
+                  table.target.equals(source.name) &
+                  (table.accountId.equals(accountId) |
+                      table.accountId.isNull()),
+            ))
+            .get();
+    final existingDelivery =
+        deliveries.where((row) => row.accountId == accountId).firstOrNull ??
+        deliveries.firstOrNull;
+    if (existingDelivery != null) {
+      // The primary delivery ID may differ from a repair ID, but both identify
+      // the same operation/provider/account. Reuse it instead of violating the
+      // natural unique key; the immutable operation keeps the audit history.
+      await (database.update(database.outboxDeliveryRecords)..where(
+            (table) => table.deliveryId.equals(existingDelivery.deliveryId),
+          ))
+          .write(
+            OutboxDeliveryRecordsCompanion(
+              accountId: Value(accountId),
+              state: const Value('pending'),
+              nextAttemptAtMs: Value(
+                DateTime.now().toUtc().millisecondsSinceEpoch,
+              ),
+              deliveredAtMs: const Value(null),
+              confirmedAtMs: const Value(null),
+              lastError: const Value(
+                'Catalog has an older edit; queued the current canonical value.',
+              ),
+            ),
+          );
+      return;
+    }
     await database
         .into(database.outboxDeliveryRecords)
         .insertOnConflictUpdate(
@@ -3251,6 +3386,9 @@ class CanonicalLibraryRepository {
             target: source.name,
             accountId: Value(accountId),
             state: 'pending',
+            nextAttemptAtMs: Value(
+              DateTime.now().toUtc().millisecondsSinceEpoch,
+            ),
             lastError: const Value(
               'Catalog has an older edit; queued the current canonical value.',
             ),
@@ -3785,19 +3923,28 @@ class CanonicalLibraryRepository {
                 (OutboxDeliveryRecords table) =>
                     table.target.equals(target.name) &
                     table.operationId.isIn(operationIds) &
-                    table.state.isNotValue('confirmed'),
+                    table.state.isIn(const [
+                      'pending',
+                      'retry',
+                      'sending',
+                      'delivered',
+                      'blocked',
+                    ]),
               ))
               .get();
       // A pre-v2 journal entry might represent several historic operations.
       // Never bulk-confirm them from one provider read-back.
       if (operationId == null && deliveries.length != 1) return;
       final int now = DateTime.now().toUtc().millisecondsSinceEpoch;
-      for (final OutboxDeliveryRecord delivery in deliveries) {
+      final updatedIds = <String>{};
+      for (final OutboxDeliveryRecord original in deliveries) {
         if (accountId != null &&
-            delivery.accountId != null &&
-            delivery.accountId != accountId) {
+            original.accountId != null &&
+            original.accountId != accountId) {
           continue;
         }
+        final delivery = await _accountDeliveryLocked(original, accountId);
+        if (delivery == null || !updatedIds.add(delivery.deliveryId)) continue;
         await (database.update(database.outboxDeliveryRecords)..where(
               (OutboxDeliveryRecords table) =>
                   table.deliveryId.equals(delivery.deliveryId),
@@ -3839,6 +3986,42 @@ class CanonicalLibraryRepository {
         }
       }
     });
+  }
+
+  Future<OutboxDeliveryRecord?> _accountDeliveryLocked(
+    OutboxDeliveryRecord delivery,
+    String? accountId,
+  ) async {
+    if (accountId == null || delivery.accountId != null) return delivery;
+    final bound =
+        await (database.select(database.outboxDeliveryRecords)..where(
+              (table) =>
+                  table.operationId.equals(delivery.operationId) &
+                  table.target.equals(delivery.target) &
+                  table.accountId.equals(accountId),
+            ))
+            .getSingleOrNull();
+    if (bound == null) return delivery;
+    // Old Drive ledgers/queues can leave an unbound alias alongside a bound
+    // row. Retain the alias for audit/Drive references, but never bind both to
+    // the same unique operation/provider/account or resurrect settled work.
+    await (database.update(
+      database.outboxDeliveryRecords,
+    )..where((table) => table.deliveryId.equals(delivery.deliveryId))).write(
+      const OutboxDeliveryRecordsCompanion(
+        state: Value('superseded'),
+        nextAttemptAtMs: Value(null),
+        lastError: Value('Replaced by the existing account-scoped delivery.'),
+      ),
+    );
+    return const [
+          'confirmed',
+          'superseded',
+          'unsupported',
+          'cancelled',
+        ].contains(bound.state)
+        ? null
+        : bound;
   }
 
   Future<void> _advanceConfirmedProviderSnapshotLocked(
@@ -3927,7 +4110,7 @@ class CanonicalLibraryRepository {
     if (ledger.isEmpty) return;
     await initialize();
     await database.transaction(() async {
-      final Set<(String, String)> affected = <(String, String)>{};
+      final affected = <(String, TrackerSource, String?)>{};
       final int now = DateTime.now().toUtc().millisecondsSinceEpoch;
       final ordered = ledger.entries.toList()
         ..sort((a, b) {
@@ -3940,20 +4123,29 @@ class CanonicalLibraryRepository {
         });
       for (final MapEntry<String, Map<String, String>> item in ordered) {
         if (item.value['state'] != 'confirmed') continue;
-        final OutboxDeliveryRecord? delivery =
+        final OutboxDeliveryRecord? originalDelivery =
             await (database.select(database.outboxDeliveryRecords)..where(
                   (OutboxDeliveryRecords table) =>
                       table.deliveryId.equals(item.key),
                 ))
                 .getSingleOrNull();
-        if (delivery == null || delivery.target == 'drive') continue;
+        if (originalDelivery == null || originalDelivery.target == 'drive') {
+          continue;
+        }
         final accountId = item.value['accountId'];
-        if (delivery.accountId != null && delivery.accountId != accountId) {
+        if (originalDelivery.accountId != null &&
+            originalDelivery.accountId != accountId) {
           continue;
         }
-        if (delivery.state == 'confirmed' && delivery.accountId == accountId) {
+        if (originalDelivery.state == 'confirmed' &&
+            originalDelivery.accountId == accountId) {
           continue;
         }
+        final delivery = await _accountDeliveryLocked(
+          originalDelivery,
+          accountId,
+        );
+        if (delivery == null) continue;
         final LibraryOperationRecord? operation =
             await (database.select(database.libraryOperationRecords)..where(
                   (LibraryOperationRecords table) =>
@@ -3966,6 +4158,14 @@ class CanonicalLibraryRepository {
               item.value['confirmedAt'] ?? '',
             )?.millisecondsSinceEpoch ??
             now;
+        if (delivery.nextAttemptAtMs != null &&
+            delivery.lastError ==
+                'Catalog has an older edit; queued the current canonical value.' &&
+            confirmedAt < delivery.nextAttemptAtMs!) {
+          // A historical Drive acknowledgment cannot settle a later repair
+          // of that same winning edit. A fresh send/readback must confirm it.
+          continue;
+        }
         await (database.update(database.outboxDeliveryRecords)..where(
               (OutboxDeliveryRecords table) =>
                   table.deliveryId.equals(delivery.deliveryId),
@@ -3988,49 +4188,25 @@ class CanonicalLibraryRepository {
             accountId,
           );
         }
-        affected.add((operation.localId, delivery.target));
+        affected.add((
+          operation.operationId,
+          TrackerSource.fromName(delivery.target),
+          accountId ?? delivery.accountId,
+        ));
       }
 
       if (affected.isEmpty) return;
       List<SyncJournalEntry> journal = await loadJournal();
-      for (final (String localId, String targetName) in affected) {
-        final TrackerSource target = TrackerSource.fromName(targetName);
-        final List<LibraryOperationRecord> localOperations =
-            await (database.select(database.libraryOperationRecords)..where(
-                  (LibraryOperationRecords table) =>
-                      table.localId.equals(localId),
-                ))
-                .get();
-        final Set<String> localOperationIds = localOperations
-            .map((LibraryOperationRecord value) => value.operationId)
-            .toSet();
-        final List<OutboxDeliveryRecord> outstanding = localOperationIds.isEmpty
-            ? const <OutboxDeliveryRecord>[]
-            : await (database.select(database.outboxDeliveryRecords)
-                    ..where(
-                      (OutboxDeliveryRecords table) =>
-                          table.target.equals(targetName) &
-                          table.operationId.isIn(localOperationIds) &
-                          table.state.isNotValue('confirmed'),
-                    )
-                    ..limit(1))
-                  .get();
-        if (outstanding.isNotEmpty) continue;
-        final CanonicalLibraryRecord? localState =
-            await (database.select(database.canonicalLibraryRecords)..where(
-                  (CanonicalLibraryRecords table) =>
-                      table.localId.equals(localId),
-                ))
-                .getSingleOrNull();
-        final UserMediaState? canonicalState = localState == null
-            ? null
-            : UserMediaState.fromJson(_jsonMap(localState.canonicalStateJson));
+      for (final (operationId, target, accountId) in affected) {
+        // Confirm exactly the delivered operation/account, not every queued
+        // edit for the title. Retired aliases and other accounts cannot keep
+        // this operation waiting or cause unrelated successors to disappear.
         journal = journal
             .map(
               (SyncJournalEntry entry) =>
-                  entry.identity.localId == localId ||
-                      (canonicalState != null &&
-                          entry.identity.matches(canonicalState.identity))
+                  entry.operationId == operationId &&
+                      (entry.targetAccountIds[target] == null ||
+                          entry.targetAccountIds[target] == accountId)
                   ? entry.confirmedBy(target).deliveredTo(target)
                   : entry,
             )
@@ -7777,12 +7953,46 @@ class _ReconciliationProposal {
     required this.current,
     required this.patch,
     this.incoming,
+    this.editAt,
   });
 
   final String localId;
   final UserMediaState? current;
   final UserMediaState? incoming;
   final UserMediaPatch patch;
+  final DateTime? editAt;
+}
+
+int _providerFieldEditTime(
+  UserMediaState incoming,
+  UserMediaState? previous,
+  TrackerSource source,
+  UserMediaField field,
+) {
+  final incomingMs =
+      (incoming.providerStates[source]?.updatedAt ?? incoming.updatedAt)
+          .toUtc()
+          .millisecondsSinceEpoch;
+  if (previous == null ||
+      !_providerPreviouslyObservedField(previous, source, field) ||
+      !providerConfirmsPatch(
+        _patchFromState(previous, {field}),
+        incoming,
+        source,
+      )) {
+    return incomingMs;
+  }
+  final times = _jsonMap(
+    previous.providerStates[source]?.data['fieldEditTimesMs'],
+  );
+  final previousMs =
+      (times[field.name] as num?)?.toInt() ??
+      (previous.providerStates[source]?.updatedAt ?? previous.updatedAt)
+          .toUtc()
+          .millisecondsSinceEpoch;
+  // An undated observation can later acquire verified evidence. A known date
+  // must not advance merely because some other field was written.
+  return previousMs <= 0 && incomingMs > 0 ? incomingMs : previousMs;
 }
 
 UserMediaState? _providerStateFromSnapshot(ProviderSnapshotRecord row) {

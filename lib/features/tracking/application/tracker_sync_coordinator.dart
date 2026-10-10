@@ -940,12 +940,17 @@ class TrackerSyncCoordinator {
   };
 
   void _scheduleDelivery() {
+    if (_shuttingDown) return;
     _deliveryDebounce?.cancel();
     _deliveryDebounce = Timer(
       const Duration(milliseconds: 150),
       () => unawaited(flushPending()),
     );
   }
+
+  /// Wake the independent delivery workers without making a local UI action
+  /// wait for the provider queues, readbacks, or outage retries.
+  void requestDelivery() => _scheduleDelivery();
 
   String _credentials(TrackerSource source) {
     final settings = _ref.mounted ? _ref.read(settingsProvider) : _settings;

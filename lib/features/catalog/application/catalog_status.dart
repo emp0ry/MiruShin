@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:sqlite3/sqlite3.dart' show SqliteException;
 
 import 'catalog_mode.dart';
 
@@ -11,6 +12,7 @@ class CatalogOfflineNotice {
     required this.occurredAt,
     this.detail,
     this.fallbackSourceName,
+    this.isLocalFailure = false,
   });
 
   final CatalogMode mode;
@@ -20,14 +22,20 @@ class CatalogOfflineNotice {
   final DateTime occurredAt;
   final String? detail;
   final String? fallbackSourceName;
+  final bool isLocalFailure;
 
   bool get isAniList => sourceName == 'AniList';
 
-  String get title => isAniList
+  String get title => isLocalFailure
+      ? 'Library sync needs attention'
+      : isAniList
       ? 'AniList is temporarily unavailable'
       : '$sourceName is temporarily unavailable';
 
   String get message {
+    if (isLocalFailure) {
+      return 'A local sync error prevented this update. Your saved library is still available. This does not mean the catalog is down.';
+    }
     if (isAniList) {
       if (fallbackSourceName != null) {
         return 'MiruShin is temporarily using $fallbackSourceName while AniList is unavailable.';
@@ -86,6 +94,7 @@ void markCatalogOffline(
   required bool usingCache,
   Object? error,
   String? fallbackSourceName,
+  bool localProcessingFailure = false,
 }) {
   ref
       .read(catalogOfflineNoticeProvider.notifier)
@@ -98,12 +107,16 @@ void markCatalogOffline(
           occurredAt: DateTime.now(),
           detail: _friendlyError(error),
           fallbackSourceName: fallbackSourceName,
+          isLocalFailure: localProcessingFailure || error is SqliteException,
         ),
       );
 }
 
 String? _friendlyError(Object? error) {
   if (error == null) return null;
+  if (error is SqliteException) {
+    return 'Local library database error (${error.extendedResultCode}). Please retry sync.';
+  }
   final String raw = error.toString();
   if (raw.trim().isEmpty) return null;
   if (raw.contains('SocketException') || raw.contains('Connection')) {
