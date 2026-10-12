@@ -2765,6 +2765,8 @@ class AniListApiClient {
       externalIds: <String, String>{
         'anilist': id.toString(),
         'anilist_type': mediaType,
+        if (mediaType == 'MANGA' && _int(json['volumes']) > 0)
+          'volumes': '${_int(json['volumes'])}',
         if (romaji.isNotEmpty) 'anilist_title_romaji': romaji,
         if (english.isNotEmpty) 'anilist_title_english': english,
         if (native.isNotEmpty) 'anilist_title_native': native,

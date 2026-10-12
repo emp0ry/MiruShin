@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/constants/app_constants.dart';
+import '../../../core/diagnostics/player_diagnostics.dart';
 import '../../../core/platform/tv_platform.dart';
 import '../../../core/security/app_secure_storage.dart';
 import '../../addons/application/addon_sources_provider.dart';
@@ -814,6 +815,12 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
         return;
       }
     }
+    final diagnosticStart = PlayerDiagnostics.instance.begin();
+    PlayerDiagnostics.instance.record('drive.started', {
+      'background': background,
+      'localOnly': localChangesOnly,
+      'remoteOnly': remoteChangesOnly,
+    });
     _activeProgressVisible =
         !background ||
         (!localChangesOnly && !remoteChangesOnly && current.lastSyncAt == null);
@@ -1262,6 +1269,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
         ),
       );
     } finally {
+      PlayerDiagnostics.instance.finish('drive.finished', diagnosticStart);
       if (ownsDeliveryLease && activeCloud != null && leaseDeviceId != null) {
         try {
           await activeCloud.releaseDeliveryLease(deviceId: leaseDeviceId);
@@ -1278,6 +1286,10 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
   }
 
   void _setProgress({required String stage, required double progress}) {
+    PlayerDiagnostics.instance.record('drive.stage', {
+      'stage': stage,
+      'progress': progress,
+    });
     if (_disposed || _shuttingDown || !_activeProgressVisible) return;
     final GoogleDriveSyncState? current = state.value;
     if (current == null) return;

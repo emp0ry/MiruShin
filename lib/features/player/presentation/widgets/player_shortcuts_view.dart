@@ -12,6 +12,7 @@ class PlayerShortcutsView extends StatelessWidget {
     this.pipSupported = false,
     this.horizontalSwipeSeekEnabled = true,
     this.volumeControlsEnabled = true,
+    this.diagnosticsEnabled = false,
     super.key,
   });
 
@@ -26,6 +27,9 @@ class PlayerShortcutsView extends StatelessWidget {
 
   /// Whether MiruShin-side volume controls are available on this platform.
   final bool volumeControlsEnabled;
+
+  /// Diagnostic marking is available only during an opt-in recording.
+  final bool diagnosticsEnabled;
 
   @override
   Widget build(BuildContext context) {
@@ -83,6 +87,8 @@ class PlayerShortcutsView extends StatelessWidget {
             _LabeledKey(glyph: 'Q', label: context.t('Quality')),
             _LabeledKey(glyph: 'V', label: context.t('Skip / Next')),
             _LabeledKey(glyph: 'Z', label: context.t('Zoom')),
+            if (diagnosticsEnabled)
+              _LabeledKey(glyph: 'D', label: context.t('Mark micro-pause')),
             if (pipSupported)
               _LabeledKey(glyph: 'P', label: context.t('Picture in Picture')),
             _LabeledKey(glyph: 'Esc', label: context.t('Back')),

@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/deep_links/mirushin_deep_link.dart';
 import '../../../app/localization/app_localizations.dart';
+import '../../../core/diagnostics/player_diagnostics.dart';
 import '../../../core/platform/tv_platform.dart';
 import '../../../shared/models/media_item.dart';
 import '../../addons/data/anime_titles_service.dart';
@@ -540,6 +541,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     try {
       if (temporary) {
         _remoteTemporaryPlaybackSpeed = speed;
+        _diagnosticCommand('speed', 'watchParty.temporary', value: speed);
         await state.engine?.setPlaybackSpeed(speed);
         state = state.copyWith(temporarySpeedActive: true);
         _updateMediaSession();
@@ -558,9 +560,22 @@ class PlaybackController extends Notifier<PlaybackState> {
     if (_temporarySpeedHolds > 0) return;
     final PlayerSettings settings =
         ref.read(playerSettingsProvider).value ?? const PlayerSettings();
+    _diagnosticCommand(
+      'speed',
+      'watchParty.restoreSpeed',
+      value: settings.playbackSpeed,
+    );
     unawaited(state.engine?.setPlaybackSpeed(settings.playbackSpeed));
     state = state.copyWith(temporarySpeedActive: false);
     _updateMediaSession();
+  }
+
+  void _diagnosticCommand(String command, String reason, {num? value}) {
+    PlayerDiagnostics.instance.record('controller.command', {
+      'command': command,
+      'reason': reason,
+      'value': ?value,
+    });
   }
 
   Future<String> _localizedText(String key) async {
@@ -1248,6 +1263,12 @@ class PlaybackController extends Notifier<PlaybackState> {
     if (generation != _playbackGeneration) return;
     _seekThumbnailPlan = thumbnailPlan;
     _seekThumbnailBackend = thumbnailBackend;
+    PlayerDiagnostics.instance.record('controller.open', {
+      'backend': engineBackend.name,
+      'route': disableProxy ? 'direct' : 'proxy',
+      'attempt': attemptIndex + 1,
+      'generation': generation,
+    });
     if (attempt != null) {
       debugPrint(
         'Playback attempt ${attemptIndex + 1}/${attempts.length}: '
@@ -1273,6 +1294,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       if (engine.managesStartupPlaybackSpeed) {
         // FVP and MediaKit intentionally open native HLS/TS at 1x, then apply
         // the saved rate once their decoder has usable startup media.
+        _diagnosticCommand('speed', 'startup', value: targetPlaybackSpeed);
         await engine.setPlaybackSpeed(targetPlaybackSpeed);
         if (generation != _playbackGeneration) {
           await _disposeEngineOnce(engine);
@@ -1299,6 +1321,7 @@ class PlaybackController extends Notifier<PlaybackState> {
         return;
       }
       if (!engine.managesStartupPlaybackSpeed) {
+        _diagnosticCommand('speed', 'startup', value: targetPlaybackSpeed);
         await engine.setPlaybackSpeed(targetPlaybackSpeed);
       }
       if (generation != _playbackGeneration) {
@@ -1317,7 +1340,10 @@ class PlaybackController extends Notifier<PlaybackState> {
       }
       final bool effectiveAutoplay =
           autoplay && (!respectDesiredPlaying || state.desiredPlaying);
-      if (effectiveAutoplay) await engine.play();
+      if (effectiveAutoplay) {
+        _diagnosticCommand('play', 'startup.autoplay');
+        await engine.play();
+      }
       if (generation != _playbackGeneration) {
         await _disposeEngineOnce(engine);
         return;
@@ -1517,6 +1543,7 @@ class PlaybackController extends Notifier<PlaybackState> {
         continue;
       }
       _progressiveSeekPreviewActiveRequest = generation;
+      final diagnosticStart = PlayerDiagnostics.instance.begin();
       SeekThumbnail? thumbnail;
       try {
         thumbnail = await _seekThumbnailService.request(
@@ -1529,6 +1556,11 @@ class PlaybackController extends Notifier<PlaybackState> {
         // Background refinement is opportunistic. An interactive request can
         // retry the same bucket and remains independent from playback.
       } finally {
+        PlayerDiagnostics.instance.finish(
+          'preview.backgroundRequest',
+          diagnosticStart,
+          {'targetMs': target.inMilliseconds, 'found': thumbnail != null},
+        );
         if (_progressiveSeekPreviewActiveRequest == generation) {
           _progressiveSeekPreviewActiveRequest = null;
         }
@@ -1733,6 +1765,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       if (speed == 1.0) continue;
 
       try {
+        _diagnosticCommand('speed', 'startup.reapplySpeed', value: speed);
         await engine.setPlaybackSpeed(speed);
       } on Object {
         return;
@@ -2100,6 +2133,7 @@ class PlaybackController extends Notifier<PlaybackState> {
         'Offline playback stalled at ${stalledPosition.inMilliseconds}ms; '
         'kicking the local player.',
       );
+      _diagnosticCommand('pause', 'existing.offlineRecovery');
       await engine.pause();
       await Future<void>.delayed(_offlineStallKickDelay);
       if (!_isActiveOfflineStallRecovery(
@@ -2111,6 +2145,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       )) {
         return;
       }
+      _diagnosticCommand('play', 'existing.offlineRecovery');
       await engine.play();
       if (!_isActiveOfflineStallRecovery(
         item,
@@ -2320,6 +2355,11 @@ class PlaybackController extends Notifier<PlaybackState> {
   }
 
   Future<void> _applyDesiredPlaying(bool desiredPlaying, int epoch) async {
+    PlayerDiagnostics.instance.record('controller.playIntent', {
+      'playing': desiredPlaying,
+      'epoch': epoch,
+      'reason': _applyingRemote ? 'watchParty' : 'localIntent',
+    });
     final PlayerEngine? engine = state.engine;
     if (engine == null) return;
     if (desiredPlaying) {
@@ -2337,6 +2377,7 @@ class PlaybackController extends Notifier<PlaybackState> {
 
     if (state.engine != engine || epoch != _playPauseIntentEpoch) return;
     if (engine.state.value.isPlaying || engine.state.value.isBuffering) {
+      _diagnosticCommand('pause', 'playPauseIntent');
       await engine.pause();
     }
     if (state.engine != engine || epoch != _playPauseIntentEpoch) return;
@@ -2375,6 +2416,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       return;
     }
     if (!engine.state.value.isPlaying) {
+      _diagnosticCommand('play', 'playPauseIntent');
       await engine.play();
     }
     if (state.engine != engine ||
@@ -2434,6 +2476,7 @@ class PlaybackController extends Notifier<PlaybackState> {
       );
       if (_isActiveResumeWatch(engine, token) &&
           !engine.state.value.isPlaying) {
+        _diagnosticCommand('play', 'existing.resumeRecovery');
         await engine.play();
       }
     } on Object catch (error) {
@@ -2948,6 +2991,10 @@ class PlaybackController extends Notifier<PlaybackState> {
     Duration target, {
     String reason = 'seek',
   }) async {
+    PlayerDiagnostics.instance.record('controller.seek', {
+      'reason': reason,
+      'targetMs': target.inMilliseconds,
+    });
     try {
       await engine.seekTo(target).timeout(_engineSeekTimeout);
       return true;
@@ -3320,6 +3367,11 @@ class PlaybackController extends Notifier<PlaybackState> {
     await ref.read(playerSettingsProvider.notifier).setSpeed(speed);
     final PlayerSettings settings =
         ref.read(playerSettingsProvider).value ?? const PlayerSettings();
+    _diagnosticCommand(
+      'speed',
+      _applyingRemote ? 'watchParty' : 'user.speedSetting',
+      value: _effectivePlaybackSpeed(settings),
+    );
     await state.engine?.setPlaybackSpeed(_effectivePlaybackSpeed(settings));
     state = state.copyWith(temporarySpeedActive: _temporarySpeedHolds > 0);
     _updateMediaSession();
@@ -3335,6 +3387,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     final PlayerSettings settings =
         ref.read(playerSettingsProvider).value ?? const PlayerSettings();
     final double temporarySpeed = _effectivePlaybackSpeed(settings);
+    _diagnosticCommand('speed', 'user.temporarySpeed', value: temporarySpeed);
     await engine.setPlaybackSpeed(temporarySpeed);
     state = state.copyWith(temporarySpeedActive: true);
     _updateMediaSession();
@@ -3349,6 +3402,11 @@ class PlaybackController extends Notifier<PlaybackState> {
     _remoteTemporaryPlaybackSpeed = null;
     final PlayerSettings settings =
         ref.read(playerSettingsProvider).value ?? const PlayerSettings();
+    _diagnosticCommand(
+      'speed',
+      'user.restoreSpeed',
+      value: settings.playbackSpeed,
+    );
     await state.engine?.setPlaybackSpeed(settings.playbackSpeed);
     state = state.copyWith(temporarySpeedActive: false);
     _updateMediaSession();
@@ -3946,10 +4004,17 @@ class PlaybackController extends Notifier<PlaybackState> {
     bool recoveryOperationFailed = false;
     _logPlaybackEnd(engine, evaluation);
     try {
+      _diagnosticCommand('pause', 'existing.prematureEofRecovery');
       await engine.pause();
       if (!_isCurrentEofRecovery(engine, generation, manualSeekEpoch)) return;
+      _diagnosticCommand(
+        'seek',
+        'existing.prematureEofRecovery',
+        value: resumeAt.inMilliseconds,
+      );
       await engine.seekTo(resumeAt);
       if (!_isCurrentEofRecovery(engine, generation, manualSeekEpoch)) return;
+      _diagnosticCommand('play', 'existing.prematureEofRecovery');
       await engine.play();
       if (_isCurrentEofRecovery(engine, generation, manualSeekEpoch)) {
         state = state.copyWith(
@@ -4192,109 +4257,114 @@ class PlaybackController extends Notifier<PlaybackState> {
     MediaPlaybackItem item,
     PlayerEngine engine,
   ) async {
-    if (item.ignoreProgress || !ref.mounted) return;
+    final diagnosticStart = PlayerDiagnostics.instance.begin();
+    try {
+      if (item.ignoreProgress || !ref.mounted) return;
 
-    final PlayerEngineState engineState = engine.state.value;
-    _trackMaxObservedPosition(engine);
-    final bool hasPendingSeekTarget =
-        (_queuedSeekEngine == engine && _queuedSeekTarget != null) ||
-        (_settlingSeekEngine == engine && _settlingSeekTarget != null);
-    Duration position = _currentPositionFor(engine);
-    if (!hasPendingSeekTarget &&
-        position <= const Duration(seconds: 1) &&
-        _maxObservedPosition > position) {
-      position = _maxObservedPosition;
-    }
-    if (!engineState.isInitialized &&
-        position <= const Duration(seconds: 1) &&
-        !_reachedNearEnd &&
-        !_autoProgressMarked) {
-      return;
-    }
-
-    final PlaybackEndEvaluation end = _playbackEndEvaluation(engine);
-    // A watched mark at 85% is intentionally not completion. Resume resets to
-    // zero only after the strict end decision was latched for this generation.
-    final bool engineCompleted = end.confirmedEnded && _reachedNearEnd;
-    final DateTime? guardUntil = _resumeGuardUntil;
-    if (!engineCompleted &&
-        guardUntil != null &&
-        DateTime.now().isBefore(guardUntil)) {
-      if (position + const Duration(seconds: 2) < _resumeGuardPosition) {
+      final PlayerEngineState engineState = engine.state.value;
+      _trackMaxObservedPosition(engine);
+      final bool hasPendingSeekTarget =
+          (_queuedSeekEngine == engine && _queuedSeekTarget != null) ||
+          (_settlingSeekEngine == engine && _settlingSeekTarget != null);
+      Duration position = _currentPositionFor(engine);
+      if (!hasPendingSeekTarget &&
+          position <= const Duration(seconds: 1) &&
+          _maxObservedPosition > position) {
+        position = _maxObservedPosition;
+      }
+      if (!engineState.isInitialized &&
+          position <= const Duration(seconds: 1) &&
+          !_reachedNearEnd &&
+          !_autoProgressMarked) {
         return;
       }
-      _resumeGuardUntil = null;
+
+      final PlaybackEndEvaluation end = _playbackEndEvaluation(engine);
+      // A watched mark at 85% is intentionally not completion. Resume resets to
+      // zero only after the strict end decision was latched for this generation.
+      final bool engineCompleted = end.confirmedEnded && _reachedNearEnd;
+      final DateTime? guardUntil = _resumeGuardUntil;
+      if (!engineCompleted &&
+          guardUntil != null &&
+          DateTime.now().isBefore(guardUntil)) {
+        if (position + const Duration(seconds: 2) < _resumeGuardPosition) {
+          return;
+        }
+        _resumeGuardUntil = null;
+      }
+
+      // When the backend signals end-of-stream the reported position can snap
+      // back to 0:00, so don't bail out on the early-position guard in that case.
+      if (!engineCompleted && position <= const Duration(seconds: 1)) {
+        return;
+      }
+
+      final int? durationSeconds = end.authoritativeDuration?.inSeconds;
+
+      // The episode counts as watched once playback crosses 85% (the common
+      // anime convention) or the backend reports end-of-stream. Latched in
+      // [_autoProgressMarked] so a later periodic save can never clear it back to
+      // unwatched while the final 15% (ED/credits) is still playing.
+      final bool reachedWatchedFraction = end.watchedThresholdReached;
+      final bool watched =
+          engineCompleted || reachedWatchedFraction || _autoProgressMarked;
+
+      // Only snap the resume point back to 0:00 once the stream is essentially
+      // finished. When we mark "watched" early (at 85%) the real position is kept
+      // so reopening resumes in the final stretch instead of restarting.
+      final bool resetToStart = engineCompleted;
+      final int savePosition = resetToStart ? 0 : position.inSeconds;
+      final int? savedDurationSeconds = durationSeconds;
+      final bool syncEnabled =
+          (ref.read(playerSettingsProvider).value ?? const PlayerSettings())
+              .autoAnilistSync;
+
+      final bool atomicCheckpointCommitted = watched && syncEnabled
+          ? await _trySyncTrackers(
+              item,
+              item.episodeNumber.round(),
+              syncToProviders: syncEnabled,
+              checkpoint: TrackingEpisodeCheckpoint(
+                mediaId: item.id,
+                season: item.seasonNumber,
+                episode: item.episodeNumber,
+                positionSeconds: savePosition,
+                durationSeconds: savedDurationSeconds,
+                completed: true,
+              ),
+            )
+          : false;
+
+      if (!ref.mounted) return;
+      await ref
+          .read(localLibraryProvider.notifier)
+          .saveEpisodeProgress(
+            mediaId: item.id,
+            season: item.seasonNumber,
+            episode: item.episodeNumber,
+            positionSeconds: savePosition,
+            durationSeconds: savedDurationSeconds,
+            completed: watched,
+            mediaItem: _trackingMediaItem(item),
+            persistCanonical: !atomicCheckpointCommitted,
+          );
+
+      if (!ref.mounted || !syncEnabled) return;
+      await ref
+          .read(localLibraryProvider.notifier)
+          .updateWatchProgress(
+            mediaId: item.id,
+            seasonNumber: item.seasonNumber,
+            episodeNumber: item.episodeNumber,
+            positionFraction: watched
+                ? 1.0
+                : (durationSeconds != null && durationSeconds > 0
+                      ? position.inSeconds / durationSeconds
+                      : null),
+          );
+    } finally {
+      PlayerDiagnostics.instance.finish('checkpoint.saved', diagnosticStart);
     }
-
-    // When the backend signals end-of-stream the reported position can snap
-    // back to 0:00, so don't bail out on the early-position guard in that case.
-    if (!engineCompleted && position <= const Duration(seconds: 1)) {
-      return;
-    }
-
-    final int? durationSeconds = end.authoritativeDuration?.inSeconds;
-
-    // The episode counts as watched once playback crosses 85% (the common
-    // anime convention) or the backend reports end-of-stream. Latched in
-    // [_autoProgressMarked] so a later periodic save can never clear it back to
-    // unwatched while the final 15% (ED/credits) is still playing.
-    final bool reachedWatchedFraction = end.watchedThresholdReached;
-    final bool watched =
-        engineCompleted || reachedWatchedFraction || _autoProgressMarked;
-
-    // Only snap the resume point back to 0:00 once the stream is essentially
-    // finished. When we mark "watched" early (at 85%) the real position is kept
-    // so reopening resumes in the final stretch instead of restarting.
-    final bool resetToStart = engineCompleted;
-    final int savePosition = resetToStart ? 0 : position.inSeconds;
-    final int? savedDurationSeconds = durationSeconds;
-    final bool syncEnabled =
-        (ref.read(playerSettingsProvider).value ?? const PlayerSettings())
-            .autoAnilistSync;
-
-    final bool atomicCheckpointCommitted = watched && syncEnabled
-        ? await _trySyncTrackers(
-            item,
-            item.episodeNumber.round(),
-            syncToProviders: syncEnabled,
-            checkpoint: TrackingEpisodeCheckpoint(
-              mediaId: item.id,
-              season: item.seasonNumber,
-              episode: item.episodeNumber,
-              positionSeconds: savePosition,
-              durationSeconds: savedDurationSeconds,
-              completed: true,
-            ),
-          )
-        : false;
-
-    if (!ref.mounted) return;
-    await ref
-        .read(localLibraryProvider.notifier)
-        .saveEpisodeProgress(
-          mediaId: item.id,
-          season: item.seasonNumber,
-          episode: item.episodeNumber,
-          positionSeconds: savePosition,
-          durationSeconds: savedDurationSeconds,
-          completed: watched,
-          mediaItem: _trackingMediaItem(item),
-          persistCanonical: !atomicCheckpointCommitted,
-        );
-
-    if (!ref.mounted || !syncEnabled) return;
-    await ref
-        .read(localLibraryProvider.notifier)
-        .updateWatchProgress(
-          mediaId: item.id,
-          seasonNumber: item.seasonNumber,
-          episodeNumber: item.episodeNumber,
-          positionFraction: watched
-              ? 1.0
-              : (durationSeconds != null && durationSeconds > 0
-                    ? position.inSeconds / durationSeconds
-                    : null),
-        );
   }
 
   Future<bool> _trySyncTrackers(

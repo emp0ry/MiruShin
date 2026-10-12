@@ -1,8 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
 
+import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import '../../tracking/data/shikimori_api_client.dart';
 
 /// Resolved multi-language titles for an anime.
 class AnimeTitles {
@@ -11,6 +14,7 @@ class AnimeTitles {
     this.japanese = '',
     this.romaji = '',
     this.russian = '',
+    this.settledProviders = const {},
   });
 
   final String english;
@@ -18,18 +22,15 @@ class AnimeTitles {
   final String romaji;
   final String russian;
 
+  /// Session-only completion signals, never persisted as metadata.
+  final Set<String> settledProviders;
+
   bool get isEmpty =>
       english.isEmpty && japanese.isEmpty && romaji.isEmpty && russian.isEmpty;
 }
 
-/// Resolves anime titles from AniList, Jikan (MAL), and Shikimori with
-/// graceful fallback at each step.
-///
-/// Priority:
-///   English / Romaji / Japanese -> AniList first, then Jikan if AniList fails.
-///   Russian                     -> Shikimori first; falls back to whatever
-///                                  AniList/Jikan already gave when Shikimori
-///                                  is unavailable.
+/// Independent enrichment: every successful provider can publish immediately.
+/// Provider IDs are verified; title-only enrichment never creates a binding.
 class AnimeTitlesService {
   static const String _anilistEndpoint = 'https://graphql.anilist.co';
   static const String _jikanBase = 'https://api.jikan.moe/v4';
@@ -37,10 +38,11 @@ class AnimeTitlesService {
 
   // Persistent cache TTL: 7 days (Russian titles rarely change).
   static const Duration _cacheTtl = Duration(days: 7);
-  static const String _cachePrefix = 'animeTitles.v1.';
+  static const String _cachePrefix = 'animeTitles.v2.';
 
   static Dio _makeDio() => Dio(
     BaseOptions(
+      baseUrl: 'https://shikimori.one',
       connectTimeout: const Duration(seconds: 8),
       receiveTimeout: const Duration(seconds: 10),
     ),
@@ -49,112 +51,148 @@ class AnimeTitlesService {
   static Future<AnimeTitles> resolve({
     String? anilistId,
     String? malId,
-    Iterable<String> titleCandidates = const <String>[],
+    String? shikimoriId,
+    Iterable<String> titleCandidates = const [],
+    List<String> languageCodes = const ['ru', 'ja', 'en'],
+    CancelToken? cancelToken,
+    Dio? dio,
   }) async {
-    // Check persistent cache first.
-    final String? cacheKey = _cacheKeyFor(anilistId, malId);
-    if (cacheKey != null) {
-      final AnimeTitles? cached = await _readCache(cacheKey);
-      if (cached != null) return cached;
+    AnimeTitles latest = const AnimeTitles();
+    await for (final value in watch(
+      anilistId: anilistId,
+      malId: malId,
+      shikimoriId: shikimoriId,
+      titleCandidates: titleCandidates,
+      languageCodes: languageCodes,
+      cancelToken: cancelToken,
+      dio: dio,
+    )) {
+      latest = value;
     }
-
-    final Dio dio = _makeDio();
-    String english = '';
-    String japanese = '';
-    String romaji = '';
-    String russian = '';
-
-    // 1. AniList -> English, Romaji, Japanese
-    if (anilistId != null && anilistId.trim().isNotEmpty) {
-      try {
-        final AnimeTitles al = await _fromAniList(dio, anilistId.trim());
-        english = al.english;
-        japanese = al.japanese;
-        romaji = al.romaji;
-        debugPrint(
-          '[AnimeTitles] AniList OK — EN:"$english" ROMAJI:"$romaji" JP:"$japanese"',
-        );
-      } catch (e) {
-        debugPrint('[AnimeTitles] AniList failed: $e');
-      }
-    }
-
-    // 2. Jikan (unofficial MAL) fallback
-    if ((english.isEmpty || romaji.isEmpty) &&
-        malId != null &&
-        malId.trim().isNotEmpty) {
-      try {
-        final AnimeTitles jk = await _fromJikan(dio, malId.trim());
-        if (english.isEmpty) english = jk.english;
-        if (japanese.isEmpty) japanese = jk.japanese;
-        if (romaji.isEmpty) romaji = jk.romaji;
-        debugPrint(
-          '[AnimeTitles] Jikan OK — EN:"$english" ROMAJI:"$romaji" JP:"$japanese"',
-        );
-      } catch (e) {
-        debugPrint('[AnimeTitles] Jikan failed: $e');
-      }
-    }
-
-    // 3. Shikimori -> Russian (primary); fallback titles if others failed
-    if (malId != null && malId.trim().isNotEmpty) {
-      try {
-        final AnimeTitles sh = await _withRetry429(
-          () => _fromShikimori(dio, malId.trim()),
-        );
-        russian = sh.russian;
-        if (english.isEmpty) english = sh.english;
-        if (japanese.isEmpty) japanese = sh.japanese;
-        // Shikimori `name` is romanized (approximately romaji)
-        if (romaji.isEmpty) romaji = sh.romaji;
-        debugPrint('[AnimeTitles] Shikimori OK — RU:"$russian"');
-      } catch (e) {
-        debugPrint('[AnimeTitles] Shikimori failed: $e');
-      }
-    }
-
-    if (russian.isEmpty) {
-      try {
-        final AnimeTitles sh = await _withRetry429(
-          () => _fromShikimoriSearch(dio, titleCandidates),
-        );
-        russian = sh.russian;
-        if (english.isEmpty) english = sh.english;
-        if (japanese.isEmpty) japanese = sh.japanese;
-        if (romaji.isEmpty) romaji = sh.romaji;
-        if (russian.isNotEmpty) {
-          debugPrint('[AnimeTitles] Shikimori search OK — RU:"$russian"');
-        }
-      } catch (e) {
-        debugPrint('[AnimeTitles] Shikimori search failed: $e');
-      }
-    }
-
-    final AnimeTitles result = AnimeTitles(
-      english: english,
-      japanese: japanese,
-      romaji: romaji,
-      russian: russian,
-    );
-
-    // Persist only when we got at least a Russian title (the slow path).
-    if (cacheKey != null && russian.isNotEmpty) {
-      await _writeCache(cacheKey, result);
-    }
-
-    return result;
+    return latest;
   }
 
-  // Persistent cache helpers
+  /// Each provider publishes independently. Russian enrichment never awaits
+  /// AniList/Jikan, and cancelling a consumer cancels all of its HTTP requests.
+  static Stream<AnimeTitles> watch({
+    String? anilistId,
+    String? malId,
+    String? shikimoriId,
+    Iterable<String> titleCandidates = const [],
+    List<String> languageCodes = const ['ru', 'ja', 'en'],
+    CancelToken? cancelToken,
+    Dio? dio,
+  }) async* {
+    final token = cancelToken ?? CancelToken();
+    final candidates = _uniqueQueries(titleCandidates);
+    final identity =
+        '${anilistId ?? ''}${malId ?? ''}${shikimoriId ?? ''}'.isEmpty
+        ? sha256.convert(utf8.encode(jsonEncode(candidates))).toString()
+        : '';
+    final key =
+        '${_cachePrefix}al:${anilistId ?? ''}|mal:${malId ?? ''}|shiki:${shikimoriId ?? ''}|${languageCodes.join(',')}|$identity';
+    final cached = await _readCache(key) ?? const AnimeTitles();
+    if (token.isCancelled) return;
+    if (!cached.isEmpty) yield cached;
+    bool hasLanguage(String code) => switch (code) {
+      'ru' => cached.russian.isNotEmpty,
+      'ja' => cached.japanese.isNotEmpty || cached.romaji.isNotEmpty,
+      _ => cached.english.isNotEmpty,
+    };
+    if (languageCodes.isNotEmpty && languageCodes.every(hasLanguage)) return;
+    final client = dio ?? _makeDio();
+    final interceptor = InterceptorsWrapper(
+      onRequest: (options, handler) {
+        options.cancelToken = token;
+        handler.next(options);
+      },
+    );
+    client.interceptors.add(interceptor);
+    final updates = StreamController<AnimeTitles>();
+    Future<void> cacheWrites = Future.value();
+    final values = <String, AnimeTitles>{'cache': cached};
+    final settled = <String>{};
+    int pending = 0;
+    AnimeTitles merged() {
+      String field(String Function(AnimeTitles) read, List<String> order) {
+        for (final source in order) {
+          final text = read(values[source] ?? const AnimeTitles());
+          if (text.isNotEmpty) return text;
+        }
+        return '';
+      }
 
-  static String? _cacheKeyFor(String? anilistId, String? malId) {
-    if (anilistId != null && anilistId.trim().isNotEmpty) {
-      return '$_cachePrefix${anilistId.trim()}';
+      return AnimeTitles(
+        english: field((t) => t.english, [
+          'anilist',
+          'jikan',
+          'shiki',
+          'cache',
+        ]),
+        japanese: field((t) => t.japanese, [
+          'anilist',
+          'jikan',
+          'shiki',
+          'cache',
+        ]),
+        romaji: field((t) => t.romaji, ['anilist', 'jikan', 'shiki', 'cache']),
+        russian: field((t) => t.russian, ['shiki', 'cache']),
+        settledProviders: Set.unmodifiable(settled),
+      );
     }
-    if (malId != null && malId.trim().isNotEmpty) {
-      return '${_cachePrefix}mal.${malId.trim()}';
+
+    final jobs = <String, Future<AnimeTitles> Function()>{
+      if ((anilistId ?? '').isNotEmpty && languageCodes.any((c) => c != 'ru'))
+        'anilist': () => _fromAniList(client, anilistId!),
+      if ((malId ?? '').isNotEmpty && languageCodes.any((c) => c != 'ru'))
+        'jikan': () => _fromJikan(client, malId!),
+      'shiki': () async {
+        final exact = await _withRetry429(
+          () => _fromShikimori(client, malId, shikimoriId, candidates),
+        );
+        if (exact.russian.isNotEmpty ||
+            (malId ?? '').isNotEmpty ||
+            (shikimoriId ?? '').isNotEmpty) {
+          return exact;
+        }
+        return _withRetry429(() => _fromShikimoriSearch(client, candidates));
+      },
+    };
+    pending = jobs.length;
+    for (final job in jobs.entries) {
+      unawaited(() async {
+        try {
+          final result = await job.value();
+          if (!token.isCancelled && !updates.isClosed && !result.isEmpty) {
+            values[job.key] = result;
+            cacheWrites = cacheWrites.then((_) => _writeCache(key, merged()));
+            updates.add(merged());
+          }
+        } on Object {
+          // A failed provider is independent and never erases cached fields.
+        } finally {
+          settled.add(job.key);
+          if (!token.isCancelled && !updates.isClosed) updates.add(merged());
+          pending--;
+          if (pending == 0 && !updates.isClosed) await updates.close();
+        }
+      }());
     }
-    return null;
+    try {
+      await for (final update in updates.stream) {
+        if (token.isCancelled) break;
+        yield update;
+      }
+      await cacheWrites;
+      if (!token.isCancelled && !merged().isEmpty) {
+        await _writeCache(key, merged());
+      }
+    } finally {
+      if (!token.isCancelled) token.cancel('title consumer finished');
+      client.interceptors.remove(interceptor);
+      if (dio == null) client.close(force: true);
+      if (!updates.isClosed) unawaited(updates.close());
+    }
   }
 
   static Future<AnimeTitles?> _readCache(String key) async {
@@ -267,29 +305,53 @@ query ($id: Int) {
 
   // Shikimori GraphQL
 
-  static Future<AnimeTitles> _fromShikimori(Dio dio, String malId) async {
-    // Shikimori uses MAL IDs. `name` is the romanized title.
-    final String gqlQuery =
-        '{ animes(ids: "$malId") { name english japanese russian } }';
-    final Response<dynamic> response = await dio.post<dynamic>(
+  static Future<AnimeTitles> _fromShikimori(
+    Dio dio,
+    String? malId,
+    String? shikimoriId,
+    Iterable<String> candidates,
+  ) async {
+    int? id = int.tryParse(shikimoriId ?? '');
+    final int? mal = int.tryParse(malId ?? '');
+    if (id == null && mal != null && mal > 0) {
+      for (final title in ['', ..._uniqueQueries(candidates)]) {
+        id = await ShikimoriApiClient(
+          accessToken: '',
+          userId: 0,
+          dio: dio,
+        ).resolveMediaIdByMalId(malId: mal, title: title);
+        if (id != null) break;
+      }
+    }
+    if (id == null || id <= 0) return const AnimeTitles();
+    final response = await dio.post<dynamic>(
       _shikimoriEndpoint,
-      data: <String, dynamic>{'query': gqlQuery},
+      data: {
+        'query':
+            '{ animes(ids: "$id") { id malId name english japanese russian } }',
+      },
       options: Options(
-        headers: <String, String>{'Content-Type': 'application/json'},
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'MiruShin title resolver',
+        },
       ),
     );
-    final Object? data = response.data;
+    final data = response.data;
     if (data is! Map) return const AnimeTitles();
-    final Object? animes = (data['data'] as Map?)?['animes'];
-    if (animes is! List || animes.isEmpty) return const AnimeTitles();
-    final Object? first = animes.first;
-    if (first is! Map) return const AnimeTitles();
-    return AnimeTitles(
-      english: _str(first['english']),
-      japanese: _str(first['japanese']),
-      romaji: _str(first['name']),
-      russian: _str(first['russian']),
-    );
+    final items = (data['data'] as Map?)?['animes'];
+    if (items is! List) return const AnimeTitles();
+    for (final item in items.whereType<Map>()) {
+      if (int.tryParse('${item['id']}') != id) continue;
+      if (mal != null && int.tryParse('${item['malId']}') != mal) continue;
+      return AnimeTitles(
+        english: _str(item['english']),
+        japanese: _str(item['japanese']),
+        romaji: _str(item['name']),
+        russian: _str(item['russian']),
+      );
+    }
+    return const AnimeTitles();
   }
 
   static Future<AnimeTitles> _fromShikimoriSearch(
@@ -326,7 +388,7 @@ query ($id: Int) {
         romaji: _str(match['name']),
         russian: _str(match['russian']),
       );
-      if (!titles.isEmpty) {
+      if (titles.russian.isNotEmpty) {
         return titles;
       }
     }
@@ -355,7 +417,8 @@ query ($id: Int) {
     String query,
   ) {
     final String queryKey = _matchKey(query);
-    Map<String, dynamic>? first;
+    if (queryKey.isEmpty) return null;
+    final matches = <String, Map<String, dynamic>>{};
     for (final Object? item in items) {
       if (item is! Map) {
         continue;
@@ -364,7 +427,6 @@ query ($id: Int) {
         (Object? key, Object? value) =>
             MapEntry<String, dynamic>(key.toString(), value),
       );
-      first ??= map;
       for (final Object? value in <Object?>[
         map['name'],
         map['russian'],
@@ -372,18 +434,25 @@ query ($id: Int) {
         map['japanese'],
       ]) {
         if (_matchKey(value) == queryKey) {
-          return map;
+          matches['${map['id']}'] = map;
+          break;
         }
       }
     }
-    return first;
+    return matches.length == 1 ? matches.values.single : null;
   }
 
   static String _matchKey(Object? value) {
     return value
             ?.toString()
             .toLowerCase()
-            .replaceAll(RegExp(r'[^a-zа-яё0-9]+', unicode: true), ' ')
+            .replaceAll(
+              RegExp(
+                r'[^a-zа-яё0-9\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]+',
+                unicode: true,
+              ),
+              ' ',
+            )
             .replaceAll(RegExp(r'\s+'), ' ')
             .trim() ??
         '';

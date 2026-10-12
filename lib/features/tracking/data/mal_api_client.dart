@@ -552,6 +552,8 @@ class MalApiClient {
       externalIds: <String, String>{
         'mal': '$malId',
         if (manga) 'anilist_type': 'MANGA',
+        if (manga && _int(node['num_volumes']) > 0)
+          'volumes': '${_int(node['num_volumes'])}',
         if (source.isNotEmpty) 'mal_source': source,
         if (nsfw.isNotEmpty) 'mal_nsfw': nsfw,
         if (mediaType.isNotEmpty) 'mal_media_type': mediaType,

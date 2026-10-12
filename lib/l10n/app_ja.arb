@@ -1592,5 +1592,17 @@
   "Unnamed entry": "名前のないエントリ",
   "These entries are saved locally, but their titles are missing or only contain placeholder text. They stay in your library and continue syncing. This notice does not block Google Drive Sync.": "これらのエントリはローカルに保存されていますが、タイトルが未取得か仮の表示です。ライブラリに残り、同期も続きます。この通知はGoogle Drive同期を妨げません。",
   "Retry asks trackers for metadata again. Ignore only hides this notice on this device; it does not delete entries or stop sync.": "「再試行」はトラッカーにメタデータを再要求します。「無視する」はこの端末の通知だけを非表示にし、エントリの削除や同期の停止は行いません。",
-  "Notice hidden. The entries and sync are unchanged.": "通知を非表示にしました。エントリと同期は変更されていません。"
+  "Notice hidden. The entries and sync are unchanged.": "通知を非表示にしました。エントリと同期は変更されていません。",
+  "No entries have a verified ID for this export.": "このエクスポートに必要な確認済みIDを持つエントリがありません。",
+  "Some entries were skipped": "一部のエントリをスキップしました",
+  "Skipped {count} entries with missing or ambiguous provider IDs.": "プロバイダーIDが未取得または曖昧なため、{count}件をスキップしました。",
+  "Exports the Local Library in MyAnimeList XML format. Works offline.": "ローカルライブラリをMyAnimeList用XMLで出力します。オフラインでも利用できます。",
+  "Exports the Local Library in Shikimori JSON format. Works offline.": "ローカルライブラリをShikimori用JSONで出力します。オフラインでも利用できます。",
+  "Playback diagnostics": "再生診断",
+  "Record the last ten minutes on this device. Does not change playback or upload reports.": "直近10分間をこの端末に記録します。再生設定の変更やレポートの自動アップロードは行いません。",
+  "Mark micro-pause": "短い停止を記録",
+  "Mark micro-pause (D)": "短い停止を記録 (D)",
+  "Press D in the player to mark a micro-pause.": "プレイヤーで D キーを押すと短い停止を記録できます。",
+  "Micro-pause marked": "短い停止を記録しました",
+  "Save diagnostic report": "診断レポートを保存"
 }

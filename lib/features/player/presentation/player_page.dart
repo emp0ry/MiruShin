@@ -28,6 +28,7 @@ import '../engine/player_engine.dart';
 import '../engine/seek_thumbnail.dart';
 import 'widgets/auto_next_overlay.dart';
 import 'widgets/gesture_overlay.dart';
+import 'widgets/player_diagnostics_controls.dart';
 import 'widgets/player_shortcuts_view.dart';
 import 'widgets/player_video_surface.dart';
 
@@ -621,6 +622,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
         key == LogicalKeyboardKey.arrowDown ||
         key == LogicalKeyboardKey.keyM ||
         key == LogicalKeyboardKey.keyC ||
+        key == LogicalKeyboardKey.keyD ||
         key == LogicalKeyboardKey.keyP ||
         key == LogicalKeyboardKey.keyV ||
         key == LogicalKeyboardKey.keyZ ||
@@ -1253,6 +1255,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     }
 
     final LogicalKeyboardKey key = event.logicalKey;
+    if (key == LogicalKeyboardKey.keyD) {
+      return handlePlayerDiagnosticKeyEvent(
+        event,
+        enabled: settings.diagnosticsEnabled,
+      );
+    }
     final PlaybackController notifier = ref.read(
       playbackControllerProvider.notifier,
     );
@@ -4707,6 +4715,7 @@ class _PlayerSettingsTiles extends ConsumerWidget {
           onTap: () => _showMenuSheet(context, 'Player controls', <Widget>[
             PlayerShortcutsView(
               seekSeconds: settings.seekInterval.inSeconds,
+              diagnosticsEnabled: settings.diagnosticsEnabled,
               horizontalSwipeSeekEnabled: settings.horizontalSwipeSeekEnabled,
               volumeControlsEnabled: volumeControlsEnabled,
               pipSupported:
@@ -4897,6 +4906,7 @@ class _PlayerSettingsTiles extends ConsumerWidget {
             }
           },
         ),
+        const PlayerDiagnosticsControls(),
       ],
     );
   }

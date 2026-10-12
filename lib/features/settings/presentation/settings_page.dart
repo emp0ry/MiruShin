@@ -43,6 +43,7 @@ import '../../metadata/data/tmdb_metadata_provider.dart';
 import '../../player/application/player_settings.dart';
 import '../../player/data/discord_rpc_service.dart';
 import '../../player/domain/player_models.dart';
+import '../../player/presentation/widgets/player_diagnostics_controls.dart';
 import '../../profile/application/anilist_user_settings_provider.dart';
 import '../../tracking/application/anilist_library_provider.dart';
 import '../../tracking/application/tracker_library_provider.dart';
@@ -58,6 +59,7 @@ import '../application/mirushin_backup_service.dart';
 import '../application/settings_state.dart';
 import '../application/update_checker_provider.dart';
 import 'mirushin_backup_file.dart';
+import 'widgets/library_export_section.dart';
 import 'widgets/library_sync_source_row.dart';
 import 'widgets/settings_widgets.dart';
 import 'widgets/support_mirushin_card.dart';
@@ -99,6 +101,8 @@ class SettingsPage extends ConsumerWidget {
             const SizedBox(height: AppSpacing.lg),
           ],
           const _LibrarySyncSection(),
+          const SizedBox(height: AppSpacing.lg),
+          const LibraryExportSection(),
           const SizedBox(height: AppSpacing.lg),
           _AppearanceSection(settings: settings, controller: controller),
           const SizedBox(height: AppSpacing.lg),
@@ -2390,6 +2394,7 @@ class _PlayerEngineSection extends ConsumerWidget {
             onChanged: controller.setHorizontalSwipeSeekEnabled,
           ),
         ),
+        const PlayerDiagnosticsControls(),
       ],
     );
   }

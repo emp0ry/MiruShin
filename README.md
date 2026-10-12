@@ -62,8 +62,30 @@ MiruShin lets you browse trending titles, build your library, keep your progress
 | 👥 **Watch Together** | Create a Watch with Friends room by code or QR and sync playback peer-to-peer across devices. |
 | 📥 **Offline** | Download episodes from the watch page and play them later from the Downloaded library tab. |
 | ⏭️ **Skip Smartly** | AniSkip markers let you jump openings and endings automatically. |
-| 👤 **Profile** | View AniList activity, favourites, feed, statistics, reviews, and export your list. |
+| 👤 **Profile** | View AniList activity, favourites, feed, statistics, and reviews. MAL XML and Shikimori JSON exports work offline from Settings → Export, using the active Local Library workspace. |
 | 🎨 **Make It Yours** | English, Russian, and Japanese UI with themes, accent colors, and layouts for mobile, desktop, and TV. |
+
+### Playback diagnostics
+
+If playback briefly pauses, enable **Settings → Player → Playback diagnostics**.
+The **D** key in the player marks a micro-pause without pausing playback.
+The key works only while diagnostics are enabled, outside text fields, and without
+Ctrl/Alt/Cmd/Shift modifiers. Holding it does not create repeated marks.
+Use **Save diagnostic report** in Player Settings to save/share the report manually.
+Diagnostics are at the end of Player Settings, away from routine playback controls.
+The memory-only journal is bounded to the last ten minutes and includes the actual
+MPV/FVP engine and route, playback/buffer transitions, commands, proxy timings,
+local checkpoints, Drive activity and Flutter frame timings. Stream URLs, tokens,
+cookies and credentials are omitted. Reports are not automatically saved to Drive.
+Disable the mode to detach its additional observers. Diagnostics do not change
+decoder, synchronization, seek preview or recovery settings; a recording is needed
+before attributing micro-pauses to a specific cause.
+
+Offline exports include canonical local edits even before tracker delivery.
+Entries without a verified target ID, ambiguous bindings and deleted entries are
+excluded; skipped entries are reported. MAL XML preserves fuzzy start/finish dates
+and manga volume progress. Shikimori JSON uses the actual Shikimori ID, never an
+assumed MAL ID, and only fields supported by its importer (which has no date fields).
 
 **More goodies**
 

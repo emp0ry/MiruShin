@@ -12,17 +12,20 @@ import 'package:share_plus/share_plus.dart';
 import '../../../app/localization/app_localizations.dart';
 import '../../../core/platform/io_compat.dart' if (dart.library.io) 'dart:io';
 import '../../../shared/models/anilist_models.dart';
-import '../../tracking/data/anilist_api_client.dart';
+import '../../../shared/models/media_item.dart';
+import '../../library/domain/library_export_snapshot.dart';
 
-enum AniListExportTarget { myAnimeList, shikimori }
+enum LibraryExportTarget { myAnimeList, shikimori }
 
-class AniListExportPayload {
-  const AniListExportPayload({
+class LibraryExportPayload {
+  const LibraryExportPayload({
     required this.filename,
     required this.bytes,
     required this.mimeType,
     required this.fileExtension,
     required this.shareText,
+    this.skippedCount = 0,
+    this.skippedTitles = const [],
   });
 
   final String filename;
@@ -30,73 +33,89 @@ class AniListExportPayload {
   final String mimeType;
   final String fileExtension;
   final String shareText;
+  final int skippedCount;
+  final List<String> skippedTitles;
 }
 
-Future<AniListExportPayload?> buildAniListExportPayload({
-  required AniListApiClient client,
-  required int userId,
+LibraryExportPayload? buildLibraryExportPayload({
+  required LibraryExportSnapshot snapshot,
   required String username,
   required bool anime,
-  required AniListExportTarget target,
-}) async {
-  final List<AniListAnimeListFolder> folders = await client
-      .fetchMediaListCollection(
-        userId: userId,
-        type: anime ? 'ANIME' : 'MANGA',
-        sort: const <String>['ADDED_TIME_DESC'],
-      );
-  final List<AniListAnimeListEntry> allEntries = _orderedEntries(folders);
-  final List<AniListAnimeListEntry> exportableEntries = allEntries
-      .where(
-        (AniListAnimeListEntry entry) =>
-            entry.mediaItem.externalIds['mal'] != null,
-      )
-      .toList(growable: false);
+  required LibraryExportTarget target,
+  DateTime? generatedAt,
+}) {
+  final String provider = target == LibraryExportTarget.myAnimeList
+      ? 'mal'
+      : 'shikimori';
+  final allEntries = <String, LibraryExportEntry>{
+    for (final entry in snapshot.entries)
+      if (entry.mediaItem.type == (anime ? MediaType.anime : MediaType.manga))
+        entry.localId: entry,
+  }.values.toList();
+  final byProviderId = <int, List<LibraryExportEntry>>{};
+  for (final entry in allEntries) {
+    final id = entry.providerIds[provider];
+    if (id != null && id > 0) byProviderId.putIfAbsent(id, () => []).add(entry);
+  }
+  // Duplicate or contradictory bindings must not write two different states
+  // for the same target. They are reported as ambiguous, not guessed.
+  final exportableEntries = byProviderId.values
+      .where((group) => group.length == 1)
+      .map((group) => group.single)
+      .toList();
+  final included = exportableEntries.map((entry) => entry.localId).toSet();
+  final skippedCount = allEntries.length - exportableEntries.length;
   if (exportableEntries.isEmpty) return null;
 
-  final DateTime now = DateTime.now();
+  final DateTime now = generatedAt ?? DateTime.now();
   final String stamp = DateFormat('yyyyMMdd_HHmmss').format(now);
   final String content = switch (target) {
-    AniListExportTarget.myAnimeList => _buildMalXml(
-      entries: allEntries,
+    LibraryExportTarget.myAnimeList => _buildMalXml(
+      entries: exportableEntries,
       username: username,
       anime: anime,
       generatedAt: now,
     ),
-    AniListExportTarget.shikimori => _buildShikimoriJson(
-      entries: allEntries,
+    LibraryExportTarget.shikimori => _buildShikimoriJson(
+      entries: exportableEntries,
       anime: anime,
     ),
   };
   final String filename = switch ((target, anime)) {
-    (AniListExportTarget.myAnimeList, true) => 'myanimelist_anime_$stamp.xml',
-    (AniListExportTarget.myAnimeList, false) => 'myanimelist_manga_$stamp.xml',
-    (AniListExportTarget.shikimori, true) => 'shikimori_anime_$stamp.json',
-    (AniListExportTarget.shikimori, false) => 'shikimori_manga_$stamp.json',
+    (LibraryExportTarget.myAnimeList, true) => 'myanimelist_anime_$stamp.xml',
+    (LibraryExportTarget.myAnimeList, false) => 'myanimelist_manga_$stamp.xml',
+    (LibraryExportTarget.shikimori, true) => 'shikimori_anime_$stamp.json',
+    (LibraryExportTarget.shikimori, false) => 'shikimori_manga_$stamp.json',
   };
   final String extension = switch (target) {
-    AniListExportTarget.myAnimeList => 'xml',
-    AniListExportTarget.shikimori => 'json',
+    LibraryExportTarget.myAnimeList => 'xml',
+    LibraryExportTarget.shikimori => 'json',
   };
   final String mimeType = switch (target) {
-    AniListExportTarget.myAnimeList => 'application/xml',
-    AniListExportTarget.shikimori => 'application/json',
+    LibraryExportTarget.myAnimeList => 'application/xml',
+    LibraryExportTarget.shikimori => 'application/json',
   };
 
-  return AniListExportPayload(
+  return LibraryExportPayload(
     filename: filename,
+    skippedCount: skippedCount,
+    skippedTitles: List.unmodifiable(
+      allEntries
+          .where((entry) => !included.contains(entry.localId))
+          .map((entry) => entry.mediaItem.title),
+    ),
     bytes: Uint8List.fromList(utf8.encode(content)),
     mimeType: mimeType,
     fileExtension: extension,
-    shareText: target == AniListExportTarget.myAnimeList
+    shareText: target == LibraryExportTarget.myAnimeList
         ? 'MyAnimeList XML export'
         : 'Shikimori JSON export',
   );
 }
 
-Future<String?> saveAniListExportPayload(
+Future<String?> saveLibraryExportPayload(
   BuildContext context,
-  AniListExportPayload payload,
+  LibraryExportPayload payload,
 ) async {
   final ScaffoldMessengerState? messenger = ScaffoldMessenger.maybeOf(context);
   final Rect origin = _computeShareOrigin(context);
@@ -175,7 +194,7 @@ Future<String?> saveAniListExportPayload(
 }
 
 String _buildMalXml({
-  required List<AniListAnimeListEntry> entries,
+  required List<LibraryExportEntry> entries,
   required String username,
   required bool anime,
   required DateTime generatedAt,
@@ -197,7 +216,7 @@ String _buildMalXml({
       ..writeln('    <user_export_type>1</user_export_type>')
       ..writeln('    <user_total_anime>${entries.length}</user_total_anime>')
       ..writeln(
-        '    <user_total_watching>${counts['current'] ?? 0}</user_total_watching>',
+        '    <user_total_watching>${(counts['current'] ?? 0) + (counts['repeating'] ?? 0)}</user_total_watching>',
       )
       ..writeln(
         '    <user_total_completed>${counts['completed'] ?? 0}</user_total_completed>',
@@ -216,7 +235,7 @@ String _buildMalXml({
       ..writeln('    <user_export_type>2</user_export_type>')
       ..writeln('    <user_total_manga>${entries.length}</user_total_manga>')
       ..writeln(
-        '    <user_total_reading>${counts['current'] ?? 0}</user_total_reading>',
+        '    <user_total_reading>${(counts['current'] ?? 0) + (counts['repeating'] ?? 0)}</user_total_reading>',
       )
       ..writeln(
         '    <user_total_completed>${counts['completed'] ?? 0}</user_total_completed>',
@@ -233,8 +252,8 @@ String _buildMalXml({
   }
   xml.writeln('  </myinfo>');
 
-  for (final AniListAnimeListEntry entry in entries) {
-    final int? malId = int.tryParse(entry.mediaItem.externalIds['mal'] ?? '');
+  for (final LibraryExportEntry entry in entries) {
+    final int? malId = entry.providerIds['mal'];
     if (malId == null || malId <= 0) continue;
     if (anime) {
       xml
@@ -259,9 +278,7 @@ String _buildMalXml({
         ..writeln(
           '    <my_finish_date>${_formatMalDate(entry.completedAt)}</my_finish_date>',
         )
-        ..writeln(
-          '    <my_score>${_normalizedTenScore(entry.score)}</my_score>',
-        )
+        ..writeln('    <my_score>${entry.tenPointScore}</my_score>')
         ..writeln(
           '    <my_status>${_xmlEscape(_malAnimeStatus(entry.status))}</my_status>',
         )
@@ -287,19 +304,19 @@ String _buildMalXml({
         ..writeln(
           '    <series_chapters>${entry.mediaItem.episodeCount ?? 0}</series_chapters>',
         )
-        ..writeln('    <series_volumes>0</series_volumes>')
+        ..writeln('    <series_volumes>${entry.totalVolumes}</series_volumes>')
         ..writeln('    <my_id>0</my_id>')
         ..writeln('    <my_read_chapters>${entry.progress}</my_read_chapters>')
-        ..writeln('    <my_read_volumes>0</my_read_volumes>')
+        ..writeln(
+          '    <my_read_volumes>${entry.progressVolumes}</my_read_volumes>',
+        )
         ..writeln(
           '    <my_start_date>${_formatMalDate(entry.startedAt)}</my_start_date>',
         )
         ..writeln(
           '    <my_finish_date>${_formatMalDate(entry.completedAt)}</my_finish_date>',
         )
-        ..writeln(
-          '    <my_score>${_normalizedTenScore(entry.score)}</my_score>',
-        )
+        ..writeln('    <my_score>${entry.tenPointScore}</my_score>')
         ..writeln(
           '    <my_status>${_xmlEscape(_malMangaStatus(entry.status))}</my_status>',
         )
@@ -320,32 +337,29 @@ String _buildMalXml({
 }
 
 String _buildShikimoriJson({
-  required List<AniListAnimeListEntry> entries,
+  required List<LibraryExportEntry> entries,
   required bool anime,
 }) {
   final List<Map<String, Object?>> payload = entries
-      .map((AniListAnimeListEntry entry) {
-        final int? malId = int.tryParse(
-          entry.mediaItem.externalIds['mal'] ?? '',
-        );
-        if (malId == null || malId <= 0) {
+      .map((LibraryExportEntry entry) {
+        final int? shikimoriId = entry.providerIds['shikimori'];
+        if (shikimoriId == null || shikimoriId <= 0) {
           return null;
         }
         return <String, Object?>{
           'target_title': entry.mediaItem.title,
-          'target_title_ru': null,
-          'target_id': malId,
+          'target_id': shikimoriId,
           'target_type': anime ? 'Anime' : 'Manga',
-          'score': _normalizedTenScore(entry.score),
+          'score': entry.tenPointScore,
           'status': anime
               ? _shikiAnimeStatus(entry.status)
               : _shikiMangaStatus(entry.status),
           'rewatches': entry.repeat,
           if (anime) 'episodes': entry.progress,
-          if (anime) 'is_fav': false,
-          if (!anime) 'volumes': 0,
+
+          if (!anime) 'volumes': entry.progressVolumes,
           if (!anime) 'chapters': entry.progress,
-          'text': entry.notes.isEmpty ? null : entry.notes,
+          'text': entry.notes,
         };
       })
       .whereType<Map<String, Object?>>()
@@ -353,7 +367,7 @@ String _buildShikimoriJson({
   return const JsonEncoder.withIndent('  ').convert(payload);
 }
 
-Map<String, int> _statusCounts(List<AniListAnimeListEntry> entries) {
+Map<String, int> _statusCounts(List<LibraryExportEntry> entries) {
   final Map<String, int> counts = <String, int>{
     'current': 0,
     'planning': 0,
@@ -362,33 +376,10 @@ Map<String, int> _statusCounts(List<AniListAnimeListEntry> entries) {
     'dropped': 0,
     'repeating': 0,
   };
-  for (final AniListAnimeListEntry entry in entries) {
+  for (final LibraryExportEntry entry in entries) {
     counts[entry.status.name] = (counts[entry.status.name] ?? 0) + 1;
   }
   return counts;
-}
-
-List<AniListAnimeListEntry> _orderedEntries(
-  List<AniListAnimeListFolder> folders,
-) {
-  final Iterable<AniListAnimeListEntry> allEntries = folders.expand(
-    (AniListAnimeListFolder folder) => folder.entries,
-  );
-  final Map<AniListListStatus, List<AniListAnimeListEntry>> grouped =
-      <AniListListStatus, List<AniListAnimeListEntry>>{};
-  for (final AniListAnimeListEntry entry in allEntries) {
-    grouped
-        .putIfAbsent(entry.status, () => <AniListAnimeListEntry>[])
-        .add(entry);
-  }
-  return <AniListAnimeListEntry>[
-    ...?grouped[AniListListStatus.current]?.reversed,
-    ...?grouped[AniListListStatus.repeating]?.reversed,
-    ...?grouped[AniListListStatus.completed]?.reversed,
-    ...?grouped[AniListListStatus.paused]?.reversed,
-    ...?grouped[AniListListStatus.dropped]?.reversed,
-    ...?grouped[AniListListStatus.planning]?.reversed,
-  ];
 }
 
 Rect _computeShareOrigin(BuildContext context) {
@@ -405,15 +396,7 @@ Rect _computeShareOrigin(BuildContext context) {
   return const Rect.fromLTWH(0, 0, 1, 1);
 }
 
-String _formatMalDate(DateTime? value) {
-  if (value == null) return '0000-00-00';
-  return DateFormat('yyyy-MM-dd').format(value);
-}
-
-int _normalizedTenScore(double? value) {
-  if (value == null || value <= 0) return 0;
-  return value.round().clamp(0, 10);
-}
+String _formatMalDate(LibraryExportDate value) => value.malDate;
 
 String _malAnimeStatus(AniListListStatus status) {
   return switch (status) {

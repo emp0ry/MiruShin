@@ -15,18 +15,29 @@ import '../data/sora_js_runtime.dart';
 import '../domain/sora_models.dart';
 import '../domain/sora_parsers.dart';
 import 'sora_addons_provider.dart';
+import 'title_variant_session.dart';
 
 /// Stable key for title-variant resolution: excludes addonId so variants are
 /// computed once and shared across all addons searching the same media.
 class _TitleVariantsKey {
-  const _TitleVariantsKey({required this.media, required this.languageCodes});
+  const _TitleVariantsKey({
+    required this.media,
+    required this.languageCodes,
+    this.epoch = 0,
+  });
 
   final MediaItem media;
   final List<String> languageCodes;
+  final int epoch;
 
   @override
   bool operator ==(Object other) {
     if (other is! _TitleVariantsKey) return false;
+    if (other.epoch != epoch) return false;
+    if (other.media.externalIds['shikimori'] !=
+        media.externalIds['shikimori']) {
+      return false;
+    }
     if (other.media.id != media.id) return false;
     if (other.media.title != media.title) return false;
     if (other.media.originalTitle != media.originalTitle) return false;
@@ -67,6 +78,8 @@ class _TitleVariantsKey {
   @override
   int get hashCode => Object.hash(
     media.id,
+    epoch,
+    media.externalIds['shikimori'],
     media.title,
     media.originalTitle,
     media.originalLanguage,
@@ -102,6 +115,112 @@ final soraTitleVariantsProvider =
       return variants;
     });
 
+final _titleSessions = <TitleVariantSession>{};
+final _titleSessionProvider = Provider.autoDispose
+    .family<TitleVariantSession, _TitleVariantsKey>((ref, key) {
+      final session = createSourceTitleSession(
+        media: key.media,
+        languageCodes: key.languageCodes,
+        settings: ref.watch(settingsProvider),
+        catalogMode: ref.watch(catalogModeProvider),
+      );
+      _titleSessions.add(session);
+      ref.onDispose(() {
+        session.cancel();
+        _titleSessions.remove(session);
+      });
+      return session;
+    });
+
+TitleVariantSession createSourceTitleSession({
+  required MediaItem media,
+  required List<String> languageCodes,
+  required SettingsState settings,
+  CatalogMode catalogMode = CatalogMode.anilist,
+  Dio? titleClient,
+}) {
+  final token = CancelToken();
+  late final TitleVariantSession session;
+  session = TitleVariantSession(
+    _titleVariantBatches(
+      media: media,
+      languageCodes: languageCodes,
+      settings: settings,
+      catalogMode: catalogMode,
+      cancelToken: token,
+      titleClient: titleClient,
+      onRussianSettled: () => session.markLanguageSettled('ru'),
+    ),
+    onCancel: () => token.cancel('source search cancelled'),
+  );
+  return session;
+}
+
+Stream<List<SoraTitleVariant>> _titleVariantBatches({
+  required MediaItem media,
+  required List<String> languageCodes,
+  required SettingsState settings,
+  required CatalogMode catalogMode,
+  required CancelToken cancelToken,
+  required void Function() onRussianSettled,
+  Dio? titleClient,
+}) async* {
+  final codes = languageCodes.isEmpty
+      ? SoraSearchLanguage.defaultPriority
+      : languageCodes;
+  yield await _buildTitleVariants(
+    media: media,
+    languageCodes: codes,
+    settings: settings,
+    catalogMode: catalogMode,
+    resolveNetwork: false,
+  );
+  if (cancelToken.isCancelled) return;
+  if (media.type != MediaType.anime) {
+    yield await _buildTitleVariants(
+      media: media,
+      languageCodes: languageCodes,
+      settings: settings,
+      catalogMode: catalogMode,
+    );
+    return;
+  }
+  final seasonName = media.externalIds['sora_season_name'] ?? '';
+  final distinctSeason =
+      seasonName.isNotEmpty &&
+      !RegExp(r'^Season\s+\d+$', caseSensitive: false).hasMatch(seasonName) &&
+      seasonName.toLowerCase() != media.title.toLowerCase() &&
+      seasonName.toLowerCase() != media.originalTitle.toLowerCase();
+  // Parent IDs identify the series, not an independently selected season.
+  // Never enrich that season with the parent's Russian title.
+  await for (final titles in AnimeTitlesService.watch(
+    anilistId: distinctSeason ? null : media.externalIds['anilist'],
+    malId: distinctSeason ? null : media.externalIds['mal'],
+    shikimoriId: distinctSeason ? null : media.externalIds['shikimori'],
+    languageCodes: codes,
+    titleCandidates: distinctSeason
+        ? [
+            seasonName,
+            media.externalIds['sora_season_original_name'] ?? '',
+            ...(media.externalIds['sora_season_aliases'] ?? '').split('\n'),
+          ]
+        : [media.title, media.originalTitle, ...media.aliases],
+    cancelToken: cancelToken,
+    dio: titleClient,
+  )) {
+    if (cancelToken.isCancelled) return;
+    yield await _buildTitleVariants(
+      media: media,
+      languageCodes: languageCodes,
+      settings: settings,
+      catalogMode: catalogMode,
+      resolveNetwork: false,
+      resolvedTitles: titles,
+    );
+    if (titles.settledProviders.contains('shiki')) onRussianSettled();
+  }
+}
+
 @visibleForTesting
 Future<List<SoraTitleVariant>> buildSoraTitleVariantsForTest({
   required MediaItem media,
@@ -129,6 +248,9 @@ final Map<String, SoraSourceSearchBundle> _soraSearchCompletedCache =
 /// await, without restarting the providers.
 void cancelAllSoraSearches([SoraJsRuntime? runtime]) {
   _soraSearchEpoch++;
+  for (final session in _titleSessions.toList()) {
+    session.cancel();
+  }
   runtime?.cancelActiveSearches();
   debugPrint('[Sora] Search loading cancel requested epoch=$_soraSearchEpoch');
 }
@@ -173,14 +295,23 @@ final soraSourceSearchProvider = FutureProvider.autoDispose
                   request.addonId == null || addon.id == request.addonId,
             )
             .toList(growable: false);
-        final List<SoraTitleVariant> variants = await ref.watch(
-          soraTitleVariantsProvider(
+        final TitleVariantSession titleSession = ref.watch(
+          _titleSessionProvider(
             _TitleVariantsKey(
               media: request.media,
               languageCodes: request.languageCodes,
+              epoch: myEpoch,
             ),
-          ).future,
+          ),
         );
+        List<SoraTitleVariant> variants = request.customQuery != null
+            ? await titleSession.initial
+            : await titleSession.forLanguage(
+                (request.languageCodes.isEmpty
+                        ? SoraSearchLanguage.defaultPriority
+                        : request.languageCodes)
+                    .first,
+              );
         debugPrint(
           '[Sora] Search loading variants $searchLabel '
           'variants=${variants.length} addons=${addons.length} '
@@ -219,85 +350,110 @@ final soraSourceSearchProvider = FutureProvider.autoDispose
             ? SoraSearchLanguage.defaultPriority
             : request.languageCodes;
         final runtime = ref.watch(soraJsRuntimeProvider);
+        final queryLedger = TitleQueryLedger();
 
-        outer:
-        for (
-          int languageIndex = 0;
-          languageIndex < languageCodes.length;
-          languageIndex += 1
-        ) {
+        final batches = request.customQuery != null
+            ? Stream.value(variants)
+            : titleSession.watch();
+        await for (final batch in batches) {
           if (shouldStop()) break;
-          final String languageCode = languageCodes[languageIndex];
-          final List<String> queries = request.customQuery != null
-              ? <String>[request.customQuery!]
-              : _queriesForLanguage(
-                  variants: variants,
-                  languageCode: languageCode,
-                  fallbackTitle: request.media.title,
-                  fallbackOriginalTitle: request.media.originalTitle,
-                );
-          debugPrint(
-            '[Sora] Search loading language $searchLabel '
-            'language=$languageCode queries=${queries.length}',
-          );
-          for (final SoraInstalledAddon addon in addons) {
-            if (shouldStop()) break outer;
-            if (matchedAddonIds.contains(addon.id)) {
-              continue;
-            }
-            for (final String query in queries) {
-              if (shouldStop()) break outer;
-              final Stopwatch queryStopwatch = Stopwatch()..start();
-              try {
-                debugPrint(
-                  '[Sora] Search addon="${addon.manifest.sourceName}" '
-                  'language=$languageCode query="$query"',
-                );
-                final List<SoraSearchResult> results = await runtime
-                    .searchResults(
-                      addon: addon,
-                      keyword: query,
+          if (matchedAddonIds.length == addons.length) break;
+          variants = batch;
+          outer:
+          for (
+            int languageIndex = 0;
+            languageIndex < languageCodes.length;
+            languageIndex += 1
+          ) {
+            if (shouldStop()) break;
+            final String languageCode = languageCodes[languageIndex];
+            final List<String> queries = queryLedger.acceptBatch(
+              languageCode,
+              request.customQuery != null
+                  ? <String>[request.customQuery!]
+                  : _queriesForLanguage(
+                      variants: variants,
                       languageCode: languageCode,
-                      titleVariants: variants,
-                      shouldCancel: shouldStop,
-                    );
+                      fallbackTitle: request.media.title,
+                      fallbackOriginalTitle: request.media.originalTitle,
+                    ),
+            );
+            debugPrint(
+              '[Sora] Search loading language $searchLabel '
+              'language=$languageCode queries=${queries.length}',
+            );
+            for (final SoraInstalledAddon addon in addons) {
+              if (shouldStop()) break outer;
+              if (matchedAddonIds.contains(addon.id)) {
+                continue;
+              }
+              for (final String query
+                  in queries
+                      .where(
+                        (query) => !queryLedger.wasAttempted(
+                          addon.id,
+                          languageCode,
+                          query,
+                        ),
+                      )
+                      .take(3)) {
                 if (shouldStop()) break outer;
-                debugPrint(
-                  '[Sora] Search result addon="${addon.manifest.sourceName}" '
-                  'language=$languageCode query="$query" '
-                  'count=${results.length} '
-                  'elapsed=${queryStopwatch.elapsedMilliseconds}ms',
-                );
-                for (final SoraSearchResult result in results) {
-                  final String key = '${addon.id}:${result.href}';
-                  final SoraSearchResult? previous = deduped[key];
-                  if (previous == null || result.score > previous.score) {
-                    deduped[key] = result;
-                  }
+                if (!queryLedger.claim(addon.id, languageCode, query)) {
+                  continue;
                 }
-                if (results.isNotEmpty) {
-                  matchedAddonIds.add(addon.id);
+                final Stopwatch queryStopwatch = Stopwatch()..start();
+                try {
+                  debugPrint(
+                    '[Sora] Search addon="${addon.manifest.sourceName}" '
+                    'language=$languageCode query="$query"',
+                  );
+                  final List<SoraSearchResult> results = await runtime
+                      .searchResults(
+                        addon: addon,
+                        keyword: query,
+                        languageCode: languageCode,
+                        titleVariants: variants,
+                        shouldCancel: shouldStop,
+                      );
+                  if (shouldStop()) break outer;
+                  debugPrint(
+                    '[Sora] Search result addon="${addon.manifest.sourceName}" '
+                    'language=$languageCode query="$query" '
+                    'count=${results.length} '
+                    'elapsed=${queryStopwatch.elapsedMilliseconds}ms',
+                  );
+                  for (final SoraSearchResult result in results) {
+                    final String key = '${addon.id}:${result.href}';
+                    final SoraSearchResult? previous = deduped[key];
+                    if (previous == null || result.score > previous.score) {
+                      deduped[key] = result;
+                    }
+                  }
+                  if (results.isNotEmpty) {
+                    matchedAddonIds.add(addon.id);
+                    break;
+                  }
+                } on Object catch (error) {
+                  if (shouldStop()) break outer;
+                  debugPrint(
+                    '[Sora] Search error addon="${addon.manifest.sourceName}" '
+                    'language=$languageCode query="$query" '
+                    'elapsed=${queryStopwatch.elapsedMilliseconds}ms '
+                    'error=${_friendlyError(error)}',
+                  );
+                  errors.add(
+                    SoraSourceError(
+                      addonId: addon.id,
+                      addonName: addon.manifest.sourceName,
+                      message: _friendlyError(error),
+                    ),
+                  );
                   break;
                 }
-              } on Object catch (error) {
-                if (shouldStop()) break outer;
-                debugPrint(
-                  '[Sora] Search error addon="${addon.manifest.sourceName}" '
-                  'language=$languageCode query="$query" '
-                  'elapsed=${queryStopwatch.elapsedMilliseconds}ms '
-                  'error=${_friendlyError(error)}',
-                );
-                errors.add(
-                  SoraSourceError(
-                    addonId: addon.id,
-                    addonName: addon.manifest.sourceName,
-                    message: _friendlyError(error),
-                  ),
-                );
-                break;
               }
             }
           }
+          if (matchedAddonIds.length == addons.length) break;
         }
 
         final List<SoraSearchResult> results = deduped.values.toList();
@@ -330,7 +486,11 @@ final soraSourceSearchProvider = FutureProvider.autoDispose
             'elapsed=${searchStopwatch.elapsedMilliseconds}ms',
           );
         } else {
-          _soraSearchCompletedCache[cacheKey] = bundle;
+          // An outage/empty lookup must remain retryable after metadata or a
+          // provider recovers, rather than becoming a permanent empty cache.
+          if (results.isNotEmpty && uniqueErrors.isEmpty) {
+            _soraSearchCompletedCache[cacheKey] = bundle;
+          }
           debugPrint(
             '[Sora] Search loading done $searchLabel '
             'results=${results.length} errors=${uniqueErrors.length} '
@@ -590,6 +750,8 @@ Future<List<SoraTitleVariant>> _buildTitleVariants({
   required List<String> languageCodes,
   required SettingsState settings,
   required CatalogMode catalogMode,
+  bool resolveNetwork = true,
+  AnimeTitles? resolvedTitles,
 }) async {
   final Map<String, SoraTitleVariant> variants = <String, SoraTitleVariant>{};
   void add(String languageCode, String title, String source) {
@@ -626,6 +788,7 @@ Future<List<SoraTitleVariant>> _buildTitleVariants({
           .toList(growable: false);
 
   final bool canReadTmdbTranslations =
+      resolveNetwork &&
       catalogMode == CatalogMode.tmdb &&
       settings.effectiveTmdbReadAccessToken.isNotEmpty &&
       media.externalIds['tmdb'] != null;
@@ -670,7 +833,7 @@ Future<List<SoraTitleVariant>> _buildTitleVariants({
   }
 
   // Resolve anime-specific titles from AniList / Jikan / Shikimori.
-  if (catalogMode == CatalogMode.anilist && isAnime) {
+  if (isAnime && resolveNetwork && resolvedTitles == null) {
     final String? anilistId = media.externalIds['anilist'];
     final String? malId = media.externalIds['mal'];
     final List<String> animeTitleCandidates = <String>[
@@ -703,6 +866,8 @@ Future<List<SoraTitleVariant>> _buildTitleVariants({
             AnimeTitlesService.resolve(
               anilistId: anilistId,
               malId: malId,
+              shikimoriId: media.externalIds['shikimori'],
+              languageCodes: codes,
               titleCandidates: animeTitleCandidates,
             ).catchError((_) async => const AnimeTitles()),
             if (hasDistinctSeasonName)
@@ -711,7 +876,6 @@ Future<List<SoraTitleVariant>> _buildTitleVariants({
                   seasonName,
                   originalSeasonName,
                   ...seasonAliases,
-                  ...animeTitleCandidates,
                 ],
               ).catchError((_) async => const AnimeTitles()),
           ],
@@ -744,6 +908,13 @@ Future<List<SoraTitleVariant>> _buildTitleVariants({
         // Best-effort anime title enrichment.
       }
     }
+  }
+
+  if (resolvedTitles != null) {
+    add('en', resolvedTitles.english, 'anime-api');
+    add('ja', resolvedTitles.romaji, 'anime-api-romaji');
+    add('ja', resolvedTitles.japanese, 'anime-api');
+    add('ru', resolvedTitles.russian, 'anime-api');
   }
 
   final String metadataLanguageCode = settings.effectiveTmdbLanguage
@@ -1026,7 +1197,6 @@ List<String> _queriesForLanguage({
         seen.add(key);
         return true;
       })
-      .take(3)
       .toList(growable: false);
 }
 
@@ -1204,6 +1374,10 @@ String _soraSearchCacheKey(SoraSourceSearchRequest request) {
     request.media.id,
     request.media.title,
     request.media.originalTitle,
+    request.media.externalIds['anilist'] ?? '',
+    request.media.externalIds['mal'] ?? '',
+    request.media.externalIds['shikimori'] ?? '',
+    request.media.aliases.join('\u0001'),
     request.media.externalIds['sora_season_number'] ?? '',
     request.media.externalIds['sora_season_name'] ?? '',
     request.media.externalIds['sora_season_original_name'] ?? '',

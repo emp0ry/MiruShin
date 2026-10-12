@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../../core/diagnostics/player_diagnostics.dart';
 import '../../settings/application/settings_state.dart';
 import '../../settings/data/workspace_preferences_store.dart';
 import '../domain/player_models.dart';
@@ -37,10 +38,12 @@ class PlayerSettingsController extends AsyncNotifier<PlayerSettings> {
     final Object? scoped = WorkspacePreferencesStore(
       prefs,
     ).read(workspaceId, WorkspacePreferencesStore.playerAutoTrackKey);
+    PlayerDiagnostics.instance.setEnabled(result.diagnosticsEnabled);
     return scoped is bool ? result.copyWith(autoAnilistSync: scoped) : result;
   }
 
   Future<void> _update(PlayerSettings settings) async {
+    PlayerDiagnostics.instance.setEnabled(settings.diagnosticsEnabled);
     state = AsyncData<PlayerSettings>(settings);
     final SharedPreferences prefs = await SharedPreferences.getInstance();
     await prefs.setString(_key, jsonEncode(settings.toJson()));
@@ -72,6 +75,14 @@ class PlayerSettingsController extends AsyncNotifier<PlayerSettings> {
   Future<void> setSeekPreviewMode(SeekPreviewMode mode) async {
     final PlayerSettings current = state.value ?? const PlayerSettings();
     await _update(current.copyWith(seekPreviewMode: mode));
+  }
+
+  Future<void> setDiagnosticsEnabled(bool enabled) async {
+    await _update(
+      (state.value ?? const PlayerSettings()).copyWith(
+        diagnosticsEnabled: enabled,
+      ),
+    );
   }
 
   Future<void> setSeekPreviewsEnabled(bool enabled) async {

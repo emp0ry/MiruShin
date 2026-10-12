@@ -6,6 +6,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
+import '../../../core/diagnostics/player_diagnostics.dart';
 
 import 'dash_hls_manifest.dart';
 import 'stream_url_policy.dart';
@@ -578,6 +579,23 @@ class LocalHlsProxy {
   // Playlist handler
 
   Future<void> _servePlaylist(HttpRequest req) async {
+    final diagnosticStart = PlayerDiagnostics.instance.begin();
+    if (diagnosticStart != null) {
+      unawaited(
+        req.response.done.then<void>(
+          (_) => PlayerDiagnostics.instance.finish(
+            'proxy.playlist',
+            diagnosticStart,
+            {'status': req.response.statusCode},
+          ),
+          onError: (Object error) => PlayerDiagnostics.instance.finish(
+            'proxy.playlist',
+            diagnosticStart,
+            {'failure': error.runtimeType.toString()},
+          ),
+        ),
+      );
+    }
     final String? rawUrl = req.uri.queryParameters['u'];
     if (rawUrl == null) {
       req.response.statusCode = HttpStatus.badRequest;
@@ -932,6 +950,23 @@ class LocalHlsProxy {
     String? range, {
     required bool preserveContentType,
   }) async {
+    final diagnosticStart = PlayerDiagnostics.instance.begin();
+    if (diagnosticStart != null) {
+      unawaited(
+        req.response.done.then<void>(
+          (_) => PlayerDiagnostics.instance.finish(
+            'proxy.media',
+            diagnosticStart,
+            {'status': req.response.statusCode, 'ranged': range != null},
+          ),
+          onError: (Object error) => PlayerDiagnostics.instance.finish(
+            'proxy.media',
+            diagnosticStart,
+            {'failure': error.runtimeType.toString()},
+          ),
+        ),
+      );
+    }
     for (int attempt = 1; attempt <= _kSegmentRetries; attempt++) {
       if (_stopping) {
         try {
@@ -984,6 +1019,11 @@ class LocalHlsProxy {
         }
 
         req.response.statusCode = upstream.statusCode;
+        PlayerDiagnostics.instance.finish('proxy.firstBytes', diagnosticStart, {
+          'attempt': attempt,
+          'status': upstream.statusCode,
+          'bytes': firstBytes.length,
+        });
         req.response.bufferOutput = false;
         _copyResponseHeaders(
           upstream.headers,

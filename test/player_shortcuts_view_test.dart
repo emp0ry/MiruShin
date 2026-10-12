@@ -35,11 +35,25 @@ void main() {
     expect(find.text('→'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('D is advertised only while diagnostics are enabled', (
+    WidgetTester tester,
+  ) async {
+    await _pumpShortcuts(tester);
+    expect(find.text('D'), findsNothing);
+    expect(find.text('Mark micro-pause'), findsNothing);
+
+    await _pumpShortcuts(tester, diagnosticsEnabled: true);
+    expect(find.text('D'), findsOneWidget);
+    expect(find.text('Mark micro-pause'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }
 
 Future<void> _pumpShortcuts(
   WidgetTester tester, {
   bool volumeControlsEnabled = true,
+  bool diagnosticsEnabled = false,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
@@ -57,6 +71,7 @@ Future<void> _pumpShortcuts(
           child: PlayerShortcutsView(
             seekSeconds: 10,
             volumeControlsEnabled: volumeControlsEnabled,
+            diagnosticsEnabled: diagnosticsEnabled,
           ),
         ),
       ),

@@ -6,6 +6,7 @@ import 'package:flutter/widgets.dart';
 import 'package:media_kit/media_kit.dart' as mk;
 import 'package:media_kit_video/media_kit_video.dart' as mkv;
 
+import '../../../core/diagnostics/player_diagnostics.dart';
 import '../domain/player_models.dart';
 import 'local_hls_metadata.dart';
 import 'local_hls_proxy.dart';
@@ -959,6 +960,10 @@ class MediaKitPlayerEngine extends PlayerEngine {
 
   @override
   Future<void> play() async {
+    PlayerDiagnostics.instance.record('engine.command', {
+      'backend': 'mpv',
+      'command': 'play',
+    });
     if (_disposed) return;
     final mk.Player? player = _player;
     if (player == null) return;
@@ -968,6 +973,10 @@ class MediaKitPlayerEngine extends PlayerEngine {
 
   @override
   Future<void> pause() async {
+    PlayerDiagnostics.instance.record('engine.command', {
+      'backend': 'mpv',
+      'command': 'pause',
+    });
     if (_disposed) return;
     final mk.Player? player = _player;
     if (player == null) return;
@@ -977,6 +986,11 @@ class MediaKitPlayerEngine extends PlayerEngine {
 
   @override
   Future<void> seekTo(Duration position) async {
+    PlayerDiagnostics.instance.record('engine.command', {
+      'backend': 'mpv',
+      'command': 'seek',
+      'targetMs': position.inMilliseconds,
+    });
     final mk.Player? player = _player;
     if (player == null) return;
     _seekEpoch += 1;
@@ -1048,6 +1062,11 @@ class MediaKitPlayerEngine extends PlayerEngine {
 
   @override
   Future<void> setPlaybackSpeed(double speed) async {
+    PlayerDiagnostics.instance.record('engine.command', {
+      'backend': 'mpv',
+      'command': 'speed',
+      'speed': speed,
+    });
     if (_disposed) return;
     _playbackSpeed = speed.clamp(0.25, 3.0).toDouble();
     _currentTargetPlaybackSpeed = _playbackSpeed;
@@ -1195,6 +1214,19 @@ class MediaKitPlayerEngine extends PlayerEngine {
       ),
     );
 
+    if (PlayerDiagnostics.instance.enabled) {
+      PlayerDiagnostics.instance.nativeTransition(
+        'mpv',
+        '${native.playing}|${native.buffering}|${native.completed}',
+        {
+          'playing': native.playing,
+          'buffering': native.buffering,
+          'ended': native.completed,
+          'positionMs': position.inMilliseconds,
+        },
+      );
+    }
+
     _watchProxyStall(
       player,
       native: native,
@@ -1268,6 +1300,21 @@ class MediaKitPlayerEngine extends PlayerEngine {
 
   void _setState(PlayerEngineState value) {
     if (_disposed) return;
+    if (PlayerDiagnostics.instance.enabled) {
+      PlayerDiagnostics.instance.sampleEngine('mpv', {
+        'route': _usingProxy ? 'proxy' : 'direct',
+        'positionMs': value.position.inMilliseconds,
+        'durationMs': value.duration.inMilliseconds,
+        'speed': value.playbackSpeed,
+        'playing': value.isPlaying,
+        'buffering': value.isBuffering,
+        'ended': value.isCompleted,
+        'error': value.hasError,
+        'bufferEndMs': value.buffered.isEmpty
+            ? 0
+            : value.buffered.last.end.inMilliseconds,
+      });
+    }
     _state.value = value;
   }
 

@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:drift/native.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mirushin/core/diagnostics/player_diagnostics.dart';
 import 'package:mirushin/features/library/application/canonical_library_repository.dart';
 import 'package:mirushin/features/library/application/local_library_provider.dart';
 import 'package:mirushin/features/library/data/canonical_library_database.dart';
@@ -43,6 +45,60 @@ void main() {
   }
 
   group('PlaybackController play/pause intent', () {
+    test(
+      'diagnostics identify command causes without extra playback commands',
+      () async {
+        final c = container();
+        await c.read(playerSettingsProvider.future);
+        final controller = c.read(playbackControllerProvider.notifier);
+        final engine = _FakePlayerEngine(
+          const PlayerEngineState(
+            isInitialized: true,
+            isPlaying: true,
+            position: Duration(seconds: 60),
+            duration: Duration(minutes: 24),
+          ),
+        );
+        controller.debugSetPlaybackState(
+          PlaybackState(engine: engine, desiredPlaying: true),
+        );
+        await c
+            .read(playerSettingsProvider.notifier)
+            .setDiagnosticsEnabled(true);
+        addTearDown(() => PlayerDiagnostics.instance.setEnabled(false));
+
+        await controller.pause();
+        await controller.setSpeed(1.25);
+        await controller.applyRemoteSpeed(1.5, temporary: true);
+        PlayerDiagnostics.instance.markMicroPause();
+
+        final events =
+            jsonDecode(PlayerDiagnostics.instance.report())['events'] as List;
+        final causes = events
+            .where((event) => event['type'] == 'controller.command')
+            .map((event) => event['data']['reason'])
+            .toList();
+        expect(
+          causes,
+          containsAll([
+            'playPauseIntent',
+            'user.speedSetting',
+            'watchParty.temporary',
+          ]),
+        );
+        expect(engine.pauseCalls, 1);
+        expect(engine.playCalls, 0);
+        expect(engine.seekCalls, 0);
+
+        await c
+            .read(playerSettingsProvider.notifier)
+            .setDiagnosticsEnabled(false);
+        final report = PlayerDiagnostics.instance.report();
+        await controller.applyRemoteSpeed(1.0, temporary: true);
+        expect(PlayerDiagnostics.instance.report(), report);
+      },
+    );
+
     for (final bool native in [false, true]) {
       test(
         'Auto Progress off preserves library state (${native ? 'native' : 'engine'})',

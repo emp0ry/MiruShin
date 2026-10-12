@@ -434,6 +434,8 @@ class ShikimoriApiClient {
         'shikimori': '$shikimoriId',
         if (malId > 0) 'mal': '$malId',
         if (manga) 'anilist_type': 'MANGA',
+        if (manga && _int(node?['volumes']) > 0)
+          'volumes': '${_int(node?['volumes'])}',
       },
       aliases: russian.isNotEmpty ? <String>[russian] : const <String>[],
       episodeCount: _nullableInt(

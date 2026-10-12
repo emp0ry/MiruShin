@@ -18,6 +18,7 @@ import '../../tracking/domain/tracking_sync_models.dart';
 import '../data/canonical_library_database.dart';
 import '../domain/canonical_library_models.dart';
 import '../domain/cloud_replica_models.dart';
+import '../domain/library_export_snapshot.dart';
 
 class LibraryWorkspaceScope {
   const LibraryWorkspaceScope({
@@ -826,6 +827,134 @@ class CanonicalLibraryRepository {
               updatedAtMs: DateTime.now().toUtc().millisecondsSinceEpoch,
             ),
           );
+    });
+  }
+
+  Future<LibraryExportSnapshot> buildExportSnapshot() async {
+    await initialize();
+    return database.transaction(() async {
+      final rows =
+          await (database.select(database.canonicalLibraryRecords)..where(
+                (t) => t.inLibrary.equals(true) & t.tombstonedAtMs.isNull(),
+              ))
+              .get();
+      final ids = rows.map((r) => r.localId).toList();
+      final media = await (database.select(
+        database.canonicalMediaRecords,
+      )..where((t) => t.localId.isIn(ids))).get();
+      final byId = {for (final row in media) row.localId: row};
+      final bindings = await (database.select(
+        database.providerBindingRecords,
+      )..where((t) => t.localId.isIn(ids))).get();
+      final bindingsById = <String, List<ProviderBindingRecord>>{};
+      for (final binding in bindings) {
+        bindingsById.putIfAbsent(binding.localId, () => []).add(binding);
+      }
+      final entries = <LibraryExportEntry>[];
+      for (final row in rows) {
+        final metadata = byId[row.localId];
+        if (metadata == null ||
+            !{'anime', 'manga'}.contains(metadata.mediaKind)) {
+          continue;
+        }
+        final state = UserMediaState.fromJson(_jsonMap(row.canonicalStateJson));
+        final item = MediaItem.fromJson({
+          ..._jsonMap(metadata.mediaJson),
+          'type': metadata.mediaKind,
+        });
+        LibraryExportDate date(
+          String field,
+          LibraryExportDate stored,
+          DateTime? canonical,
+        ) {
+          final revisions = _revisionLeaves(
+            _jsonMap(row.fieldRevisionsJson)[field],
+          ).map(_jsonMap).where((revision) => revision.isNotEmpty);
+          final explicit = revisions.any(
+            (revision) =>
+                revision['origin'] != 'provider' &&
+                revision['origin'] != 'migration',
+          );
+          final raw = state
+              .providerStates[TrackerSource.anilist]
+              ?.data['${field}Fuzzy'];
+          if (!explicit &&
+              state.source == TrackerSource.anilist &&
+              raw is Map) {
+            int? component(String key, int max) {
+              final value = raw[key];
+              return value is num && value.toInt() > 0 && value.toInt() <= max
+                  ? value.toInt()
+                  : null;
+            }
+
+            final year = component('year', 9999);
+            final month = component('month', 12);
+            final day = component('day', 31);
+            // AniList's display model fills unknown month/day with 1. Recover
+            // preserved fuzzy parts only while that accepted date still
+            // matches canonical state, never over a newer explicit edit.
+            if ((year == null && canonical == null) ||
+                (year == canonical?.year &&
+                    (month ?? 1) == canonical?.month &&
+                    (day ?? 1) == canonical?.day)) {
+              return LibraryExportDate(year: year, month: month, day: day);
+            }
+          }
+          return stored;
+        }
+
+        entries.add(
+          LibraryExportEntry(
+            localId: row.localId,
+            mediaItem: item,
+            status: AniListListStatus.values.firstWhere(
+              (status) => status.name == row.status,
+              orElse: () => state.status,
+            ),
+            progress: row.progress,
+            progressVolumes: row.progressVolumes,
+            totalVolumes:
+                int.tryParse(
+                  item.externalIds['anilist_volumes'] ??
+                      item.externalIds['volumes'] ??
+                      '',
+                ) ??
+                0,
+            repeat: row.repeatCount,
+            scoreRaw: row.scoreRaw,
+            notes: row.notes,
+            format: state.format,
+            startedAt: date(
+              'startedAt',
+              LibraryExportDate(
+                year: row.startedYear,
+                month: row.startedMonth,
+                day: row.startedDay,
+              ),
+              state.startedAt,
+            ),
+            completedAt: date(
+              'completedAt',
+              LibraryExportDate(
+                year: row.completedYear,
+                month: row.completedMonth,
+                day: row.completedDay,
+              ),
+              state.completedAt,
+            ),
+            providerIds: Map.unmodifiable({
+              for (final binding
+                  in bindingsById[row.localId] ?? <ProviderBindingRecord>[])
+                if (binding.mediaKind == metadata.mediaKind &&
+                    !binding.quarantined &&
+                    binding.externalMediaId > 0)
+                  binding.provider: binding.externalMediaId,
+            }),
+          ),
+        );
+      }
+      return LibraryExportSnapshot(workspaceId: workspaceId, entries: entries);
     });
   }
 

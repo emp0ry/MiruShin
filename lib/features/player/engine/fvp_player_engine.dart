@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:fvp/mdk.dart' as mdk;
 
+import '../../../core/diagnostics/player_diagnostics.dart';
 import '../domain/player_models.dart';
 import 'local_hls_metadata.dart';
 import 'local_hls_proxy.dart';
@@ -126,6 +127,7 @@ class FvpPlayerEngine extends PlayerEngine {
 
   mdk.Player? _player;
   final LocalHlsProxy _proxy = LocalHlsProxy();
+  bool _diagnosticProxy = false;
   StreamSubscription<dynamic>? _eventSubscription;
   StreamSubscription<dynamic>? _stateSubscription;
   StreamSubscription<dynamic>? _mediaStatusSubscription;
@@ -306,6 +308,7 @@ class FvpPlayerEngine extends PlayerEngine {
       if (!_isActivePlayer(player, openGeneration)) return;
       final bool useProxy =
           !source.disableProxy && (isNetwork || isInlineDash || isLocalHls);
+      _diagnosticProxy = useProxy;
       // A downloaded DASH presentation is stored as local HLS metadata around
       // the original fMP4 tracks. It is already demuxable without the MPD
       // parser, so only a real direct MPD needs this Windows guard.
@@ -570,6 +573,10 @@ class FvpPlayerEngine extends PlayerEngine {
 
   @override
   Future<void> play() async {
+    PlayerDiagnostics.instance.record('engine.command', {
+      'backend': 'fvp',
+      'command': 'play',
+    });
     if (_disposed) return;
     final mdk.Player? player = _player;
     if (player == null) return;
@@ -584,6 +591,10 @@ class FvpPlayerEngine extends PlayerEngine {
 
   @override
   Future<void> pause() async {
+    PlayerDiagnostics.instance.record('engine.command', {
+      'backend': 'fvp',
+      'command': 'pause',
+    });
     if (_disposed) return;
     final mdk.Player? player = _player;
     if (player == null) return;
@@ -594,6 +605,11 @@ class FvpPlayerEngine extends PlayerEngine {
 
   @override
   Future<void> seekTo(Duration position) async {
+    PlayerDiagnostics.instance.record('engine.command', {
+      'backend': 'fvp',
+      'command': 'seek',
+      'targetMs': position.inMilliseconds,
+    });
     final int seekEpoch = ++_seekEpoch;
     try {
       await _seekToNative(position, seekEpoch: seekEpoch);
@@ -952,6 +968,11 @@ class FvpPlayerEngine extends PlayerEngine {
 
   @override
   Future<void> setPlaybackSpeed(double speed) async {
+    PlayerDiagnostics.instance.record('engine.command', {
+      'backend': 'fvp',
+      'command': 'speed',
+      'speed': speed,
+    });
     if (_disposed) return;
     final double safeSpeed = speed.clamp(0.25, 3.0).toDouble();
     final int speedGeneration = ++_speedApplyGeneration;
@@ -1359,6 +1380,16 @@ class FvpPlayerEngine extends PlayerEngine {
         status.test(mdk.MediaStatus.loading) ||
         status.test(mdk.MediaStatus.stalled);
     final bool nativeEnded = status.test(mdk.MediaStatus.end);
+    if (PlayerDiagnostics.instance.enabled) {
+      PlayerDiagnostics.instance
+          .nativeTransition('fvp', '$status|${player.state}', {
+            'status': status.toString(),
+            'playing': isPlaying,
+            'buffering': nativeBuffering,
+            'ended': nativeEnded,
+            'positionMs': position.inMilliseconds,
+          });
+    }
     final bool plausibleNativeCompletion = isPlausibleFvpNativeCompletion(
       nativeEnded: nativeEnded,
       position: position,
@@ -1498,6 +1529,21 @@ class FvpPlayerEngine extends PlayerEngine {
 
   void _setState(PlayerEngineState value) {
     if (_disposed) return;
+    if (PlayerDiagnostics.instance.enabled) {
+      PlayerDiagnostics.instance.sampleEngine('fvp', {
+        'route': _diagnosticProxy ? 'proxy' : 'direct',
+        'positionMs': value.position.inMilliseconds,
+        'durationMs': value.duration.inMilliseconds,
+        'speed': value.playbackSpeed,
+        'playing': value.isPlaying,
+        'buffering': value.isBuffering,
+        'ended': value.isCompleted,
+        'error': value.hasError,
+        'bufferEndMs': value.buffered.isEmpty
+            ? 0
+            : value.buffered.last.end.inMilliseconds,
+      });
+    }
     _state.value = value;
   }
 

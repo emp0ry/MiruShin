@@ -377,6 +377,7 @@ class PlayerSettings {
     this.discordRpcEnabled = true,
     this.autoAnilistSync = true,
     this.debugStreamInfo = false,
+    this.diagnosticsEnabled = false,
     this.playerBackend = PlayerBackend.auto,
     this.seekPreviewsEnabled = true,
     this.seekPreviewMode = SeekPreviewMode.progressive,
@@ -413,6 +414,7 @@ class PlayerSettings {
   final bool discordRpcEnabled;
   final bool autoAnilistSync;
   final bool debugStreamInfo;
+  final bool diagnosticsEnabled;
   final PlayerBackend playerBackend;
   final bool seekPreviewsEnabled;
   final SeekPreviewMode seekPreviewMode;
@@ -446,6 +448,7 @@ class PlayerSettings {
     bool? discordRpcEnabled,
     bool? autoAnilistSync,
     bool? debugStreamInfo,
+    bool? diagnosticsEnabled,
     PlayerBackend? playerBackend,
     bool? seekPreviewsEnabled,
     SeekPreviewMode? seekPreviewMode,
@@ -485,6 +488,7 @@ class PlayerSettings {
       discordRpcEnabled: discordRpcEnabled ?? this.discordRpcEnabled,
       autoAnilistSync: autoAnilistSync ?? this.autoAnilistSync,
       debugStreamInfo: debugStreamInfo ?? this.debugStreamInfo,
+      diagnosticsEnabled: diagnosticsEnabled ?? this.diagnosticsEnabled,
       playerBackend: playerBackend ?? this.playerBackend,
       seekPreviewsEnabled: seekPreviewsEnabled ?? this.seekPreviewsEnabled,
       seekPreviewMode: seekPreviewMode ?? this.seekPreviewMode,
@@ -520,6 +524,7 @@ class PlayerSettings {
     'discordRpcEnabled': discordRpcEnabled,
     'autoAnilistSync': autoAnilistSync,
     'debugStreamInfo': debugStreamInfo,
+    'diagnosticsEnabled': diagnosticsEnabled,
     'playerBackend': playerBackend.name,
     'seekPreviewsEnabled': seekPreviewsEnabled,
     'seekPreviewMode': seekPreviewMode.name,
@@ -578,6 +583,7 @@ class PlayerSettings {
       discordRpcEnabled: json['discordRpcEnabled'] as bool? ?? true,
       autoAnilistSync: json['autoAnilistSync'] as bool? ?? true,
       debugStreamInfo: json['debugStreamInfo'] as bool? ?? false,
+      diagnosticsEnabled: json['diagnosticsEnabled'] as bool? ?? false,
       playerBackend: PlayerBackend.values.firstWhere(
         (PlayerBackend value) => value.name == json['playerBackend'],
         orElse: () => PlayerBackend.auto,

@@ -1597,5 +1597,17 @@
   "Unnamed entry": "Запись без названия",
   "These entries are saved locally, but their titles are missing or only contain placeholder text. They stay in your library and continue syncing. This notice does not block Google Drive Sync.": "Эти записи сохранены локально, но их названия отсутствуют или пока заменены заглушкой. Они остаются в библиотеке и продолжают синхронизироваться. Это уведомление не блокирует Google Drive Sync.",
   "Retry asks trackers for metadata again. Ignore only hides this notice on this device; it does not delete entries or stop sync.": "«Повторить» снова запрашивает метаданные у трекеров. «Игнорировать» скрывает только уведомление на этом устройстве: записи не удаляются, синхронизация не останавливается.",
-  "Notice hidden. The entries and sync are unchanged.": "Уведомление скрыто. Записи и синхронизация не изменены."
+  "Notice hidden. The entries and sync are unchanged.": "Уведомление скрыто. Записи и синхронизация не изменены.",
+  "No entries have a verified ID for this export.": "Нет записей с подтверждённым ID для этого экспорта.",
+  "Some entries were skipped": "Некоторые записи пропущены",
+  "Skipped {count} entries with missing or ambiguous provider IDs.": "Пропущено записей с отсутствующим или неоднозначным ID провайдера: {count}.",
+  "Exports the Local Library in MyAnimeList XML format. Works offline.": "Экспортирует локальную библиотеку в XML для MyAnimeList. Работает офлайн.",
+  "Exports the Local Library in Shikimori JSON format. Works offline.": "Экспортирует локальную библиотеку в JSON для Shikimori. Работает офлайн.",
+  "Playback diagnostics": "Диагностика воспроизведения",
+  "Record the last ten minutes on this device. Does not change playback or upload reports.": "Записывает последние десять минут на этом устройстве. Не меняет воспроизведение и не загружает отчёты в облако.",
+  "Mark micro-pause": "Отметить микропаузу",
+  "Mark micro-pause (D)": "Отметить микропаузу (D)",
+  "Press D in the player to mark a micro-pause.": "Нажми D в плеере, чтобы отметить микропаузу.",
+  "Micro-pause marked": "Микропауза отмечена",
+  "Save diagnostic report": "Сохранить отчёт диагностики"
 }
