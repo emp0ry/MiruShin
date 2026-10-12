@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.9.18",
+          "date": "2026-10-12",
+          "localizedDescription": "- Export your active Local Library from Settings to MyAnimeList XML or Shikimori JSON, including pending local edits, manga volumes, scores and dates where supported. Export works offline and reports entries without verified target IDs.\n- Find Sources now starts with saved titles and enriches Russian, Japanese and English names independently, so AniList outages no longer block Russian searches. Provider matches are verified and cancelled searches stop their enrichment requests.\n- Added optional MPV/FVP playback diagnostics with D-key micro-pause marking and manually saved, redacted reports. Diagnostics are at the end of Player Settings; no marker buttons or automatic report uploads.\n- Added English, Russian and Japanese translations, updated documentation, and regression coverage for offline exports, independent source searches and diagnostic shortcuts.\n- Hardened Apple release builds with verified SQLite asset pre-caching, bounded download retries, and HTTP error handling while retaining SHA-256 integrity checks.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.18/MiruShin-ios-v2.9.18.ipa",
+          "size": 31890040,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.9.17",
           "date": "2026-10-10",
           "localizedDescription": "- Choose AniList, MyAnimeList, or Shikimori as the only incoming library sync source; AniList is the default.\n- Keep other connected catalogs as outgoing mirrors without allowing their edits or outages to overwrite the local library or switch the source.\n- Safely retire obsolete destination conflicts and queued imports when changing the source, preserving local edits and audit history.\n- Recover outgoing updates independently after restart and preserve unknown catalog-specific fields.",
@@ -807,11 +815,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.9.17",
-      "versionDate": "2026-10-10",
-      "versionDescription": "- Choose AniList, MyAnimeList, or Shikimori as the only incoming library sync source; AniList is the default.\n- Keep other connected catalogs as outgoing mirrors without allowing their edits or outages to overwrite the local library or switch the source.\n- Safely retire obsolete destination conflicts and queued imports when changing the source, preserving local edits and audit history.\n- Recover outgoing updates independently after restart and preserve unknown catalog-specific fields.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.17/MiruShin-ios-v2.9.17.ipa",
-      "size": 31857074,
+      "version": "2.9.18",
+      "versionDate": "2026-10-12",
+      "versionDescription": "- Export your active Local Library from Settings to MyAnimeList XML or Shikimori JSON, including pending local edits, manga volumes, scores and dates where supported. Export works offline and reports entries without verified target IDs.\n- Find Sources now starts with saved titles and enriches Russian, Japanese and English names independently, so AniList outages no longer block Russian searches. Provider matches are verified and cancelled searches stop their enrichment requests.\n- Added optional MPV/FVP playback diagnostics with D-key micro-pause marking and manually saved, redacted reports. Diagnostics are at the end of Player Settings; no marker buttons or automatic report uploads.\n- Added English, Russian and Japanese translations, updated documentation, and regression coverage for offline exports, independent source searches and diagnostic shortcuts.\n- Hardened Apple release builds with verified SQLite asset pre-caching, bounded download retries, and HTTP error handling while retaining SHA-256 integrity checks.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.18/MiruShin-ios-v2.9.18.ipa",
+      "size": 31890040,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
