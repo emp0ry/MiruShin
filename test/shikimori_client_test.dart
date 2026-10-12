@@ -7,6 +7,7 @@ import 'package:mirushin/features/metadata/data/shikimori_client.dart';
 import 'package:mirushin/features/tracking/data/shikimori_api_client.dart'
     as tracking;
 import 'package:mirushin/shared/models/anilist_models.dart';
+import 'package:mirushin/shared/models/anime_airing.dart';
 import 'package:mirushin/shared/models/media_item.dart';
 
 void main() {
@@ -250,6 +251,49 @@ void main() {
       expect(adapter.createdUserRate, isNull);
     },
   );
+
+  test('tracking anime list preserves airing without AniList', () async {
+    final adapter = _FakeShikimoriAdapter()
+      ..userRates.add({
+        'id': 700,
+        'target_id': 44,
+        'status': 'watching',
+        'episodes': 4,
+      })
+      ..graphqlMediaByRequestedId[0] = {
+        'id': '44',
+        'malId': '55',
+        'name': 'Ongoing anime',
+        'episodes': 12,
+        'status': 'ongoing',
+        'episodesAired': 6,
+        'nextEpisodeAt': '2026-10-14T18:00:00Z',
+      };
+    final client = tracking.ShikimoriApiClient(
+      accessToken: 'token',
+      userId: 7,
+      dio: Dio()..httpClientAdapter = adapter,
+    );
+    final entry = (await client.fetchAnimeList()).single.entries.single;
+    expect(entry.progress, 4);
+    expect(entry.mediaItem.externalIds[shikimoriEpisodesAiredKey], '6');
+    expect(entry.mediaItem.statusLabel, 'RELEASING');
+    expect(
+      AnimeAiringSchedule.forLibrary(
+        entry.mediaItem,
+        now: DateTime.utc(2026, 10, 12),
+      ).nextEpisode,
+      7,
+    );
+    expect(
+      animeEpisodesBehind(
+        entry.mediaItem,
+        progress: 4,
+        now: DateTime.utc(2026, 10, 12),
+      ),
+      2,
+    );
+  });
 
   test(
     'tracking manga list preserves exact ids and presentation data',

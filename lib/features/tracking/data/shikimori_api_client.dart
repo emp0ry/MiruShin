@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 
 import '../../../core/constants/app_constants.dart';
 import '../../../shared/models/anilist_models.dart';
+import '../../../shared/models/anime_airing.dart';
 import '../../../shared/models/media_item.dart';
 import '../domain/tracker_models.dart';
 
@@ -361,13 +362,15 @@ class ShikimoriApiClient {
       final String joined = ids.sublist(i, end).join(',');
       try {
         final String field = manga ? 'mangas' : 'animes';
-        final String progressFields = manga ? 'chapters volumes' : 'episodes';
+        final String progressFields = manga
+            ? 'chapters volumes'
+            : 'episodes episodesAired nextEpisodeAt';
         final Response<dynamic> response = await _request(
           'POST',
           '/api/graphql',
           data: <String, dynamic>{
             'query':
-                '{ $field(ids: "$joined", limit: 50) { id malId name russian $progressFields score poster { originalUrl mainUrl } } }',
+                '{ $field(ids: "$joined", limit: 50) { id malId name russian status $progressFields score poster { originalUrl mainUrl } } }',
           },
           authenticated: false,
         );
@@ -436,12 +439,23 @@ class ShikimoriApiClient {
         if (manga) 'anilist_type': 'MANGA',
         if (manga && _int(node?['volumes']) > 0)
           'volumes': '${_int(node?['volumes'])}',
+        if (!manga && node != null && node.containsKey('episodesAired'))
+          shikimoriAiringKnownKey: 'true',
+        if (!manga && node?['episodesAired'] is num)
+          shikimoriEpisodesAiredKey: '${_int(node?['episodesAired'])}',
+        if (!manga && _string(node?['nextEpisodeAt']).isNotEmpty)
+          shikimoriNextEpisodeAtKey: _string(node?['nextEpisodeAt']),
       },
       aliases: russian.isNotEmpty ? <String>[russian] : const <String>[],
       episodeCount: _nullableInt(
         node == null ? null : node[manga ? 'chapters' : 'episodes'],
       ),
-      statusLabel: '',
+      statusLabel: switch (_string(node?['status']).toLowerCase()) {
+        'ongoing' => 'RELEASING',
+        'released' => 'FINISHED',
+        'anons' => 'NOT_YET_RELEASED',
+        _ => '',
+      },
     );
   }
 

@@ -586,6 +586,94 @@ void main() {
       },
     );
 
+    test(
+      'unchanged tracking refreshes airing metadata and replicates it',
+      () async {
+        Future<void> pull(UserMediaState remote) =>
+            repository.reconcileProviderSnapshot(
+              source: TrackerSource.anilist,
+              accountId: 'airing-viewer',
+              mediaKind: 'anime',
+              remote: [remote],
+              journal: const [],
+              propagationTargets: const {TrackerSource.mal},
+              completeSnapshot: true,
+            );
+        UserMediaState airing(int? episode, DateTime? at) {
+          final initial = _state(progress: 6);
+          return UserMediaState.fromJson({
+            ...initial.toJson(),
+            'nextEpisode': episode,
+            'airingAt': at?.toIso8601String(),
+            'mediaItem': initial.mediaItem
+                .copyWith(
+                  externalIds: {
+                    ...initial.mediaItem.externalIds,
+                    'anilist_airing_known': 'true',
+                    if (episode != null)
+                      anilistNextAiringEpisodeKey: '$episode',
+                    if (at != null)
+                      anilistNextAiringAtKey:
+                          '${at.millisecondsSinceEpoch ~/ 1000}',
+                  },
+                )
+                .toJson(),
+          });
+        }
+
+        final old = airing(7, DateTime.utc(2026, 10, 7));
+        await pull(old);
+        await repository.approveProviderAccount(
+          provider: 'anilist',
+          accountId: 'airing-viewer',
+        );
+        await pull(old);
+        final logCount = (await repository.watchActivity().first).length;
+        final peerDb = CanonicalLibraryDatabase(NativeDatabase.memory());
+        final peer = CanonicalLibraryRepository(peerDb);
+        addTearDown(peerDb.close);
+        await peer.applyDriveSnapshot(await repository.buildDriveSnapshot());
+        final journalBefore = (await repository.loadJournal())
+            .map((e) => e.operationId)
+            .toList();
+        final fresh = airing(8, DateTime.utc(2026, 10, 14));
+        await pull(fresh);
+        final stored = (await repository.loadTrackingStates()).single;
+        expect(stored.nextEpisode, 8);
+        expect(stored.airingAt, DateTime.utc(2026, 10, 14));
+        expect(stored.progress, 6);
+        expect(stored.updatedAt, old.updatedAt);
+        expect((await repository.watchActivity().first).length, logCount);
+        expect(
+          (await repository.loadJournal()).map((e) => e.operationId).toList(),
+          journalBefore,
+        );
+        final segment = await repository.buildPendingDriveSegment();
+        expect(segment, isNotNull);
+        await peer.applyDriveSegment(segment!, trackerTargets: const {});
+        final restored = (await peer.loadTrackingStates()).single;
+        expect(restored.nextEpisode, 8);
+        expect(restored.airingAt, stored.airingAt);
+        expect(await peer.watchPendingDriveDeliveryCount().first, 0);
+        final checksum = (await repository.buildDriveSnapshot()).checksum;
+        await pull(fresh);
+        expect((await repository.buildDriveSnapshot()).checksum, checksum);
+        await pull(airing(null, null));
+        final finished = (await repository.loadTrackingStates()).single;
+        expect(finished.nextEpisode, isNull);
+        expect(finished.airingAt, isNull);
+        expect(
+          finished.mediaItem.externalIds[anilistNextAiringEpisodeKey],
+          isNull,
+        );
+        await peer.applyDriveSegment(
+          (await repository.buildPendingDriveSegment())!,
+          trackerTargets: const {},
+        );
+        expect((await peer.loadTrackingStates()).single.nextEpisode, isNull);
+      },
+    );
+
     test('detail enrichment updates only metadata and queues Drive', () async {
       final UserMediaState initial = _state(progress: 6);
       await repository.saveTrackingStates(<UserMediaState>[initial]);

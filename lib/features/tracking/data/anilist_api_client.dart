@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 
 import '../../../shared/models/anilist_models.dart';
+import '../../../shared/models/anime_airing.dart';
 import '../../../shared/models/calendar_item.dart';
 import '../../../shared/models/media_item.dart';
 import '../../media_details/domain/watch_order.dart';
@@ -2784,6 +2785,8 @@ class AniListApiClient {
           'anilist_is_favourite': (json['isFavourite'] == true).toString(),
         if (popularity > 0) 'anilist_popularity': popularity.toString(),
         if (favourites > 0) 'anilist_favourites': favourites.toString(),
+        if (json.containsKey('nextAiringEpisode'))
+          anilistAiringKnownKey: 'true',
         if (nextAiringEpisode > 0)
           anilistNextAiringEpisodeKey: nextAiringEpisode.toString(),
         if (nextAiringAt > 0) anilistNextAiringAtKey: nextAiringAt.toString(),

@@ -171,6 +171,8 @@ class AniListAnimeListEntry {
     int? scoreRaw,
     String? notes,
     int? repeat,
+    int? nextEpisode,
+    DateTime? airingAt,
   }) {
     return AniListAnimeListEntry(
       id: id,
@@ -192,8 +194,8 @@ class AniListAnimeListEntry {
       updatedAt: updatedAt,
       startedAt: startedAt,
       completedAt: completedAt,
-      nextEpisode: nextEpisode,
-      airingAt: airingAt,
+      nextEpisode: nextEpisode ?? this.nextEpisode,
+      airingAt: airingAt ?? this.airingAt,
       avgScore: avgScore,
       format: format,
     );

@@ -1,4 +1,5 @@
 import '../../../shared/models/anilist_models.dart';
+import '../../../shared/models/anime_airing.dart';
 import '../../../shared/models/media_item.dart';
 import 'tracker_models.dart';
 
@@ -255,13 +256,19 @@ class UserMediaState {
     }
     final DateTime updatedAt =
         DateTime.tryParse('${json['updatedAt'] ?? ''}') ?? DateTime(1970);
+    final media = MediaItem.fromJson(
+      Map<String, dynamic>.from(json['mediaItem'] as Map? ?? const {}),
+    );
+    final airing = AnimeAiringSchedule.fromMedia(
+      media,
+      legacyNextEpisode: _positiveInt(json['nextEpisode']),
+      legacyAiringAt: DateTime.tryParse('${json['airingAt'] ?? ''}'),
+    );
     return UserMediaState(
       identity: MediaIdentity.fromJson(
         Map<String, dynamic>.from(json['identity'] as Map? ?? const {}),
       ),
-      mediaItem: MediaItem.fromJson(
-        Map<String, dynamic>.from(json['mediaItem'] as Map? ?? const {}),
-      ),
+      mediaItem: media,
       status: _statusFromName(json['status']?.toString()),
       progress: _nonNegativeInt(json['progress']),
       progressVolumes: _nonNegativeInt(json['progressVolumes']),
@@ -272,8 +279,8 @@ class UserMediaState {
       updatedAt: updatedAt,
       startedAt: DateTime.tryParse('${json['startedAt'] ?? ''}'),
       completedAt: DateTime.tryParse('${json['completedAt'] ?? ''}'),
-      nextEpisode: _positiveInt(json['nextEpisode']),
-      airingAt: DateTime.tryParse('${json['airingAt'] ?? ''}'),
+      nextEpisode: airing.nextEpisode,
+      airingAt: airing.airingAt,
       avgScore: _positiveInt(json['avgScore']),
       format: _nullableTrimmedString(json['format']),
       source: TrackerSource.fromName(json['source']?.toString()),
@@ -464,6 +471,11 @@ class UserMediaState {
   }
 
   UserMediaState withMediaItem(MediaItem next) {
+    final airing = AnimeAiringSchedule.fromMedia(
+      next,
+      legacyNextEpisode: nextEpisode,
+      legacyAiringAt: airingAt,
+    );
     return UserMediaState(
       identity: identity,
       mediaItem: next.copyWith(
@@ -479,8 +491,8 @@ class UserMediaState {
       updatedAt: updatedAt,
       startedAt: startedAt,
       completedAt: completedAt,
-      nextEpisode: nextEpisode,
-      airingAt: airingAt,
+      nextEpisode: airing.nextEpisode,
+      airingAt: airing.airingAt,
       avgScore: avgScore,
       format: format,
       source: source,
@@ -1567,10 +1579,9 @@ MediaItem _mergeMedia(
         : preferred.backdropUrl,
     rating: preferred.rating == 0 ? fallback.rating : preferred.rating,
     genres: preferred.genres.isEmpty ? fallback.genres : preferred.genres,
-    externalIds: identity.mergeExternalIds(<String, String>{
-      ...fallback.externalIds,
-      ...preferred.externalIds,
-    }),
+    externalIds: identity.mergeExternalIds(
+      mergeAiringMetadata(fallback.externalIds, preferred.externalIds),
+    ),
     episodeCount: preferred.episodeCount ?? fallback.episodeCount,
     runtimeMinutes: preferred.runtimeMinutes ?? fallback.runtimeMinutes,
     seasons: preferred.seasons.isEmpty ? fallback.seasons : preferred.seasons,

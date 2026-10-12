@@ -19,6 +19,7 @@ import '../../../core/widgets/neutral_placeholder.dart';
 import '../../../core/widgets/tv_focusable.dart';
 import '../../../core/widgets/tv_text_field_focus.dart';
 import '../../../shared/models/anilist_models.dart';
+import '../../../shared/models/anime_airing.dart';
 import '../../../shared/models/library_item.dart';
 import '../../../shared/models/media_item.dart';
 import '../../../shared/utils/media_status_formatter.dart';
@@ -1811,10 +1812,15 @@ class _FolderViewState extends ConsumerState<_FolderView>
         list.sort((a, b) => a.repeat.compareTo(b.repeat));
       case _Sort.airingNearest:
         list.sort((a, b) {
-          if (a.airingAt == null && b.airingAt == null) return 0;
-          if (a.airingAt == null) return 1;
-          if (b.airingAt == null) return -1;
-          return a.airingAt!.compareTo(b.airingAt!);
+          final now = DateTime.now();
+          final aSchedule = _libraryAiringSchedule(a, now: now);
+          final bSchedule = _libraryAiringSchedule(b, now: now);
+          final aAt = aSchedule.isUpcoming(now) ? aSchedule.airingAt : null;
+          final bAt = bSchedule.isUpcoming(now) ? bSchedule.airingAt : null;
+          if (aAt == null && bAt == null) return 0;
+          if (aAt == null) return 1;
+          if (bAt == null) return -1;
+          return aAt.compareTo(bAt);
         });
       case _Sort.avgScoreHigh:
         list.sort((a, b) => (b.avgScore ?? 0).compareTo(a.avgScore ?? 0));
@@ -1885,17 +1891,7 @@ class _FolderViewState extends ConsumerState<_FolderView>
 
   List<AniListAnimeListEntry> _upcomingEntries(
     List<AniListAnimeListEntry> entries,
-  ) {
-    final DateTime now = DateTime.now();
-    final List<AniListAnimeListEntry> upcoming = entries
-        .where(
-          (AniListAnimeListEntry entry) =>
-              entry.airingAt != null && entry.airingAt!.isAfter(now),
-        )
-        .toList();
-    upcoming.sort((a, b) => a.airingAt!.compareTo(b.airingAt!));
-    return upcoming.take(10).toList(growable: false);
-  }
+  ) => libraryUpcomingEntries(entries);
 
   void _openSortSheet() {
     showModalBottomSheet<void>(
@@ -3167,18 +3163,18 @@ class _CollectionTileState extends ConsumerState<_CollectionTile> {
     if (_repeat > 0) {
       railItems['↩ $_repeat×'] = true;
     }
-    final int? nextEp = widget.entry.nextEpisode;
-    final DateTime? airingAt = widget.entry.airingAt;
+    final schedule = _libraryAiringSchedule(widget.entry);
+    final int? nextEp = schedule.nextEpisode;
+    final DateTime? airingAt = schedule.airingAt;
     final String? airingLabel = libraryNextAiringLabel(
       nextEpisode: nextEp,
       airingAt: airingAt,
     );
     // Episodes aired but not yet watched.
-    final int? behindCount = () {
-      if (nextEp == null || nextEp <= 1) return null;
-      final int b = (nextEp - 1) - _progress;
-      return b > 0 ? b : null;
-    }();
+    final int? behindCount = libraryEpisodesBehind(
+      widget.entry,
+      progress: _progress,
+    );
     final int? avgScore = widget.entry.avgScore;
     final String notes = _notes;
 
@@ -3420,7 +3416,9 @@ class _CollectionTileState extends ConsumerState<_CollectionTile> {
                                 if (behindCount != null) ...<Widget>[
                                   const SizedBox(width: 6),
                                   Text(
-                                    '$behindCount ep behind',
+                                    context.tf('{count} ep behind', {
+                                      'count': behindCount,
+                                    }),
                                     style: tt.labelSmall?.copyWith(
                                       color: AppColors.danger,
                                     ),
@@ -3768,13 +3766,10 @@ bool? _anilistBoolMetadata(MediaItem item, String key) {
 
 bool _matchesFlag(AniListAnimeListEntry entry, _LibraryFlag flag) {
   return switch (flag) {
-    _LibraryFlag.airingSoon =>
-      entry.airingAt != null && entry.airingAt!.isAfter(DateTime.now()),
-    _LibraryFlag.behind => () {
-      final int? nextEpisode = entry.nextEpisode;
-      if (nextEpisode == null || nextEpisode <= 1) return false;
-      return entry.progress < nextEpisode - 1;
-    }(),
+    _LibraryFlag.airingSoon => _libraryAiringSchedule(
+      entry,
+    ).isUpcoming(DateTime.now()),
+    _LibraryFlag.behind => libraryEpisodesBehind(entry) != null,
     _LibraryFlag.hasNotes => entry.notes.trim().isNotEmpty,
     _LibraryFlag.repeating =>
       entry.repeat > 0 || entry.status == AniListListStatus.repeating,
@@ -3792,6 +3787,52 @@ String _humanizeMediaStatus(String raw) {
 }
 
 bool _hasCyrillic(String value) => RegExp(r'[а-яёА-ЯЁ]').hasMatch(value);
+
+AnimeAiringSchedule _libraryAiringSchedule(
+  AniListAnimeListEntry entry, {
+  DateTime? now,
+}) => AnimeAiringSchedule.forLibrary(
+  entry.mediaItem,
+  nextEpisode: entry.nextEpisode,
+  airingAt: entry.airingAt,
+  now: now,
+);
+
+@visibleForTesting
+int? libraryEpisodesBehind(
+  AniListAnimeListEntry entry, {
+  int? progress,
+  DateTime? now,
+}) => animeEpisodesBehind(
+  entry.mediaItem,
+  progress: progress ?? entry.progress,
+  nextEpisode: entry.nextEpisode,
+  airingAt: entry.airingAt,
+  now: now,
+);
+
+@visibleForTesting
+List<AniListAnimeListEntry> libraryUpcomingEntries(
+  List<AniListAnimeListEntry> entries, {
+  DateTime? now,
+  int limit = 10,
+}) {
+  final at = now ?? DateTime.now();
+  final upcoming = <AniListAnimeListEntry>[];
+  for (final entry in entries) {
+    final airing = _libraryAiringSchedule(entry, now: at);
+    if (airing.isUpcoming(at)) {
+      upcoming.add(
+        entry.copyWith(
+          nextEpisode: airing.nextEpisode,
+          airingAt: airing.airingAt,
+        ),
+      );
+    }
+  }
+  upcoming.sort((a, b) => a.airingAt!.compareTo(b.airingAt!));
+  return upcoming.take(limit).toList(growable: false);
+}
 
 int? _malIdForMediaItem(MediaItem item) {
   final int? malId = int.tryParse(item.externalIds['mal'] ?? '');
@@ -3881,9 +3922,10 @@ class _GridCell extends ConsumerWidget {
     final int? total = media.episodeCount;
     final int progress = entry.progress;
     final String fmt = ref.watch(aniListEffectiveScoreFormatProvider);
+    final schedule = _libraryAiringSchedule(entry);
     final String? airingLabel = libraryNextAiringLabel(
-      nextEpisode: entry.nextEpisode,
-      airingAt: entry.airingAt,
+      nextEpisode: schedule.nextEpisode,
+      airingAt: schedule.airingAt,
     );
     final double frac = total != null && total > 0
         ? (progress / total).clamp(0.0, 1.0)

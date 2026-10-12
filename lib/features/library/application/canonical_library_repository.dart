@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../../shared/models/anilist_models.dart';
+import '../../../shared/models/anime_airing.dart';
 import '../../../shared/models/library_item.dart';
 import '../../../shared/models/media_item.dart';
 import '../../settings/application/settings_state.dart';
@@ -1239,41 +1240,47 @@ class CanonicalLibraryRepository {
         identity: identity,
         mediaItem: mediaItem,
       );
-      final CanonicalMediaRecord storedMedia =
-          await (database.select(database.canonicalMediaRecords)..where(
-                (CanonicalMediaRecords table) => table.localId.equals(localId),
-              ))
-              .getSingle();
-      final MediaItem merged = MediaItem.fromJson(
-        _jsonMap(storedMedia.mediaJson),
-      );
-      final CanonicalLibraryRecord? libraryRow =
-          await (database.select(database.canonicalLibraryRecords)..where(
-                (CanonicalLibraryRecords table) =>
-                    table.localId.equals(localId) &
-                    table.inLibrary.equals(true),
-              ))
-              .getSingleOrNull();
-      if (libraryRow == null) return merged;
+      return _refreshLibraryPresentationLocked(localId);
+    });
+  }
 
-      final UserMediaState before = UserMediaState.fromJson(
-        _jsonMap(libraryRow.canonicalStateJson),
-      );
-      if (jsonEncode(before.mediaItem.toJson()) ==
-          jsonEncode(merged.toJson())) {
-        return merged;
-      }
-      final UserMediaState after = before.withMediaItem(merged);
-      final int now = DateTime.now().toUtc().millisecondsSinceEpoch;
-      await (database.update(database.canonicalLibraryRecords)..where(
-            (CanonicalLibraryRecords table) => table.localId.equals(localId),
-          ))
-          .write(
-            CanonicalLibraryRecordsCompanion(
-              canonicalStateJson: Value<String>(jsonEncode(after.toJson())),
-              updatedAtMs: Value<int>(now),
-            ),
-          );
+  Future<MediaItem> _refreshLibraryPresentationLocked(
+    String localId, {
+    bool replicate = true,
+  }) async {
+    final CanonicalMediaRecord storedMedia =
+        await (database.select(database.canonicalMediaRecords)..where(
+              (CanonicalMediaRecords table) => table.localId.equals(localId),
+            ))
+            .getSingle();
+    final MediaItem merged = MediaItem.fromJson(
+      _jsonMap(storedMedia.mediaJson),
+    );
+    final CanonicalLibraryRecord? libraryRow =
+        await (database.select(database.canonicalLibraryRecords)..where(
+              (CanonicalLibraryRecords table) =>
+                  table.localId.equals(localId) & table.inLibrary.equals(true),
+            ))
+            .getSingleOrNull();
+    if (libraryRow == null) return merged;
+
+    final UserMediaState before = UserMediaState.fromJson(
+      _jsonMap(libraryRow.canonicalStateJson),
+    );
+    final UserMediaState after = before.withMediaItem(merged);
+    if (libraryRow.canonicalStateJson == jsonEncode(after.toJson())) {
+      return merged;
+    }
+    final int now = DateTime.now().toUtc().millisecondsSinceEpoch;
+    await (database.update(database.canonicalLibraryRecords)..where(
+          (CanonicalLibraryRecords table) => table.localId.equals(localId),
+        ))
+        .write(
+          CanonicalLibraryRecordsCompanion(
+            canonicalStateJson: Value<String>(jsonEncode(after.toJson())),
+          ),
+        );
+    if (replicate) {
       await _appendOperationLocked(
         LibraryOperationDraft(
           localId: localId,
@@ -1288,8 +1295,8 @@ class CanonicalLibraryRepository {
           visibleInLog: false,
         ),
       );
-      return merged;
-    });
+    }
+    return merged;
   }
 
   /// Persists an exact provider id learned after a local entry was created.
@@ -1599,10 +1606,9 @@ class CanonicalLibraryRepository {
       sourceProvider: incomingPreferred
           ? incoming.sourceProvider
           : cached.sourceProvider,
-      externalIds: identity.mergeExternalIds(<String, String>{
-        ...cached.externalIds,
-        ...incoming.externalIds,
-      }),
+      externalIds: identity.mergeExternalIds(
+        mergeAiringMetadata(cached.externalIds, incoming.externalIds),
+      ),
       runtimeMinutes: chooseNullableInt(
         cached.runtimeMinutes,
         incoming.runtimeMinutes,
@@ -2547,6 +2553,10 @@ class CanonicalLibraryRepository {
           if (binding != null && binding.localId != localId) ambiguous = true;
         }
         if (ambiguous) continue;
+        // Schedule/catalog changes are independent of user-list edit dates.
+        // Persist them even when reconciliation accepts no tracking fields,
+        // including when this provider is an outgoing-only mirror.
+        await _refreshLibraryPresentationLocked(localId);
         final MediaIdentity identity = MediaIdentity(
           localId: localId,
           kind: incoming.identity.mediaKind,
@@ -6433,6 +6443,23 @@ class CanonicalLibraryRepository {
             );
           }
         }
+        if (accepted.contains('metadata')) {
+          // A metadata-only segment has no after.state. Update the embedded
+          // presentation too, without creating a Drive echo or tracking write.
+          final rawMedia = after['media'];
+          if (rawMedia is Map) {
+            // translatedIds skips identity resolution after the first action
+            // for this title. A later metadata action still carries new data.
+            await _resolveOrCreateMediaLocked(
+              identity:
+                  current?.identity ?? incomingIdentity.withLocalId(localId),
+              mediaItem: MediaItem.fromJson(
+                Map<String, dynamic>.from(rawMedia),
+              ),
+            );
+          }
+          await _refreshLibraryPresentationLocked(localId, replicate: false);
+        }
         final Map<String, dynamic> nextRevisions = <String, dynamic>{
           ...currentRevisions,
         };
@@ -6571,7 +6598,10 @@ class CanonicalLibraryRepository {
                 ),
                 undoOf: Value<String?>(remoteOperation['undoOf']?.toString()),
                 title: Value<String?>(remoteOperation['title']?.toString()),
-                visibleInLog: const Value<bool>(true),
+                visibleInLog: Value<bool>(
+                  remoteOperation['visibleInLog'] != false &&
+                      !fields.every((field) => field == 'metadata'),
+                ),
                 occurredAtMs: operationAt.millisecondsSinceEpoch,
               ),
             );

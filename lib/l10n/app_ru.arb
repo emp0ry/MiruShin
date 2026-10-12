@@ -912,6 +912,7 @@
   "Avg Score ↓": "Ср. оценка ↓",
   "Avg Score ↑": "Ср. оценка ↑",
   "Behind": "Отстаёт",
+  "{count} ep behind": "Не просмотрено серий: {count}",
   "Cancelled": "Отменено",
   "China": "Китай",
   "Chinese": "Китайский",

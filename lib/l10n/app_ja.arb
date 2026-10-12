@@ -883,6 +883,7 @@
   "Avg Score ↓": "平均評価 ↓",
   "Avg Score ↑": "平均評価 ↑",
   "Behind": "遅れあり",
+  "{count} ep behind": "未視聴：{count}話",
   "Cancelled": "キャンセル",
   "China": "中国",
   "Chinese": "中国語",
