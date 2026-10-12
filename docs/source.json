@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.9.20",
+          "date": "2026-10-12",
+          "localizedDescription": "- Fixed stale episode-behind counts and missing titles in the Library upcoming-release strip.\n- Library cards, airing filters and sorting now use consistent cached airing metadata, including elapsed episodes without guessing future releases.\n- Airing metadata refreshes independently of watch progress and syncs between devices through Google Drive without generating upload echoes.\n- Added Shikimori aired-episode counts and next-airing dates as a fallback when AniList scheduling data is unavailable.\n- Added Russian and Japanese episode-backlog labels and regression tests for provider refreshes and cross-device schedule updates.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.20/MiruShin-ios-v2.9.20.ipa",
+          "size": 31915630,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.9.19",
           "date": "2026-10-12",
           "localizedDescription": "- Reduce Library-related UI stalls by reusing unchanged metadata and moving large native decoding and checksum work off the UI thread.\n- Defer Google Drive sync while the player is open, keep progress saved locally, and automatically resume queued changes after leaving the player.\n- Improve sync coordination during episode transitions and player shutdown, with safer deferred-sync status handling.",
@@ -823,11 +831,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.9.19",
+      "version": "2.9.20",
       "versionDate": "2026-10-12",
-      "versionDescription": "- Reduce Library-related UI stalls by reusing unchanged metadata and moving large native decoding and checksum work off the UI thread.\n- Defer Google Drive sync while the player is open, keep progress saved locally, and automatically resume queued changes after leaving the player.\n- Improve sync coordination during episode transitions and player shutdown, with safer deferred-sync status handling.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.19/MiruShin-ios-v2.9.19.ipa",
-      "size": 31913187,
+      "versionDescription": "- Fixed stale episode-behind counts and missing titles in the Library upcoming-release strip.\n- Library cards, airing filters and sorting now use consistent cached airing metadata, including elapsed episodes without guessing future releases.\n- Airing metadata refreshes independently of watch progress and syncs between devices through Google Drive without generating upload echoes.\n- Added Shikimori aired-episode counts and next-airing dates as a fallback when AniList scheduling data is unavailable.\n- Added Russian and Japanese episode-backlog labels and regression tests for provider refreshes and cross-device schedule updates.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.20/MiruShin-ios-v2.9.20.ipa",
+      "size": 31915630,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
