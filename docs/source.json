@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.9.21",
+          "date": "2026-10-12",
+          "localizedDescription": "- Fixed incorrect episode-behind badges on finished anime.\n- Finished and cancelled titles no longer appear in the Behind filter or upcoming-release schedules when stale provider dates remain cached.\n- Handled broadcast statuses consistently across AniList, MyAnimeList and Shikimori without changing watch progress or library data.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.21/MiruShin-ios-v2.9.21.ipa",
+          "size": 31916139,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.9.20",
           "date": "2026-10-12",
           "localizedDescription": "- Fixed stale episode-behind counts and missing titles in the Library upcoming-release strip.\n- Library cards, airing filters and sorting now use consistent cached airing metadata, including elapsed episodes without guessing future releases.\n- Airing metadata refreshes independently of watch progress and syncs between devices through Google Drive without generating upload echoes.\n- Added Shikimori aired-episode counts and next-airing dates as a fallback when AniList scheduling data is unavailable.\n- Added Russian and Japanese episode-backlog labels and regression tests for provider refreshes and cross-device schedule updates.",
@@ -831,11 +839,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.9.20",
+      "version": "2.9.21",
       "versionDate": "2026-10-12",
-      "versionDescription": "- Fixed stale episode-behind counts and missing titles in the Library upcoming-release strip.\n- Library cards, airing filters and sorting now use consistent cached airing metadata, including elapsed episodes without guessing future releases.\n- Airing metadata refreshes independently of watch progress and syncs between devices through Google Drive without generating upload echoes.\n- Added Shikimori aired-episode counts and next-airing dates as a fallback when AniList scheduling data is unavailable.\n- Added Russian and Japanese episode-backlog labels and regression tests for provider refreshes and cross-device schedule updates.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.20/MiruShin-ios-v2.9.20.ipa",
-      "size": 31915630,
+      "versionDescription": "- Fixed incorrect episode-behind badges on finished anime.\n- Finished and cancelled titles no longer appear in the Behind filter or upcoming-release schedules when stale provider dates remain cached.\n- Handled broadcast statuses consistently across AniList, MyAnimeList and Shikimori without changing watch progress or library data.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.21/MiruShin-ios-v2.9.21.ipa",
+      "size": 31916139,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
