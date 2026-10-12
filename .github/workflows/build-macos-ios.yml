@@ -40,6 +40,13 @@ jobs:
       - name: Pre-cache Apple MDK SDK
         run: bash .github/scripts/precache-apple-mdk.sh
 
+      - name: Pre-cache verified Apple SQLite assets
+        run: >-
+          dart --disable-dart-dev tool/precache_sqlite_assets.dart
+          libsqlite3.arm64.ios.dylib
+          libsqlite3.arm64.macos.dylib
+          libsqlite3.x64.macos.dylib
+
       - name: Prepare iOS no-codesign config
         shell: bash
         run: |
