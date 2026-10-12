@@ -44,6 +44,106 @@ void main() {
 
   group('canonical Library airing presentation', () {
     final now = DateTime.utc(2026, 10, 12, 12);
+    test('finished SAKAMOTO DAYS has no behind badge with 4 of 11 watched', () {
+      final entry = _entry(
+        progress: 4,
+        releaseStatus: 'FINISHED',
+        ids: {shikimoriEpisodesAiredKey: '11'},
+      );
+      expect(libraryEpisodesBehind(entry, now: now), isNull);
+      expect(libraryUpcomingEntries([entry], now: now), isEmpty);
+      expect(entry.progress, 4);
+      expect(entry.status, AniListListStatus.current);
+    });
+    for (final releaseStatus in [
+      'FINISHED',
+      'finished_airing',
+      'Released',
+      'CANCELLED',
+      'canceled',
+    ]) {
+      test(
+        '$releaseStatus overrides stale future AniList and Shikimori schedules',
+        () {
+          final entry = _entry(
+            progress: 4,
+            releaseStatus: releaseStatus,
+            nextEpisode: 12,
+            airingAt: now.add(const Duration(days: 1)),
+            ids: {
+              anilistNextAiringEpisodeKey: '12',
+              anilistNextAiringAtKey:
+                  '${now.add(const Duration(days: 1)).millisecondsSinceEpoch ~/ 1000}',
+              shikimoriEpisodesAiredKey: '11',
+              shikimoriNextEpisodeAtKey: now
+                  .add(const Duration(days: 2))
+                  .toIso8601String(),
+            },
+          );
+          expect(libraryEpisodesBehind(entry, now: now), isNull);
+          expect(libraryUpcomingEntries([entry], now: now), isEmpty);
+          expect(
+            AnimeAiringSchedule.forLibrary(
+              entry.mediaItem,
+              now: now,
+            ).nextEpisode,
+            isNull,
+          );
+        },
+      );
+    }
+    for (final releaseStatus in [
+      'RELEASING',
+      'currently_airing',
+      'Ongoing',
+      'airing',
+    ]) {
+      test('$releaseStatus still shows aired but unwatched episodes', () {
+        final entry = _entry(
+          progress: 4,
+          releaseStatus: releaseStatus,
+          ids: {shikimoriEpisodesAiredKey: '11'},
+        );
+        expect(libraryEpisodesBehind(entry, now: now), 7);
+        // List status is the user's choice, not the broadcast status.
+        expect(
+          libraryEpisodesBehind(
+            entry.copyWith(status: AniListListStatus.completed),
+            now: now,
+          ),
+          7,
+        );
+      });
+    }
+    for (final releaseStatus in [
+      'NOT_YET_RELEASED',
+      'not_yet_aired',
+      'anons',
+      'HIATUS',
+      '',
+      'AniList',
+    ]) {
+      test('$releaseStatus does not turn an old aired counter into behind', () {
+        final entry = _entry(
+          progress: 4,
+          releaseStatus: releaseStatus,
+          nextEpisode: 12,
+          airingAt: now.subtract(const Duration(days: 1)),
+          ids: {shikimoriEpisodesAiredKey: '11'},
+        );
+        expect(libraryEpisodesBehind(entry, now: now), isNull);
+      });
+    }
+    test('not-yet-released premiere can appear in upcoming but not behind', () {
+      final entry = _entry(
+        progress: 0,
+        releaseStatus: 'NOT_YET_RELEASED',
+        nextEpisode: 1,
+        airingAt: now.add(const Duration(days: 1)),
+      );
+      expect(libraryUpcomingEntries([entry], now: now).single.nextEpisode, 1);
+      expect(libraryEpisodesBehind(entry, now: now), isNull);
+    });
     test('fresh metadata repairs old next episode in both behind and strip', () {
       final entry = _entry(
         progress: 12,
@@ -170,6 +270,7 @@ AniListAnimeListEntry _entry({
   int? nextEpisode,
   DateTime? airingAt,
   Map<String, String> ids = const {},
+  String releaseStatus = 'RELEASING',
 }) => AniListAnimeListEntry(
   id: 10,
   status: AniListListStatus.current,
@@ -189,6 +290,6 @@ AniListAnimeListEntry _entry({
     genres: const [],
     sourceProvider: 'AniList',
     externalIds: {'anilist': '10', ...ids},
-    statusLabel: 'RELEASING',
+    statusLabel: releaseStatus,
   ),
 );

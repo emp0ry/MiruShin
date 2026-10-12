@@ -5,6 +5,24 @@ const shikimoriAiringKnownKey = 'shikimori_airing_known';
 const shikimoriEpisodesAiredKey = 'shikimori_episodes_aired';
 const shikimoriNextEpisodeAtKey = 'shikimori_next_episode_at';
 
+String _releaseStatus(MediaItem media) =>
+    media.statusLabel.trim().toUpperCase().replaceAll(' ', '_');
+
+bool _hasEndedBroadcast(MediaItem media) => switch (_releaseStatus(media)) {
+  'FINISHED' ||
+  'FINISHED_AIRING' ||
+  'RELEASED' ||
+  'CANCELLED' ||
+  'CANCELED' => true,
+  _ => false,
+};
+
+bool _isCurrentlyBroadcasting(MediaItem media) =>
+    switch (_releaseStatus(media)) {
+      'RELEASING' || 'CURRENTLY_AIRING' || 'ONGOING' || 'AIRING' => true,
+      _ => false,
+    };
+
 /// An episode/time pair belongs to one snapshot. Never combine a cached
 /// episode number with a newer timestamp or extrapolate a weekly schedule.
 class AnimeAiringSchedule {
@@ -50,7 +68,11 @@ class AnimeAiringSchedule {
     DateTime? airingAt,
     DateTime? now,
   }) {
-    if (media.type != MediaType.anime) return const AnimeAiringSchedule();
+    // A completed broadcast overrides stale schedules from either provider.
+    // Keep the stored metadata intact; only its Library presentation changes.
+    if (media.type != MediaType.anime || _hasEndedBroadcast(media)) {
+      return const AnimeAiringSchedule();
+    }
     final at = now ?? DateTime.now();
     final anilist = AnimeAiringSchedule.fromMedia(
       media,
@@ -108,7 +130,11 @@ int? animeEpisodesBehind(
   DateTime? airingAt,
   DateTime? now,
 }) {
-  if (media.type != MediaType.anime) return null;
+  // Behind means missing episodes of an ongoing broadcast, not every
+  // unwatched episode of a finished show. Use media status, never list status.
+  if (media.type != MediaType.anime || !_isCurrentlyBroadcasting(media)) {
+    return null;
+  }
   final at = now ?? DateTime.now();
   final schedule = AnimeAiringSchedule.forLibrary(
     media,
