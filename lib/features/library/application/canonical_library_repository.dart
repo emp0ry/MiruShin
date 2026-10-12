@@ -19,6 +19,11 @@ import '../data/canonical_library_database.dart';
 import '../domain/canonical_library_models.dart';
 import '../domain/cloud_replica_models.dart';
 import '../domain/library_export_snapshot.dart';
+import 'tracking_state_decoder.dart';
+
+String _driveSegmentChecksum(DriveReplicaSegment segment) => segment.checksum;
+String _driveSnapshotChecksum(DriveLibrarySnapshot snapshot) =>
+    snapshot.checksum;
 
 class LibraryWorkspaceScope {
   const LibraryWorkspaceScope({
@@ -278,6 +283,7 @@ class CanonicalLibraryRepository {
   final String replicaNamespace;
   final bool importsLegacyData;
   Future<void>? _initialization;
+  final _trackingStateDecoder = TrackingStateDecoder();
 
   Future<void> initialize() => _initialization ??= _initialize();
 
@@ -965,22 +971,29 @@ class CanonicalLibraryRepository {
               (CanonicalLibraryRecords table) => table.inLibrary.equals(true),
             ))
             .get();
-    final List<UserMediaState> result = <UserMediaState>[];
-    for (final CanonicalLibraryRecord row in rows) {
-      try {
-        final Object? decoded = jsonDecode(row.canonicalStateJson);
-        if (decoded is Map<String, dynamic>) {
-          result.add(UserMediaState.fromJson(decoded));
-        }
-      } on Object {
-        // A corrupt row is isolated instead of making the whole library fail.
-      }
-    }
-    result.sort(
-      (UserMediaState a, UserMediaState b) =>
-          b.updatedAt.compareTo(a.updatedAt),
-    );
-    return result;
+    return _decodeTrackingRows(rows);
+  }
+
+  Future<List<UserMediaState>> _decodeTrackingRows(
+    List<CanonicalLibraryRecord> rows,
+  ) => _trackingStateDecoder.decode([
+    for (final row in rows) (row.localId, row.canonicalStateJson),
+  ]);
+
+  Future<UserMediaState?> _trackingStateForIdentityLocked(
+    MediaIdentity identity,
+  ) async {
+    final id = await _localIdForIdentityLocked(identity);
+    if (id == null) return null;
+    final row =
+        await (database.select(database.canonicalLibraryRecords)..where(
+              (table) =>
+                  table.localId.equals(id) & table.inLibrary.equals(true),
+            ))
+            .getSingleOrNull();
+    if (row == null) return null;
+    final state = (await _decodeTrackingRows([row])).firstOrNull;
+    return state?.identity.mediaKind == identity.mediaKind ? state : null;
   }
 
   Future<void> saveTrackingStates(List<UserMediaState> states) async {
@@ -999,13 +1012,9 @@ class CanonicalLibraryRepository {
   }) async {
     await initialize();
     await database.transaction(() async {
-      UserMediaState? before;
-      for (final UserMediaState value in await loadTrackingStates()) {
-        if (value.identity.matches(state.identity)) {
-          before = value;
-          break;
-        }
-      }
+      final UserMediaState? before = await _trackingStateForIdentityLocked(
+        state.identity,
+      );
       final String localId = await _upsertTrackingStateLocked(state);
       final UserMediaState stored = state.withIdentity(
         MediaIdentity(
@@ -1044,18 +1053,14 @@ class CanonicalLibraryRepository {
   }) async {
     await initialize();
     await database.transaction(() async {
-      UserMediaState? before;
-      for (final UserMediaState value in await loadTrackingStates()) {
-        if (value.identity.matches(identity)) {
-          before = value;
-          break;
-        }
-      }
+      final UserMediaState? before = await _trackingStateForIdentityLocked(
+        identity,
+      );
       if (before == null) return;
       final int now = DateTime.now().toUtc().millisecondsSinceEpoch;
       await (database.update(database.canonicalLibraryRecords)..where(
             (CanonicalLibraryRecords table) =>
-                table.localId.equals(before!.identity.localId),
+                table.localId.equals(before.identity.localId),
           ))
           .write(
             CanonicalLibraryRecordsCompanion(
@@ -3898,8 +3903,22 @@ class CanonicalLibraryRepository {
     await initialize();
     await database.transaction(() async {
       final journal = await loadJournal();
+      final localIds = <int, String>{};
+      for (int i = 0; i < journal.length; i++) {
+        if (!journal[i].tracks(source)) continue;
+        final id = await _localIdForIdentityLocked(journal[i].identity);
+        if (id != null) localIds[i] = id;
+      }
+      if (localIds.isEmpty) return;
+      final rows =
+          await (database.select(database.canonicalLibraryRecords)..where(
+                (table) =>
+                    table.inLibrary.equals(true) &
+                    table.localId.isIn(localIds.values.toSet()),
+              ))
+              .get();
       final states = {
-        for (final state in await loadTrackingStates())
+        for (final state in await _decodeTrackingRows(rows))
           state.identity.localId: state,
       };
       final blocked = await unresolvedProviderDeliveryBlocks({
@@ -3909,7 +3928,7 @@ class CanonicalLibraryRepository {
       final groups = <String, int>{};
       for (int i = 0; i < journal.length; i++) {
         final job = journal[i];
-        final id = await _localIdForIdentityLocked(job.identity);
+        final id = localIds[i];
         if (id == null || !job.tracks(source)) continue;
         if (job.patch.delete ||
             job.patch.touches(UserMediaField.favorite) ||
@@ -4755,17 +4774,7 @@ class CanonicalLibraryRepository {
                   }
                   return true;
                 })
-                .map(
-                  (rows) =>
-                      rows
-                          .map(
-                            (row) => UserMediaState.fromJson(
-                              _jsonMap(row.canonicalStateJson),
-                            ),
-                          )
-                          .toList()
-                        ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt)),
-                ),
+                .asyncMap(_decodeTrackingRows),
       );
 
   Future<void> _setFavoriteLocked({
@@ -5532,6 +5541,11 @@ class CanonicalLibraryRepository {
         '${snapshot.replicaNamespace} != $replicaNamespace',
       );
     }
+    final snapshotChecksum = await compute(
+      _driveSnapshotChecksum,
+      snapshot,
+      debugLabel: 'MiruShin Drive snapshot hash',
+    );
     final DriveSnapshotApplyResult
     baseResult = await database.transaction(() async {
       final int beforeCount =
@@ -5790,7 +5804,7 @@ class CanonicalLibraryRepository {
           .insertOnConflictUpdate(
             SyncCursorRecordsCompanion.insert(
               scope: 'drive.snapshot:${snapshot.replicaNamespace}',
-              cursor: snapshot.checksum,
+              cursor: snapshotChecksum,
               metadataJson: Value<String>(
                 jsonEncode(<String, dynamic>{
                   'snapshotId': snapshot.snapshotId,
@@ -5832,7 +5846,7 @@ class CanonicalLibraryRepository {
           });
     final int recovered = await applyDriveSegment(
       DriveReplicaSegment(
-        segmentId: 'snapshot-recovery-v2-${snapshot.checksum}',
+        segmentId: 'snapshot-recovery-v2-$snapshotChecksum',
         deviceId: snapshot.deviceId,
         createdAt: snapshot.createdAt,
         operations: orderedOperations,
@@ -5850,7 +5864,7 @@ class CanonicalLibraryRepository {
         .insertOnConflictUpdate(
           SyncCursorRecordsCompanion.insert(
             scope: 'drive.snapshot.reconciled.v2:${snapshot.replicaNamespace}',
-            cursor: snapshot.checksum,
+            cursor: snapshotChecksum,
             metadataJson: Value<String>(
               jsonEncode(<String, dynamic>{
                 'snapshotId': snapshot.snapshotId,
@@ -5934,6 +5948,11 @@ class CanonicalLibraryRepository {
     required String remoteFileId,
   }) async {
     await initialize();
+    final checksum = await compute(
+      _driveSegmentChecksum,
+      segment,
+      debugLabel: 'MiruShin Drive delivered segment hash',
+    );
     await database.transaction(() async {
       final int now = DateTime.now().toUtc().millisecondsSinceEpoch;
       final Set<String> operationIds = segment.operations
@@ -5962,7 +5981,7 @@ class CanonicalLibraryRepository {
               scope: 'drive.pushed:${segment.fileName}',
               cursor: remoteFileId,
               metadataJson: Value<String>(
-                jsonEncode(<String, dynamic>{'checksum': segment.checksum}),
+                jsonEncode(<String, dynamic>{'checksum': checksum}),
               ),
               updatedAtMs: now,
             ),
@@ -6021,6 +6040,13 @@ class CanonicalLibraryRepository {
         '${segment.replicaNamespace} != $replicaNamespace',
       );
     }
+    // This can encode/hash a large restored segment. Never do it while the
+    // UI isolate is holding the import transaction's SQLite write lock.
+    final checksum = await compute(
+      _driveSegmentChecksum,
+      segment,
+      debugLabel: 'MiruShin Drive segment hash',
+    );
     return database.transaction(() async {
       final SyncCursorRecord? processed =
           await (database.select(database.syncCursorRecords)..where(
@@ -6594,7 +6620,7 @@ class CanonicalLibraryRepository {
           .insertOnConflictUpdate(
             SyncCursorRecordsCompanion.insert(
               scope: 'drive.pulled:${segment.fileName}',
-              cursor: segment.checksum,
+              cursor: checksum,
               metadataJson: Value<String>(
                 jsonEncode(<String, dynamic>{'applied': applied}),
               ),

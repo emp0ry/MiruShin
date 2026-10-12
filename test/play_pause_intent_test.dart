@@ -10,6 +10,7 @@ import 'package:mirushin/core/diagnostics/player_diagnostics.dart';
 import 'package:mirushin/features/library/application/canonical_library_repository.dart';
 import 'package:mirushin/features/library/application/local_library_provider.dart';
 import 'package:mirushin/features/library/data/canonical_library_database.dart';
+import 'package:mirushin/features/player/application/playback_activity.dart';
 import 'package:mirushin/features/player/application/playback_controller.dart';
 import 'package:mirushin/features/player/application/player_settings.dart';
 import 'package:mirushin/features/player/domain/playback_end_decision.dart';
@@ -732,6 +733,36 @@ void main() {
         expect(engine.playCalls, 1);
       },
     );
+
+    test('failed teardown releases Drive after the final local save', () async {
+      final c = container();
+      await c.read(playerSettingsProvider.future);
+      await c.read(playerSettingsProvider.notifier).setAutoAnilistSync(false);
+      final controller = c.read(playbackControllerProvider.notifier);
+      final item = _testPlaybackItem('anilist:10');
+      final engine = _FailingDisposalEngine(
+        const PlayerEngineState(
+          isInitialized: true,
+          position: Duration(seconds: 95),
+          duration: Duration(seconds: 1400),
+        ),
+      );
+      controller.debugSetPlaybackState(
+        PlaybackState(item: item, engine: engine),
+      );
+      c.read(playbackActivityProvider.notifier).setActive(true);
+      // Existing teardown policy absorbs native errors; that policy is kept.
+      await controller.stop();
+      expect(engine.disposeCalls, 1);
+      expect(c.read(playbackActivityProvider), isFalse);
+      expect(
+        (await c
+                .read(localLibraryProvider.notifier)
+                .loadEpisodeProgress(item.id, 1, 1))
+            ?.positionSeconds,
+        95,
+      );
+    });
 
     test('stop tears down only the session it captured', () async {
       final ProviderContainer c = container();
@@ -2331,6 +2362,16 @@ class _FakePlayerEngine extends PlayerEngine {
   Future<void> dispose() async {
     disposeCalls += 1;
     _state.dispose();
+  }
+}
+
+class _FailingDisposalEngine extends _FakePlayerEngine {
+  _FailingDisposalEngine(super.initialState);
+
+  @override
+  Future<void> dispose() async {
+    await super.dispose();
+    throw StateError('fixture native teardown failure');
   }
 }
 

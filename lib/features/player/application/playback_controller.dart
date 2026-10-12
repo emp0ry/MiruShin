@@ -36,6 +36,7 @@ import '../engine/seek_thumbnail.dart';
 import '../engine/seek_thumbnail_extractor.dart';
 import '../engine/seek_thumbnail_source.dart';
 import '../engine/stream_url_policy.dart';
+import 'playback_activity.dart';
 import 'player_settings.dart';
 import 'resume_stability.dart';
 
@@ -304,6 +305,7 @@ class PlaybackController extends Notifier<PlaybackState> {
   Timer? _manualSeekEofQuarantineTimer;
   int _retryCount = 0;
   int _playbackGeneration = 0;
+  int _playbackActivityEpoch = 0;
   PlaybackRouteHint? _provenPlaybackRoute;
   int _seekPreviewGeneration = 0;
   int _manualSeekEpoch = 0;
@@ -591,6 +593,7 @@ class PlaybackController extends Notifier<PlaybackState> {
 
   @override
   PlaybackState build() {
+    final activity = ref.read(playbackActivityProvider.notifier);
     MediaSessionService.init(
       onPlay: () {
         final PlayerEngine? e = state.engine;
@@ -642,6 +645,8 @@ class PlaybackController extends Notifier<PlaybackState> {
       }
     });
     ref.onDispose(() {
+      // Do not mutate another provider while Riverpod is tearing this one down.
+      scheduleMicrotask(() => activity.setActive(false));
       _playbackGeneration++;
       _playPauseIntentEpoch++;
       _resumeStabilizeEpoch++;
@@ -889,6 +894,8 @@ class PlaybackController extends Notifier<PlaybackState> {
     MediaPlaybackItem item, {
     PlaybackRouteHint? preferredPlaybackRoute,
   }) async {
+    _playbackActivityEpoch++;
+    ref.read(playbackActivityProvider.notifier).setActive(true);
     debugPrint(
       '[DEBUG] load: S${item.seasonNumber}E${item.episodeNumber} ignoreProgress=${item.ignoreProgress}',
     );
@@ -2180,6 +2187,7 @@ class PlaybackController extends Notifier<PlaybackState> {
   }
 
   Future<void> stop() async {
+    final int activityEpoch = _playbackActivityEpoch;
     unawaited(MediaSessionService.clearNowPlaying());
     unawaited(_ignorePlaybackTeardownErrors(DiscordRpcService.clearActivity()));
     final MediaPlaybackItem? item = state.item;
@@ -2231,10 +2239,20 @@ class PlaybackController extends Notifier<PlaybackState> {
       // Preview teardown must not prevent the main player from being released.
     }
 
-    if (engineDisposal != null) await engineDisposal;
-    await finalProgressSave;
-    _resumeGuardPosition = Duration.zero;
-    _resumeGuardUntil = null;
+    try {
+      if (engineDisposal != null) await engineDisposal;
+    } finally {
+      await finalProgressSave;
+      _resumeGuardPosition = Duration.zero;
+      _resumeGuardUntil = null;
+      // Loading can still be awaiting progress with state.item == null. Only
+      // this captured session may release the gate, even after teardown fails.
+      if (ref.mounted &&
+          activityEpoch == _playbackActivityEpoch &&
+          state.item == null) {
+        ref.read(playbackActivityProvider.notifier).setActive(false);
+      }
+    }
   }
 
   StreamQuality _initialQuality(MediaServer server, {String? explicitId}) {

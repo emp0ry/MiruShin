@@ -560,6 +560,9 @@ class _GoogleDriveSyncSectionState
           '$status • ${context.t('Waiting to sync')}: '
           '$pendingDriveChanges';
     }
+    if (connected && state?.deferredForPlayback == true) {
+      status = context.t('Sync resumes after playback.');
+    }
     if (connected && state?.checking == true) {
       status = '$status • ${context.t('Checking for updates…')}';
     }

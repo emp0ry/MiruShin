@@ -8,6 +8,89 @@ import 'package:mirushin/features/library/domain/cloud_replica_models.dart';
 import 'package:mirushin/features/settings/domain/preference_sync_models.dart';
 
 void main() {
+  for (final failure in ['none', 'download', 'content', 'identity']) {
+    test('worker segment decode validates $failure integrity', () async {
+      final segment = DriveReplicaSegment(
+        segmentId: 'segment-1',
+        deviceId: 'device-a',
+        createdAt: DateTime.utc(2026, 10, 12),
+        replicaNamespace: 'anilist-1',
+        operations: const [
+          {'operationId': 'op-1'},
+        ],
+        media: const [],
+        libraryEntries: const [],
+        episodeStates: const [],
+        streamPreferences: const [],
+      );
+      final body = failure == 'identity'
+          ? jsonEncode({...segment.toJson(), 'segmentId': 'other'})
+          : segment.encode();
+      final manifest = DriveReplicaManifest(
+        segments: {
+          segment.fileName: failure == 'content'
+              ? 'incorrect'
+              : segment.checksum,
+        },
+      );
+      final dio = Dio();
+      addTearDown(() => dio.close(force: true));
+      dio.interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            Object? data;
+            if (options.uri.path.endsWith('/files')) {
+              final manifestQuery = '${options.queryParameters['q'] ?? ''}'
+                  .contains('manifest');
+              data = {
+                'files': [
+                  if (manifestQuery)
+                    {
+                      'id': 'manifest',
+                      'name': 'mirushin.anilist-1.manifest.json',
+                    }
+                  else
+                    {
+                      'id': 'segment',
+                      'name': segment.fileName,
+                      'md5Checksum': failure == 'download'
+                          ? 'incorrect'
+                          : md5.convert(utf8.encode(body)).toString(),
+                    },
+                ],
+              };
+            } else if (options.uri.path.endsWith('/manifest')) {
+              data = jsonEncode(manifest.toJson());
+            } else if (options.uri.path.endsWith('/segment')) {
+              data = body;
+            } else {
+              handler.reject(
+                DioException(
+                  requestOptions: options,
+                  message: 'Unexpected fixture request',
+                ),
+              );
+              return;
+            }
+            handler.resolve(Response(requestOptions: options, data: data));
+          },
+        ),
+      );
+      final pull = GoogleDriveCloudReplica(
+        accessToken: 'fixture',
+        replicaNamespace: 'anilist-1',
+        dio: dio,
+      ).pullSegments(excluding: {});
+      if (failure == 'none') {
+        final restored = (await pull).single;
+        expect(restored.checksum, segment.checksum);
+        expect(restored.operations.single['operationId'], 'op-1');
+      } else {
+        await expectLater(pull, throwsStateError);
+      }
+    });
+  }
+
   test('optimized Library checksum stays compatible with old v2 manifests', () {
     final DriveLibrarySnapshot snapshot = DriveLibrarySnapshot(
       snapshotId: 'new-envelope',

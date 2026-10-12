@@ -1,7 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
-import 'package:drift/drift.dart' show driftRuntimeOptions;
+import 'package:drift/drift.dart' show Value, driftRuntimeOptions;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mirushin/features/library/application/canonical_library_repository.dart';
@@ -55,6 +56,37 @@ void main() {
     });
 
     tearDown(() => database.close());
+
+    test(
+      'decoded reads follow direct writes and transaction rollback',
+      () async {
+        await repository.saveTrackingStates([_state(progress: 4)]);
+        final first = (await repository.loadTrackingStates()).single;
+        expect((await repository.loadTrackingStates()).single, same(first));
+        final changed = _state(progress: 8).withIdentity(first.identity);
+        await expectLater(
+          database.transaction(() async {
+            await (database.update(database.canonicalLibraryRecords)..where(
+                  (table) => table.localId.equals(first.identity.localId),
+                ))
+                .write(
+                  CanonicalLibraryRecordsCompanion(
+                    canonicalStateJson: Value(jsonEncode(changed.toJson())),
+                    progress: const Value(8),
+                  ),
+                );
+            expect((await repository.loadTrackingStates()).single.progress, 8);
+            throw StateError('rollback');
+          }),
+          throwsStateError,
+        );
+        expect((await repository.loadTrackingStates()).single.progress, 4);
+        await repository.removeLocalState(first.identity);
+        expect(await repository.loadTrackingStates(), isEmpty);
+        await repository.upsertLocalState(changed);
+        expect((await repository.loadTrackingStates()).single.progress, 8);
+      },
+    );
 
     test(
       'native Library reads do not wait for a Drive write transaction',

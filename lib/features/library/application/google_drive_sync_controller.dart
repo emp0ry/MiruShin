@@ -13,6 +13,7 @@ import '../../../core/security/app_secure_storage.dart';
 import '../../addons/application/addon_sources_provider.dart';
 import '../../addons/application/sora_addons_provider.dart';
 import '../../addons/data/addon_drive_sync_service.dart';
+import '../../player/application/playback_activity.dart';
 import '../../player/application/player_settings.dart';
 import '../../profile/application/anilist_user_settings_provider.dart';
 import '../../settings/application/settings_state.dart';
@@ -39,6 +40,7 @@ class GoogleDriveSyncState {
     required this.connected,
     this.syncing = false,
     this.checking = false,
+    this.deferredForPlayback = false,
     this.lastSyncAt,
     this.lastError,
     this.appliedSegments = 0,
@@ -62,6 +64,7 @@ class GoogleDriveSyncState {
   /// A quiet background pull is in progress; unlike a manual sync it does not
   /// show a persistent progress bar or disable the Sync now button.
   final bool checking;
+  final bool deferredForPlayback;
   final DateTime? lastSyncAt;
   final String? lastError;
   final int appliedSegments;
@@ -82,6 +85,7 @@ class GoogleDriveSyncState {
     bool? connected,
     bool? syncing,
     bool? checking,
+    bool? deferredForPlayback,
     DateTime? lastSyncAt,
     String? lastError,
     bool clearError = false,
@@ -104,6 +108,7 @@ class GoogleDriveSyncState {
     connected: connected ?? this.connected,
     syncing: syncing ?? this.syncing,
     checking: checking ?? this.checking,
+    deferredForPlayback: deferredForPlayback ?? this.deferredForPlayback,
     lastSyncAt: lastSyncAt ?? this.lastSyncAt,
     lastError: clearError ? null : lastError ?? this.lastError,
     appliedSegments: appliedSegments ?? this.appliedSegments,
@@ -417,8 +422,12 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
   Future<void>? _activeSync;
   bool _activeSyncIsFull = false;
   CancelToken? _activeCancelToken;
+  // Two optional reads can share a sync token, so retain one reference per
+  // request until both have settled.
+  final List<CancelToken> _decorationRequests = <CancelToken>[];
   Timer? _localCheckpointRetry;
   Timer? _fullSyncRetry;
+  Timer? _playbackResumeDebounce;
   bool _syncAgainRequested = false;
   bool _fullSyncAgainRequested = false;
   bool _runningCoalescedFollowUp = false;
@@ -427,6 +436,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
   bool _cloudDataDeletionActive = false;
   bool _disposed = false;
   bool _shuttingDown = false;
+  bool _deferredForPlayback = false;
   bool _accountsRestored = false;
   final Set<String> _pulledLibraryWorkspaces = <String>{};
   final Set<String> _trackerOutboxResumedWorkspaces = <String>{};
@@ -442,6 +452,30 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
     _accountsRestored = false;
     _pulledLibraryWorkspaces.clear();
     _trackerOutboxResumedWorkspaces.clear();
+    ref.listen<bool>(playbackActivityProvider, (previous, active) {
+      if (active) {
+        _playbackResumeDebounce?.cancel();
+        if (_activeSync != null || _decorationRequests.isNotEmpty) {
+          _deferUntilPlaybackEnds();
+        }
+        return;
+      }
+      if (!_deferredForPlayback) return;
+      // Auto-next may briefly close its player route while resolving the next
+      // stream. Reuse the normal push debounce instead of starting a large
+      // restore in that gap. Opening any player cancels this timer again.
+      _playbackResumeDebounce?.cancel();
+      _playbackResumeDebounce = Timer(const Duration(seconds: 8), () {
+        if (_disposed ||
+            _shuttingDown ||
+            ref.read(playbackActivityProvider) ||
+            !_deferredForPlayback) {
+          return;
+        }
+        _deferredForPlayback = false;
+        unawaited(syncNow(background: true));
+      });
+    });
     ref.onDispose(() {
       _disposed = true;
       _shuttingDown = true;
@@ -449,10 +483,14 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
       _fullSyncAgainRequested = false;
       _activeCancelToken?.cancel('Google Drive controller disposed.');
       _activeCancelToken = null;
+      for (final token in _decorationRequests) {
+        token.cancel('Google Drive controller disposed.');
+      }
       _localCheckpointRetry?.cancel();
       _localCheckpointRetry = null;
       _fullSyncRetry?.cancel();
       _fullSyncRetry = null;
+      _playbackResumeDebounce?.cancel();
     });
     final bool configured = _googleDriveConfigured;
     bool connected;
@@ -502,6 +540,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
       connected: connected,
       account: account,
       lastSyncAt: lastFullSyncAt,
+      deferredForPlayback: _deferredForPlayback,
     );
   }
 
@@ -529,6 +568,11 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
   }
 
   Future<void> disconnect() async {
+    _playbackResumeDebounce?.cancel();
+    _deferredForPlayback = false;
+    for (final token in _decorationRequests) {
+      token.cancel('Google Drive disconnected.');
+    }
     _accountsRestored = false;
     _pulledLibraryWorkspaces.clear();
     _trackerOutboxResumedWorkspaces.clear();
@@ -566,6 +610,25 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
   }) {
     if (_disposed || _shuttingDown || _cloudDataDeletionActive) {
       return Future<void>.value();
+    }
+    if (ref.read(playbackActivityProvider)) {
+      _deferUntilPlaybackEnds();
+      return Future<void>.value();
+    }
+    if (background &&
+        _deferredForPlayback &&
+        _playbackResumeDebounce?.isActive == true) {
+      // A periodic poll must not escape the auto-next quiet window. The timer
+      // resumes all replicas; an explicit manual request can drain them now.
+      return Future<void>.value();
+    }
+    if (_deferredForPlayback && _activeSync == null) {
+      // A manual request or Library poll can beat the exit debounce. It must
+      // drain all deferred replicas once, not leave a second timer/full pass.
+      _playbackResumeDebounce?.cancel();
+      _deferredForPlayback = false;
+      localChangesOnly = false;
+      remoteChangesOnly = false;
     }
     if (remoteChangesOnly) {
       // A running full or local checkpoint already pulls this workspace.
@@ -706,6 +769,10 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
   Future<void> prepareForExit() async {
     if (_disposed) return;
     _shuttingDown = true;
+    _playbackResumeDebounce?.cancel();
+    for (final token in _decorationRequests) {
+      token.cancel('MiruShin is closing.');
+    }
     _syncAgainRequested = false;
     _fullSyncAgainRequested = false;
     _localCheckpointRetry?.cancel();
@@ -826,6 +893,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
         (!localChangesOnly && !remoteChangesOnly && current.lastSyncAt == null);
     _setState(
       current.copyWith(
+        deferredForPlayback: false,
         syncing: _activeProgressVisible,
         checking: !_activeProgressVisible && !localChangesOnly,
         clearError: true,
@@ -845,12 +913,15 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
     try {
       final String? token = await _validAccessToken(cancelToken: cancelToken);
       if (_disposed || _shuttingDown) return;
+      _requirePlaybackIdle(cancelToken);
       if (token == null || token.isEmpty) {
         _setState(
-          current.copyWith(
+          (state.value ?? current).copyWith(
             connected: false,
             syncing: false,
             checking: false,
+            deferredForPlayback: false,
+            clearProgress: true,
             lastError: 'Google Drive session expired. Connect again.',
           ),
         );
@@ -893,6 +964,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
               )
             : null;
         if (_disposed || _shuttingDown) return;
+        _requirePlaybackIdle(cancelToken);
         if (cloudSnapshot != null &&
             !await repository.hasAppliedDriveSnapshot(cloudSnapshot.checksum)) {
           await repository.applyDriveSnapshot(
@@ -902,11 +974,13 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
           restoredSnapshot = true;
         }
         for (final DriveReplicaSegment segment in changes.segments) {
+          _requirePlaybackIdle(cancelToken);
           applied += await repository.applyDriveSegment(
             segment,
             trackerTargets: targets,
           );
         }
+        _requirePlaybackIdle(cancelToken);
         await repository.saveDriveChangePageToken(changes.nextPageToken);
         if (changes.manifestChanged) {
           await repository.applyRemoteDeliveryLedger(
@@ -1014,6 +1088,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
               localAccounts: settingsController.driveAniListAccounts(),
               activeViewerId: ref.read(settingsProvider).anilistViewerId,
             );
+        _requirePlaybackIdle(cancelToken);
         if (accountResult.localStateChanged) {
           _applyingRemoteChanges = true;
           try {
@@ -1039,6 +1114,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
             await PreferenceDriveSyncService(
               preferences: await SharedPreferences.getInstance(),
             ).sync(cloud: cloud, deviceId: leaseDeviceId);
+        _requirePlaybackIdle(cancelToken);
         if (preferenceResult.localStateChanged) {
           _applyingRemoteChanges = true;
           try {
@@ -1092,6 +1168,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
               ),
             )
           : null;
+      _requirePlaybackIdle(cancelToken);
       if (cloudSnapshot != null &&
           !await repository.hasAppliedDriveSnapshot(cloudSnapshot.checksum)) {
         await repository.applyDriveSnapshot(
@@ -1113,11 +1190,13 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
       _setProgress(stage: 'Merging recent changes…', progress: 0.64);
       int applied = 0;
       for (final DriveReplicaSegment segment in changes.segments) {
+        _requirePlaybackIdle(cancelToken);
         applied += await repository.applyDriveSegment(
           segment,
           trackerTargets: targets,
         );
       }
+      _requirePlaybackIdle(cancelToken);
       await repository.saveDriveChangePageToken(changes.nextPageToken);
       if (applied > 0) {
         ref.invalidate(trackerLocalAnimeLibraryProvider);
@@ -1141,6 +1220,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
         progressEnd: 0.8,
       );
       if (_disposed || _shuttingDown) return;
+      _requirePlaybackIdle(cancelToken);
       // The library is the user's critical path. Addons are an independent
       // replica: a slow/failed addon request must not delay receiving or
       // publishing the latest library changes on another device.
@@ -1150,6 +1230,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
           preferences: await SharedPreferences.getInstance(),
           store: ref.read(soraAddonStoreProvider),
         ).sync(cloud: cloud, deviceId: leaseDeviceId);
+        _requirePlaybackIdle(cancelToken);
         if (addonResult.localStateChanged) {
           _applyingRemoteChanges = true;
           try {
@@ -1190,6 +1271,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
           ownsDeliveryLease && needsCheckpoint
           ? await repository.buildDriveSnapshot()
           : null;
+      _requirePlaybackIdle(cancelToken);
       if (outgoingSnapshot != null) {
         await libraryCloud.pushLibrarySnapshot(
           outgoingSnapshot,
@@ -1248,7 +1330,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
       );
       // Size is display-only. Listing every historical appData file must not
       // hold the sync button and Library readiness hostage.
-      unawaited(_refreshDriveUsage(libraryCloud));
+      unawaited(_refreshDriveUsage(libraryCloud, cancelToken));
     } on Object catch (error) {
       if (_disposed || _shuttingDown || _isCancelled(error)) {
         return;
@@ -1278,11 +1360,53 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
           // a completed local/cloud sync into a destructive retry.
         }
       }
-      if (!_disposed && !_shuttingDown && state.value?.checking == true) {
-        _setState(state.value!.copyWith(checking: false));
+      if (!_disposed &&
+          !_shuttingDown &&
+          state.value != null &&
+          (state.value!.checking || state.value!.syncing)) {
+        _setState(
+          state.value!.copyWith(
+            checking: false,
+            syncing: false,
+            clearProgress: true,
+          ),
+        );
       }
       _activeProgressVisible = false;
     }
+  }
+
+  void _deferUntilPlaybackEnds() {
+    _deferredForPlayback = true;
+    _playbackResumeDebounce?.cancel();
+    _syncAgainRequested = false;
+    _fullSyncAgainRequested = false;
+    _localCheckpointRetry?.cancel();
+    _fullSyncRetry?.cancel();
+    _activeCancelToken?.cancel('Drive sync deferred until playback ends.');
+    for (final token in _decorationRequests) {
+      token.cancel('Drive sync deferred until playback ends.');
+    }
+    final current = state.value;
+    if (current != null && current.connected && !current.deferredForPlayback) {
+      _setState(
+        current.copyWith(
+          deferredForPlayback: true,
+          checking: false,
+          syncing: false,
+          clearProgress: true,
+        ),
+      );
+    }
+  }
+
+  void _requirePlaybackIdle(CancelToken token) {
+    if (_disposed || _shuttingDown) {
+      token.cancel('Drive sync stopped.');
+    } else if (ref.read(playbackActivityProvider)) {
+      _deferUntilPlaybackEnds();
+    }
+    if (token.isCancelled) throw token.cancelError!;
   }
 
   void _setProgress({required String stage, required double progress}) {
@@ -1290,7 +1414,12 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
       'stage': stage,
       'progress': progress,
     });
-    if (_disposed || _shuttingDown || !_activeProgressVisible) return;
+    if (_disposed ||
+        _shuttingDown ||
+        !_activeProgressVisible ||
+        ref.read(playbackActivityProvider)) {
+      return;
+    }
     final GoogleDriveSyncState? current = state.value;
     if (current == null) return;
     _setState(
@@ -1313,7 +1442,12 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
     required double start,
     required double end,
   }) {
-    if (_disposed || _shuttingDown || !_activeProgressVisible) return;
+    if (_disposed ||
+        _shuttingDown ||
+        !_activeProgressVisible ||
+        ref.read(playbackActivityProvider)) {
+      return;
+    }
     final double fraction = total > 0
         ? (transferred / total).clamp(0.0, 1.0)
         : 0;
@@ -1339,7 +1473,12 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
     required double start,
     required double end,
   }) {
-    if (_disposed || _shuttingDown || !_activeProgressVisible) return;
+    if (_disposed ||
+        _shuttingDown ||
+        !_activeProgressVisible ||
+        ref.read(playbackActivityProvider)) {
+      return;
+    }
     final double fraction = total > 0 ? (completed / total).clamp(0.0, 1.0) : 1;
     final GoogleDriveSyncState? current = state.value;
     if (current == null) return;
@@ -1374,6 +1513,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
     );
     DriveReplicaSegment? outgoing = await repository.buildPendingDriveSegment();
     while (outgoing != null && processed < initialPending) {
+      if (_activeCancelToken case final token?) _requirePlaybackIdle(token);
       final int batchSize = outgoing.operations.length;
       final double batchStart =
           progressStart +
@@ -1410,8 +1550,13 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
     return (await repository.pendingDriveDeliveryCount()) > 0;
   }
 
-  Future<void> _refreshDriveUsage(GoogleDriveCloudReplica cloud) async {
+  Future<void> _refreshDriveUsage(
+    GoogleDriveCloudReplica cloud,
+    CancelToken cancelToken,
+  ) async {
+    _decorationRequests.add(cancelToken);
     try {
+      _requirePlaybackIdle(cancelToken);
       final DriveReplicaUsage usage = await cloud.readUsage();
       if (_disposed || _shuttingDown) return;
       final GoogleDriveSyncState? current = state.value;
@@ -1423,7 +1568,11 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
         ),
       );
     } on Object catch (error) {
-      debugPrint('Could not refresh Google Drive storage size: $error');
+      if (!_isCancelled(error)) {
+        debugPrint('Could not refresh Google Drive storage size: $error');
+      }
+    } finally {
+      _decorationRequests.remove(cancelToken);
     }
   }
 
@@ -1567,9 +1716,14 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
     GoogleDriveAccountProfile? fallback,
     CancelToken? cancelToken,
   }) async {
+    if (_disposed || _shuttingDown || ref.read(playbackActivityProvider)) {
+      return fallback;
+    }
+    final requestToken = cancelToken ?? CancelToken();
+    _decorationRequests.add(requestToken);
     try {
       final GoogleDriveAccountProfile account = await GoogleDriveAccountClient()
-          .fetchProfile(accessToken, cancelToken: cancelToken);
+          .fetchProfile(accessToken, cancelToken: requestToken);
       if (await _storedAccessToken() == accessToken) {
         await _storage.writeGoogleDriveAccountProfile(
           jsonEncode(account.toJson()),
@@ -1577,10 +1731,12 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
       }
       return account;
     } on Object catch (error) {
-      if (_isCancelled(error)) rethrow;
+      if (_isCancelled(error) && cancelToken != null) rethrow;
       // Account decoration must never block local/cloud synchronization. The
       // next successful sync retries the lightweight Drive about.get call.
       return fallback;
+    } finally {
+      _decorationRequests.remove(requestToken);
     }
   }
 

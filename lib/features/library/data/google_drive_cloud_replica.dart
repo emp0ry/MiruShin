@@ -35,6 +35,34 @@ DriveLibrarySnapshot _decodeLibrarySnapshot((String, String?) input) {
   return snapshot;
 }
 
+(String, String) _prepareLibrarySegment(DriveReplicaSegment segment) {
+  final body = segment.encode();
+  return (body, sha256.convert(utf8.encode(body)).toString());
+}
+
+DriveReplicaSegment _decodeLibrarySegment(
+  (String, String, String?, String?) input,
+) {
+  final (body, fileName, downloadChecksum, expectedChecksum) = input;
+  if (downloadChecksum != null &&
+      downloadChecksum.isNotEmpty &&
+      md5.convert(utf8.encode(body)).toString() != downloadChecksum) {
+    throw StateError('Google Drive segment checksum mismatch: $fileName');
+  }
+  final decoded = jsonDecode(body);
+  if (decoded is! Map<String, dynamic>) {
+    throw FormatException('Invalid Google Drive segment: $fileName');
+  }
+  final segment = DriveReplicaSegment.fromJson(decoded);
+  if (fileName != segment.fileName) {
+    throw StateError('Google Drive segment identity mismatch: $fileName');
+  }
+  if (expectedChecksum != null && expectedChecksum != segment.checksum) {
+    throw StateError('Google Drive segment checksum mismatch: $fileName');
+  }
+  return segment;
+}
+
 class GoogleDriveCloudReplica
     implements
         CloudReplica,
@@ -351,19 +379,20 @@ class GoogleDriveCloudReplica
     DriveReplicaSegment segment, {
     void Function(int sent, int total)? onProgress,
   }) async {
+    final (body, checksum) = await compute(
+      _prepareLibrarySegment,
+      segment,
+      debugLabel: 'MiruShin Drive segment encode',
+    );
     final CloudReplicaFile? existing = await _findByName(segment.fileName);
     // A previous attempt can upload the file and fail while updating the
     // manifest. Reuse that immutable file, but still finish its registration.
     final CloudReplicaFile uploaded =
         existing ??
-        await _createJsonFile(
-          segment.fileName,
-          segment.encode(),
-          onProgress: onProgress,
-        );
+        await _createJsonFile(segment.fileName, body, onProgress: onProgress);
     await _updateManifest((DriveReplicaManifest manifest) {
       final String? registeredChecksum = manifest.segments[segment.fileName];
-      if (registeredChecksum == segment.checksum) return manifest;
+      if (registeredChecksum == checksum) return manifest;
       if (registeredChecksum != null) {
         throw StateError('Google Drive segment checksum mismatch.');
       }
@@ -371,7 +400,7 @@ class GoogleDriveCloudReplica
         revision: manifest.revision + 1,
         segments: <String, String>{
           ...manifest.segments,
-          segment.fileName: segment.checksum,
+          segment.fileName: checksum,
         },
         processedByDevice: manifest.processedByDevice,
         deliveryLedger: manifest.deliveryLedger,
@@ -518,24 +547,12 @@ class GoogleDriveCloudReplica
     DriveReplicaManifest? manifest,
   ]) async {
     final String body = await _download(file.id);
-    if (file.checksum != null &&
-        file.checksum!.isNotEmpty &&
-        md5.convert(utf8.encode(body)).toString() != file.checksum) {
-      throw StateError('Google Drive segment checksum mismatch: ${file.name}');
-    }
-    final Object? decoded = jsonDecode(body);
-    if (decoded is! Map<String, dynamic>) {
-      throw FormatException('Invalid Google Drive segment: ${file.name}');
-    }
-    final DriveReplicaSegment segment = DriveReplicaSegment.fromJson(decoded);
-    if (file.name != segment.fileName) {
-      throw StateError('Google Drive segment identity mismatch: ${file.name}');
-    }
-    final String? expected = manifest?.segments[file.name];
-    if (expected != null && expected != segment.checksum) {
-      throw StateError('Google Drive segment checksum mismatch: ${file.name}');
-    }
-    return segment;
+    return compute(_decodeLibrarySegment, (
+      body,
+      file.name,
+      file.checksum,
+      manifest?.segments[file.name],
+    ), debugLabel: 'MiruShin Drive segment decode');
   }
 
   @override

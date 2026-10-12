@@ -63,6 +63,7 @@
   "MiruShin data in Drive: {size} · {count} library entries": "Drive 内の MiruShin データ: {size}・ライブラリ {count} 件",
   "Google OAuth is not configured in this build. Local Library and tracker sync continue normally.": "このビルドではGoogle OAuthが設定されていません。ローカルライブラリとトラッカー同期は引き続き利用できます。",
   "Connected. Waiting for the first sync.": "接続済みです。最初の同期を待っています。",
+  "Sync resumes after playback.": "プレーヤーを閉じると同期が再開されます。",
   "Last sync": "最終同期",
   "Connect Google Drive to keep your MiruShin data up to date across your devices.": "Google Driveに接続すると、MiruShinのデータを複数のデバイスで最新の状態に保てます。",
   "Sync across devices": "デバイス間で同期",
