@@ -721,7 +721,18 @@ class LocalHlsProxy {
     onDirectMedia,
   }) async {
     if (url.scheme == 'file') {
-      return File.fromUri(url).readAsString();
+      // Apply the same manifest ceiling as HTTP. A mislabeled local video or
+      // a growing file must not be decoded wholesale into a Dart String.
+      final bytes = BytesBuilder(copy: false);
+      await for (final chunk in File.fromUri(
+        url,
+      ).openRead(0, _kMaxPlaylistBytes + 1)) {
+        bytes.add(chunk);
+      }
+      if (bytes.length > _kMaxPlaylistBytes) {
+        throw const FormatException('Playlist exceeds size limit.');
+      }
+      return utf8.decode(bytes.takeBytes());
     }
 
     for (int attempt = 1; attempt <= _kPlaylistRetries; attempt++) {

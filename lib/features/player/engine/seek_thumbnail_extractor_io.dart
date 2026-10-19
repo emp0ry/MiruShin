@@ -85,6 +85,7 @@ class NativeSeekThumbnailExtractor implements SeekThumbnailExtractor {
         final SeekThumbnailExtractionResult extraction = await _extractSerial(
           source,
           position,
+          generation,
         );
         result.complete(
           generation == _generation ? extraction : _cancelledResult,
@@ -106,6 +107,7 @@ class NativeSeekThumbnailExtractor implements SeekThumbnailExtractor {
   Future<SeekThumbnailExtractionResult> _extractSerial(
     SeekThumbnailSource source,
     Duration position,
+    int generation,
   ) async {
     final Stopwatch total = Stopwatch()..start();
     int prepareMilliseconds = 0;
@@ -118,6 +120,7 @@ class NativeSeekThumbnailExtractor implements SeekThumbnailExtractor {
     final int attempts = mayBeSegmented ? 4 : 1;
     int lastWindowSize = 0;
     for (int index = 0; index < attempts; index += 1) {
+      if (_disposed || generation != _generation) return _cancelledResult;
       final Stopwatch prepare = Stopwatch()..start();
       PreparedThumbnailInput? input;
       try {
@@ -132,6 +135,10 @@ class NativeSeekThumbnailExtractor implements SeekThumbnailExtractor {
       prepare.stop();
       prepareMilliseconds += prepare.elapsedMilliseconds;
       if (input == null) continue;
+      if (_disposed || generation != _generation) {
+        await input.dispose();
+        return _cancelledResult;
+      }
       final bool segmented = input.windowSegmentCount > 0;
       indexLookupMicroseconds += input.indexLookupMicroseconds;
       if (segmented && input.windowSegmentCount == lastWindowSize) {
@@ -245,6 +252,9 @@ class NativeSeekThumbnailExtractor implements SeekThumbnailExtractor {
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
+    // Cancel I/O/native decode before waiting for the serial queue to drain.
+    // Waiting first leaves a superseded episode's resources alive until EOF.
+    cancelPending();
     await _serial;
     await _decoder.dispose();
     await _loader.dispose();

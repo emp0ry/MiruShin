@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
+import '../../../core/utils/lazy_mapped_list.dart';
 import '../../../shared/models/anilist_models.dart';
 import '../../../shared/models/anime_airing.dart';
 import '../../../shared/models/library_item.dart';
@@ -304,25 +305,10 @@ class CanonicalLibraryRepository {
               ))
               .getSingleOrNull();
       if (marker != null) return;
-      final history =
-          await (database.select(database.libraryOperationRecords)..orderBy([
-                (table) => OrderingTerm.asc(table.occurredAtMs),
-                (table) => OrderingTerm.asc(table.operationId),
-              ]))
-              .get();
-      final operations = <String, Map<String, dynamic>>{
-        for (final op in history)
-          op.operationId: {
-            'baseRevisions': _jsonMap(op.baseRevisionsJson),
-            'after': _jsonMap(op.afterJson),
-            'originKind': op.originKind,
-            'occurredAtMs': op.occurredAtMs,
-          },
-      };
-      final historyByLocal = <String, List<LibraryOperationRecord>>{};
-      for (final op in history) {
-        historyByLocal.putIfAbsent(op.localId, () => []).add(op);
-      }
+      // The historical payload can be hundreds of MB. Keep only small causal
+      // edges globally and materialize rich after-states for one title at a
+      // time; migration must not expand the whole audit log on the UI heap.
+      final operations = await _readRevisionGraphLocked();
       final rows = await database
           .select(database.canonicalLibraryRecords)
           .get();
@@ -339,11 +325,25 @@ class CanonicalLibraryRepository {
         bool inLibrary = row.inLibrary;
         int? tombstonedAtMs = row.tombstonedAtMs;
         final Map<String, UserMediaState> parsedAfterStates = {};
-        final rowHistory = historyByLocal[row.localId] ?? const [];
+        final rowHistory =
+            await (database.select(database.libraryOperationRecords)
+                  ..where((table) => table.localId.equals(row.localId))
+                  ..orderBy([
+                    (table) => OrderingTerm.asc(table.occurredAtMs),
+                    (table) => OrderingTerm.asc(table.operationId),
+                  ]))
+                .get();
+        final rowOperations = <String, Map<String, dynamic>>{
+          for (final op in rowHistory)
+            op.operationId: {
+              'after': _jsonMap(op.afterJson),
+              'occurredAtMs': op.occurredAtMs,
+            },
+        };
         // Legacy first-import operations had revisions in their history, but
         // not on their newly created canonical row. Recover matching values.
         for (final op in rowHistory) {
-          final after = _jsonMap(operations[op.operationId]?['after']);
+          final after = _jsonMap(rowOperations[op.operationId]?['after']);
           final rawState = after['state'];
           final afterState = rawState is Map
               ? parsedAfterStates.putIfAbsent(
@@ -374,7 +374,22 @@ class CanonicalLibraryRepository {
           final leaves = _revisionLeaves(item.value);
           if (leaves.length != 1) continue;
           final id = _jsonMap(leaves.single)['operationId']?.toString();
-          final op = operations[id];
+          // Merged legacy identities may still refer to an operation whose
+          // local id predates the merge. Preserve that fallback without loading
+          // every other title's metadata into memory.
+          if (id != null && !rowOperations.containsKey(id)) {
+            final referenced =
+                await (database.select(database.libraryOperationRecords)
+                      ..where((table) => table.operationId.equals(id)))
+                    .getSingleOrNull();
+            if (referenced != null) {
+              rowOperations[id] = {
+                'after': _jsonMap(referenced.afterJson),
+                'occurredAtMs': referenced.occurredAtMs,
+              };
+            }
+          }
+          final op = rowOperations[id];
           if (op == null) continue;
           final after = _jsonMap(op['after']);
           if (item.key == 'favorite' && after['favorite'] is bool) {
@@ -5403,6 +5418,22 @@ class CanonicalLibraryRepository {
   }
 
   Future<DriveLibrarySnapshot> buildDriveSnapshot() async {
+    return compute(
+      _buildDriveSnapshotFromRows,
+      await _loadDriveSnapshotRows(),
+      debugLabel: 'MiruShin Drive snapshot rows',
+    );
+  }
+
+  Future<EncodedDriveLibrarySnapshot> buildEncodedDriveSnapshot() async {
+    return compute(
+      _encodeDriveSnapshotRows,
+      await _loadDriveSnapshotRows(),
+      debugLabel: 'MiruShin Drive snapshot bytes',
+    );
+  }
+
+  Future<_DriveSnapshotRows> _loadDriveSnapshotRows() async {
     await initialize();
     final List<CanonicalLibraryRecord> library = await database
         .select(database.canonicalLibraryRecords)
@@ -5449,22 +5480,18 @@ class CanonicalLibraryRepository {
                         table.originId.like('mirror:%').not()),
               ))
               .get();
-    return compute(
-      _buildDriveSnapshotFromRows,
-      _DriveSnapshotRows(
-        snapshotId: _uuid.v7(),
-        deviceId: await deviceId(),
-        createdAt: DateTime.now().toUtc(),
-        replicaNamespace: replicaNamespace,
-        media: media,
-        library: library,
-        bindings: bindings,
-        providerSnapshots: providerSnapshots,
-        episodes: episodes,
-        streams: streams,
-        operations: operations,
-      ),
-      debugLabel: 'MiruShin Drive snapshot rows',
+    return _DriveSnapshotRows(
+      snapshotId: _uuid.v7(),
+      deviceId: await deviceId(),
+      createdAt: DateTime.now().toUtc(),
+      replicaNamespace: replicaNamespace,
+      media: media,
+      library: library,
+      bindings: bindings,
+      providerSnapshots: providerSnapshots,
+      episodes: episodes,
+      streams: streams,
+      operations: operations,
     );
   }
 
@@ -8330,28 +8357,37 @@ class _DriveSnapshotRows {
   final List<LibraryOperationRecord> operations;
 }
 
-DriveLibrarySnapshot _buildDriveSnapshotFromRows(_DriveSnapshotRows rows) =>
-    DriveLibrarySnapshot(
-      snapshotId: rows.snapshotId,
-      deviceId: rows.deviceId,
-      createdAt: rows.createdAt,
-      replicaNamespace: rows.replicaNamespace,
-      media: rows.media.map(_mediaRowJson).toList(growable: false),
-      libraryEntries: rows.library.map(_libraryRowJson).toList(growable: false),
-      providerBindings: rows.bindings
-          .map(_providerBindingRowJson)
-          .toList(growable: false),
-      providerSnapshots: rows.providerSnapshots
-          .map(_providerSnapshotRowJson)
-          .toList(growable: false),
-      episodeStates: rows.episodes.map(_episodeRowJson).toList(growable: false),
-      streamPreferences: rows.streams
-          .map(_streamReplicaRowJson)
-          .toList(growable: false),
-      operations: rows.operations
-          .map(_operationRowJson)
-          .toList(growable: false),
+EncodedDriveLibrarySnapshot _encodeDriveSnapshotRows(_DriveSnapshotRows rows) =>
+    encodeDriveLibrarySnapshot(
+      _buildDriveSnapshotFromRows(rows, lazyHistory: true),
     );
+
+DriveLibrarySnapshot _buildDriveSnapshotFromRows(
+  _DriveSnapshotRows rows, {
+  bool lazyHistory = false,
+}) => DriveLibrarySnapshot(
+  snapshotId: rows.snapshotId,
+  deviceId: rows.deviceId,
+  createdAt: rows.createdAt,
+  replicaNamespace: rows.replicaNamespace,
+  media: rows.media.map(_mediaRowJson).toList(growable: false),
+  libraryEntries: rows.library.map(_libraryRowJson).toList(growable: false),
+  providerBindings: rows.bindings
+      .map(_providerBindingRowJson)
+      .toList(growable: false),
+  providerSnapshots: lazyHistory
+      ? LazyMappedList(rows.providerSnapshots, _providerSnapshotRowJson)
+      : rows.providerSnapshots
+            .map(_providerSnapshotRowJson)
+            .toList(growable: false),
+  episodeStates: rows.episodes.map(_episodeRowJson).toList(growable: false),
+  streamPreferences: rows.streams
+      .map(_streamReplicaRowJson)
+      .toList(growable: false),
+  operations: lazyHistory
+      ? LazyMappedList(rows.operations, _operationRowJson)
+      : rows.operations.map(_operationRowJson).toList(growable: false),
+);
 
 Map<String, dynamic> _operationRowJson(LibraryOperationRecord value) =>
     <String, dynamic>{

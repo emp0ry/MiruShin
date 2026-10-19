@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 
+import '../../../core/network/request_cancellation_scope.dart';
 import '../../../shared/models/anilist_models.dart';
 import '../../../shared/models/anime_airing.dart';
 import '../../../shared/models/calendar_item.dart';
@@ -31,6 +32,7 @@ class AniListApiClient {
     String? accessToken,
     Dio? dio,
     this.cancelToken,
+    this.cancellationScope,
     Duration connectTimeout = const Duration(seconds: 12),
     Duration receiveTimeout = defaultReceiveTimeout,
     Duration timeoutRetryDelay = defaultTimeoutRetryDelay,
@@ -52,6 +54,7 @@ class AniListApiClient {
 
   final Dio _dio;
   final CancelToken? cancelToken;
+  final RequestCancellationScope? cancellationScope;
   final String? _accessToken;
   final Duration _timeoutRetryDelay;
   final bool retryTimeoutReads;
@@ -2414,18 +2417,27 @@ class AniListApiClient {
       throw StateError('AniList access token is not configured.');
     }
 
-    Future<Response<dynamic>> send() => _dio.post<dynamic>(
-      '',
-      cancelToken: cancelToken,
-      data: <String, dynamic>{'query': query, 'variables': variables},
-      options: Options(
-        headers: <String, String>{
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          if (authenticated) 'Authorization': 'Bearer $_accessToken',
-        },
-      ),
-    );
+    Future<Response<dynamic>> sendWithToken(CancelToken? token) =>
+        _dio.post<dynamic>(
+          '',
+          cancelToken: token,
+          data: <String, dynamic>{'query': query, 'variables': variables},
+          options: Options(
+            headers: <String, String>{
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+              if (authenticated) 'Authorization': 'Bearer $_accessToken',
+            },
+          ),
+        );
+
+    final scope =
+        cancellationScope ??
+        (cancelToken == null
+            ? null
+            : RequestCancellationScope.linkedTo(cancelToken!));
+    Future<Response<dynamic>> send() =>
+        scope == null ? sendWithToken(null) : scope.run(sendWithToken);
 
     Response<dynamic> response;
     try {

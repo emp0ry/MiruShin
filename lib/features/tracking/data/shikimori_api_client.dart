@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 
 import '../../../core/constants/app_constants.dart';
+import '../../../core/network/request_cancellation_scope.dart';
 import '../../../shared/models/anilist_models.dart';
 import '../../../shared/models/anime_airing.dart';
 import '../../../shared/models/media_item.dart';
@@ -22,6 +23,7 @@ class ShikimoriApiClient {
     Future<String?> Function()? onRefreshToken,
     Dio? dio,
     this.cancelToken,
+    this.cancellationScope,
   }) : _accessToken = accessToken,
        _userId = userId,
        _onRefreshToken = onRefreshToken,
@@ -37,6 +39,7 @@ class ShikimoriApiClient {
 
   final Dio _dio;
   final CancelToken? cancelToken;
+  final RequestCancellationScope? cancellationScope;
   String _accessToken;
   int _userId;
   final Future<String?> Function()? _onRefreshToken;
@@ -468,20 +471,27 @@ class ShikimoriApiClient {
     bool retried = false,
   }) async {
     try {
-      return await _dio.request<dynamic>(
-        path,
-        cancelToken: cancelToken,
-        data: data,
-        queryParameters: queryParameters,
-        options: Options(
-          method: method,
-          headers: <String, String>{
-            'User-Agent': AppConstants.shikimoriUserAgent,
-            'Accept': 'application/json',
-            if (authenticated) 'Authorization': 'Bearer $_accessToken',
-          },
-        ),
-      );
+      Future<Response<dynamic>> send(CancelToken? token) =>
+          _dio.request<dynamic>(
+            path,
+            cancelToken: token,
+            data: data,
+            queryParameters: queryParameters,
+            options: Options(
+              method: method,
+              headers: <String, String>{
+                'User-Agent': AppConstants.shikimoriUserAgent,
+                'Accept': 'application/json',
+                if (authenticated) 'Authorization': 'Bearer $_accessToken',
+              },
+            ),
+          );
+      final scope =
+          cancellationScope ??
+          (cancelToken == null
+              ? null
+              : RequestCancellationScope.linkedTo(cancelToken!));
+      return await (scope == null ? send(null) : scope.run(send));
     } on DioException catch (error) {
       if (!retried &&
           authenticated &&

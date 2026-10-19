@@ -178,6 +178,7 @@ enum SeekThumbnailFailureReason {
   missingRandomAccessContext,
   rangeUnsupported,
   rangeProbeRejected,
+  resourceLimit,
   plainProbeRejected,
   libavOpenFailure,
   libavSeekFailure,
@@ -343,6 +344,7 @@ class SeekThumbnailService {
         }
       }
       if (_disposed || desired != _desiredContextKey) return;
+      _sourceHealth.clear();
       _extractor = _extractorFactory(_desiredBackend);
       _activeContextKey = desired;
       if (kDebugMode) {
@@ -650,6 +652,7 @@ class SeekThumbnailService {
   Future<void> reset() async {
     if (_disposed) return;
     _desiredContextKey = null;
+    cancelPending();
     await _activation;
     final SeekThumbnailExtractor? extractor = _extractor;
     _extractor = null;
@@ -672,6 +675,7 @@ class SeekThumbnailService {
     if (_disposed) return;
     _disposed = true;
     _desiredContextKey = null;
+    cancelPending();
     await _activation;
     final SeekThumbnailExtractor? extractor = _extractor;
     _extractor = null;

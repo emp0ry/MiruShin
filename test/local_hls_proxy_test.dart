@@ -7,6 +7,29 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mirushin/features/player/engine/local_hls_proxy.dart';
 
 void main() {
+  test(
+    'local manifest reads reject an oversized file without decoding it',
+    () async {
+      final dir = await Directory.systemTemp.createTemp(
+        'mirushin_manifest_limit_',
+      );
+      addTearDown(() => dir.delete(recursive: true));
+      final file = File('${dir.path}/index.m3u8');
+      await file.writeAsBytes(Uint8List(4 * 1024 * 1024 + 1));
+      final proxy = LocalHlsProxy();
+      addTearDown(proxy.stop);
+      await proxy.start();
+      final client = HttpClient();
+      addTearDown(() => client.close(force: true));
+      final request = await client.getUrl(
+        Uri.parse(proxy.playlistUrl(file.uri)),
+      );
+      final response = await request.close();
+      expect(response.statusCode, HttpStatus.badGateway);
+      await response.drain<void>();
+    },
+  );
+
   test('a one-use direct media URL is fetched only once', () async {
     final Uint8List video = Uint8List.fromList(<int>[
       0,

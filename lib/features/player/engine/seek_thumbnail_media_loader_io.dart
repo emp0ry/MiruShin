@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -7,6 +6,7 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
+import '../../../core/cache/bounded_byte_cache.dart';
 import '../domain/player_models.dart';
 import 'local_hls_proxy.dart';
 import 'player_engine.dart';
@@ -51,7 +51,21 @@ class SeekThumbnailLoadException implements Exception {
 }
 
 class SeekThumbnailMediaLoader {
-  SeekThumbnailMediaLoader() {
+  SeekThumbnailMediaLoader({
+    this.maximumResourceBytes = 16 * 1024 * 1024,
+    this.maximumPlaylistBytes = 2 * 1024 * 1024,
+    this.maximumIgnoredRangeSkipBytes = 2 * 1024 * 1024,
+    this.maximumSourceSessions = 4,
+    int maximumCacheBytes = 12 * 1024 * 1024,
+    int maximumCacheEntries = 12,
+  }) : assert(maximumResourceBytes > 0),
+       assert(maximumPlaylistBytes > 0),
+       assert(maximumIgnoredRangeSkipBytes >= 0),
+       assert(maximumSourceSessions > 0),
+       _resourceCache = BoundedByteCache<String>(
+         maximumBytes: maximumCacheBytes,
+         maximumEntries: maximumCacheEntries,
+       ) {
     _client.connectionTimeout = const Duration(seconds: 3);
     _client.idleTimeout = const Duration(seconds: 15);
     _client.maxConnectionsPerHost = 4;
@@ -61,6 +75,16 @@ class SeekThumbnailMediaLoader {
   static const int _maxRedirects = 5;
   static const int _maxAttempts = 2;
   static const int _networkProbeBytes = 64 * 1024;
+
+  final int maximumResourceBytes;
+  final int maximumPlaylistBytes;
+  final int maximumIgnoredRangeSkipBytes;
+  final int maximumSourceSessions;
+  final BoundedByteCache<String> _resourceCache;
+  @visibleForTesting
+  int get cachedResourceBytes => _resourceCache.byteCount;
+  @visibleForTesting
+  int get cachedSourceSessions => _hlsSessions.length;
 
   final HttpClient _client = HttpClient();
   final LocalHlsProxy _proxy = LocalHlsProxy();
@@ -163,6 +187,7 @@ class SeekThumbnailMediaLoader {
     SeekThumbnailSource source,
     int generation,
   ) {
+    _touchSessionCache(_sourceProbes, source.decoderKey);
     final Future<_ResolvedNetworkSource>
     pending = _sourceProbes.putIfAbsent(source.decoderKey, () async {
       final _NetworkProbeResponse probe = await _probeNetworkSource(
@@ -229,6 +254,7 @@ class SeekThumbnailMediaLoader {
   }
 
   Future<_HlsSession> _hlsSession(SeekThumbnailSource source) {
+    _touchSessionCache(_hlsSessions, source.decoderKey);
     final Future<_HlsSession>
     pending = _hlsSessions.putIfAbsent(source.decoderKey, () async {
       final int generation = _generation;
@@ -270,6 +296,7 @@ class SeekThumbnailMediaLoader {
           playlistHeaders,
           generation: generation,
           allowNetwork: !source.isOffline,
+          maximumBytes: maximumPlaylistBytes,
         );
         if (!_hasHlsSignature(playlistBytes)) {
           throw const SeekThumbnailLoadException(
@@ -314,6 +341,7 @@ class SeekThumbnailMediaLoader {
             playlistHeaders,
             generation: generation,
             allowNetwork: !source.isOffline,
+            maximumBytes: maximumPlaylistBytes,
           );
           if (!_hasHlsSignature(variantBytes)) {
             throw const SeekThumbnailLoadException(
@@ -335,6 +363,7 @@ class SeekThumbnailMediaLoader {
           );
         }
         return _HlsSession(
+          cacheKey: source.decoderKey,
           index: index,
           resourceHeaders: playlistHeaders,
           isOffline: source.isOffline,
@@ -755,13 +784,10 @@ class SeekThumbnailMediaLoader {
     required int generation,
   }) async {
     final String key =
-        '${uri.toString()}|'
+        '${session.cacheKey}|${uri.toString()}|'
         '${range?.offset ?? -1}:${range?.length ?? -1}';
-    final Uint8List? cached = session.resourceCache.remove(key);
-    if (cached != null) {
-      session.resourceCache[key] = cached;
-      return cached;
-    }
+    final Uint8List? cached = _resourceCache.get(key);
+    if (cached != null) return cached;
     final Uint8List bytes = await _readResource(
       uri,
       session.resourceHeaders,
@@ -769,19 +795,19 @@ class SeekThumbnailMediaLoader {
       generation: generation,
       allowNetwork: !session.isOffline,
     );
-    if (bytes.length <= _HlsSession.maxCacheBytes) {
-      session.resourceCache[key] = bytes;
-      session.resourceCacheBytes += bytes.length;
-      while (session.resourceCache.isNotEmpty &&
-          (session.resourceCache.length > _HlsSession.maxCacheEntries ||
-              session.resourceCacheBytes > _HlsSession.maxCacheBytes)) {
-        final String oldest = session.resourceCache.keys.first;
-        session.resourceCacheBytes -= session.resourceCache
-            .remove(oldest)!
-            .length;
-      }
-    }
+    _resourceCache.put(key, bytes);
     return bytes;
+  }
+
+  void _touchSessionCache<T>(Map<String, Future<T>> cache, String key) {
+    final existing = cache.remove(key);
+    if (existing != null) {
+      cache[key] = existing;
+      return;
+    }
+    while (cache.length >= maximumSourceSessions) {
+      cache.remove(cache.keys.first);
+    }
   }
 
   void _throwIfCancelled(int generation) {
@@ -817,11 +843,22 @@ class SeekThumbnailMediaLoader {
     HlsByteRange? range,
     required int generation,
     bool allowNetwork = true,
+    int? maximumBytes,
   }) async {
     _throwIfCancelled(generation);
+    final limit = maximumBytes ?? maximumResourceBytes;
+    if (range != null &&
+        (range.offset < 0 || range.length <= 0 || range.length > limit)) {
+      throw const SeekThumbnailLoadException(
+        SeekThumbnailFailure(
+          scope: SeekThumbnailFailureScope.bucketSpecific,
+          reason: SeekThumbnailFailureReason.resourceLimit,
+        ),
+      );
+    }
     if (_isLocalUri(uri)) {
       try {
-        final Uint8List bytes = await _readLocal(uri, range);
+        final Uint8List bytes = await _readLocal(uri, range, limit);
         _throwIfCancelled(generation);
         return bytes;
       } on FileSystemException {
@@ -850,6 +887,7 @@ class SeekThumbnailMediaLoader {
           headers,
           range,
           generation,
+          limit,
         );
         _throwIfCancelled(generation);
         return bytes;
@@ -895,13 +933,17 @@ class SeekThumbnailMediaLoader {
     );
   }
 
-  Future<Uint8List> _readLocal(Uri uri, HlsByteRange? range) async {
+  Future<Uint8List> _readLocal(Uri uri, HlsByteRange? range, int limit) async {
     final File file = File(_localPath(uri.toString()));
-    if (range == null) return file.readAsBytes();
     final RandomAccessFile handle = await file.open();
     try {
-      await handle.setPosition(range.offset);
-      return Uint8List.fromList(await handle.read(range.length));
+      final length = await handle.length();
+      if (range == null && length > limit) _resourceLimit();
+      if (range != null && range.endExclusive > length) {
+        throw const FormatException('Preview range is incomplete.');
+      }
+      await handle.setPosition(range?.offset ?? 0);
+      return await handle.read(range?.length ?? length);
     } finally {
       await handle.close();
     }
@@ -944,7 +986,8 @@ class SeekThumbnailMediaLoader {
           final String? location = response.headers.value(
             HttpHeaders.locationHeader,
           );
-          await response.drain<void>();
+          request.abort();
+          await response.listen(null).cancel();
           if (location == null || redirect == _maxRedirects) {
             throw const HttpException('Invalid preview probe redirect.');
           }
@@ -952,18 +995,26 @@ class SeekThumbnailMediaLoader {
           continue;
         }
         if (response.statusCode < 200 || response.statusCode >= 300) {
-          await response.drain<void>();
+          request.abort();
+          await response.listen(null).cancel();
           throw _PreviewHttpException(response.statusCode);
         }
 
         final BytesBuilder bytes = BytesBuilder(copy: false);
         await for (final List<int> chunk in response.timeout(_requestTimeout)) {
+          _throwIfCancelled(generation);
           final int remaining = _networkProbeBytes - bytes.length;
-          if (remaining <= 0) break;
+          if (remaining <= 0) {
+            request.abort();
+            break;
+          }
           bytes.add(
             chunk.length <= remaining ? chunk : chunk.sublist(0, remaining),
           );
-          if (bytes.length >= _networkProbeBytes) break;
+          if (bytes.length >= _networkProbeBytes) {
+            request.abort();
+            break;
+          }
         }
         final String? acceptRanges = response.headers.value(
           HttpHeaders.acceptRangesHeader,
@@ -996,6 +1047,7 @@ class SeekThumbnailMediaLoader {
     Map<String, String> headers,
     HlsByteRange? range,
     int generation,
+    int limit,
   ) async {
     Uri uri = initialUri;
     for (int redirect = 0; redirect <= _maxRedirects; redirect += 1) {
@@ -1005,6 +1057,7 @@ class SeekThumbnailMediaLoader {
           .timeout(_requestTimeout);
       _activeRequests.add(request);
       try {
+        _throwIfCancelled(generation);
         headers.forEach((String key, String value) {
           request.headers.set(key, value);
         });
@@ -1026,7 +1079,8 @@ class SeekThumbnailMediaLoader {
           final String? location = response.headers.value(
             HttpHeaders.locationHeader,
           );
-          await response.drain<void>();
+          request.abort();
+          await response.listen(null).cancel();
           if (location == null || redirect == _maxRedirects) {
             throw const HttpException('Invalid preview redirect.');
           }
@@ -1034,33 +1088,124 @@ class SeekThumbnailMediaLoader {
           continue;
         }
         if (response.statusCode < 200 || response.statusCode >= 300) {
-          await response.drain<void>();
+          request.abort();
+          await response.listen(null).cancel();
           throw _PreviewHttpException(response.statusCode);
         }
-        final BytesBuilder bytes = BytesBuilder(copy: false);
-        await for (final List<int> chunk in response.timeout(_requestTimeout)) {
-          bytes.add(chunk);
-        }
-        Uint8List result = bytes.takeBytes();
-        if (range != null && response.statusCode == HttpStatus.ok) {
-          if (result.length < range.endExclusive) {
-            throw const HttpException('Preview range response was incomplete.');
-          }
-          result = Uint8List.sublistView(
-            result,
-            range.offset,
-            range.endExclusive,
-          );
-        }
-        if (range != null && result.length != range.length) {
-          throw const HttpException('Preview range length did not match.');
-        }
-        return result;
+        return await _readResponse(response, range, generation, limit, request);
+      } on Object {
+        request.abort();
+        rethrow;
       } finally {
         _activeRequests.remove(request);
       }
     }
     throw const HttpException('Too many preview redirects.');
+  }
+
+  Never _resourceLimit() => throw const SeekThumbnailLoadException(
+    SeekThumbnailFailure(
+      scope: SeekThumbnailFailureScope.bucketSpecific,
+      reason: SeekThumbnailFailureReason.resourceLimit,
+    ),
+  );
+
+  Future<Uint8List> _readResponse(
+    HttpClientResponse response,
+    HlsByteRange? range,
+    int generation,
+    int limit,
+    HttpClientRequest request,
+  ) async {
+    int skip = 0;
+    final int? wanted = range?.length;
+    if (range != null) {
+      if (response.statusCode == HttpStatus.ok) {
+        // Some CDNs ignore Range. Support small prefixes, never read an entire
+        // movie into RAM or scan gigabytes to make an optional thumbnail.
+        skip = range.offset;
+        if (skip > maximumIgnoredRangeSkipBytes) {
+          request.abort();
+          await response.listen(null).cancel();
+          throw const SeekThumbnailLoadException(
+            SeekThumbnailFailure(
+              scope: SeekThumbnailFailureScope.bucketSpecific,
+              reason: SeekThumbnailFailureReason.rangeUnsupported,
+            ),
+          );
+        }
+      } else if (response.statusCode == HttpStatus.partialContent) {
+        final header = response.headers.value(HttpHeaders.contentRangeHeader);
+        if (header != null) {
+          final match = RegExp(
+            r'^bytes (\d+)-(\d+)/(\d+|\*)$',
+          ).firstMatch(header.trim());
+          if (match == null ||
+              int.tryParse(match.group(1)!) != range.offset ||
+              int.tryParse(match.group(2)!) != range.endExclusive - 1) {
+            request.abort();
+            await response.listen(null).cancel();
+            throw const FormatException('Preview Content-Range mismatch.');
+          }
+        }
+        if (response.contentLength >= 0 && response.contentLength != wanted) {
+          request.abort();
+          await response.listen(null).cancel();
+          throw const FormatException('Preview range length mismatch.');
+        }
+      } else {
+        request.abort();
+        await response.listen(null).cancel();
+        throw const FormatException('Unexpected preview range response.');
+      }
+    } else if (response.contentLength > limit) {
+      request.abort();
+      await response.listen(null).cancel();
+      _resourceLimit();
+    }
+    final bytes = BytesBuilder(copy: false);
+    await for (final chunk in response.timeout(
+      _requestTimeout,
+      onTimeout: (sink) {
+        request.abort();
+        sink.addError(TimeoutException('Preview body timed out.'));
+        sink.close();
+      },
+    )) {
+      _throwIfCancelled(generation);
+      final start = skip.clamp(0, chunk.length);
+      skip -= start;
+      final available = chunk.length - start;
+      final remaining = wanted == null ? null : wanted - bytes.length;
+      final count = remaining == null
+          ? available
+          : available.clamp(0, remaining);
+      if (bytes.length + count > limit) {
+        request.abort();
+        _resourceLimit();
+      }
+      if (count > 0) {
+        // Own only the requested slice, never a view retaining the HTTP body.
+        bytes.add(
+          start == 0 && count == chunk.length
+              ? chunk
+              : Uint8List.fromList(chunk.sublist(start, start + count)),
+        );
+      }
+      if (wanted != null && bytes.length == wanted) {
+        // Close the unused tail immediately: it can be an entire movie and
+        // might never reach EOF. Do not leave optional preview traffic alive.
+        request.abort();
+        break;
+      }
+    }
+    if (skip != 0 || (wanted != null && bytes.length != wanted)) {
+      throw const FormatException('Preview range response was incomplete.');
+    }
+    final result = bytes.takeBytes();
+    return result.buffer.lengthInBytes == result.lengthInBytes
+        ? result
+        : Uint8List.fromList(result);
   }
 
   Future<void> dispose() async {
@@ -1070,6 +1215,7 @@ class SeekThumbnailMediaLoader {
     _client.close(force: true);
     _hlsSessions.clear();
     _sourceProbes.clear();
+    _resourceCache.clear();
     await _proxy.stop();
     final Directory? root = _temporaryRoot;
     _temporaryRoot = null;
@@ -1085,22 +1231,18 @@ class SeekThumbnailMediaLoader {
 
 class _HlsSession {
   _HlsSession({
+    required this.cacheKey,
     required this.index,
     required this.resourceHeaders,
     required this.isOffline,
     required this.sourceKind,
   });
 
-  static const int maxCacheEntries = 12;
-  static const int maxCacheBytes = 12 * 1024 * 1024;
-
+  final String cacheKey;
   final HlsMediaIndex index;
   final Map<String, String> resourceHeaders;
   final bool isOffline;
   final SeekThumbnailSourceKind sourceKind;
-  final LinkedHashMap<String, Uint8List> resourceCache =
-      LinkedHashMap<String, Uint8List>();
-  int resourceCacheBytes = 0;
 }
 
 class _ResolvedNetworkSource {

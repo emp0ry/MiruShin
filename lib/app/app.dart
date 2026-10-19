@@ -115,16 +115,39 @@ class _MiruShinAppState extends ConsumerState<MiruShinApp> {
     if (cleanup != null) return cleanup;
 
     return _exitCleanup = () async {
+      final elapsed = Stopwatch()..start();
+      debugPrint('MiruShin shutdown: started.');
+      Future<void> step(String name, Future<void> work) async {
+        final startedAt = elapsed.elapsedMilliseconds;
+        debugPrint('MiruShin shutdown: $name started at ${startedAt}ms.');
+        try {
+          await work;
+          debugPrint(
+            'MiruShin shutdown: $name completed in '
+            '${elapsed.elapsedMilliseconds - startedAt}ms.',
+          );
+        } on Object {
+          debugPrint('MiruShin shutdown: $name failed.');
+          rethrow;
+        }
+      }
+
       _stopDriveLifecycle();
-      final trackerReconciliationStopped = _stopTrackerReconciliation();
-      final driveStopped = _googleDriveSyncController.prepareForExit();
+      final trackerReconciliationStopped = step(
+        'tracker reconciliation',
+        _stopTrackerReconciliation(),
+      );
+      final driveStopped = step(
+        'Drive',
+        _googleDriveSyncController.prepareForExit(),
+      );
       // Do not time out persistence: a timeout leaves SQLite writes running
       // while the native engine tears down. Save the player's final checkpoint
       // before stopping the local mutation lane.
-      await _playbackController.prepareForExit();
+      await step('player and checkpoint', _playbackController.prepareForExit());
       await Future.wait<void>(<Future<void>>[
         driveStopped,
-        _trackerCoordinatorRegistry.prepareForExit(),
+        step('tracker requests', _trackerCoordinatorRegistry.prepareForExit()),
         trackerReconciliationStopped,
         _soraRuntime.shutdown().timeout(_exitWebViewCleanupTimeout).catchError((
           _,
@@ -134,7 +157,10 @@ class _MiruShinAppState extends ConsumerState<MiruShinApp> {
       ]);
       // This must be the final step: all sync/database users are stopped first,
       // then Drift is closed and awaited before Flutter tears down the Dart VM.
-      await _libraryDatabaseRegistry.closeAll();
+      await step('library databases', _libraryDatabaseRegistry.closeAll());
+      debugPrint(
+        'MiruShin shutdown: ready in ${elapsed.elapsedMilliseconds}ms.',
+      );
     }();
   }
 

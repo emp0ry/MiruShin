@@ -942,6 +942,58 @@ void main() {
   );
 
   test(
+    'bounded consistency repair keeps independent title histories isolated',
+    () async {
+      final repo = memory();
+      final initial = List.generate(24, (i) {
+        final id = i + 100;
+        final value = example();
+        return value
+            .withIdentity(
+              MediaIdentity(
+                localId: 'anime:$id',
+                anilistId: id,
+                malId: id + 1000,
+              ),
+            )
+            .withMediaItem(
+              MediaItem.fromJson({
+                ...value.mediaItem.toJson(),
+                'id': 'anilist:$id',
+                'title': 'Title $id',
+                'overview': 'Rich cached metadata ${'x' * 8192}',
+                'externalIds': {'anilist': '$id', 'mal': '${id + 1000}'},
+              }),
+            );
+      });
+      await repo.saveTrackingStates(initial);
+      final patch = UserMediaPatch(
+        status: AniListListStatus.completed,
+        progress: 12,
+      );
+      for (final state in initial.take(8)) {
+        await mutate(repo, state.apply(patch, state.updatedAt), patch);
+      }
+      await repo.saveTrackingStates(initial); // Simulate stale pre-fix rows.
+      await repo.repairSyncConsistency();
+      final repaired = await repo.loadTrackingStates();
+      expect(repaired, hasLength(24));
+      for (final state in repaired) {
+        final completed = state.identity.anilistId! < 108;
+        expect(
+          state.status,
+          completed ? AniListListStatus.completed : AniListListStatus.current,
+        );
+        expect(state.progress, completed ? 12 : 3);
+        expect(state.mediaItem.overview, startsWith('Rich cached metadata'));
+      }
+      final before = (await repo.buildDriveSnapshot()).checksum;
+      await repo.repairSyncConsistency();
+      expect((await repo.buildDriveSnapshot()).checksum, before);
+    },
+  );
+
+  test(
     'Consistency repair closes duplicate/equal historical conflicts only',
     () async {
       final a = memory(), b = memory();

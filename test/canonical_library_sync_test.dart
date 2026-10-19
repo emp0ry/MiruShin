@@ -57,6 +57,41 @@ void main() {
 
     tearDown(() => database.close());
 
+    test('encoded backup preserves canonical state and all history', () async {
+      await repository.saveTrackingStates([_state(progress: 4)]);
+      final localId =
+          (await repository.loadTrackingStates()).single.identity.localId;
+      for (var i = 0; i < 20; i++) {
+        await repository.appendOperation(
+          LibraryOperationDraft(
+            operationId: 'history-$i',
+            localId: localId,
+            originKind: LibraryOriginKind.user,
+            intent: LibraryMutationIntent.edit,
+            fields: {'notes'},
+            before: {
+              'notes': 'Привет 日本語 😀 $i',
+              'nested': {'tags': List.generate(30, (j) => 'tag-$j')},
+            },
+            after: {'notes': 'Updated $i', 'progress': i},
+            targets: {'drive'},
+            occurredAt: DateTime.utc(2026, 1, 1).add(Duration(seconds: i)),
+          ),
+        );
+      }
+      final before = await repository.buildDriveSnapshot();
+      final encoded = await repository.buildEncodedDriveSnapshot();
+      final restored = DriveLibrarySnapshot.fromJson(
+        jsonDecode(utf8.decode(encoded.bytes)),
+      );
+      expect(restored.checksum, before.checksum);
+      expect(restored.libraryEntries, before.libraryEntries);
+      expect(restored.operations, before.operations);
+      expect(restored.operations.length, greaterThanOrEqualTo(20));
+      expect(encoded.checksum, before.checksum);
+      expect(encoded.entryCount, before.entryCount);
+    });
+
     test(
       'decoded reads follow direct writes and transaction rollback',
       () async {

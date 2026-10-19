@@ -955,7 +955,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
               excluding: await repository.processedDriveSegmentNames(),
               pageToken: await repository.driveChangePageToken(),
             );
-        final DriveLibrarySnapshot? cloudSnapshot =
+        DriveLibrarySnapshot? cloudSnapshot =
             changes.manifestChanged || appliedSnapshotChecksum == null
             ? await libraryCloud.pullLibrarySnapshot(
                 excludingChecksum: appliedSnapshotChecksum,
@@ -965,6 +965,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
             : null;
         if (_disposed || _shuttingDown) return;
         _requirePlaybackIdle(cancelToken);
+        final int? restoredEntryCount = cloudSnapshot?.entryCount;
         if (cloudSnapshot != null &&
             !await repository.hasAppliedDriveSnapshot(cloudSnapshot.checksum)) {
           await repository.applyDriveSnapshot(
@@ -973,6 +974,9 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
           );
           restoredSnapshot = true;
         }
+        // Only the count is needed below. Release the expanded remote history
+        // before replaying segments or constructing an outgoing checkpoint.
+        cloudSnapshot = null;
         for (final DriveReplicaSegment segment in changes.segments) {
           _requirePlaybackIdle(cancelToken);
           applied += await repository.applyDriveSegment(
@@ -1049,7 +1053,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
             lastSyncAt: completedAt,
             appliedSegments: applied,
             cloudEntryCount: moreLocalChanges
-                ? cloudSnapshot?.entryCount
+                ? restoredEntryCount
                 : localEntryCount,
             localEntryCount: localEntryCount,
             clearError: true,
@@ -1153,7 +1157,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
         excluding: await repository.processedDriveSegmentNames(),
         pageToken: await repository.driveChangePageToken(),
       );
-      final DriveLibrarySnapshot? cloudSnapshot =
+      DriveLibrarySnapshot? cloudSnapshot =
           changes.manifestChanged || appliedSnapshotChecksum == null
           ? await libraryCloud.pullLibrarySnapshot(
               excludingChecksum: appliedSnapshotChecksum,
@@ -1169,6 +1173,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
             )
           : null;
       _requirePlaybackIdle(cancelToken);
+      final int? restoredEntryCount = cloudSnapshot?.entryCount;
       if (cloudSnapshot != null &&
           !await repository.hasAppliedDriveSnapshot(cloudSnapshot.checksum)) {
         await repository.applyDriveSnapshot(
@@ -1187,6 +1192,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
         ref.invalidate(trackerAnimeListProvider);
         ref.invalidate(trackerMangaListProvider);
       }
+      cloudSnapshot = null;
       _setProgress(stage: 'Merging recent changes…', progress: 0.64);
       int applied = 0;
       for (final DriveReplicaSegment segment in changes.segments) {
@@ -1251,7 +1257,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
       final bool needsCheckpoint =
           pushedSegmentCount >
               await repository.checkpointedDriveSegmentCount() ||
-          (cloudSnapshot == null && appliedSnapshotChecksum == null);
+          (restoredEntryCount == null && appliedSnapshotChecksum == null);
       // Tracker delivery has its own background queue. Waiting for every
       // AniList/MAL/Shikimori request here can hold the Drive UI at 377/377
       // for hours even though all local segments are already uploaded.
@@ -1267,13 +1273,13 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
           await repository.confirmedTrackerDeliveryLedger(),
         );
       }
-      final DriveLibrarySnapshot? outgoingSnapshot =
+      final EncodedDriveLibrarySnapshot? outgoingSnapshot =
           ownsDeliveryLease && needsCheckpoint
-          ? await repository.buildDriveSnapshot()
+          ? await repository.buildEncodedDriveSnapshot()
           : null;
       _requirePlaybackIdle(cancelToken);
       if (outgoingSnapshot != null) {
-        await libraryCloud.pushLibrarySnapshot(
+        await libraryCloud.pushEncodedLibrarySnapshot(
           outgoingSnapshot,
           onProgress: (int sent, int total) => _setTransferProgress(
             stage: 'Uploading Library backup…',
@@ -1319,7 +1325,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
           appliedSegments: applied,
           clearProgress: true,
           cloudEntryCount: moreLocalChanges
-              ? (outgoingSnapshot?.entryCount ?? cloudSnapshot?.entryCount)
+              ? (outgoingSnapshot?.entryCount ?? restoredEntryCount)
               : localEntryCount,
           localEntryCount: localEntryCount,
           lastError: replicaWarnings.isEmpty

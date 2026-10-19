@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 
 import '../../../core/constants/app_constants.dart';
+import '../../../core/network/request_cancellation_scope.dart';
 import '../../../shared/models/anilist_models.dart';
 import '../../../shared/models/media_item.dart';
 import '../domain/tracker_models.dart';
@@ -15,6 +16,7 @@ class MalApiClient {
     Future<String?> Function()? onRefreshToken,
     Dio? dio,
     this.cancelToken,
+    this.cancellationScope,
     this.readListStatusCache,
     this.writeListStatusCache,
     this.priorityListStatusIds,
@@ -32,6 +34,7 @@ class MalApiClient {
 
   final Dio _dio;
   final CancelToken? cancelToken;
+  final RequestCancellationScope? cancellationScope;
   String _accessToken;
   final Future<String?> Function()? _onRefreshToken;
   final Future<Map<String, dynamic>> Function(String kind)? readListStatusCache;
@@ -591,17 +594,26 @@ class MalApiClient {
     bool retried = false,
   }) async {
     try {
-      return await _dio.request<dynamic>(
-        path,
-        cancelToken: cancelToken,
-        data: data,
-        queryParameters: queryParameters,
-        options: Options(
-          method: method,
-          contentType: contentType,
-          headers: <String, String>{'Authorization': 'Bearer $_accessToken'},
-        ),
-      );
+      Future<Response<dynamic>> send(CancelToken? token) =>
+          _dio.request<dynamic>(
+            path,
+            cancelToken: token,
+            data: data,
+            queryParameters: queryParameters,
+            options: Options(
+              method: method,
+              contentType: contentType,
+              headers: <String, String>{
+                'Authorization': 'Bearer $_accessToken',
+              },
+            ),
+          );
+      final scope =
+          cancellationScope ??
+          (cancelToken == null
+              ? null
+              : RequestCancellationScope.linkedTo(cancelToken!));
+      return await (scope == null ? send(null) : scope.run(send));
     } on DioException catch (error) {
       if (!retried &&
           error.response?.statusCode == 401 &&

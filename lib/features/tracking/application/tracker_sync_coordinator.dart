@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http_parser/http_parser.dart' show parseHttpDate;
 
+import '../../../core/network/request_cancellation_scope.dart';
 import '../../../shared/models/anilist_models.dart';
 import '../../../shared/models/media_item.dart';
 import '../../library/application/canonical_library_repository.dart';
@@ -225,7 +226,8 @@ class TrackerSyncCoordinator {
   final Map<TrackerSource, String> _authBlockedCredentials = {};
   Timer? _deliveryDebounce;
   Future<bool>? _driveGate;
-  final CancelToken _networkCancellation = CancelToken();
+  final RequestCancellationScope _networkCancellation =
+      RequestCancellationScope();
   bool _shuttingDown = false;
   Future<void>? _shutdown;
 
@@ -834,7 +836,7 @@ class TrackerSyncCoordinator {
       adapters[TrackerSource.anilist] = _AniListAdapter(
         client: AniListApiClient(
           accessToken: aniListToken,
-          cancelToken: _networkCancellation,
+          cancellationScope: _networkCancellation,
           titleLanguage: titleLanguage == 'RUSSIAN' ? 'ENGLISH' : titleLanguage,
         ),
         viewerId: settings.anilistViewerId,
@@ -860,7 +862,7 @@ class TrackerSyncCoordinator {
       if (token != null && token.trim().isNotEmpty) {
         malMetadataClient = MalApiClient(
           accessToken: token,
-          cancelToken: _networkCancellation,
+          cancellationScope: _networkCancellation,
           readListStatusCache: (kind) => _repository.loadProviderFieldCache(
             'mal',
             '${settings.malViewerId}',
@@ -907,7 +909,7 @@ class TrackerSyncCoordinator {
         adapters[TrackerSource.shikimori] = _ShikimoriAdapter(
           ShikimoriApiClient(
             accessToken: token,
-            cancelToken: _networkCancellation,
+            cancellationScope: _networkCancellation,
             userId: shikimoriViewerId,
             onRefreshToken: () => _ref.mounted
                 ? _controller.refreshShikimoriToken()

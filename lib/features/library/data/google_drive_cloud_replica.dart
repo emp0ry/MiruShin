@@ -6,6 +6,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 
 import '../../../core/constants/app_constants.dart';
+import '../../../core/network/request_cancellation_scope.dart';
 import '../../addons/domain/addon_sync_models.dart';
 import '../../settings/domain/account_sync_models.dart';
 import '../../settings/domain/preference_sync_models.dart';
@@ -14,11 +15,6 @@ import '../domain/cloud_replica_models.dart';
 // Serialize the large checkpoint away from Flutter's UI isolate on native
 // platforms. `compute` runs inline on Web, where the single-pass checksum
 // sorting still avoids the old O(n log n) JSON encoding cost.
-(String, String, int) _prepareLibrarySnapshot(DriveLibrarySnapshot snapshot) {
-  final String body = snapshot.encode();
-  return (body, snapshot.checksum, utf8.encode(body).length);
-}
-
 DriveLibrarySnapshot _decodeLibrarySnapshot((String, String?) input) {
   final Object? decoded = jsonDecode(input.$1);
   if (decoded is! Map<String, dynamic>) {
@@ -95,6 +91,32 @@ class GoogleDriveCloudReplica
   final String replicaNamespace;
   final bool includeLegacyLibrary;
 
+  Future<Response<T>> _send<T>(
+    String path, {
+    String? method,
+    Object? data,
+    Map<String, dynamic>? queryParameters,
+    Options? options,
+    ProgressCallback? onSendProgress,
+    ProgressCallback? onReceiveProgress,
+    CancelToken? cancelToken,
+  }) {
+    Future<Response<T>> request(CancelToken? token) => _dio.request<T>(
+      path,
+      data: data,
+      queryParameters: queryParameters,
+      options: (options ?? Options()).copyWith(
+        method: method ?? options?.method ?? 'GET',
+      ),
+      onSendProgress: onSendProgress,
+      onReceiveProgress: onReceiveProgress,
+      cancelToken: token,
+    );
+    return cancelToken == null
+        ? request(null)
+        : RequestCancellationScope.linkedTo(cancelToken).run(request);
+  }
+
   String get _libraryManifestName => replicaNamespace == 'legacy'
       ? manifestName
       : 'mirushin.$replicaNamespace.manifest.v1.json';
@@ -159,23 +181,36 @@ class GoogleDriveCloudReplica
     DriveLibrarySnapshot snapshot, {
     void Function(int sent, int total)? onProgress,
   }) async {
+    return pushEncodedLibrarySnapshot(
+      await compute(
+        encodeDriveLibrarySnapshot,
+        snapshot,
+        debugLabel: 'MiruShin Drive snapshot encode',
+      ),
+      onProgress: onProgress,
+    );
+  }
+
+  Future<CloudReplicaFile> pushEncodedLibrarySnapshot(
+    EncodedDriveLibrarySnapshot snapshot, {
+    void Function(int sent, int total)? onProgress,
+  }) async {
     if (snapshot.replicaNamespace != replicaNamespace) {
       throw StateError('Google Drive library snapshot workspace mismatch.');
     }
-    final (String body, String checksum, int sizeBytes) = await compute(
-      _prepareLibrarySnapshot,
-      snapshot,
-      debugLabel: 'MiruShin Drive snapshot encode',
-    );
+    final checksum = snapshot.checksum;
+    final sizeBytes = snapshot.bytes.length;
     final _ManifestRead current = await _readManifest();
     if (current.value.snapshotChecksum == checksum) {
       final CloudReplicaFile? existing = await _findByName(snapshot.fileName);
       if (existing != null) return existing;
     }
     final CloudReplicaFile? existing = await _findByName(snapshot.fileName);
-    final CloudReplicaFile uploaded = existing == null
-        ? await _createJsonFile(snapshot.fileName, body, onProgress: onProgress)
-        : await _updateJsonFile(existing, body, onProgress: onProgress);
+    final CloudReplicaFile uploaded = await _uploadEncodedSnapshot(
+      snapshot,
+      existing,
+      onProgress: onProgress,
+    );
     await _updateManifest((DriveReplicaManifest manifest) {
       return _copyManifest(
         manifest,
@@ -215,6 +250,82 @@ class GoogleDriveCloudReplica
     );
   }
 
+  Future<CloudReplicaFile> _uploadEncodedSnapshot(
+    EncodedDriveLibrarySnapshot snapshot,
+    CloudReplicaFile? existing, {
+    void Function(int sent, int total)? onProgress,
+  }) async {
+    final boundary =
+        'mirushin-${DateTime.now().microsecondsSinceEpoch}-${Random.secure().nextInt(1 << 30)}';
+    final prefix = existing == null
+        ? utf8.encode(
+            '--$boundary\r\n'
+            'Content-Type: application/json; charset=UTF-8\r\n\r\n'
+            '${jsonEncode({
+              'name': snapshot.fileName,
+              'parents': ['appDataFolder'],
+            })}\r\n'
+            '--$boundary\r\n'
+            'Content-Type: application/json; charset=UTF-8\r\n\r\n',
+          )
+        : const <int>[];
+    final suffix = existing == null
+        ? utf8.encode('\r\n--$boundary--')
+        : const <int>[];
+    Stream<List<int>> body() async* {
+      if (prefix.isNotEmpty) yield prefix;
+      // Never concatenate the checkpoint with multipart headers or convert
+      // its entire history back to a String on Flutter's UI isolate.
+      const chunkBytes = 64 * 1024;
+      for (
+        int offset = 0;
+        offset < snapshot.bytes.length;
+        offset += chunkBytes
+      ) {
+        if (_cancelToken?.isCancelled ?? false) {
+          throw _cancelToken!.cancelError!;
+        }
+        yield Uint8List.sublistView(
+          snapshot.bytes,
+          offset,
+          min(offset + chunkBytes, snapshot.bytes.length),
+        );
+      }
+      if (suffix.isNotEmpty) yield suffix;
+    }
+
+    final response = await _send<dynamic>(
+      '${AppConstants.googleDriveUploadBaseUrl}/files${existing == null ? '' : '/${existing.id}'}',
+      queryParameters: {
+        'uploadType': existing == null ? 'multipart' : 'media',
+        'fields': 'id,name,md5Checksum',
+      },
+      data: body(),
+      options: _options(
+        headers: {
+          'Content-Type': existing == null
+              ? 'multipart/related; boundary=$boundary'
+              : 'application/json; charset=UTF-8',
+          if (!kIsWeb)
+            'Content-Length':
+                '${prefix.length + snapshot.bytes.length + suffix.length}',
+        },
+      )..method = existing == null ? 'POST' : 'PATCH',
+      onSendProgress: onProgress,
+      cancelToken: _cancelToken,
+    );
+    final data = response.data;
+    if (data is! Map<String, dynamic>) {
+      throw StateError('Unexpected Google Drive upload response.');
+    }
+    return CloudReplicaFile(
+      id: '${data['id'] ?? existing?.id ?? ''}',
+      name: '${data['name'] ?? snapshot.fileName}',
+      checksum: data['md5Checksum']?.toString(),
+      sizeBytes: snapshot.bytes.length,
+    );
+  }
+
   /// Deletes only MiruShin-owned files from the private appDataFolder.
   /// Other Drive files are outside this OAuth scope and are never visible.
   Future<int> deleteAllMiruShinData({
@@ -225,8 +336,9 @@ class GoogleDriveCloudReplica
         .toList(growable: false);
     var completed = 0;
     for (final CloudReplicaFile file in files) {
-      await _dio.delete<void>(
+      await _send<void>(
         '${AppConstants.googleDriveApiBaseUrl}/files/${file.id}',
+        method: 'DELETE',
         options: _options(),
         cancelToken: _cancelToken,
       );
@@ -460,7 +572,7 @@ class GoogleDriveCloudReplica
       String? snapshotFileId;
       String nextToken = token;
       while (true) {
-        final Response<dynamic> response = await _dio.get<dynamic>(
+        final Response<dynamic> response = await _send<dynamic>(
           '${AppConstants.googleDriveApiBaseUrl}/changes',
           queryParameters: <String, dynamic>{
             'pageToken': nextToken,
@@ -529,7 +641,7 @@ class GoogleDriveCloudReplica
   }
 
   Future<String> _startChangePageToken() async {
-    final Response<dynamic> response = await _dio.get<dynamic>(
+    final Response<dynamic> response = await _send<dynamic>(
       '${AppConstants.googleDriveApiBaseUrl}/changes/startPageToken',
       options: _options(),
       cancelToken: _cancelToken,
@@ -667,7 +779,7 @@ class GoogleDriveCloudReplica
     final List<CloudReplicaFile> result = <CloudReplicaFile>[];
     String? pageToken;
     do {
-      final Response<dynamic> response = await _dio.get<dynamic>(
+      final Response<dynamic> response = await _send<dynamic>(
         '${AppConstants.googleDriveApiBaseUrl}/files',
         queryParameters: <String, dynamic>{
           'spaces': 'appDataFolder',
@@ -701,7 +813,7 @@ class GoogleDriveCloudReplica
 
   Future<CloudReplicaFile?> _findByName(String name) async {
     final String escaped = name.replaceAll("'", "\\'");
-    final Response<dynamic> response = await _dio.get<dynamic>(
+    final Response<dynamic> response = await _send<dynamic>(
       '${AppConstants.googleDriveApiBaseUrl}/files',
       queryParameters: <String, dynamic>{
         'spaces': 'appDataFolder',
@@ -740,7 +852,7 @@ class GoogleDriveCloudReplica
     String fileId, {
     void Function(int received, int total)? onProgress,
   }) async {
-    final Response<String> response = await _dio.get<String>(
+    final Response<String> response = await _send<String>(
       '${AppConstants.googleDriveApiBaseUrl}/files/$fileId',
       queryParameters: const <String, String>{'alt': 'media'},
       options: _options(),
@@ -768,8 +880,9 @@ class GoogleDriveCloudReplica
         'Content-Type: application/json; charset=UTF-8\r\n\r\n'
         '$content\r\n'
         '--$boundary--';
-    final Response<dynamic> response = await _dio.post<dynamic>(
+    final Response<dynamic> response = await _send<dynamic>(
       '${AppConstants.googleDriveUploadBaseUrl}/files',
+      method: 'POST',
       queryParameters: const <String, String>{
         'uploadType': 'multipart',
         'fields': 'id,name,md5Checksum',
@@ -801,8 +914,9 @@ class GoogleDriveCloudReplica
     String? etag,
     void Function(int sent, int total)? onProgress,
   }) async {
-    final Response<dynamic> response = await _dio.patch<dynamic>(
+    final Response<dynamic> response = await _send<dynamic>(
       '${AppConstants.googleDriveUploadBaseUrl}/files/${file.id}',
+      method: 'PATCH',
       queryParameters: const <String, String>{
         'uploadType': 'media',
         'fields': 'id,name,md5Checksum',
@@ -836,7 +950,7 @@ class GoogleDriveCloudReplica
     if (file == null) {
       return const _ManifestRead(value: DriveReplicaManifest(), exists: false);
     }
-    final Response<String> response = await _dio.get<String>(
+    final Response<String> response = await _send<String>(
       '${AppConstants.googleDriveApiBaseUrl}/files/${file.id}',
       queryParameters: const <String, String>{'alt': 'media'},
       options: _options(),

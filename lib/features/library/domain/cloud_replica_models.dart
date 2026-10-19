@@ -1,6 +1,7 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
-import 'package:crypto/crypto.dart';
+import '../../../core/utils/json_memory.dart';
 
 class DriveReplicaSegment {
   DriveReplicaSegment({
@@ -65,7 +66,7 @@ class DriveReplicaSegment {
 
   String encode() => jsonEncode(toJson());
 
-  String get checksum => sha256.convert(utf8.encode(encode())).toString();
+  String get checksum => jsonSha256(toJson());
 }
 
 /// A complete, render-ready checkpoint of one Local Library workspace.
@@ -154,70 +155,100 @@ class DriveLibrarySnapshot {
   /// Checksum used by the first v2 implementation. Kept only so devices can
   /// read an already-uploaded checkpoint before replacing it with the stable
   /// content checksum on the next successful push.
-  String get legacyEnvelopeChecksum =>
-      sha256.convert(utf8.encode(encode())).toString();
+  String get legacyEnvelopeChecksum => jsonSha256(toJson());
 
   /// Identifies the actual checkpoint contents. Runtime envelope values are
   /// excluded so an unchanged library does not upload another full snapshot
   /// merely because a later sync generated a new id and timestamp.
-  late final String checksum = sha256
-      .convert(utf8.encode(_stableContentJson()))
-      .toString();
+  late final String checksum = utf8ChunksSha256(_stableContentChunks());
 
-  String _stableContentJson() {
+  Iterable<String> _stableContentChunks() sync* {
     // Preserve the exact field order and bytes of the existing v2 checksum.
     // Reuse each encoded row for sorting and output instead of serializing the
     // entire provider/operation history a second time.
-    final StringBuffer content = StringBuffer('{"schemaVersion":2,')
-      ..write('"replicaNamespace":')
-      ..write(jsonEncode(replicaNamespace))
-      ..write(',"entryCount":')
-      ..write(entryCount)
-      ..write(',"media":')
-      ..write(_stableSnapshotRowsJson(media))
-      ..write(',"libraryEntries":')
-      ..write(_stableSnapshotRowsJson(libraryEntries))
-      ..write(',"providerBindings":')
-      ..write(
-        _stableSnapshotRowsJson(
-          providerBindings.map((Map<String, dynamic> row) {
-            final Map<String, dynamic> stable = Map<String, dynamic>.from(row);
-            stable.remove('verifiedAtMs');
-            return stable;
-          }),
-        ),
-      )
-      ..write(',"providerSnapshots":')
-      ..write(
-        _stableSnapshotRowsJson(
-          providerSnapshots.map((Map<String, dynamic> row) {
-            final Map<String, dynamic> stable = Map<String, dynamic>.from(row);
-            stable.remove('fetchedAtMs');
-            stable.remove('destructiveConfirmationCount');
-            return stable;
-          }),
-        ),
-      )
-      ..write(',"episodeStates":')
-      ..write(_stableSnapshotRowsJson(episodeStates))
-      ..write(',"streamPreferences":')
-      ..write(_stableSnapshotRowsJson(streamPreferences))
-      ..write(',"operations":')
-      ..write(_stableSnapshotRowsJson(operations))
-      ..write('}');
-    return content.toString();
+    yield '{"schemaVersion":2,"replicaNamespace":';
+    yield jsonEncode(replicaNamespace);
+    yield ',"entryCount":$entryCount,"media":';
+    yield* _stableSnapshotRowsChunks(media);
+    yield ',"libraryEntries":';
+    yield* _stableSnapshotRowsChunks(libraryEntries);
+    yield ',"providerBindings":';
+    yield* _stableSnapshotRowsChunks(
+      providerBindings.map((Map<String, dynamic> row) {
+        final Map<String, dynamic> stable = Map<String, dynamic>.from(row);
+        stable.remove('verifiedAtMs');
+        return stable;
+      }),
+    );
+    yield ',"providerSnapshots":';
+    yield* _stableSnapshotRowsChunks(
+      providerSnapshots.map((Map<String, dynamic> row) {
+        final Map<String, dynamic> stable = Map<String, dynamic>.from(row);
+        stable.remove('fetchedAtMs');
+        stable.remove('destructiveConfirmationCount');
+        return stable;
+      }),
+    );
+    yield ',"episodeStates":';
+    yield* _stableSnapshotRowsChunks(episodeStates);
+    yield ',"streamPreferences":';
+    yield* _stableSnapshotRowsChunks(streamPreferences);
+    yield ',"operations":';
+    yield* _stableSnapshotRowsChunks(operations);
+    yield '}';
   }
 
-  int get encodedSizeBytes => utf8.encode(encode()).length;
+  int get encodedSizeBytes => jsonUtf8Size(toJson());
 }
 
-String _stableSnapshotRowsJson(Iterable<Map<String, dynamic>> rows) {
+Iterable<String> _stableSnapshotRowsChunks(
+  Iterable<Map<String, dynamic>> rows,
+) sync* {
   // Keep the v2 checksum byte-for-byte compatible with existing manifests.
   // Encoding inside the comparator used to serialize large provider snapshots
   // O(n log n) times on every backup; decorate each row only once instead.
   final List<String> encoded = rows.map(jsonEncode).toList(growable: false)
     ..sort();
-  return '[${encoded.join(',')}]';
+  yield '[';
+  for (int i = 0; i < encoded.length; i++) {
+    if (i > 0) yield ',';
+    yield encoded[i];
+  }
+  yield ']';
+}
+
+/// Native snapshot construction/encoding stays in one worker. Flutter's UI
+/// isolate receives bytes, not a second expanded object graph of all history.
+class EncodedDriveLibrarySnapshot {
+  const EncodedDriveLibrarySnapshot({
+    required this.fileName,
+    required this.replicaNamespace,
+    required this.entryCount,
+    required this.createdAt,
+    required this.checksum,
+    required this.bytes,
+  });
+  final String fileName;
+  final String replicaNamespace;
+  final int entryCount;
+  final DateTime createdAt;
+  final String checksum;
+  final Uint8List bytes;
+}
+
+EncodedDriveLibrarySnapshot encodeDriveLibrarySnapshot(
+  DriveLibrarySnapshot snapshot,
+) {
+  final checksum = snapshot.checksum;
+  final encoded = JsonUtf8Encoder().convert(snapshot.toJson());
+  return EncodedDriveLibrarySnapshot(
+    fileName: snapshot.fileName,
+    replicaNamespace: snapshot.replicaNamespace,
+    entryCount: snapshot.entryCount,
+    createdAt: snapshot.createdAt,
+    checksum: checksum,
+    bytes: encoded is Uint8List ? encoded : Uint8List.fromList(encoded),
+  );
 }
 
 class CloudReplicaFile {
