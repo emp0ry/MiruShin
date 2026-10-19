@@ -31,6 +31,14 @@
       ],
       "versions": [
         {
+          "version": "2.9.22",
+          "date": "2026-10-19",
+          "localizedDescription": "- Fixed excessive memory growth in AniList, MyAnimeList, Shikimori, and Google Drive sync by releasing completed network requests.\n- Reduced memory spikes while preparing Library backups and checking sync history, without discarding saved data or Undo history.\n- Bounded seek-preview downloads and caches, and improved cancellation and resource cleanup.",
+          "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.22/MiruShin-ios-v2.9.22.ipa",
+          "size": 31946213,
+          "minOSVersion": "13.0"
+        },
+        {
           "version": "2.9.21",
           "date": "2026-10-12",
           "localizedDescription": "- Fixed incorrect episode-behind badges on finished anime.\n- Finished and cancelled titles no longer appear in the Behind filter or upcoming-release schedules when stale provider dates remain cached.\n- Handled broadcast statuses consistently across AniList, MyAnimeList and Shikimori without changing watch progress or library data.",
@@ -839,11 +847,11 @@
           "minOSVersion": "13.0"
         }
       ],
-      "version": "2.9.21",
-      "versionDate": "2026-10-12",
-      "versionDescription": "- Fixed incorrect episode-behind badges on finished anime.\n- Finished and cancelled titles no longer appear in the Behind filter or upcoming-release schedules when stale provider dates remain cached.\n- Handled broadcast statuses consistently across AniList, MyAnimeList and Shikimori without changing watch progress or library data.",
-      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.21/MiruShin-ios-v2.9.21.ipa",
-      "size": 31916139,
+      "version": "2.9.22",
+      "versionDate": "2026-10-19",
+      "versionDescription": "- Fixed excessive memory growth in AniList, MyAnimeList, Shikimori, and Google Drive sync by releasing completed network requests.\n- Reduced memory spikes while preparing Library backups and checking sync history, without discarding saved data or Undo history.\n- Bounded seek-preview downloads and caches, and improved cancellation and resource cleanup.",
+      "downloadURL": "https://github.com/emp0ry/MiruShin/releases/download/v2.9.22/MiruShin-ios-v2.9.22.ipa",
+      "size": 31946213,
       "minOSVersion": "13.0",
       "appPermissions": {
         "entitlements": [],
