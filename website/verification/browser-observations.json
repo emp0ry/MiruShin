@@ -1,0 +1,643 @@
+{
+  "date": "2026-10-23",
+  "environment": "In-app browser, localhost production preview, unthrottled desktop, warm cache; responsive viewport overrides",
+  "observations": [
+    {
+      "name": "desktop-1440-hero",
+      "button": [
+        {
+          "background": "rgba(23, 19, 31, 0.46)",
+          "border": "rgba(197, 176, 228, 0.23)",
+          "radius": "5px"
+        },
+        {
+          "background": "rgba(23, 19, 31, 0.46)",
+          "border": "rgba(197, 176, 228, 0.23)",
+          "radius": "5px"
+        }
+      ],
+      "header": {
+        "bottom": 80,
+        "height": 80,
+        "left": 0,
+        "right": 1440,
+        "top": 0,
+        "width": 1440,
+        "x": 0,
+        "y": 0
+      },
+      "images": [
+        {
+          "height": 940,
+          "loaded": true,
+          "ratio": 0.0004466460938767902,
+          "src": "/site/media/board.webp",
+          "width": 1005
+        }
+      ],
+      "mark": {
+        "activePulses": "0",
+        "drawP95": "2.60",
+        "draws": "288",
+        "frameMedian": "33.3",
+        "state": "running"
+      },
+      "metrics": {
+        "cls": "0",
+        "lcp": "124.0",
+        "motion": "full"
+      },
+      "overflow": 0,
+      "pageScroll": 0,
+      "removedCTA": true,
+      "rootScroll": [
+        0,
+        0
+      ],
+      "url": "http://127.0.0.1:4175/?qa=review",
+      "viewport": [
+        1440,
+        900
+      ]
+    },
+    {
+      "name": "successive-waves",
+      "state": {
+        "activePulses": "2",
+        "drawP95": "2.40",
+        "draws": "1020",
+        "frameMedian": "33.3",
+        "state": "running"
+      }
+    },
+    {
+      "name": "desktop-overview",
+      "button": [
+        {
+          "background": "rgba(23, 19, 31, 0.46)",
+          "border": "rgba(197, 176, 228, 0.23)",
+          "radius": "5px"
+        },
+        {
+          "background": "rgba(23, 19, 31, 0.46)",
+          "border": "rgba(197, 176, 228, 0.23)",
+          "radius": "5px"
+        }
+      ],
+      "header": {
+        "bottom": 80,
+        "height": 80,
+        "left": 0,
+        "right": 1440,
+        "top": 0,
+        "width": 1440,
+        "x": 0,
+        "y": 0
+      },
+      "images": [
+        {
+          "height": 940,
+          "loaded": true,
+          "ratio": 0.0004466460938767902,
+          "src": "/site/media/board.webp",
+          "width": 1005
+        }
+      ],
+      "mark": {
+        "activePulses": "3",
+        "drawP95": "2.40",
+        "draws": "1032",
+        "frameMedian": "33.3",
+        "state": "paused"
+      },
+      "metrics": {
+        "cls": "0",
+        "lcp": "124.0",
+        "motion": "full"
+      },
+      "overflow": 0,
+      "pageScroll": 2102,
+      "removedCTA": true,
+      "rootScroll": [
+        0,
+        0
+      ],
+      "url": "http://127.0.0.1:4175/?qa=review#features",
+      "viewport": [
+        1440,
+        900
+      ]
+    },
+    {
+      "focus": "Close screenshot",
+      "image": true,
+      "locked": true,
+      "name": "image-dialog",
+      "open": true
+    },
+    {
+      "focus": "screenshot-link desktop-shot",
+      "locked": false,
+      "name": "image-escape"
+    },
+    {
+      "focus": "Close navigation",
+      "locked": true,
+      "name": "phone-menu",
+      "rect": {
+        "bottom": 629.5,
+        "height": 415,
+        "left": 16,
+        "right": 374,
+        "top": 214.5,
+        "width": 358,
+        "x": 16,
+        "y": 214.5
+      }
+    },
+    {
+      "focus": "Open navigation",
+      "locked": false,
+      "name": "phone-menu-escape"
+    },
+    {
+      "name": "phone-390-player",
+      "button": [
+        {
+          "background": "rgba(23, 19, 31, 0.46)",
+          "border": "rgba(197, 176, 228, 0.23)",
+          "radius": "5px"
+        },
+        {
+          "background": "rgba(23, 19, 31, 0.46)",
+          "border": "rgba(197, 176, 228, 0.23)",
+          "radius": "5px"
+        }
+      ],
+      "header": {
+        "bottom": 68,
+        "height": 68,
+        "left": 0,
+        "right": 390,
+        "top": 0,
+        "width": 390,
+        "x": 0,
+        "y": 0
+      },
+      "images": [
+        {
+          "height": 326,
+          "loaded": true,
+          "ratio": -0.0012176274996487102,
+          "src": "/site/media/player.webp",
+          "width": 348
+        }
+      ],
+      "mark": {
+        "activePulses": "0",
+        "drawP95": "2.30",
+        "draws": "1424",
+        "frameMedian": "33.3",
+        "state": "running"
+      },
+      "metrics": {
+        "cls": "0.0001",
+        "lcp": "124.0",
+        "motion": "full"
+      },
+      "overflow": 0,
+      "pageScroll": 620.5,
+      "removedCTA": true,
+      "rootScroll": [
+        0,
+        0
+      ],
+      "url": "http://127.0.0.1:4175/?qa=review#experience",
+      "viewport": [
+        390,
+        844
+      ]
+    },
+    {
+      "name": "tablet-768",
+      "button": [
+        {
+          "background": "rgba(23, 19, 31, 0.46)",
+          "border": "rgba(197, 176, 228, 0.23)",
+          "radius": "5px"
+        },
+        {
+          "background": "rgba(23, 19, 31, 0.46)",
+          "border": "rgba(197, 176, 228, 0.23)",
+          "radius": "5px"
+        }
+      ],
+      "header": {
+        "bottom": 80,
+        "height": 80,
+        "left": 0,
+        "right": 768,
+        "top": 0,
+        "width": 768,
+        "x": 0,
+        "y": 0
+      },
+      "images": [
+        {
+          "height": 656,
+          "loaded": true,
+          "ratio": -0.00010472910072611974,
+          "src": "/site/media/board.webp",
+          "width": 701
+        }
+      ],
+      "mark": {
+        "activePulses": "0",
+        "drawP95": "2.60",
+        "draws": "103",
+        "frameMedian": "33.3",
+        "state": "running"
+      },
+      "metrics": {
+        "cls": "0.0055",
+        "lcp": "96.0",
+        "motion": "full"
+      },
+      "overflow": 0,
+      "pageScroll": 0,
+      "removedCTA": true,
+      "rootScroll": [
+        0,
+        0
+      ],
+      "url": "http://127.0.0.1:4175/?qa=tablet#top",
+      "viewport": [
+        768,
+        1024
+      ]
+    },
+    {
+      "name": "phone-390",
+      "button": [
+        {
+          "background": "rgba(23, 19, 31, 0.46)",
+          "border": "rgba(197, 176, 228, 0.23)",
+          "radius": "5px"
+        },
+        {
+          "background": "rgba(23, 19, 31, 0.46)",
+          "border": "rgba(197, 176, 228, 0.23)",
+          "radius": "5px"
+        }
+      ],
+      "header": {
+        "bottom": 68,
+        "height": 68,
+        "left": 0,
+        "right": 390,
+        "top": 0,
+        "width": 390,
+        "x": 0,
+        "y": 0
+      },
+      "images": [
+        {
+          "height": 326,
+          "loaded": true,
+          "ratio": -0.0012176274996487102,
+          "src": "/site/media/board.webp",
+          "width": 348
+        }
+      ],
+      "mark": {
+        "activePulses": "0",
+        "drawP95": "1.70",
+        "draws": "164",
+        "frameMedian": "33.3",
+        "state": "running"
+      },
+      "metrics": {
+        "cls": "0",
+        "lcp": "64.0",
+        "motion": "full"
+      },
+      "overflow": 0,
+      "pageScroll": 0,
+      "removedCTA": true,
+      "rootScroll": [
+        0,
+        0
+      ],
+      "url": "http://127.0.0.1:4175/?qa=phone#top",
+      "viewport": [
+        390,
+        844
+      ]
+    },
+    {
+      "name": "small-320",
+      "button": [
+        {
+          "background": "rgba(23, 19, 31, 0.46)",
+          "border": "rgba(197, 176, 228, 0.23)",
+          "radius": "5px"
+        },
+        {
+          "background": "rgba(23, 19, 31, 0.46)",
+          "border": "rgba(197, 176, 228, 0.23)",
+          "radius": "5px"
+        }
+      ],
+      "header": {
+        "bottom": 68,
+        "height": 68,
+        "left": 0,
+        "right": 320,
+        "top": 0,
+        "width": 320,
+        "x": 0,
+        "y": 0
+      },
+      "images": [
+        {
+          "height": 260,
+          "loaded": true,
+          "ratio": 0.0005284791544333256,
+          "src": "/site/media/board.webp",
+          "width": 278
+        }
+      ],
+      "mark": {
+        "activePulses": "0",
+        "drawP95": "1.80",
+        "draws": "127",
+        "frameMedian": "33.3",
+        "state": "running"
+      },
+      "metrics": {
+        "cls": "0",
+        "lcp": "68.0",
+        "motion": "full"
+      },
+      "overflow": 0,
+      "pageScroll": 0,
+      "removedCTA": true,
+      "rootScroll": [
+        0,
+        0
+      ],
+      "url": "http://127.0.0.1:4175/?qa=small#top",
+      "viewport": [
+        320,
+        568
+      ]
+    },
+    {
+      "name": "landscape-844",
+      "button": [
+        {
+          "background": "rgba(23, 19, 31, 0.46)",
+          "border": "rgba(197, 176, 228, 0.23)",
+          "radius": "5px"
+        },
+        {
+          "background": "rgba(23, 19, 31, 0.46)",
+          "border": "rgba(197, 176, 228, 0.23)",
+          "radius": "5px"
+        }
+      ],
+      "header": {
+        "bottom": 64,
+        "height": 64,
+        "left": 0,
+        "right": 844,
+        "top": 0,
+        "width": 844,
+        "x": 0,
+        "y": 0
+      },
+      "images": [
+        {
+          "height": 722,
+          "loaded": true,
+          "ratio": -0.0008352540652556417,
+          "src": "/site/media/board.webp",
+          "width": 771
+        }
+      ],
+      "mark": {
+        "activePulses": "0",
+        "drawP95": "2.20",
+        "draws": "620",
+        "frameMedian": "33.3",
+        "state": "running"
+      },
+      "metrics": {
+        "cls": "0",
+        "lcp": "80.0",
+        "motion": "full"
+      },
+      "overflow": 0,
+      "pageScroll": 0,
+      "removedCTA": true,
+      "rootScroll": [
+        0,
+        0
+      ],
+      "url": "http://127.0.0.1:4175/?qa=landscape#top",
+      "viewport": [
+        844,
+        390
+      ]
+    },
+    {
+      "name": "desktop-final-1440",
+      "button": [
+        {
+          "background": "rgba(23, 19, 31, 0.46)",
+          "border": "rgba(197, 176, 228, 0.23)",
+          "radius": "5px"
+        },
+        {
+          "background": "rgba(23, 19, 31, 0.46)",
+          "border": "rgba(197, 176, 228, 0.23)",
+          "radius": "5px"
+        }
+      ],
+      "header": {
+        "bottom": 80,
+        "height": 80,
+        "left": 0,
+        "right": 1440,
+        "top": 0,
+        "width": 1440,
+        "x": 0,
+        "y": 0
+      },
+      "images": [
+        {
+          "height": 940,
+          "loaded": true,
+          "ratio": 0.0004466460938767902,
+          "src": "/site/media/board.webp",
+          "width": 1005
+        }
+      ],
+      "mark": {
+        "activePulses": "0",
+        "drawP95": "2.80",
+        "draws": "130",
+        "frameMedian": "33.3",
+        "state": "running"
+      },
+      "metrics": {
+        "cls": "0",
+        "lcp": "132.0",
+        "motion": "full"
+      },
+      "overflow": 0,
+      "pageScroll": 0,
+      "removedCTA": true,
+      "rootScroll": [
+        0,
+        0
+      ],
+      "url": "http://127.0.0.1:4175/?qa=final#top",
+      "viewport": [
+        1440,
+        900
+      ]
+    },
+    {
+      "name": "desktop-final-1280",
+      "button": [
+        {
+          "background": "rgba(23, 19, 31, 0.46)",
+          "border": "rgba(197, 176, 228, 0.23)",
+          "radius": "5px"
+        },
+        {
+          "background": "rgba(23, 19, 31, 0.46)",
+          "border": "rgba(197, 176, 228, 0.23)",
+          "radius": "5px"
+        }
+      ],
+      "header": {
+        "bottom": 80,
+        "height": 80,
+        "left": 0,
+        "right": 1280,
+        "top": 0,
+        "width": 1280,
+        "x": 0,
+        "y": 0
+      },
+      "images": [
+        {
+          "height": 803,
+          "loaded": true,
+          "ratio": -0.0002091393914043227,
+          "src": "/site/media/board.webp",
+          "width": 858
+        }
+      ],
+      "mark": {
+        "activePulses": "0",
+        "drawP95": "2.20",
+        "draws": "313",
+        "frameMedian": "33.3",
+        "state": "running"
+      },
+      "metrics": {
+        "cls": "0",
+        "lcp": "92.0",
+        "motion": "full"
+      },
+      "overflow": 0,
+      "pageScroll": 0,
+      "removedCTA": true,
+      "rootScroll": [
+        0,
+        0
+      ],
+      "url": "http://127.0.0.1:4175/?qa=final-1280#top",
+      "viewport": [
+        1280,
+        720
+      ]
+    },
+    {
+      "name": "final-offscreen-initial",
+      "mark": {
+        "activePulses": "0",
+        "draws": "2",
+        "state": "paused"
+      },
+      "markTop": -4574,
+      "rootScroll": [
+        0,
+        0
+      ],
+      "viewport": [
+        1280,
+        720
+      ]
+    }
+  ],
+  "downloadChecks": [
+    {
+      "downloads": [
+        "https://github.com/emp0ry/MiruShin/releases/download/v2.9.22/MiruShin-macos-v2.9.22.dmg"
+      ],
+      "name": "platform",
+      "selected": "macOS",
+      "visible": [
+        "download-macos"
+      ]
+    },
+    {
+      "downloads": [
+        "https://github.com/emp0ry/MiruShin/releases/download/v2.9.22/MiruShin-linux-v2.9.22.AppImage",
+        "https://github.com/emp0ry/MiruShin/releases/download/v2.9.22/MiruShin-linux-v2.9.22.deb",
+        "https://github.com/emp0ry/MiruShin/releases/download/v2.9.22/MiruShin-linux-v2.9.22.tar.gz"
+      ],
+      "name": "platform",
+      "selected": "Linux",
+      "visible": [
+        "download-linux"
+      ]
+    },
+    {
+      "downloads": [
+        "https://github.com/emp0ry/MiruShin/releases/download/v2.9.22/MiruShin-android-v2.9.22.apk"
+      ],
+      "name": "platform",
+      "selected": "Android",
+      "visible": [
+        "download-android"
+      ]
+    },
+    {
+      "downloads": [
+        "https://github.com/emp0ry/MiruShin/releases/download/v2.9.22/MiruShin-ios-v2.9.22.ipa"
+      ],
+      "name": "platform",
+      "selected": "iOS",
+      "visible": [
+        "download-ios"
+      ]
+    },
+    {
+      "downloads": [
+        "https://github.com/emp0ry/MiruShin/releases/download/v2.9.22/MiruShin-windows-v2.9.22-setup.exe",
+        "https://github.com/emp0ry/MiruShin/releases/download/v2.9.22/MiruShin-windows-v2.9.22-setup.msi",
+        "https://github.com/emp0ry/MiruShin/releases/download/v2.9.22/MiruShin-windows-v2.9.22-portable.zip"
+      ],
+      "name": "platform",
+      "selected": "Windows",
+      "visible": [
+        "download-windows"
+      ]
+    }
+  ]
+}

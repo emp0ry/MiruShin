@@ -2,17 +2,25 @@
   "name": "MiruShin",
   "short_name": "MiruShin",
   "id": "/",
-  "description": "A cinematic Flutter media player for discovery, watching, Watch with Friends peer sync, Android TV, AniList, MyAnimeList, and Shikimori tracking, and Sora-compatible module workflows.",
+  "description": "Discover anime, films, and shows. Watch with friends and keep a local-first library across desktop, mobile, and Android TV.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "display_override": ["window-controls-overlay", "standalone", "browser"],
+  "display_override": [
+    "window-controls-overlay",
+    "standalone",
+    "browser"
+  ],
   "orientation": "any",
   "lang": "en-US",
   "dir": "ltr",
-  "background_color": "#070711",
-  "theme_color": "#120b24",
-  "categories": ["entertainment", "multimedia", "utilities"],
+  "background_color": "#09090d",
+  "theme_color": "#09090d",
+  "categories": [
+    "entertainment",
+    "multimedia",
+    "utilities"
+  ],
   "icons": [
     {
       "src": "assets/android-chrome-192x192.png",
@@ -41,30 +49,30 @@
   ],
   "screenshots": [
     {
-      "src": "assets/imgs/board.png",
-      "sizes": "1888x1768",
-      "type": "image/png",
+      "src": "site/media/board.webp",
+      "sizes": "1400x1310",
+      "type": "image/webp",
       "form_factor": "wide",
       "label": "MiruShin discovery board"
     },
     {
-      "src": "assets/imgs/player.png",
-      "sizes": "1888x1768",
-      "type": "image/png",
+      "src": "site/media/player.webp",
+      "sizes": "1400x1310",
+      "type": "image/webp",
       "form_factor": "wide",
       "label": "MiruShin desktop player"
     },
     {
-      "src": "assets/imgs/mobile_tmdb.png",
-      "sizes": "1320x2868",
-      "type": "image/png",
+      "src": "site/media/mobile-board.webp",
+      "sizes": "660x1434",
+      "type": "image/webp",
       "form_factor": "narrow",
       "label": "MiruShin mobile discovery"
     },
     {
-      "src": "assets/imgs/mobile_player.png",
-      "sizes": "1320x2868",
-      "type": "image/png",
+      "src": "site/media/mobile-player.webp",
+      "sizes": "660x1434",
+      "type": "image/webp",
       "form_factor": "narrow",
       "label": "MiruShin mobile player"
     }
