@@ -208,3 +208,10 @@ jobs:
             echo "Published \`$RELEASE_TAG\` with $ASSET_COUNT artifacts."
             echo "Triggered the AltStore source refresh."
           } >> "$GITHUB_STEP_SUMMARY"
+
+  notify-website:
+    needs: publish-release
+    permissions: {}
+    uses: ./.github/workflows/notify-website.yml
+    secrets:
+      EMP0RY_WEB_DEPLOY_HOOK: ${{ secrets.EMP0RY_WEB_DEPLOY_HOOK }}

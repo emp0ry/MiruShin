@@ -4,9 +4,10 @@ on:
   release:
     types: [published, edited, deleted, unpublished]
   workflow_dispatch:
-  workflow_run:
-    workflows: ["Release No Web"]
-    types: [completed]
+  workflow_call:
+    secrets:
+      EMP0RY_WEB_DEPLOY_HOOK:
+        required: true
 
 permissions: {}
 
@@ -16,11 +17,6 @@ concurrency:
 
 jobs:
   notify:
-    if: >-
-      github.event_name != 'workflow_run' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event != 'pull_request' &&
-       github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     steps:
       - name: Trigger the central static build
