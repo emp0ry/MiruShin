@@ -25,3 +25,11 @@ dialog{position:fixed;inset:0;margin:auto;color:var(--text);border:1px solid #de
 .reduce-motion .page-scroll{scroll-behavior:auto}.reduce-motion *,.reduce-motion *::before,.reduce-motion *::after{animation-duration:.01ms!important;transition-duration:.01ms!important;animation-iteration-count:1!important}.reduce-motion .sync-points{display:none}
 .corner-a{border-top-color:#b7a0e540;border-left-color:#b7a0e540}.corner-b{border-bottom-color:#b7a0e540;border-right-color:#b7a0e540}
 @media print{html,body{height:auto;overflow:visible;background:white;color:black}.page-scroll{position:static;overflow:visible;clip-path:none}.site-header,.menu-toggle,.mark-control,dialog,.skip-link{display:none!important}.document-main{padding-top:0}.document-toc{display:none}.document-layout{display:block}.document-copy,.document-copy h2,.document-heading>p:last-child{color:black}.wrap{width:100%}.site-footer{display:none}}
+
+/* Public contact channels, shared across the EMP0RY ecosystem. */
+.contact-links{display:flex;gap:24px;border-top:1px solid var(--line);margin-top:24px;padding-top:22px}
+.contact-links a{display:flex;align-items:baseline;justify-content:center;gap:16px;min-width:0;min-height:44px;padding-block:5px}
+.contact-role{font-size:11px;line-height:1.5;color:var(--muted)}
+.contact-address{font-size:14px;line-height:1.5;color:var(--text);transition:color 160ms;overflow-wrap:anywhere}
+.contact-links a:hover .contact-address{color:var(--accent)}
+@media(max-width:700px){.contact-links{flex-wrap:wrap;gap:12px 20px;padding-top:18px;margin-top:20px}.contact-role{font-size:10px}.contact-address{font-size:12px}}

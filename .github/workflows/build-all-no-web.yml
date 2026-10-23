@@ -361,7 +361,7 @@ jobs:
           Section: video
           Priority: optional
           Architecture: amd64
-          Maintainer: emp0ry <avagyanerik13@gmail.com>
+          Maintainer: emp0ry <dev@emp0ry.com>
           Installed-Size: ${INSTALLED_KB}
           Depends: libgtk-3-0, libglib2.0-0, libsecret-1-0, libpulse0, libgl1, libegl1
           Description: ${APP_NAME} anime player
