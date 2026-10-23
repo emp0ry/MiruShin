@@ -34,8 +34,8 @@ MiruShin lets you browse trending titles, build your library, keep your progress
 
 <div align="center">
 
-<img src="docs/assets/imgs/board.png" alt="MiruShin discovery board" width="49%">
-<img src="docs/assets/imgs/player.png" alt="MiruShin player" width="49%">
+<img src="https://mirushin.emp0ry.com/assets/imgs/board.png" alt="MiruShin discovery board" width="49%">
+<img src="https://mirushin.emp0ry.com/assets/imgs/player.png" alt="MiruShin player" width="49%">
 
 </div>
 
@@ -43,9 +43,9 @@ MiruShin lets you browse trending titles, build your library, keep your progress
 
 <div align="center">
 
-<img src="docs/assets/imgs/mobile_tmdb.png" alt="Mobile discovery" width="30%">
-<img src="docs/assets/imgs/mobile_detail.png" alt="Mobile title detail" width="30%">
-<img src="docs/assets/imgs/mobile_player.png" alt="Mobile player" width="30%">
+<img src="https://mirushin.emp0ry.com/assets/imgs/mobile_tmdb.png" alt="Mobile discovery" width="30%">
+<img src="https://mirushin.emp0ry.com/assets/imgs/mobile_detail.png" alt="Mobile title detail" width="30%">
+<img src="https://mirushin.emp0ry.com/assets/imgs/mobile_player.png" alt="Mobile player" width="30%">
 
 </div>
 
@@ -279,3 +279,7 @@ Flutter · Riverpod · GoRouter · Dio · media_kit (mpv) & FVP · WebView Flutt
 - [Shikimori](https://shikimori.io/) for tracker sync and Russian-title enrichment flows
 - [AniSkip](https://aniskip.com/) for OP/ED marker support
 - [cranci1](https://github.com/cranci1), author of Sora and the Sora module ecosystem
+
+## Website
+
+The [product website](https://mirushin.emp0ry.com/) is also available at [emp0ry.com/MiruShin/](https://emp0ry.com/MiruShin/). Website sources and publication are maintained in the private emp0ry.com project. Completed application releases notify its central static build; this repository contains the application and its technical documentation.

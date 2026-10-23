@@ -243,9 +243,3 @@ GoogleService-Info.plist
 # Other
 /docs/all
 .claude
-
-# MiruShin website build output
-/website/dist/
-# GitHub Pages serves these generated browser bundles directly.
-!/docs/site/build/
-!/docs/site/build/**

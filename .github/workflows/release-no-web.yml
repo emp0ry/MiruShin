@@ -196,14 +196,6 @@ jobs:
           gh release upload "$RELEASE_TAG" "${assets[@]}"
           gh release edit "$RELEASE_TAG" --draft=false --latest
 
-      - name: Refresh AltStore-compatible source
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          SOURCE_REF: ${{ github.ref_name }}
-        run: gh workflow run altstore-source.yml --ref "$SOURCE_REF"
-
       - name: Write release summary
         shell: bash
         env:
