@@ -236,6 +236,9 @@ class PreferenceDriveSyncService {
     for (final PreferenceReplicaSegment segment in segments) {
       for (final MapEntry<String, PreferenceSyncValue> entry
           in segment.values.entries) {
+        if (entry.key == SettingsPreferences.googleDriveLibrarySyncEnabledKey) {
+          continue;
+        }
         final PreferenceSyncValue? existing = values[entry.key];
         final PreferenceSyncVersion? deleted = tombstones[entry.key];
         if ((existing == null ||
@@ -247,6 +250,9 @@ class PreferenceDriveSyncService {
       }
       for (final MapEntry<String, PreferenceSyncVersion> entry
           in segment.tombstones.entries) {
+        if (entry.key == SettingsPreferences.googleDriveLibrarySyncEnabledKey) {
+          continue;
+        }
         final PreferenceSyncValue? existing = values[entry.key];
         final PreferenceSyncVersion? deleted = tombstones[entry.key];
         if ((existing == null ||

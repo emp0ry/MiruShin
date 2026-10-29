@@ -59,6 +59,7 @@ import '../application/mirushin_backup_service.dart';
 import '../application/settings_state.dart';
 import '../application/update_checker_provider.dart';
 import 'mirushin_backup_file.dart';
+import 'widgets/google_drive_library_sync_row.dart';
 import 'widgets/library_export_section.dart';
 import 'widgets/library_sync_source_row.dart';
 import 'widgets/settings_widgets.dart';
@@ -544,6 +545,11 @@ class _GoogleDriveSyncSectionState
     final bool connected = state?.connected == true;
     final bool configured = state?.configured == true;
     final bool syncing = state?.syncing == true;
+    final bool libraryEnabled = ref.watch(
+      settingsProvider.select(
+        (settings) => settings.googleDriveLibrarySyncEnabled,
+      ),
+    );
     String status = !configured
         ? context.t(
             'Google OAuth is not configured in this build. Local Library and tracker sync continue normally.',
@@ -583,7 +589,7 @@ class _GoogleDriveSyncSectionState
             processedItems: state?.processedItems ?? 0,
             totalItems: state?.totalItems ?? 0,
             driveUsageBytes: state?.driveUsageBytes,
-            cloudEntryCount: state?.cloudEntryCount,
+            cloudEntryCount: libraryEnabled ? state?.cloudEntryCount : null,
             busy: _busy,
             onSync: _syncNow,
             onDisconnect: _disconnect,
@@ -608,9 +614,10 @@ class _GoogleDriveSyncSectionState
         SettingsRow(
           title: context.t('Sync across devices'),
           subtitle: context.t(
-            'Keep your library, watch progress, accounts, API connections, addons, relay preferences, and Library settings up to date across your devices.',
+            'Keep watch positions, accounts, API connections, addons, relay preferences, and settings up to date across your devices. Full library sync is optional.',
           ),
         ),
+        const GoogleDriveLibrarySyncRow(),
         if (state?.lastError != null)
           Text(
             _googleDriveErrorText(context, state!.lastError!),
@@ -791,13 +798,20 @@ class _GoogleDriveAccountCard extends StatelessWidget {
               if (driveUsageBytes != null) ...<Widget>[
                 const SizedBox(height: AppSpacing.xs),
                 Text(
-                  context.tf(
-                    'MiruShin data in Drive: {size} · {count} library entries',
-                    <String, Object?>{
-                      'size': _formatStorageSize(driveUsageBytes!),
-                      'count': cloudEntryCount ?? 0,
-                    },
-                  ),
+                  cloudEntryCount == null
+                      ? context.tf(
+                          'MiruShin data in Drive: {size}',
+                          <String, Object?>{
+                            'size': _formatStorageSize(driveUsageBytes!),
+                          },
+                        )
+                      : context.tf(
+                          'MiruShin data in Drive: {size} · {count} library entries',
+                          <String, Object?>{
+                            'size': _formatStorageSize(driveUsageBytes!),
+                            'count': cloudEntryCount ?? 0,
+                          },
+                        ),
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ],
@@ -911,6 +925,7 @@ String _googleDriveErrorText(BuildContext context, String error) {
     'account': 'Accounts',
     'preferences': 'Settings',
     'addons': 'Addons',
+    'playback': 'Watch progress',
   };
   final String items = error
       .substring(prefix.length)
@@ -921,7 +936,7 @@ String _googleDriveErrorText(BuildContext context, String error) {
       .toSet()
       .join(', ');
   return context.tf(
-    'Library synced, but {items} could not be synced. MiruShin will retry.',
+    'Some data could not be synced: {items}. MiruShin will retry.',
     <String, Object?>{'items': items},
   );
 }

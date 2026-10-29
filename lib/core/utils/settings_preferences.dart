@@ -9,6 +9,16 @@ class SettingsPreferences {
 
   final SharedPreferences _preferences;
 
+  // Device-local: deliberately excluded from Drive's preference allowlist.
+  static const String googleDriveLibrarySyncEnabledKey =
+      'settings.googleDriveLibrarySyncEnabled';
+
+  bool readGoogleDriveLibrarySyncEnabled() =>
+      _preferences.getBool(googleDriveLibrarySyncEnabledKey) ?? false;
+
+  Future<void> saveGoogleDriveLibrarySyncEnabled(bool value) =>
+      _preferences.setBool(googleDriveLibrarySyncEnabledKey, value);
+
   static const String themeModeKey = 'settings.themeMode';
   static const String appLanguageKey = 'settings.appLanguage';
   static const String metadataLanguageKey = 'settings.metadataLanguage';

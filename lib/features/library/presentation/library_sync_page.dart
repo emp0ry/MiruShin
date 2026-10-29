@@ -28,10 +28,14 @@ class LibrarySyncPage extends ConsumerStatefulWidget {
 class _LibrarySyncPageState extends ConsumerState<LibrarySyncPage> {
   LibraryOriginKind? _origin;
   bool _busy = false;
+  bool _librarySyncEnabled = false;
   final Set<String> _resolvingConflicts = <String>{};
 
   @override
   Widget build(BuildContext context) {
+    _librarySyncEnabled = ref.watch(
+      settingsProvider.select((s) => s.googleDriveLibrarySyncEnabled),
+    );
     final AsyncValue<List<ProviderAccountPreview>> previews = ref.watch(
       pendingProviderAccountPreviewsProvider,
     );
@@ -252,6 +256,9 @@ class _LibrarySyncPageState extends ConsumerState<LibrarySyncPage> {
           LibraryMutationIntent.remoteImport,
         }.contains(event.intent);
     final List<_LibraryChangeLine> changes = _changeLines(event);
+    final deliveryDetails = event.deliveryDetails.entries
+        .where((entry) => entry.key != 'drive' || _librarySyncEnabled)
+        .toList();
     return Padding(
       padding: const EdgeInsets.only(bottom: AppSpacing.sm),
       child: GlassCard(
@@ -304,16 +311,16 @@ class _LibrarySyncPageState extends ConsumerState<LibrarySyncPage> {
               Divider(color: Theme.of(context).colorScheme.outlineVariant),
               const SizedBox(height: AppSpacing.sm),
               _activityRoute(event),
-              if (event.deliveryDetails.isNotEmpty)
+              if (deliveryDetails.isNotEmpty)
                 ExpansionTile(
                   tilePadding: EdgeInsets.zero,
                   title: Text(context.t('Sync details')),
                   children: [
-                    for (final entry in event.deliveryDetails.entries)
+                    for (final entry in deliveryDetails)
                       ListTile(
                         contentPadding: EdgeInsets.zero,
                         title: Text(
-                          '${_targetLabel(entry.key)} · ${context.t(_deliveryStateLabel(event.deliveryStates[entry.key] ?? 'pending'))}',
+                          '${context.t(_targetLabel(entry.key))} · ${context.t(_deliveryStateLabel(event.deliveryStates[entry.key] ?? 'pending'))}',
                         ),
                         subtitle: Text(
                           [
@@ -378,6 +385,7 @@ class _LibrarySyncPageState extends ConsumerState<LibrarySyncPage> {
       ...event.targets,
       ...event.deliveryStates.keys,
     }..remove(sourceTarget);
+    if (!_librarySyncEnabled) targets.remove('drive');
     final List<String> orderedTargets = targets.toList()
       ..sort(
         (String first, String second) =>
@@ -537,7 +545,7 @@ class _LibrarySyncPageState extends ConsumerState<LibrarySyncPage> {
           : tooltip,
       child: _routePill(
         icon: icon,
-        label: _targetLabel(target),
+        label: context.t(_targetLabel(target)),
         status: context.t(_deliveryStateLabel(normalized)),
         color: color,
       ),
@@ -1362,6 +1370,7 @@ String _formatDate(DateTime value) {
 
 String _targetLabel(String target) => switch (target.toLowerCase()) {
   'drive' => 'Google Drive',
+  'drive.playback' => 'Google Drive · Watch progress',
   'anilist' => 'AniList',
   'mal' || 'myanimelist' => 'MyAnimeList',
   'shiki' || 'shikimori' => 'Shikimori',
@@ -1369,7 +1378,7 @@ String _targetLabel(String target) => switch (target.toLowerCase()) {
 };
 
 int _targetOrder(String target) => switch (target.toLowerCase()) {
-  'drive' => 0,
+  'drive' || 'drive.playback' => 0,
   'anilist' => 1,
   'mal' || 'myanimelist' => 2,
   'shiki' || 'shikimori' => 3,

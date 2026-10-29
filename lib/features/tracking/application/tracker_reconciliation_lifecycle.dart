@@ -37,11 +37,12 @@ final trackerReconciliationLifecycleProvider = Provider<Future<void> Function()>
       final Future<void> operation = () async {
         await ref.read(settingsProvider.notifier).ready;
         if (disposed) return;
-        final GoogleDriveSyncState drive = await ref.read(
-          googleDriveSyncControllerProvider.future,
-        );
+        final GoogleDriveSyncState? drive =
+            ref.read(settingsProvider).googleDriveLibrarySyncEnabled
+            ? await ref.read(googleDriveSyncControllerProvider.future)
+            : null;
         if (disposed) return;
-        if (drive.connected) {
+        if (drive?.connected == true) {
           // Restore the current account's Drive operations before a provider
           // snapshot can be interpreted as a new local mutation on this device.
           final bool driveReady = await ref
@@ -121,6 +122,7 @@ final trackerReconciliationLifecycleProvider = Provider<Future<void> Function()>
           settings.shikimoriAccessToken,
           settings.hasShikimoriSession,
           settings.primaryTrackerSource,
+          settings.googleDriveLibrarySyncEnabled,
         ),
       ),
       (previous, next) {

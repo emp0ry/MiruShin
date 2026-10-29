@@ -11,6 +11,7 @@ import '../../addons/domain/addon_sync_models.dart';
 import '../../settings/domain/account_sync_models.dart';
 import '../../settings/domain/preference_sync_models.dart';
 import '../domain/cloud_replica_models.dart';
+import '../domain/playback_sync_models.dart';
 
 // Serialize the large checkpoint away from Flutter's UI isolate on native
 // platforms. `compute` runs inline on Web, where the single-pass checksum
@@ -64,7 +65,8 @@ class GoogleDriveCloudReplica
         CloudReplica,
         AddonCloudReplica,
         AccountCloudReplica,
-        PreferenceCloudReplica {
+        PreferenceCloudReplica,
+        PlaybackCloudReplica {
   GoogleDriveCloudReplica({
     required String accessToken,
     this.replicaNamespace = 'legacy',
@@ -137,6 +139,58 @@ class GoogleDriveCloudReplica
         replicaNamespace != 'legacy' &&
         name.startsWith('mirushin.segment.') &&
         name.endsWith('.json');
+  }
+
+  @override
+  Future<PlaybackCloudRead> pullPlaybackSnapshots({
+    required Map<String, String> excluding,
+  }) async {
+    final prefix = 'mirushin.$replicaNamespace.playback.';
+    // Filter on the server: a lightweight poll does not enumerate years of
+    // library segments or read their manifests/change feeds.
+    final files = await _listFiles(nameContains: prefix);
+    final result = <PlaybackReplicaSnapshot>[];
+    for (final file in files) {
+      if (!file.name.startsWith(prefix) || !file.name.endsWith('.v1.json')) {
+        continue;
+      }
+      if (file.checksum != null && excluding[file.name] == file.checksum) {
+        continue;
+      }
+      final body = await _download(file.id);
+      if (file.checksum != null &&
+          md5.convert(utf8.encode(body)).toString() != file.checksum) {
+        throw StateError('Google Drive playback checksum mismatch.');
+      }
+      final snapshot = PlaybackReplicaSnapshot.decode(body);
+      if (snapshot.fileName != file.name ||
+          snapshot.replicaNamespace != replicaNamespace) {
+        throw StateError('Google Drive playback identity mismatch.');
+      }
+      result.add(snapshot);
+    }
+    result.sort((a, b) => a.deviceId.compareTo(b.deviceId));
+    return PlaybackCloudRead(
+      snapshots: result,
+      fileNames: {
+        for (final file in files)
+          if (file.name.startsWith(prefix) && file.name.endsWith('.v1.json'))
+            file.name,
+      },
+    );
+  }
+
+  @override
+  Future<void> pushPlaybackSnapshot(PlaybackReplicaSnapshot snapshot) async {
+    if (snapshot.replicaNamespace != replicaNamespace) {
+      throw StateError('Google Drive playback workspace mismatch.');
+    }
+    final existing = await _findByName(snapshot.fileName);
+    if (existing == null) {
+      await _createJsonFile(snapshot.fileName, snapshot.encode());
+    } else {
+      await _updateJsonFile(existing, snapshot.encode());
+    }
   }
 
   Future<DriveLibrarySnapshot?> pullLibrarySnapshot({
@@ -358,13 +412,14 @@ class GoogleDriveCloudReplica
   Future<List<AccountReplicaSegment>> pullAccountSegments({
     required Set<String> excluding,
   }) async {
-    final List<CloudReplicaFile> files = (await _listFiles())
-        .where(
-          (CloudReplicaFile file) =>
-              file.name.startsWith('mirushin.accounts.segment.') &&
-              file.name.endsWith('.v1.json'),
-        )
-        .toList(growable: false);
+    final List<CloudReplicaFile> files =
+        (await _listFiles(nameContains: 'mirushin.accounts.segment.'))
+            .where(
+              (CloudReplicaFile file) =>
+                  file.name.startsWith('mirushin.accounts.segment.') &&
+                  file.name.endsWith('.v1.json'),
+            )
+            .toList(growable: false);
     final List<AccountReplicaSegment> result = <AccountReplicaSegment>[];
     for (final CloudReplicaFile file in files) {
       if (excluding.contains(file.name)) continue;
@@ -402,13 +457,14 @@ class GoogleDriveCloudReplica
   Future<List<PreferenceReplicaSegment>> pullPreferenceSegments({
     required Set<String> excluding,
   }) async {
-    final List<CloudReplicaFile> files = (await _listFiles())
-        .where(
-          (CloudReplicaFile file) =>
-              file.name.startsWith('mirushin.preferences.segment.') &&
-              file.name.endsWith('.v1.json'),
-        )
-        .toList(growable: false);
+    final List<CloudReplicaFile> files =
+        (await _listFiles(nameContains: 'mirushin.preferences.segment.'))
+            .where(
+              (CloudReplicaFile file) =>
+                  file.name.startsWith('mirushin.preferences.segment.') &&
+                  file.name.endsWith('.v1.json'),
+            )
+            .toList(growable: false);
     final List<PreferenceReplicaSegment> result = <PreferenceReplicaSegment>[];
     for (final CloudReplicaFile file in files) {
       if (excluding.contains(file.name)) continue;
@@ -447,13 +503,14 @@ class GoogleDriveCloudReplica
   Future<List<AddonReplicaSegment>> pullAddonSegments({
     required Set<String> excluding,
   }) async {
-    final List<CloudReplicaFile> files = (await _listFiles())
-        .where(
-          (CloudReplicaFile file) =>
-              file.name.startsWith('mirushin.addons.segment.') &&
-              file.name.endsWith('.v1.json'),
-        )
-        .toList(growable: false);
+    final List<CloudReplicaFile> files =
+        (await _listFiles(nameContains: 'mirushin.addons.segment.'))
+            .where(
+              (CloudReplicaFile file) =>
+                  file.name.startsWith('mirushin.addons.segment.') &&
+                  file.name.endsWith('.v1.json'),
+            )
+            .toList(growable: false);
     final List<AddonReplicaSegment> result = <AddonReplicaSegment>[];
     for (final CloudReplicaFile file in files) {
       if (excluding.contains(file.name)) continue;
@@ -775,7 +832,7 @@ class GoogleDriveCloudReplica
     });
   }
 
-  Future<List<CloudReplicaFile>> _listFiles() async {
+  Future<List<CloudReplicaFile>> _listFiles({String? nameContains}) async {
     final List<CloudReplicaFile> result = <CloudReplicaFile>[];
     String? pageToken;
     do {
@@ -783,7 +840,9 @@ class GoogleDriveCloudReplica
         '${AppConstants.googleDriveApiBaseUrl}/files',
         queryParameters: <String, dynamic>{
           'spaces': 'appDataFolder',
-          'q': 'trashed = false',
+          'q': nameContains == null
+              ? 'trashed = false'
+              : "trashed = false and name contains '${nameContains.replaceAll("'", "\\'")}'",
           'fields': 'nextPageToken,files(id,name,md5Checksum,size)',
           'pageSize': 1000,
           'pageToken': ?pageToken,

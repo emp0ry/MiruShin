@@ -29,10 +29,12 @@ import '../data/google_drive_account_client.dart';
 import '../data/google_drive_cloud_replica.dart';
 import '../data/google_drive_native_auth.dart';
 import '../data/google_drive_oauth_service.dart';
+import '../data/playback_drive_sync_service.dart';
 import '../domain/cloud_replica_models.dart';
 import 'canonical_library_repository.dart';
 
-const String _googleDriveLastFullSyncAtKey = 'google.drive.lastFullSyncAt.v1';
+// Keep the existing preference key when persisting lightweight completions.
+const String _googleDriveLastSyncAtKey = 'google.drive.lastFullSyncAt.v1';
 
 class GoogleDriveSyncState {
   const GoogleDriveSyncState({
@@ -103,6 +105,7 @@ class GoogleDriveSyncState {
     int? driveFileCount,
     int? cloudEntryCount,
     int? localEntryCount,
+    bool clearLibraryCounts = false,
   }) => GoogleDriveSyncState(
     configured: configured ?? this.configured,
     connected: connected ?? this.connected,
@@ -123,8 +126,12 @@ class GoogleDriveSyncState {
     totalItems: clearProgress ? 0 : totalItems ?? this.totalItems,
     driveUsageBytes: driveUsageBytes ?? this.driveUsageBytes,
     driveFileCount: driveFileCount ?? this.driveFileCount,
-    cloudEntryCount: cloudEntryCount ?? this.cloudEntryCount,
-    localEntryCount: localEntryCount ?? this.localEntryCount,
+    cloudEntryCount: clearLibraryCounts
+        ? null
+        : cloudEntryCount ?? this.cloudEntryCount,
+    localEntryCount: clearLibraryCounts
+        ? null
+        : localEntryCount ?? this.localEntryCount,
   );
 }
 
@@ -132,6 +139,18 @@ final googleDriveSyncControllerProvider =
     AsyncNotifierProvider<GoogleDriveSyncController, GoogleDriveSyncState>(
       GoogleDriveSyncController.new,
     );
+
+/// Fresh clients share the same bounded timeouts. Injectable so lifecycle
+/// tests exercise the real controller without Google credentials or network.
+final googleDriveDioFactoryProvider = Provider<Dio Function()>((ref) {
+  return () => Dio(
+    BaseOptions(
+      connectTimeout: const Duration(seconds: 15),
+      sendTimeout: const Duration(seconds: 45),
+      receiveTimeout: const Duration(seconds: 45),
+    ),
+  );
+});
 
 final googleDriveSyncLifecycleProvider = Provider<VoidCallback>((Ref ref) {
   Timer? localPushDebounce;
@@ -452,6 +471,34 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
     _accountsRestored = false;
     _pulledLibraryWorkspaces.clear();
     _trackerOutboxResumedWorkspaces.clear();
+    ref.listen<bool>(
+      settingsProvider.select((s) => s.googleDriveLibrarySyncEnabled),
+      (previous, enabled) {
+        if (previous == null || previous == enabled) return;
+        _activeCancelToken?.cancel('Library sync mode changed.');
+        for (final token in _decorationRequests) {
+          token.cancel('Library sync mode changed.');
+        }
+        _localCheckpointRetry?.cancel();
+        _fullSyncRetry?.cancel();
+        _localRetryAttempt = 0;
+        _fullRetryAttempt = 0;
+        _pulledLibraryWorkspaces.clear();
+        _trackerOutboxResumedWorkspaces.clear();
+        final current = state.value;
+        if (current != null) {
+          _setState(current.copyWith(clearLibraryCounts: true));
+        }
+        // Wait for cancellation to unwind before starting the new mode.
+        final active = _activeSync;
+        unawaited(
+          (active ?? Future<void>.value()).then((_) async {
+            if (_disposed || _shuttingDown) return;
+            await syncNow(background: true);
+          }),
+        );
+      },
+    );
     ref.listen<bool>(playbackActivityProvider, (previous, active) {
       if (active) {
         _playbackResumeDebounce?.cancel();
@@ -532,14 +579,14 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
       unawaited(_refreshAccountProfile(accessToken, fallback: account));
     }
     final SharedPreferences preferences = await SharedPreferences.getInstance();
-    final DateTime? lastFullSyncAt = DateTime.tryParse(
-      preferences.getString(_googleDriveLastFullSyncAtKey) ?? '',
+    final DateTime? lastSyncAt = DateTime.tryParse(
+      preferences.getString(_googleDriveLastSyncAtKey) ?? '',
     );
     return GoogleDriveSyncState(
       configured: configured,
       connected: connected,
       account: account,
-      lastSyncAt: lastFullSyncAt,
+      lastSyncAt: lastSyncAt,
       deferredForPlayback: _deferredForPlayback,
     );
   }
@@ -549,7 +596,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
     _pulledLibraryWorkspaces.clear();
     _trackerOutboxResumedWorkspaces.clear();
     await (await SharedPreferences.getInstance()).remove(
-      _googleDriveLastFullSyncAtKey,
+      _googleDriveLastSyncAtKey,
     );
     await _storage.writeGoogleDriveAccessToken(tokens.accessToken);
     await _storage.writeGoogleDriveRefreshToken(tokens.refreshToken);
@@ -568,6 +615,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
   }
 
   Future<void> disconnect() async {
+    _activeCancelToken?.cancel('Google Drive disconnected.');
     _playbackResumeDebounce?.cancel();
     _deferredForPlayback = false;
     for (final token in _decorationRequests) {
@@ -591,7 +639,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
     }
     await _storage.clearGoogleDriveSession();
     await (await SharedPreferences.getInstance()).remove(
-      _googleDriveLastFullSyncAtKey,
+      _googleDriveLastSyncAtKey,
     );
     if (_disposed) return;
     _setState(
@@ -709,6 +757,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
   /// A provider import must not run against the pre-Drive state of this
   /// workspace. A failed first pull leaves the provider queue untouched.
   Future<bool> syncBeforeTrackerReconciliation() async {
+    if (!ref.read(settingsProvider).googleDriveLibrarySyncEnabled) return true;
     final bool driveWasConnected = state.value?.connected == true;
     final Future<void>? active = _activeSync;
     if (active != null && !_activeSyncIsFull) {
@@ -733,6 +782,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
   Future<bool> ensureWorkspaceReadyForTrackerDelivery(
     String replicaNamespace,
   ) async {
+    if (!ref.read(settingsProvider).googleDriveLibrarySyncEnabled) return true;
     final GoogleDriveSyncState? current = state.value;
     if (current == null) return false;
     if (!current.configured) return true;
@@ -748,6 +798,9 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
     }
     for (var attempt = 0; attempt < 2; attempt += 1) {
       await syncNow(background: true, remoteChangesOnly: _accountsRestored);
+      if (!ref.read(settingsProvider).googleDriveLibrarySyncEnabled) {
+        return true;
+      }
       if (_accountsRestored &&
           _pulledLibraryWorkspaces.contains(replicaNamespace)) {
         return true;
@@ -818,8 +871,11 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
           clearError: true,
         ),
       );
-      final int deleted = await GoogleDriveCloudReplica(accessToken: token)
-          .deleteAllMiruShinData(
+      final int deleted =
+          await GoogleDriveCloudReplica(
+            accessToken: token,
+            dio: ref.read(googleDriveDioFactoryProvider)(),
+          ).deleteAllMiruShinData(
             onProgress: (int completed, int total) {
               _setItemProgress(
                 stage: 'Deleting MiruShin data from Drive…',
@@ -859,6 +915,11 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
     required bool remoteChangesOnly,
     required CancelToken cancelToken,
   }) async {
+    await ref.read(settingsProvider.notifier).ready;
+    if (_disposed || _shuttingDown || cancelToken.isCancelled) return;
+    final libraryEnabled = ref
+        .read(settingsProvider)
+        .googleDriveLibrarySyncEnabled;
     final GoogleDriveSyncState current =
         state.value ??
         GoogleDriveSyncState(
@@ -868,9 +929,10 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
     if (!current.configured || !current.connected) return;
     if (localChangesOnly && !remoteChangesOnly) {
       try {
-        final int pending = await ref
-            .read(canonicalLibraryRepositoryProvider)
-            .pendingDriveDeliveryCount();
+        final repository = ref.read(canonicalLibraryRepositoryProvider);
+        final int pending =
+            (await repository.pendingPlaybackDeliveryIds()).length +
+            (libraryEnabled ? await repository.pendingDriveDeliveryCount() : 0);
         if (pending <= 0) {
           _localRetryAttempt = 0;
           return;
@@ -927,11 +989,18 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
         );
         return;
       }
-      if (localChangesOnly || remoteChangesOnly) {
+      if (localChangesOnly || (remoteChangesOnly && libraryEnabled)) {
+        await _syncPlayback(token, cancelToken, replicaWarnings);
+        _requirePlaybackIdle(cancelToken);
+        if (!libraryEnabled) {
+          await _finishLightweightSync(current, replicaWarnings);
+          return;
+        }
         final CanonicalLibraryRepository repository = ref.read(
           canonicalLibraryRepositoryProvider,
         );
         final GoogleDriveCloudReplica libraryCloud = GoogleDriveCloudReplica(
+          dio: ref.read(googleDriveDioFactoryProvider)(),
           accessToken: token,
           replicaNamespace: repository.replicaNamespace,
           includeLegacyLibrary: repository.importsLegacyData,
@@ -970,6 +1039,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
             !await repository.hasAppliedDriveSnapshot(cloudSnapshot.checksum)) {
           await repository.applyDriveSnapshot(
             cloudSnapshot,
+            requireActive: () => _requirePlaybackIdle(cancelToken),
             trackerTargets: targets,
           );
           restoredSnapshot = true;
@@ -981,17 +1051,18 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
           _requirePlaybackIdle(cancelToken);
           applied += await repository.applyDriveSegment(
             segment,
+            requireActive: () => _requirePlaybackIdle(cancelToken),
             trackerTargets: targets,
           );
         }
         _requirePlaybackIdle(cancelToken);
         await repository.saveDriveChangePageToken(changes.nextPageToken);
         if (changes.manifestChanged) {
-          await repository.applyRemoteDeliveryLedger(
-            await libraryCloud.readDeliveryLedger(
-              manifestFileId: changes.manifestFileId,
-            ),
+          final ledger = await libraryCloud.readDeliveryLedger(
+            manifestFileId: changes.manifestFileId,
           );
+          _requirePlaybackIdle(cancelToken);
+          await repository.applyRemoteDeliveryLedger(ledger);
         }
         _markLibraryPulled(repository.replicaNamespace);
         if (remoteChangesOnly) {
@@ -1008,7 +1079,10 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
               connected: true,
               lastSyncAt: DateTime.now().toUtc(),
               appliedSegments: applied,
-              clearError: true,
+              lastError: replicaWarnings.isEmpty
+                  ? null
+                  : _replicaWarningCode(replicaWarnings),
+              clearError: replicaWarnings.isEmpty,
               clearProgress: true,
             ),
           );
@@ -1035,7 +1109,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
         final int localEntryCount = await repository.activeLibraryEntryCount();
         final DateTime completedAt = DateTime.now().toUtc();
         await (await SharedPreferences.getInstance()).setString(
-          _googleDriveLastFullSyncAtKey,
+          _googleDriveLastSyncAtKey,
           completedAt.toIso8601String(),
         );
         if (_disposed || _shuttingDown) return;
@@ -1056,7 +1130,10 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
                 ? restoredEntryCount
                 : localEntryCount,
             localEntryCount: localEntryCount,
-            clearError: true,
+            lastError: replicaWarnings.isEmpty
+                ? null
+                : _replicaWarningCode(replicaWarnings),
+            clearError: replicaWarnings.isEmpty,
             clearProgress: true,
           ),
         );
@@ -1071,6 +1148,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
         ),
       );
       final GoogleDriveCloudReplica cloud = GoogleDriveCloudReplica(
+        dio: ref.read(googleDriveDioFactoryProvider)(),
         accessToken: token,
         cancelToken: cancelToken,
       );
@@ -1136,11 +1214,42 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
         debugPrint('Google Drive preference sync failed: $error');
         replicaWarnings.add('preferences');
       }
+      await _syncPlayback(token, cancelToken, replicaWarnings);
+      _setProgress(stage: 'Syncing addons…', progress: 0.8);
+      try {
+        final AddonDriveSyncResult addonResult = await AddonDriveSyncService(
+          preferences: await SharedPreferences.getInstance(),
+          store: ref.read(soraAddonStoreProvider),
+        ).sync(cloud: cloud, deviceId: leaseDeviceId);
+        _requirePlaybackIdle(cancelToken);
+        if (addonResult.localStateChanged) {
+          _applyingRemoteChanges = true;
+          try {
+            ref.invalidate(soraJsRuntimeProvider);
+            ref.invalidate(addonCatalogProvider);
+            await ref.read(soraAddonsProvider.notifier).load();
+            await ref.read(addonSourcesProvider.notifier).load();
+          } finally {
+            _applyingRemoteChanges = false;
+          }
+        }
+      } on Object catch (error) {
+        if (_isCancelled(error)) rethrow;
+        debugPrint('Google Drive addon sync failed: $error');
+        replicaWarnings.add('addons');
+      }
+      _requirePlaybackIdle(cancelToken);
+      if (!libraryEnabled) {
+        await _finishLightweightSync(current, replicaWarnings);
+        unawaited(_refreshDriveUsage(cloud, cancelToken));
+        return;
+      }
       final CanonicalLibraryRepository repository = ref.read(
         canonicalLibraryRepositoryProvider,
       );
       leaseDeviceId = await repository.deviceId();
       final GoogleDriveCloudReplica libraryCloud = GoogleDriveCloudReplica(
+        dio: ref.read(googleDriveDioFactoryProvider)(),
         accessToken: token,
         replicaNamespace: repository.replicaNamespace,
         includeLegacyLibrary: repository.importsLegacyData,
@@ -1178,6 +1287,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
           !await repository.hasAppliedDriveSnapshot(cloudSnapshot.checksum)) {
         await repository.applyDriveSnapshot(
           cloudSnapshot,
+          requireActive: () => _requirePlaybackIdle(cancelToken),
           trackerTargets: targets,
           onProgress: (int completed, int total) => _setItemProgress(
             stage: 'Restoring Local Library…',
@@ -1199,6 +1309,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
         _requirePlaybackIdle(cancelToken);
         applied += await repository.applyDriveSegment(
           segment,
+          requireActive: () => _requirePlaybackIdle(cancelToken),
           trackerTargets: targets,
         );
       }
@@ -1211,11 +1322,11 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
         ref.invalidate(trackerMangaListProvider);
       }
       if (changes.manifestChanged) {
-        await repository.applyRemoteDeliveryLedger(
-          await libraryCloud.readDeliveryLedger(
-            manifestFileId: changes.manifestFileId,
-          ),
+        final ledger = await libraryCloud.readDeliveryLedger(
+          manifestFileId: changes.manifestFileId,
         );
+        _requirePlaybackIdle(cancelToken);
+        await repository.applyRemoteDeliveryLedger(ledger);
       }
       _markLibraryPulled(repository.replicaNamespace);
       _setProgress(stage: 'Uploading local changes…', progress: 0.76);
@@ -1227,32 +1338,6 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
       );
       if (_disposed || _shuttingDown) return;
       _requirePlaybackIdle(cancelToken);
-      // The library is the user's critical path. Addons are an independent
-      // replica: a slow/failed addon request must not delay receiving or
-      // publishing the latest library changes on another device.
-      _setProgress(stage: 'Syncing addons…', progress: 0.8);
-      try {
-        final AddonDriveSyncResult addonResult = await AddonDriveSyncService(
-          preferences: await SharedPreferences.getInstance(),
-          store: ref.read(soraAddonStoreProvider),
-        ).sync(cloud: cloud, deviceId: leaseDeviceId);
-        _requirePlaybackIdle(cancelToken);
-        if (addonResult.localStateChanged) {
-          _applyingRemoteChanges = true;
-          try {
-            ref.invalidate(soraJsRuntimeProvider);
-            ref.invalidate(addonCatalogProvider);
-            await ref.read(soraAddonsProvider.notifier).load();
-            await ref.read(addonSourcesProvider.notifier).load();
-          } finally {
-            _applyingRemoteChanges = false;
-          }
-        }
-      } on Object catch (error) {
-        if (_isCancelled(error)) rethrow;
-        debugPrint('Google Drive addon sync failed: $error');
-        replicaWarnings.add('addons');
-      }
       final int pushedSegmentCount = await repository.pushedDriveSegmentCount();
       final bool needsCheckpoint =
           pushedSegmentCount >
@@ -1289,12 +1374,13 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
             end: 0.94,
           ),
         );
+        _requirePlaybackIdle(cancelToken);
         await repository.markDriveSnapshotPublished(pushedSegmentCount);
       }
       _setProgress(stage: 'Finishing sync…', progress: 0.96);
       final DateTime completedAt = DateTime.now().toUtc();
       await (await SharedPreferences.getInstance()).setString(
-        _googleDriveLastFullSyncAtKey,
+        _googleDriveLastSyncAtKey,
         completedAt.toIso8601String(),
       );
       if (_disposed || _shuttingDown) return;
@@ -1380,6 +1466,71 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
       }
       _activeProgressVisible = false;
     }
+  }
+
+  Future<void> _syncPlayback(
+    String token,
+    CancelToken cancelToken,
+    List<String> warnings,
+  ) async {
+    final repository = ref.read(canonicalLibraryRepositoryProvider);
+    void requireActive() {
+      _requirePlaybackIdle(cancelToken);
+      if (ref.read(canonicalLibraryRepositoryProvider).replicaNamespace !=
+          repository.replicaNamespace) {
+        cancelToken.cancel('Playback workspace changed.');
+        throw cancelToken.cancelError!;
+      }
+    }
+
+    try {
+      requireActive();
+      _setProgress(stage: 'Syncing watch positions…', progress: 0.18);
+      await PlaybackDriveSyncService(repository: repository).sync(
+        cloud: GoogleDriveCloudReplica(
+          dio: ref.read(googleDriveDioFactoryProvider)(),
+          accessToken: token,
+          replicaNamespace: repository.replicaNamespace,
+          cancelToken: cancelToken,
+        ),
+        requireActive: requireActive,
+      );
+    } on Object catch (error) {
+      if (_isCancelled(error)) rethrow;
+      debugPrint('Google Drive playback sync failed: $error');
+      warnings.add('playback');
+      _scheduleFullSyncRetry();
+    }
+  }
+
+  Future<void> _finishLightweightSync(
+    GoogleDriveSyncState previous,
+    List<String> warnings,
+  ) async {
+    final completedAt = DateTime.now().toUtc();
+    await (await SharedPreferences.getInstance()).setString(
+      _googleDriveLastSyncAtKey,
+      completedAt.toIso8601String(),
+    );
+    if (_disposed || _shuttingDown) return;
+    if (warnings.isEmpty) {
+      _localRetryAttempt = 0;
+      _fullRetryAttempt = 0;
+    } else {
+      _scheduleFullSyncRetry();
+    }
+    _setState(
+      (state.value ?? previous).copyWith(
+        syncing: false,
+        checking: false,
+        lastSyncAt: completedAt,
+        appliedSegments: 0,
+        clearProgress: true,
+        clearLibraryCounts: true,
+        lastError: warnings.isEmpty ? null : _replicaWarningCode(warnings),
+        clearError: warnings.isEmpty,
+      ),
+    );
   }
 
   void _deferUntilPlaybackEnds() {
@@ -1539,6 +1690,7 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
           end: batchEnd,
         ),
       );
+      if (_activeCancelToken case final token?) _requirePlaybackIdle(token);
       await repository.markDriveSegmentDelivered(
         outgoing,
         remoteFileId: file.id,
@@ -1728,8 +1880,9 @@ class GoogleDriveSyncController extends AsyncNotifier<GoogleDriveSyncState> {
     final requestToken = cancelToken ?? CancelToken();
     _decorationRequests.add(requestToken);
     try {
-      final GoogleDriveAccountProfile account = await GoogleDriveAccountClient()
-          .fetchProfile(accessToken, cancelToken: requestToken);
+      final GoogleDriveAccountProfile account = await GoogleDriveAccountClient(
+        dio: ref.read(googleDriveDioFactoryProvider)(),
+      ).fetchProfile(accessToken, cancelToken: requestToken);
       if (await _storedAccessToken() == accessToken) {
         await _storage.writeGoogleDriveAccountProfile(
           jsonEncode(account.toJson()),

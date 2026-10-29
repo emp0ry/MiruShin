@@ -5,9 +5,130 @@ import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mirushin/features/library/data/google_drive_cloud_replica.dart';
 import 'package:mirushin/features/library/domain/cloud_replica_models.dart';
+import 'package:mirushin/features/library/domain/playback_sync_models.dart';
 import 'package:mirushin/features/settings/domain/preference_sync_models.dart';
 
 void main() {
+  test(
+    'compact playback file is replaced in place and unchanged files are not downloaded',
+    () async {
+      PlaybackReplicaSnapshot snapshot(int position) => PlaybackReplicaSnapshot(
+        replicaNamespace: 'anilist-1',
+        deviceId: 'device-a',
+        media: const [],
+        episodes: [
+          {'positionSeconds': position},
+        ],
+        streamPreferences: const [],
+      );
+      final first = snapshot(100);
+      final second = snapshot(0);
+      String? body;
+      final mutations = <String>[];
+      final queries = <String>[];
+      int downloads = 0;
+      final dio = Dio();
+      addTearDown(() => dio.close(force: true));
+      dio.interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            Object? response;
+            if (options.method == 'POST') {
+              mutations.add('POST');
+              final multipart = utf8.decode(options.data as List<int>);
+              expect(multipart, contains(first.fileName));
+              body = first.encode();
+              response = {'id': 'playback', 'name': first.fileName};
+            } else if (options.method == 'PATCH') {
+              mutations.add('PATCH');
+              expect(options.uri.path, endsWith('/files/playback'));
+              body = utf8.decode(options.data as List<int>);
+              response = {'id': 'playback', 'name': second.fileName};
+            } else if (options.uri.path.endsWith('/files')) {
+              queries.add('${options.queryParameters['q']}');
+              response = {
+                'files': [
+                  if (body != null)
+                    {
+                      'id': 'playback',
+                      'name': first.fileName,
+                      'md5Checksum': md5.convert(utf8.encode(body!)).toString(),
+                    },
+                ],
+              };
+            } else {
+              downloads++;
+              response = body;
+            }
+            handler.resolve(Response(requestOptions: options, data: response));
+          },
+        ),
+      );
+      final replica = GoogleDriveCloudReplica(
+        accessToken: 'fixture',
+        replicaNamespace: 'anilist-1',
+        dio: dio,
+      );
+      await replica.pushPlaybackSnapshot(first);
+      await replica.pushPlaybackSnapshot(second);
+      expect(mutations, ['POST', 'PATCH']);
+      final pulled = await replica.pullPlaybackSnapshots(excluding: {});
+      expect(pulled.snapshots.single.episodes.single['positionSeconds'], 0);
+      expect(
+        (await replica.pullPlaybackSnapshots(
+          excluding: {second.fileName: second.checksum},
+        )).snapshots,
+        isEmpty,
+      );
+      expect(downloads, 1);
+      expect(queries.every((q) => q.contains('.playback.')), isTrue);
+    },
+  );
+
+  test(
+    'playback file identity and workspace are verified before applying it',
+    () async {
+      const snapshot = PlaybackReplicaSnapshot(
+        replicaNamespace: 'anilist-2',
+        deviceId: 'device-a',
+        media: [],
+        episodes: [],
+        streamPreferences: [],
+      );
+      final dio = Dio();
+      addTearDown(() => dio.close(force: true));
+      dio.interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            handler.resolve(
+              Response(
+                requestOptions: options,
+                data: options.uri.path.endsWith('/files')
+                    ? {
+                        'files': [
+                          {
+                            'id': 'playback',
+                            'name':
+                                'mirushin.anilist-1.playback.device-a.v1.json',
+                          },
+                        ],
+                      }
+                    : snapshot.encode(),
+              ),
+            );
+          },
+        ),
+      );
+      await expectLater(
+        GoogleDriveCloudReplica(
+          accessToken: 'fixture',
+          replicaNamespace: 'anilist-1',
+          dio: dio,
+        ).pullPlaybackSnapshots(excluding: {}),
+        throwsStateError,
+      );
+    },
+  );
   for (final failure in ['none', 'download', 'content', 'identity']) {
     test('worker segment decode validates $failure integrity', () async {
       final segment = DriveReplicaSegment(

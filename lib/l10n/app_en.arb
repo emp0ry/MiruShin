@@ -1606,5 +1606,13 @@
   "Mark micro-pause (D)": "Mark micro-pause (D)",
   "Press D in the player to mark a micro-pause.": "Press D in the player to mark a micro-pause.",
   "Micro-pause marked": "Micro-pause marked",
-  "Save diagnostic report": "Save diagnostic report"
+  "Save diagnostic report": "Save diagnostic report",
+  "Sync full library": "Sync full library",
+  "Only on this device. When off, your library comes from the selected catalog. Watch positions and other Drive data still sync. Turn on to restore an older full backup.": "Only on this device. When off, your library comes from the selected catalog. Watch positions and other Drive data still sync. Turn on to restore an older full backup.",
+  "Keep watch positions, accounts, API connections, addons, relay preferences, and settings up to date across your devices. Full library sync is optional.": "Keep watch positions, accounts, API connections, addons, relay preferences, and settings up to date across your devices. Full library sync is optional.",
+  "MiruShin data in Drive: {size}": "MiruShin data in Drive: {size}",
+  "Some data could not be synced: {items}. MiruShin will retry.": "Some data could not be synced: {items}. MiruShin will retry.",
+  "Syncing watch positions…": "Syncing watch positions…",
+  "Watch progress": "Watch progress",
+  "Google Drive · Watch progress": "Google Drive · Watch progress"
 }

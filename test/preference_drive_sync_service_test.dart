@@ -11,6 +11,59 @@ import 'package:shared_preferences/shared_preferences.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  test(
+    'full-library switch is neither exported nor applied from Drive',
+    () async {
+      final cloud = _MemoryPreferenceCloud();
+      SharedPreferences.setMockInitialValues({
+        SettingsPreferences.googleDriveLibrarySyncEnabledKey: true,
+        SettingsPreferences.tmdbRegionKey: 'JP',
+      });
+      final preferences = await SharedPreferences.getInstance();
+      await PreferenceDriveSyncService(
+        preferences: preferences,
+      ).sync(cloud: cloud, deviceId: 'a');
+      expect(
+        cloud.files.values.every(
+          (s) =>
+              !s.values.containsKey(
+                SettingsPreferences.googleDriveLibrarySyncEnabledKey,
+              ) &&
+              !s.tombstones.containsKey(
+                SettingsPreferences.googleDriveLibrarySyncEnabledKey,
+              ),
+        ),
+        isTrue,
+      );
+      final incoming = PreferenceReplicaSegment(
+        deviceId: 'b',
+        revision: 1,
+        createdAt: DateTime.utc(2030),
+        values: {
+          SettingsPreferences.googleDriveLibrarySyncEnabledKey:
+              PreferenceSyncValue(
+                version: PreferenceSyncVersion(
+                  changedAt: DateTime.utc(2030),
+                  deviceId: 'b',
+                ),
+                value: false,
+              ),
+        },
+        tombstones: {},
+      );
+      cloud.files[incoming.fileName] = incoming;
+      await PreferenceDriveSyncService(
+        preferences: preferences,
+      ).sync(cloud: cloud, deviceId: 'a');
+      expect(
+        preferences.getBool(
+          SettingsPreferences.googleDriveLibrarySyncEnabledKey,
+        ),
+        isTrue,
+      );
+    },
+  );
+
   test('preferences segment rejects modified payload', () {
     final PreferenceReplicaSegment segment = PreferenceReplicaSegment(
       deviceId: 'a',

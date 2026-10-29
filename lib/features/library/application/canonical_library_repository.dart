@@ -21,7 +21,10 @@ import '../data/canonical_library_database.dart';
 import '../domain/canonical_library_models.dart';
 import '../domain/cloud_replica_models.dart';
 import '../domain/library_export_snapshot.dart';
+import '../domain/playback_sync_models.dart';
 import 'tracking_state_decoder.dart';
+
+part 'playback_library_repository.dart';
 
 String _driveSegmentChecksum(DriveReplicaSegment segment) => segment.checksum;
 String _driveSnapshotChecksum(DriveLibrarySnapshot snapshot) =>
@@ -255,7 +258,11 @@ final pendingDriveDeliveryCountProvider = StreamProvider.autoDispose<int>((
 ) {
   return ref
       .watch(canonicalLibraryRepositoryProvider)
-      .watchPendingDriveDeliveryCount();
+      .watchPendingCloudDeliveryCount(
+        includeLibrary: ref.watch(
+          settingsProvider.select((s) => s.googleDriveLibrarySyncEnabled),
+        ),
+      );
 });
 
 final libraryConflictsProvider =
@@ -2451,7 +2458,9 @@ class CanonicalLibraryRepository {
         await (database.update(database.outboxDeliveryRecords)..where(
               (table) =>
                   table.operationId.equals(job.operationId!) &
-                  table.target.isNotValue('drive') &
+                  table.target.isIn(
+                    TrackerSource.values.map((source) => source.name),
+                  ) &
                   table.state.isNotIn([
                     'confirmed',
                     'unsupported',
@@ -3216,7 +3225,9 @@ class CanonicalLibraryRepository {
                 await (database.update(database.outboxDeliveryRecords)..where(
                       (table) =>
                           table.operationId.equals(job.operationId!) &
-                          table.target.isNotValue('drive') &
+                          table.target.isIn(
+                            TrackerSource.values.map((source) => source.name),
+                          ) &
                           table.state.isNotValue('confirmed'),
                     ))
                     .write(
@@ -4089,7 +4100,9 @@ class CanonicalLibraryRepository {
       final pending =
           await (database.select(database.outboxDeliveryRecords)..where(
                 (table) =>
-                    table.target.isNotValue('drive') &
+                    table.target.isIn(
+                      TrackerSource.values.map((source) => source.name),
+                    ) &
                     table.state.isNotIn([
                       'confirmed',
                       'superseded',
@@ -4187,7 +4200,9 @@ class CanonicalLibraryRepository {
       final List<OutboxDeliveryRecord> pending =
           await (database.select(database.outboxDeliveryRecords)..where(
                 (OutboxDeliveryRecords table) =>
-                    table.target.isNotValue('drive') &
+                    table.target.isIn(
+                      TrackerSource.values.map((source) => source.name),
+                    ) &
                     table.state.isNotValue('confirmed'),
               ))
               .get();
@@ -4625,7 +4640,9 @@ class CanonicalLibraryRepository {
     final List<OutboxDeliveryRecord> rows =
         await (database.select(database.outboxDeliveryRecords)..where(
               (OutboxDeliveryRecords table) =>
-                  table.target.isNotValue('drive') &
+                  table.target.isIn(
+                    TrackerSource.values.map((source) => source.name),
+                  ) &
                   table.state.equals('confirmed'),
             ))
             .get();
@@ -4668,7 +4685,10 @@ class CanonicalLibraryRepository {
                       table.deliveryId.equals(item.key),
                 ))
                 .getSingleOrNull();
-        if (originalDelivery == null || originalDelivery.target == 'drive') {
+        if (originalDelivery == null ||
+            !TrackerSource.values.any(
+              (source) => source.name == originalDelivery.target,
+            )) {
           continue;
         }
         final accountId = item.value['accountId'];
@@ -5568,6 +5588,7 @@ class CanonicalLibraryRepository {
   Future<DriveSnapshotApplyResult> applyDriveSnapshot(
     DriveLibrarySnapshot snapshot, {
     void Function(int completed, int total)? onProgress,
+    void Function()? requireActive,
     Set<TrackerSource> trackerTargets = const <TrackerSource>{},
   }) async {
     await initialize();
@@ -5585,6 +5606,7 @@ class CanonicalLibraryRepository {
     );
     final DriveSnapshotApplyResult
     baseResult = await database.transaction(() async {
+      requireActive?.call();
       final int beforeCount =
           await (database.selectOnly(database.canonicalLibraryRecords)
                 ..addColumns(<Expression<Object>>[
@@ -5662,7 +5684,16 @@ class CanonicalLibraryRepository {
         // protocol. Existing rows continue to merge through immutable
         // operations and field revisions below, so a newer whole-record
         // timestamp can never erase an unrelated local field change.
-        if (existing == null) {
+        final existingRevisions = _jsonMap(existing?.fieldRevisionsJson);
+        final playbackOnly =
+            existing != null &&
+            !existing.inLibrary &&
+            existing.tombstonedAtMs == null &&
+            existingRevisions.keys.every(_isPlaybackRevisionField);
+        // Compact playback can arrive before the first full restore. Its
+        // hidden identity row is not an existing library entry, and must not
+        // prevent bootstrapping membership or discard newer resume revisions.
+        if (existing == null || playbackOnly) {
           final MediaIdentity translated = MediaIdentity(
             localId: localId,
             kind: remote.identity.mediaKind,
@@ -5712,7 +5743,10 @@ class CanonicalLibraryRepository {
                 CanonicalLibraryRecordsCompanion(
                   inLibrary: Value<bool>(row['inLibrary'] == true),
                   fieldRevisionsJson: Value<String>(
-                    jsonEncode(_jsonMap(row['fieldRevisions'])),
+                    jsonEncode({
+                      ..._jsonMap(row['fieldRevisions']),
+                      if (playbackOnly) ...existingRevisions,
+                    }),
                   ),
                   updatedAtMs: Value<int>(remoteUpdated),
                   tombstonedAtMs: Value<int?>(
@@ -5721,7 +5755,7 @@ class CanonicalLibraryRepository {
                 ),
               );
           restored += 1;
-          restoredRemoteIds.add(remoteLocalId);
+          if (existing == null) restoredRemoteIds.add(remoteLocalId);
           if (row['inLibrary'] == true) {
             activeIds.add(localId);
           } else {
@@ -5852,6 +5886,7 @@ class CanonicalLibraryRepository {
               updatedAtMs: DateTime.now().toUtc().millisecondsSinceEpoch,
             ),
           );
+      requireActive?.call();
       return DriveSnapshotApplyResult(
         cloudEntryCount: snapshot.entryCount,
         localEntryCount: localCount,
@@ -5894,7 +5929,9 @@ class CanonicalLibraryRepository {
         replicaNamespace: snapshot.replicaNamespace,
       ),
       trackerTargets: trackerTargets,
+      requireActive: requireActive,
     );
+    requireActive?.call();
     final int now = DateTime.now().toUtc().millisecondsSinceEpoch;
     await database
         .into(database.syncCursorRecords)
@@ -6068,6 +6105,7 @@ class CanonicalLibraryRepository {
   Future<int> applyDriveSegment(
     DriveReplicaSegment segment, {
     required Set<TrackerSource> trackerTargets,
+    void Function()? requireActive,
   }) async {
     await initialize();
     if (segment.replicaNamespace != replicaNamespace &&
@@ -6085,6 +6123,7 @@ class CanonicalLibraryRepository {
       debugLabel: 'MiruShin Drive segment hash',
     );
     return database.transaction(() async {
+      requireActive?.call();
       final SyncCursorRecord? processed =
           await (database.select(database.syncCursorRecords)..where(
                 (SyncCursorRecords table) =>
@@ -6684,6 +6723,7 @@ class CanonicalLibraryRepository {
               updatedAtMs: importedAt.millisecondsSinceEpoch,
             ),
           );
+      requireActive?.call();
       return applied;
     });
   }
@@ -6774,8 +6814,9 @@ class CanonicalLibraryRepository {
   Future<void> _importDriveStreamRows(
     DriveReplicaSegment segment,
     Map<String, String> translatedIds,
-    DateTime importedAt,
-  ) async {
+    DateTime importedAt, {
+    bool replaceEqualTimestamp = false,
+  }) async {
     for (final Map<String, dynamic> row in segment.streamPreferences) {
       final String? localId = translatedIds['${row['localId'] ?? ''}'];
       if (localId == null) continue;
@@ -6793,7 +6834,12 @@ class CanonicalLibraryRepository {
                     table.preferenceId.equals(id),
               ))
               .getSingleOrNull();
-      if (existing != null && existing.updatedAtMs >= incomingUpdated) continue;
+      if (existing != null &&
+          (existing.updatedAtMs > incomingUpdated ||
+              (!replaceEqualTimestamp &&
+                  existing.updatedAtMs == incomingUpdated))) {
+        continue;
+      }
       await database
           .into(database.streamPreferenceRecords)
           .insertOnConflictUpdate(
@@ -6819,14 +6865,22 @@ class CanonicalLibraryRepository {
   Future<String> _appendOperationLocked(LibraryOperationDraft draft) async {
     final String operationId = draft.operationId ?? _uuid.v7();
     final String currentDeviceId = await deviceId();
-    final Set<String> deliveryTargets = <String>{'drive', ...draft.targets};
+    final Set<String> deliveryTargets = <String>{
+      'drive',
+      if (draft.fields.contains('episodeProgress') ||
+          draft.fields.contains('streamPreference'))
+        'drive.playback',
+      ...draft.targets,
+    };
     CanonicalLibraryRecord? entry =
         await (database.select(database.canonicalLibraryRecords)..where(
               (CanonicalLibraryRecords table) =>
                   table.localId.equals(draft.localId),
             ))
             .getSingleOrNull();
-    if (entry == null && draft.fields.contains('episodeProgress')) {
+    if (entry == null &&
+        (draft.fields.contains('episodeProgress') ||
+            draft.fields.contains('streamPreference'))) {
       final media = await (database.select(
         database.canonicalMediaRecords,
       )..where((table) => table.localId.equals(draft.localId))).getSingle();
@@ -7274,7 +7328,9 @@ class CanonicalLibraryRepository {
             await (database.update(database.outboxDeliveryRecords)..where(
                   (OutboxDeliveryRecords table) =>
                       table.operationId.equals(staleOperationId) &
-                      table.target.isNotValue('drive') &
+                      table.target.isIn(
+                        TrackerSource.values.map((source) => source.name),
+                      ) &
                       table.state.isIn(const <String>['pending', 'retry']),
                 ))
                 .write(
@@ -7737,30 +7793,7 @@ class CanonicalLibraryRepository {
     int watchCycle = 0,
   }) async {
     await initialize();
-    final identity = MediaIdentity.fromExternalIds(const {}, mediaId: mediaId);
-    if (identity.hasProviderId) {
-      final blocked =
-          await (database.select(database.providerBindingRecords)..where(
-                (t) =>
-                    t.quarantined.equals(true) &
-                    t.mediaKind.equals(identity.mediaKind) &
-                    ((t.provider.equals('anilist') &
-                            t.externalMediaId.equals(
-                              identity.anilistId ?? -1,
-                            )) |
-                        (t.provider.equals('mal') &
-                            t.externalMediaId.equals(identity.malId ?? -1)) |
-                        (t.provider.equals('shikimori') &
-                            t.externalMediaId.equals(
-                              identity.shikimoriId ?? -1,
-                            ))),
-              ))
-              .get();
-      if (blocked.isNotEmpty) return null;
-    }
-    final String? localId =
-        await _localIdForAlias(mediaId) ??
-        await _localIdForIdentityLocked(identity);
+    final String? localId = await _localIdForPlaybackAlias(mediaId);
     if (localId == null) return null;
     final EpisodeStateRecord? row =
         await (database.select(database.episodeStateRecords)..where(
@@ -7956,7 +7989,7 @@ class CanonicalLibraryRepository {
     required String mediaId,
   }) async {
     await initialize();
-    final String? localId = await _localIdForAlias(mediaId);
+    final String? localId = await _localIdForPlaybackAlias(mediaId);
     if (localId == null) return null;
     final StreamPreferenceRecord? row =
         await (database.select(database.streamPreferenceRecords)..where(
@@ -8077,6 +8110,32 @@ class CanonicalLibraryRepository {
       preference: preference,
       recordActivity: recordActivity,
     );
+  }
+
+  Future<String?> _localIdForPlaybackAlias(String mediaId) async {
+    final identity = MediaIdentity.fromExternalIds(const {}, mediaId: mediaId);
+    if (identity.hasProviderId) {
+      final blocked =
+          await (database.select(database.providerBindingRecords)..where(
+                (t) =>
+                    t.quarantined.equals(true) &
+                    t.mediaKind.equals(identity.mediaKind) &
+                    ((t.provider.equals('anilist') &
+                            t.externalMediaId.equals(
+                              identity.anilistId ?? -1,
+                            )) |
+                        (t.provider.equals('mal') &
+                            t.externalMediaId.equals(identity.malId ?? -1)) |
+                        (t.provider.equals('shikimori') &
+                            t.externalMediaId.equals(
+                              identity.shikimoriId ?? -1,
+                            ))),
+              ))
+              .get();
+      if (blocked.isNotEmpty) return null;
+    }
+    return await _localIdForAlias(mediaId) ??
+        await _localIdForIdentityLocked(identity);
   }
 
   Future<String?> _localIdForAlias(String alias) async {

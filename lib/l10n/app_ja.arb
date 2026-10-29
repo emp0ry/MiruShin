@@ -1606,5 +1606,13 @@
   "Mark micro-pause (D)": "短い停止を記録 (D)",
   "Press D in the player to mark a micro-pause.": "プレイヤーで D キーを押すと短い停止を記録できます。",
   "Micro-pause marked": "短い停止を記録しました",
-  "Save diagnostic report": "診断レポートを保存"
+  "Save diagnostic report": "診断レポートを保存",
+  "Sync full library": "ライブラリ全体を同期",
+  "Only on this device. When off, your library comes from the selected catalog. Watch positions and other Drive data still sync. Turn on to restore an older full backup.": "このデバイスのみに適用されます。オフの場合、ライブラリは選択したカタログから読み込まれます。再生位置やその他のDriveデータは引き続き同期されます。以前の完全バックアップを復元するにはオンにしてください。",
+  "Keep watch positions, accounts, API connections, addons, relay preferences, and settings up to date across your devices. Full library sync is optional.": "再生位置、アカウント、API接続、アドオン、リレー設定、アプリ設定をデバイス間で同期します。ライブラリ全体の同期は任意です。",
+  "MiruShin data in Drive: {size}": "Drive上のMiruShinデータ: {size}",
+  "Some data could not be synced: {items}. MiruShin will retry.": "一部のデータを同期できませんでした: {items}。MiruShinは再試行します。",
+  "Syncing watch positions…": "再生位置を同期中…",
+  "Watch progress": "視聴の進捗",
+  "Google Drive · Watch progress": "Google Drive · 視聴の進捗"
 }

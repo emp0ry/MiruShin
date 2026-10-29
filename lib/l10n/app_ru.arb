@@ -1611,5 +1611,13 @@
   "Mark micro-pause (D)": "Отметить микропаузу (D)",
   "Press D in the player to mark a micro-pause.": "Нажми D в плеере, чтобы отметить микропаузу.",
   "Micro-pause marked": "Микропауза отмечена",
-  "Save diagnostic report": "Сохранить отчёт диагностики"
+  "Save diagnostic report": "Сохранить отчёт диагностики",
+  "Sync full library": "Синхронизировать полную библиотеку",
+  "Only on this device. When off, your library comes from the selected catalog. Watch positions and other Drive data still sync. Turn on to restore an older full backup.": "Только на этом устройстве. Когда выключено, библиотека загружается из выбранного каталога. Позиции просмотра и остальные данные Drive продолжают синхронизироваться. Включите для восстановления старой полной копии.",
+  "Keep watch positions, accounts, API connections, addons, relay preferences, and settings up to date across your devices. Full library sync is optional.": "Синхронизируйте позиции просмотра, аккаунты, подключения API, аддоны, настройки ретрансляторов и приложения между устройствами. Полную библиотеку можно синхронизировать отдельно.",
+  "MiruShin data in Drive: {size}": "Данные MiruShin в Drive: {size}",
+  "Some data could not be synced: {items}. MiruShin will retry.": "Не удалось синхронизировать часть данных: {items}. MiruShin повторит попытку.",
+  "Syncing watch positions…": "Синхронизация позиций просмотра…",
+  "Watch progress": "Прогресс просмотра",
+  "Google Drive · Watch progress": "Google Drive · Прогресс просмотра"
 }

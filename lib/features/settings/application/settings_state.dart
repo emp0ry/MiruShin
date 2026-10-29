@@ -124,6 +124,7 @@ extension AppThemeModeLabel on AppThemeMode {
 
 class SettingsState {
   const SettingsState({
+    this.googleDriveLibrarySyncEnabled = false,
     this.themeMode = AppThemeMode.system,
     this.appLocale,
     this.metadataLocale,
@@ -181,6 +182,7 @@ class SettingsState {
   });
 
   final AppThemeMode themeMode;
+  final bool googleDriveLibrarySyncEnabled;
   final Locale? appLocale;
   final Locale? metadataLocale;
   final Color accentColor;
@@ -342,6 +344,7 @@ class SettingsState {
   }
 
   SettingsState copyWith({
+    bool? googleDriveLibrarySyncEnabled,
     AppThemeMode? themeMode,
     Locale? appLocale,
     Locale? metadataLocale,
@@ -456,6 +459,8 @@ class SettingsState {
       anilistScoreFormat: anilistScoreFormat ?? this.anilistScoreFormat,
       soraWebProxyUrl: soraWebProxyUrl ?? this.soraWebProxyUrl,
       startupPage: startupPage ?? this.startupPage,
+      googleDriveLibrarySyncEnabled:
+          googleDriveLibrarySyncEnabled ?? this.googleDriveLibrarySyncEnabled,
       primaryTrackerSource: primaryTrackerSource ?? this.primaryTrackerSource,
       malAccessToken: clearMalSession
           ? ''
@@ -755,6 +760,8 @@ class SettingsController extends Notifier<SettingsState> {
 
       state = state.copyWith(
         themeMode: _themeModeFromName(themeModeName),
+        googleDriveLibrarySyncEnabled: preferences
+            .readGoogleDriveLibrarySyncEnabled(),
         appLocale: appLocale,
         accentColor: accentColor == null ? null : Color(accentColor),
         compactMode: preferences.readCompactMode(),
@@ -1367,6 +1374,11 @@ class SettingsController extends Notifier<SettingsState> {
             prefs.savePrimaryTrackerSource(value.name),
       ),
     );
+  }
+
+  void setGoogleDriveLibrarySyncEnabled(bool value) {
+    state = state.copyWith(googleDriveLibrarySyncEnabled: value);
+    unawaited(_save((prefs) => prefs.saveGoogleDriveLibrarySyncEnabled(value)));
   }
 
   void setMalUseCustomCredentials(bool value) {

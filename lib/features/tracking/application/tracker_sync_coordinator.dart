@@ -88,6 +88,7 @@ final trackerSyncCoordinatorProvider = Provider<TrackerSyncCoordinator>((
         shikimoriViewerId: settings.shikimoriViewerId,
         hasShikimoriSession: settings.hasShikimoriSession,
         primary: settings.primaryTrackerSource,
+        driveLibrarySyncEnabled: settings.googleDriveLibrarySyncEnabled,
       ),
     ),
   );
@@ -103,6 +104,11 @@ final trackerSyncCoordinatorProvider = Provider<TrackerSyncCoordinator>((
     repository: repository,
     effectiveTitleLanguage: settings.anilistTitleLanguage,
     beforeTrackerNetwork: () async {
+      // Lightweight Drive sync must never gate catalog reads or deliveries,
+      // including native Google sign-in initialization and expired sessions.
+      if (!ref.read(settingsProvider).googleDriveLibrarySyncEnabled) {
+        return true;
+      }
       final GoogleDriveSyncState drive = await ref.read(
         googleDriveSyncControllerProvider.future,
       );
