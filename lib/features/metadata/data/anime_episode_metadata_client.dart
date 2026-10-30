@@ -1,12 +1,14 @@
 import 'package:dio/dio.dart';
 
+import '../../../core/network/anilist_request_scheduler.dart';
+
 import '../domain/anime_episode_metadata.dart';
 
 class AnimeEpisodeMetadataClient {
   AnimeEpisodeMetadataClient({Dio? dio})
     : _dio =
           dio ??
-          Dio(
+          createAniListDio(
             BaseOptions(
               connectTimeout: const Duration(seconds: 10),
               receiveTimeout: const Duration(seconds: 15),

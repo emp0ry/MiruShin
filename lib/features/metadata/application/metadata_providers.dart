@@ -29,7 +29,17 @@ export 'media_catalog.dart' show BoardRails;
 // TMDB (primary)
 
 final tmdbProviderProvider = Provider<TmdbMetadataProvider?>((Ref ref) {
-  final SettingsState settings = ref.watch(settingsProvider);
+  ref.watch(
+    settingsProvider.select(
+      (settings) => (
+        settings.effectiveTmdbReadAccessToken,
+        settings.effectiveTmdbLanguage,
+        settings.tmdbRegion,
+        settings.tmdbShowAdultContent,
+      ),
+    ),
+  );
+  final SettingsState settings = ref.read(settingsProvider);
   if (settings.effectiveTmdbReadAccessToken.isEmpty) {
     return null;
   }
@@ -50,7 +60,12 @@ final shikimoriClientProvider = Provider<ShikimoriClient>(
 // AniList
 
 final anilistApiClientProvider = Provider<AniListApiClient>((Ref ref) {
-  final SettingsState settings = ref.watch(settingsProvider);
+  ref.watch(
+    settingsProvider.select(
+      (settings) => (settings.anilistViewerId, settings.anilistAccessToken),
+    ),
+  );
+  final SettingsState settings = ref.read(settingsProvider);
   final String token = settings.anilistAccessToken.trim();
   return AniListApiClient(
     accessToken: token.isEmpty ? null : token,
@@ -72,7 +87,21 @@ final catalogRepositoryProvider = Provider.family<CatalogRepository?, CatalogMod
   CatalogMode mode,
 ) {
   final MetadataCacheStore cache = ref.watch(metadataCacheStoreProvider);
-  final SettingsState settings = ref.watch(settingsProvider);
+  ref.watch(
+    settingsProvider.select(
+      (settings) => (
+        settings.effectiveTmdbReadAccessToken,
+        settings.effectiveTmdbLanguage,
+        settings.tmdbRegion,
+        settings.tmdbShowAdultContent,
+        settings.anilistAccessToken,
+        settings.anilistViewerId,
+        settings.malAccessToken,
+        settings.hasMalSession,
+      ),
+    ),
+  );
+  final SettingsState settings = ref.read(settingsProvider);
   final String aniListTitleLanguage = ref.watch(
     aniListEffectiveTitleLanguageProvider,
   );
@@ -189,6 +218,9 @@ final catalogRepositoryProvider = Provider.family<CatalogRepository?, CatalogMod
             .read(trackingSyncStoreProvider)
             .loadHealth();
         final TrackerProviderHealth? aniList = health[TrackerSource.anilist];
+        if (aniList?.nextRetryAt?.isAfter(DateTime.now().toUtc()) == true) {
+          return false;
+        }
         final DateTime? failedAt = aniList?.lastFailureAt;
         if (aniList?.availability == TrackerProviderAvailability.unavailable &&
             failedAt != null &&

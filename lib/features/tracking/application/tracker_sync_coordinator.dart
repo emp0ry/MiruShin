@@ -228,6 +228,7 @@ class TrackerSyncCoordinator {
   final Map<TrackerSource, Future<void>> _providerTails = {};
   final Set<Future<void>> _networkWork = {};
   final Set<TrackerSource> _initializedProviders = {};
+  final Map<(TrackerSource, String), DateTime> _snapshotCompletedAt = {};
   final Map<TrackerSource, Timer> _retryTimers = {};
   final Map<TrackerSource, String> _authBlockedCredentials = {};
   Timer? _deliveryDebounce;
@@ -489,19 +490,12 @@ class TrackerSyncCoordinator {
                 }
                 final engine = await _engine(source: source);
                 if (!_initializedProviders.contains(source)) {
-                  final anime = await engine.refreshAllProviderSnapshots(
-                    providerOrder: [source],
-                    deliverAfterRefresh: false,
-                  );
+                  final anime = await _pullSnapshot(engine, source, 'anime');
                   if (anime.fromCache || anime.requiresAccountApproval) {
                     await _scheduleRetry(source);
                     return;
                   }
-                  final manga = await engine.refreshAllProviderSnapshots(
-                    providerOrder: [source],
-                    mediaKind: 'manga',
-                    deliverAfterRefresh: false,
-                  );
+                  final manga = await _pullSnapshot(engine, source, 'manga');
                   if (anime.fromCache ||
                       manga.fromCache ||
                       anime.requiresAccountApproval ||
@@ -560,48 +554,72 @@ class TrackerSyncCoordinator {
     return _cachedSnapshot(kind);
   }
 
+  Future<LocalFirstLibraryResult> _pullSnapshot(
+    LocalFirstSyncEngine engine,
+    TrackerSource source,
+    String kind,
+  ) async {
+    final result = await engine.refreshAllProviderSnapshots(
+      providerOrder: [source],
+      mediaKind: kind,
+      deliverAfterRefresh: false,
+    );
+    if (!result.fromCache && !result.requiresAccountApproval) {
+      _snapshotCompletedAt[(source, kind)] = DateTime.now().toUtc();
+    }
+    return result;
+  }
+
   Future<LocalFirstLibraryResult> _refreshSource(
     TrackerSource source,
     String kind, {
     bool force = false,
-  }) =>
-      _serialProvider(source, () async {
-        if (await _providerDeferred(source, force: force)) {
-          await _scheduleRetry(source);
-          return LocalFirstLibraryResult(
-            states: await _store.loadStates(),
-            fromCache: true,
-          );
-        }
-        final engine = await _engine(source: source);
-        final result = await engine.refreshAllProviderSnapshots(
-          providerOrder: [source],
-          mediaKind: kind,
-          deliverAfterRefresh: false,
-        );
-        if (!result.fromCache && !result.requiresAccountApproval) {
-          // Reconcile the other kind before the first replay of this account.
-          if (!_initializedProviders.contains(source)) {
-            final other = await engine.refreshAllProviderSnapshots(
-              providerOrder: [source],
-              mediaKind: kind == 'anime' ? 'manga' : 'anime',
-              deliverAfterRefresh: false,
-            );
-            if (!other.fromCache && !other.requiresAccountApproval) {
-              _initializedProviders.add(source);
-            }
-          }
-          if (_initializedProviders.contains(source)) await engine.flush();
-        }
+  }) {
+    final requestedAt = DateTime.now().toUtc();
+    return _serialProvider(source, () async {
+      if (await _providerDeferred(source, force: force)) {
         await _scheduleRetry(source);
-        _invalidateHealth();
-        return result;
-      }).onError(
-        (Object error, StackTrace stack) async => LocalFirstLibraryResult(
+        return LocalFirstLibraryResult(
           states: await _store.loadStates(),
           fromCache: true,
-        ),
-      );
+        );
+      }
+      // Initialization or an earlier queued caller may already have fetched
+      // this kind since this request was scheduled. Reuse that complete read.
+      final completed = _snapshotCompletedAt[(source, kind)];
+      if (completed != null && !completed.isBefore(requestedAt)) {
+        return LocalFirstLibraryResult(
+          states: await _store.loadStates(),
+          remoteSource: source,
+          fromCache: false,
+        );
+      }
+      final engine = await _engine(source: source);
+      final result = await _pullSnapshot(engine, source, kind);
+      if (!result.fromCache && !result.requiresAccountApproval) {
+        // Reconcile the other kind before the first replay of this account.
+        if (!_initializedProviders.contains(source)) {
+          final other = await _pullSnapshot(
+            engine,
+            source,
+            kind == 'anime' ? 'manga' : 'anime',
+          );
+          if (!other.fromCache && !other.requiresAccountApproval) {
+            _initializedProviders.add(source);
+          }
+        }
+        if (_initializedProviders.contains(source)) await engine.flush();
+      }
+      await _scheduleRetry(source);
+      _invalidateHealth();
+      return result;
+    }).onError(
+      (Object error, StackTrace stack) async => LocalFirstLibraryResult(
+        states: await _store.loadStates(),
+        fromCache: true,
+      ),
+    );
+  }
 
   /// Imports only the selected catalog; other independent lanes observe and
   /// repair outgoing mirrors without changing the canonical local library.
@@ -754,13 +772,23 @@ class TrackerSyncCoordinator {
 
   Future<void> recordProviderFailure(TrackerSource source, Object error) =>
       _serialNetwork<void>(() async {
+        // Catalog reads use the same persisted cooldown as tracker adapters.
+        // Do not turn Retry-After into a two-second generic outage retry.
+        Object failure = error;
+        if (error is DioException && error.response?.statusCode == 429) {
+          try {
+            _throwAuthentication(source, error);
+          } on TrackerRateLimitException catch (limited) {
+            failure = limited;
+          }
+        }
         final LocalFirstSyncEngine engine = LocalFirstSyncEngine(
           store: _store,
           adapters: const <TrackerSource, TrackerProviderAdapter>{},
           targetAccountIds: _accountIds,
           primary: _settings.effectivePrimaryTrackerSource,
         );
-        await engine.recordFailure(source, error);
+        await engine.recordFailure(source, failure);
         _invalidateHealth();
       });
 
@@ -1006,6 +1034,7 @@ class TrackerSyncCoordinator {
     }
     if (health?.consecutiveFailures != 0 &&
         health?.consecutiveFailures != null) {
+      _snapshotCompletedAt.removeWhere((key, _) => key.$1 == source);
       _initializedProviders.remove(
         source,
       ); // Pull before replay after recovery.

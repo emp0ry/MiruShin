@@ -1,10 +1,12 @@
 import 'package:dio/dio.dart';
 
+import '../../../core/network/anilist_request_scheduler.dart';
+
 class AniListAnimeClient {
   AniListAnimeClient({Dio? dio})
     : _dio =
           dio ??
-          Dio(
+          createAniListDio(
             BaseOptions(
               baseUrl: 'https://graphql.anilist.co',
               connectTimeout: const Duration(seconds: 12),

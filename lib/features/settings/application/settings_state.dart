@@ -1019,6 +1019,7 @@ class SettingsController extends Notifier<SettingsState> {
   }
 
   void setAniListShowAdultContent(bool value) {
+    if (state.anilistShowAdultContent == value) return;
     state = state.copyWith(anilistShowAdultContent: value);
     unawaited(
       _save(
@@ -1028,6 +1029,7 @@ class SettingsController extends Notifier<SettingsState> {
   }
 
   void setAniListTitleLanguage(String value) {
+    if (state.anilistTitleLanguage == value) return;
     state = state.copyWith(anilistTitleLanguage: value);
     unawaited(
       _save(
@@ -1057,6 +1059,7 @@ class SettingsController extends Notifier<SettingsState> {
 
   void setAniListScoreFormat(String value) {
     final String normalized = value == 'SMILEY' ? 'POINT_3' : value;
+    if (state.anilistScoreFormat == normalized) return;
     state = state.copyWith(anilistScoreFormat: normalized);
     unawaited(
       _save(

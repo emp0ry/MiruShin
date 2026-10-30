@@ -23,7 +23,12 @@ final aniListViewerIdProvider = Provider<int?>((Ref ref) {
 });
 
 final aniListProfileClientProvider = Provider<AniListApiClient>((Ref ref) {
-  final SettingsState settings = ref.watch(settingsProvider);
+  ref.watch(
+    settingsProvider.select(
+      (settings) => (settings.anilistViewerId, settings.anilistAccessToken),
+    ),
+  );
+  final SettingsState settings = ref.read(settingsProvider);
   final String token = settings.anilistAccessToken.trim();
   return AniListApiClient(
     accessToken: token.isEmpty ? null : token,

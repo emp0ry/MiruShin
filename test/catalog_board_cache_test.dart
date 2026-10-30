@@ -128,6 +128,8 @@ void main() {
       expect(initial.additionalSections.values, everyElement(hasLength(24)));
 
       final _BlockingAniListClient refreshClient = _BlockingAniListClient();
+      cache._values['test.anilist.board.public']!['fetchedAtUtc'] =
+          DateTime.utc(2000).toIso8601String();
       final Future<void> refreshWritten = cache.nextWrite;
       final BoardRails shown = await AniListCatalogRepository(
         client: refreshClient,
@@ -167,6 +169,47 @@ void main() {
       );
     });
   });
+
+  test('fresh AniList Board cache does not start another nine reads', () async {
+    final cache = _RecordingCacheStore();
+    await AniListCatalogRepository(
+      client: _ImmediateAniListClient('cached'),
+      cache: cache,
+      cacheScope: 'test.fresh',
+    ).boardRails();
+    final client = _BlockingAniListClient();
+    final shown = await AniListCatalogRepository(
+      client: client,
+      cache: cache,
+      cacheScope: 'test.fresh',
+    ).boardRails();
+    expect(shown.topAnime.first.title, 'cached-top 0');
+    expect(client.callCount, 0);
+  });
+
+  test(
+    'concurrent Board loads share one refresh for the same account',
+    () async {
+      final cache = _RecordingCacheStore();
+      final client = _BlockingAniListClient();
+      final catalog = AniListCatalogRepository(
+        client: client,
+        cache: cache,
+        cacheScope: 'test.concurrent',
+      );
+      final first = catalog.boardRails();
+      final second = catalog.boardRails();
+      await Future<void>.delayed(Duration.zero);
+      expect(client.callCount, 1);
+      client.complete('fresh');
+      final shown = await Future.wait([first, second]);
+      expect(client.callCount, 9);
+      expect(
+        shown.every((board) => board.topAnime.first.title == 'fresh-top 0'),
+        isTrue,
+      );
+    },
+  );
 
   group('details metadata cache', () {
     test(

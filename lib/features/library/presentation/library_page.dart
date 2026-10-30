@@ -519,6 +519,7 @@ class _AniListDataTabState extends ConsumerState<_AniListDataTab>
           ? const <TrackerLibraryOptimisticMutation>[]
           : ref.watch(trackerLibraryOptimisticMutationsProvider);
       return local.when(
+        skipLoadingOnReload: true,
         loading: () => _AniListTabContent(
           state: const _AniListTabViewState(
             phase: _AniListTabPhase.loading,

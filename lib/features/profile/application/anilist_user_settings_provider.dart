@@ -3,12 +3,44 @@ import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../../core/network/request_cancellation_scope.dart';
 import '../../../core/utils/settings_preferences.dart';
 import '../../notifications/airing_notification_scheduler.dart';
 import '../../settings/application/settings_state.dart';
 import '../../settings/data/workspace_preferences_store.dart';
 import '../../tracking/data/anilist_api_client.dart';
 import '../domain/anilist_profile_models.dart';
+
+final aniListUserSettingsClientProvider = Provider<AniListApiClient>((ref) {
+  final account = ref.watch(
+    settingsProvider.select(
+      (settings) => (settings.anilistViewerId, settings.anilistAccessToken),
+    ),
+  );
+  final requests = RequestCancellationScope();
+  ref.onDispose(() => requests.cancel('AniList account changed.'));
+  return AniListApiClient(
+    accessToken: account.$2.trim(),
+    cancellationScope: requests,
+  );
+});
+
+// Remote settings depend only on the account, never on cache notifications or
+// unrelated local preferences. Rebuilding the local projection reuses this read.
+final aniListRemoteUserSettingsProvider =
+    AsyncNotifierProvider<
+      AniListRemoteUserSettingsController,
+      AniListUserSettings
+    >(AniListRemoteUserSettingsController.new, retry: (_, _) => null);
+
+class AniListRemoteUserSettingsController
+    extends AsyncNotifier<AniListUserSettings> {
+  @override
+  Future<AniListUserSettings> build() =>
+      ref.watch(aniListUserSettingsClientProvider).fetchUserSettings();
+
+  void accept(AniListUserSettings settings) => state = AsyncData(settings);
+}
 
 final aniListUserSettingsProvider =
     AsyncNotifierProvider<AniListUserSettingsController, AniListUserSettings>(
@@ -61,7 +93,23 @@ class AniListUserSettingsController extends AsyncNotifier<AniListUserSettings> {
   @override
   Future<AniListUserSettings> build() async {
     ref.watch(drivePreferencesRevisionProvider);
-    final SettingsState settings = ref.watch(settingsProvider);
+    ref.watch(
+      settingsProvider.select(
+        (settings) => (
+          settings.anilistViewerId,
+          settings.anilistAccessToken,
+          settings.hasAniListSession,
+          settings.anilistTitleLanguage,
+          settings.anilistShowAdultContent,
+          settings.anilistScoreFormat,
+        ),
+      ),
+    );
+    final SettingsState settings = ref.read(settingsProvider);
+    final remoteSettings = settings.hasAniListSession
+        ? ref.watch(aniListRemoteUserSettingsProvider.future)
+        : null;
+    final settingsController = ref.read(settingsProvider.notifier);
     final AniListUserSettings fallback = _fallbackFromSettings(settings);
     final SharedPreferences rawPreferences =
         await SharedPreferences.getInstance();
@@ -83,9 +131,8 @@ class AniListUserSettingsController extends AsyncNotifier<AniListUserSettings> {
     }
 
     try {
-      final AniListUserSettings remote = await _client(
-        settings,
-      ).fetchUserSettings();
+      final AniListUserSettings remote = await remoteSettings!;
+      if (!ref.mounted) return cached ?? fallback;
       final AniListUserSettings local = _withLocalOverrides(
         remote,
         settings,
@@ -93,9 +140,7 @@ class AniListUserSettingsController extends AsyncNotifier<AniListUserSettings> {
       );
       await prefs.saveAniListUserSettingsCache(jsonEncode(local.toCacheJson()));
       await _saveWorkspaceCache(workspaceStore, settings, local);
-      final SettingsController settingsController = ref.read(
-        settingsProvider.notifier,
-      );
+      if (!ref.mounted) return local;
       settingsController.setAniListShowAdultContent(local.displayAdultContent);
       settingsController.setAniListScoreFormat(local.scoreFormat);
       return local;
@@ -106,11 +151,15 @@ class AniListUserSettingsController extends AsyncNotifier<AniListUserSettings> {
 
   Future<AniListUserSettings> save(AniListUserSettings draft) async {
     final SettingsState settings = ref.read(settingsProvider);
+    final client = settings.hasAniListSession
+        ? ref.read(aniListUserSettingsClientProvider)
+        : null;
     final SettingsController settingsController = ref.read(
       settingsProvider.notifier,
     );
     final SharedPreferences rawPreferences =
         await SharedPreferences.getInstance();
+    if (!_isCurrentAccount(settings)) return draft;
     final SettingsPreferences prefs = SettingsPreferences(rawPreferences);
     final WorkspacePreferencesStore workspaceStore = WorkspacePreferencesStore(
       rawPreferences,
@@ -121,6 +170,7 @@ class AniListUserSettingsController extends AsyncNotifier<AniListUserSettings> {
     if (!settings.hasAniListSession) {
       await prefs.saveAniListUserSettingsCache(jsonEncode(draft.toCacheJson()));
       await _saveWorkspaceCache(workspaceStore, settings, draft);
+      if (!_isCurrentAccount(settings)) return draft;
       settingsController.setAniListTitleLanguage(draft.titleLanguage);
       settingsController.setAniListShowAdultContent(draft.displayAdultContent);
       settingsController.setAniListScoreFormat(draft.scoreFormat);
@@ -151,15 +201,19 @@ class AniListUserSettingsController extends AsyncNotifier<AniListUserSettings> {
     if (_shouldResetAiringNotifications(previous, draft)) {
       await AiringNotificationScheduler.cancelAll();
     }
-    final AniListUserSettings updated = await _client(
-      settings,
-    ).updateUserSettings(draft);
+    if (!_isCurrentAccount(settings)) return draft;
+    final AniListUserSettings updated = await client!.updateUserSettings(draft);
+    if (!_isCurrentAccount(settings)) {
+      return draft;
+    }
+    ref.read(aniListRemoteUserSettingsProvider.notifier).accept(updated);
     final AniListUserSettings local = updated.copyWith(
       titleLanguage: draft.titleLanguage == 'RUSSIAN' ? 'RUSSIAN' : null,
       airingNotificationScope: draft.airingNotificationScope,
     );
     await prefs.saveAniListUserSettingsCache(jsonEncode(local.toCacheJson()));
     await _saveWorkspaceCache(workspaceStore, settings, local);
+    if (!_isCurrentAccount(settings)) return draft;
     settingsController.setAniListTitleLanguage(local.titleLanguage);
     settingsController.setAniListShowAdultContent(local.displayAdultContent);
     settingsController.setAniListScoreFormat(local.scoreFormat);
@@ -167,8 +221,11 @@ class AniListUserSettingsController extends AsyncNotifier<AniListUserSettings> {
     return local;
   }
 
-  AniListApiClient _client(SettingsState settings) {
-    return AniListApiClient(accessToken: settings.anilistAccessToken.trim());
+  bool _isCurrentAccount(SettingsState settings) {
+    if (!ref.mounted) return false;
+    final current = ref.read(settingsProvider);
+    return current.anilistViewerId == settings.anilistViewerId &&
+        current.anilistAccessToken == settings.anilistAccessToken;
   }
 
   String _workspaceId(SettingsState settings) =>
@@ -182,17 +239,22 @@ class AniListUserSettingsController extends AsyncNotifier<AniListUserSettings> {
     AniListUserSettings value,
   ) async {
     final String workspaceId = _workspaceId(settings);
-    await store.write(
-      workspaceId,
-      WorkspacePreferencesStore.userSettingsCacheKey,
-      jsonEncode(value.toCacheJson()),
-    );
-    await store.write(
-      workspaceId,
-      WorkspacePreferencesStore.airingScopeKey,
-      value.airingNotificationScope.name,
-    );
-    ref.read(drivePreferencesRevisionProvider.notifier).changed();
+    final values = <String, String>{
+      WorkspacePreferencesStore.userSettingsCacheKey: jsonEncode(
+        value.toCacheJson(),
+      ),
+      WorkspacePreferencesStore.airingScopeKey:
+          value.airingNotificationScope.name,
+    };
+    bool changed = false;
+    for (final entry in values.entries) {
+      if (store.read(workspaceId, entry.key) == entry.value) continue;
+      await store.write(workspaceId, entry.key, entry.value);
+      changed = true;
+    }
+    if (changed && ref.mounted) {
+      ref.read(drivePreferencesRevisionProvider.notifier).changed();
+    }
   }
 
   AniListUserSettings? _decodeCache(String? raw) {

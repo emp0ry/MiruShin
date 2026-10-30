@@ -224,6 +224,12 @@ Run a specific target with `flutter run -d macos`, `-d windows`, `-d linux`, or 
 
 On mobile the OAuth flow uses an embedded WebView callback; on desktop MiruShin listens for a localhost callback.
 
+All default AniList clients share a request queue with a conservative rolling
+budget and server-directed cooldowns (`Retry-After` / `X-RateLimit-Reset`).
+Settings cache updates reuse the current account's remote settings instead of
+fetching them again. Board snapshots stay fresh for five minutes, and background
+Library updates retain the visible list and scroll position.
+
 ### MyAnimeList and Shikimori OAuth
 
 Default MyAnimeList and Shikimori login goes through the Cloudflare Worker in

@@ -1013,7 +1013,12 @@ Future<List<AniListAnimeListFolder>> _fetchCollection(
   List<AniListListStatus>? statuses,
   bool flushQueue = true,
 }) async {
-  final SettingsState settings = ref.watch(settingsProvider);
+  ref.watch(
+    settingsProvider.select(
+      (settings) => (settings.anilistViewerId, settings.anilistAccessToken),
+    ),
+  );
+  final SettingsState settings = ref.read(settingsProvider);
   final String token = settings.anilistAccessToken.trim();
   final int? viewerId = settings.anilistViewerId;
   final MetadataCacheStore cache = ref.watch(metadataCacheStoreProvider);
@@ -1025,11 +1030,8 @@ Future<List<AniListAnimeListFolder>> _fetchCollection(
     requestedTitleLanguage,
   );
   final AniListUserSettings? userSettings = ref
-      .watch(aniListUserSettingsProvider)
-      .maybeWhen(
-        data: (AniListUserSettings settings) => settings,
-        orElse: () => null,
-      );
+      .read(aniListUserSettingsProvider)
+      .value;
   final bool airingNotificationsEnabled =
       userSettings?.airingNotifications ?? true;
   final AiringNotificationScope airingNotificationScope =

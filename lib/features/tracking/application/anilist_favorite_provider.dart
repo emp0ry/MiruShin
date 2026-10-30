@@ -22,7 +22,12 @@ final _canonicalFavoritesProvider =
 
 final anilistMediaFavoriteStatusProvider = FutureProvider.autoDispose
     .family<bool?, int>((Ref ref, int mediaId) async {
-      final SettingsState settings = ref.watch(settingsProvider);
+      ref.watch(
+        settingsProvider.select(
+          (settings) => (settings.anilistViewerId, settings.anilistAccessToken),
+        ),
+      );
+      final SettingsState settings = ref.read(settingsProvider);
       final String token = settings.anilistAccessToken.trim();
       if (token.isEmpty) return null;
       return AniListApiClient(

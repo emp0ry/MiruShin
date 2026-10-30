@@ -5,6 +5,7 @@ import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../../core/network/anilist_request_scheduler.dart';
 import '../../tracking/data/shikimori_api_client.dart';
 
 /// Resolved multi-language titles for an anime.
@@ -40,7 +41,7 @@ class AnimeTitlesService {
   static const Duration _cacheTtl = Duration(days: 7);
   static const String _cachePrefix = 'animeTitles.v2.';
 
-  static Dio _makeDio() => Dio(
+  static Dio _makeDio() => createAniListDio(
     BaseOptions(
       baseUrl: 'https://shikimori.one',
       connectTimeout: const Duration(seconds: 8),
@@ -107,7 +108,8 @@ class AnimeTitlesService {
         handler.next(options);
       },
     );
-    client.interceptors.add(interceptor);
+    // Attach the consumer's token before the shared AniList queue can wait.
+    client.interceptors.insert(0, interceptor);
     final updates = StreamController<AnimeTitles>();
     Future<void> cacheWrites = Future.value();
     final values = <String, AnimeTitles>{'cache': cached};

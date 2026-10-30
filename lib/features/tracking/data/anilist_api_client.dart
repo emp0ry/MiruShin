@@ -1,5 +1,7 @@
 import 'package:dio/dio.dart';
 
+import '../../../core/network/anilist_request_scheduler.dart';
+
 import '../../../core/network/request_cancellation_scope.dart';
 import '../../../shared/models/anilist_models.dart';
 import '../../../shared/models/anime_airing.dart';
@@ -44,7 +46,7 @@ class AniListApiClient {
        _timeoutRetryDelay = timeoutRetryDelay,
        _dio =
            dio ??
-           Dio(
+           createAniListDio(
              BaseOptions(
                baseUrl: 'https://graphql.anilist.co',
                connectTimeout: connectTimeout,

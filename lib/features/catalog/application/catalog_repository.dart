@@ -200,6 +200,7 @@ class AniListCatalogRepository implements CatalogRepository {
     this.shouldTryPrimary,
     this.onOffline,
     this.onOnline,
+    this.boardRefreshInterval = const Duration(minutes: 5),
   });
 
   final AniListApiClient client;
@@ -216,6 +217,7 @@ class AniListCatalogRepository implements CatalogRepository {
   final Future<bool> Function()? shouldTryPrimary;
   final CatalogOfflineCallback? onOffline;
   final CatalogOnlineCallback? onOnline;
+  final Duration boardRefreshInterval;
 
   @override
   CatalogMode get mode => CatalogMode.anilist;
@@ -225,6 +227,7 @@ class AniListCatalogRepository implements CatalogRepository {
     return _cachedBoardThenRefreshForNextLaunch(
       cache: cache,
       key: '$cacheScope.board.${viewerId ?? 'public'}',
+      refreshInterval: boardRefreshInterval,
       isCachedSnapshotCurrent: (Map<String, dynamic> json) =>
           json['schemaVersion'] == _boardCacheSchemaVersion,
       onOffline: onOffline,
@@ -532,17 +535,32 @@ Future<BoardRails> _cachedBoardThenRefreshForNextLaunch({
   bool Function(Map<String, dynamic> json)? isCachedSnapshotCurrent,
   CatalogOfflineCallback? onOffline,
   CatalogOnlineCallback? onOnline,
+  Duration refreshInterval = Duration.zero,
 }) async {
+  Future<BoardRails> fetchOnce() {
+    final requests = _boardRequests[cache] ??= {};
+    return requests[key] ??= Future<BoardRails>.sync(fetch).whenComplete(() {
+      requests.remove(key);
+    });
+  }
+
   final Map<String, dynamic>? cachedJson = await cache.read(key);
   if (cachedJson != null &&
       (isCachedSnapshotCurrent?.call(cachedJson) ?? true)) {
     try {
       final BoardRails cached = _limitBoardRails(_boardFromJson(cachedJson));
+      final fetchedAt = DateTime.tryParse(
+        '${cachedJson['fetchedAtUtc'] ?? ''}',
+      );
+      if (fetchedAt != null &&
+          DateTime.now().toUtc().difference(fetchedAt) < refreshInterval) {
+        return cached;
+      }
       unawaited(
         _refreshBoardCache(
           cache: cache,
           key: key,
-          fetch: fetch,
+          fetch: fetchOnce,
           onOffline: onOffline,
           onOnline: onOnline,
         ),
@@ -560,12 +578,14 @@ Future<BoardRails> _cachedBoardThenRefreshForNextLaunch({
     fallback: BoardRails.empty(),
     onOffline: onOffline,
     onOnline: onOnline,
-    fetch: fetch,
+    fetch: fetchOnce,
     decode: (Map<String, dynamic> json) =>
         _limitBoardRails(_boardFromJson(json)),
     encode: (BoardRails value) => _boardToJson(_limitBoardRails(value)),
   );
 }
+
+final _boardRequests = Expando<Map<String, Future<BoardRails>>>();
 
 Future<void> _refreshBoardCache({
   required MetadataCacheStore cache,
@@ -698,6 +718,7 @@ Map<String, dynamic> _boardToJson(BoardRails rails) {
   final BoardRails limited = _limitBoardRails(rails);
   return <String, dynamic>{
     'schemaVersion': _boardCacheSchemaVersion,
+    'fetchedAtUtc': DateTime.now().toUtc().toIso8601String(),
     'recentMovies': limited.recentMovies
         .map((MediaItem item) => item.toJson())
         .toList(growable: false),
