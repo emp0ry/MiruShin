@@ -203,7 +203,7 @@ For the full terms, see the [Legal Notice](LEGAL.md).
 
 ### Requirements
 
-- Flutter (stable channel)
+- Flutter (stable channel; Android CI pins 3.47.9 for the current Gradle/AGP toolchain)
 - Dart SDK compatible with `sdk: ^3.11.4`
 
 ### Run locally

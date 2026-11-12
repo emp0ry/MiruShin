@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:sqlite3/sqlite3.dart' show SqliteException;
+import 'package:sqlite3/common.dart' show SqliteException;
 import 'package:uuid/uuid.dart';
 
 import '../../../shared/models/anilist_models.dart';
