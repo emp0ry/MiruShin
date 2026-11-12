@@ -11,6 +11,7 @@ import 'package:mirushin/app/theme/app_theme.dart';
 import 'package:mirushin/features/downloads/application/downloads_provider.dart';
 import 'package:mirushin/features/downloads/domain/download_models.dart';
 import 'package:mirushin/features/library/application/canonical_library_repository.dart';
+import 'package:mirushin/features/library/application/library_refresh_controller.dart';
 import 'package:mirushin/features/library/data/canonical_library_database.dart';
 import 'package:mirushin/features/library/presentation/library_page.dart';
 import 'package:mirushin/features/profile/application/anilist_user_settings_provider.dart';
@@ -60,6 +61,12 @@ void main() {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
+            libraryRefreshControllerProvider.overrideWithValue(
+              LibraryRefreshController(
+                (_, _) async =>
+                    const TrackerLibrarySnapshot(folders: [], fromCache: false),
+              ),
+            ),
             settingsProvider.overrideWith(_ConnectedSettings.new),
             anilistAnimeListProvider.overrideWith(
               () => _TestAniListLibrary(folders),
@@ -138,6 +145,12 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          libraryRefreshControllerProvider.overrideWithValue(
+            LibraryRefreshController(
+              (_, _) async =>
+                  const TrackerLibrarySnapshot(folders: [], fromCache: false),
+            ),
+          ),
           settingsProvider.overrideWith(_ConnectedSettings.new),
           trackerLocalAnimeLibraryProvider.overrideWith(
             (Ref ref) async => TrackerLocalAnimeLibrary(
@@ -251,6 +264,12 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          libraryRefreshControllerProvider.overrideWithValue(
+            LibraryRefreshController(
+              (_, _) async =>
+                  const TrackerLibrarySnapshot(folders: [], fromCache: false),
+            ),
+          ),
           settingsProvider.overrideWith(_ConnectedSettings.new),
           trackerLocalAnimeLibraryProvider.overrideWith(
             (Ref ref) async => TrackerLocalAnimeLibrary(
@@ -302,6 +321,12 @@ void main() {
       final _DelayedAniListLibrary library = _DelayedAniListLibrary(fetch);
       final ProviderContainer container = ProviderContainer(
         overrides: [
+          libraryRefreshControllerProvider.overrideWithValue(
+            LibraryRefreshController(
+              (_, _) async =>
+                  const TrackerLibrarySnapshot(folders: [], fromCache: false),
+            ),
+          ),
           anilistAnimeListProvider.overrideWith(() => library),
           anilistAnimePreviewListProvider.overrideWith(
             (Ref ref) async => const <AniListAnimeListFolder>[],
@@ -352,6 +377,12 @@ void main() {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
+            libraryRefreshControllerProvider.overrideWithValue(
+              LibraryRefreshController(
+                (_, _) async =>
+                    const TrackerLibrarySnapshot(folders: [], fromCache: false),
+              ),
+            ),
             settingsProvider.overrideWith(_ConnectedMalSettings.new),
             anilistAnimeListProvider.overrideWith(
               () => _TestAniListLibrary(const <AniListAnimeListFolder>[]),
@@ -444,6 +475,12 @@ void main() {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
+            libraryRefreshControllerProvider.overrideWithValue(
+              LibraryRefreshController(
+                (_, _) async =>
+                    const TrackerLibrarySnapshot(folders: [], fromCache: false),
+              ),
+            ),
             settingsProvider.overrideWith(_ConnectedMalSettings.new),
             anilistAnimeListProvider.overrideWith(
               () => _TestAniListLibrary(const <AniListAnimeListFolder>[]),
@@ -549,6 +586,12 @@ void main() {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
+            libraryRefreshControllerProvider.overrideWithValue(
+              LibraryRefreshController(
+                (_, _) async =>
+                    const TrackerLibrarySnapshot(folders: [], fromCache: false),
+              ),
+            ),
             settingsProvider.overrideWith(_ConnectedMalSettings.new),
             anilistAnimeListProvider.overrideWith(
               () => _TestAniListLibrary(const <AniListAnimeListFolder>[]),
@@ -654,6 +697,12 @@ void main() {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
+            libraryRefreshControllerProvider.overrideWithValue(
+              LibraryRefreshController(
+                (_, _) async =>
+                    const TrackerLibrarySnapshot(folders: [], fromCache: false),
+              ),
+            ),
             settingsProvider.overrideWith(_ConnectedSettings.new),
             anilistAnimeListProvider.overrideWith(() => fullLibrary),
             anilistAnimePreviewListProvider.overrideWith((Ref ref) async {
@@ -789,6 +838,12 @@ void main() {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
+            libraryRefreshControllerProvider.overrideWithValue(
+              LibraryRefreshController(
+                (_, _) async =>
+                    const TrackerLibrarySnapshot(folders: [], fromCache: false),
+              ),
+            ),
             settingsProvider.overrideWith(_ConnectedSettings.new),
             anilistAnimeListProvider.overrideWith(
               () => _TestAniListLibrary(folders),
@@ -936,6 +991,12 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          libraryRefreshControllerProvider.overrideWithValue(
+            LibraryRefreshController(
+              (_, _) async =>
+                  const TrackerLibrarySnapshot(folders: [], fromCache: false),
+            ),
+          ),
           canonicalLibraryDatabaseProvider.overrideWithValue(database),
           settingsProvider.overrideWith(_ConnectedSettings.new),
           anilistAnimeListProvider.overrideWith(
@@ -996,6 +1057,12 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          libraryRefreshControllerProvider.overrideWithValue(
+            LibraryRefreshController(
+              (_, _) async =>
+                  const TrackerLibrarySnapshot(folders: [], fromCache: false),
+            ),
+          ),
           settingsProvider.overrideWith(_ConnectedSettings.new),
           anilistAnimeListProvider.overrideWith(
             () => _TestAniListLibrary(const <AniListAnimeListFolder>[]),
@@ -1056,6 +1123,12 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          libraryRefreshControllerProvider.overrideWithValue(
+            LibraryRefreshController(
+              (_, _) async =>
+                  const TrackerLibrarySnapshot(folders: [], fromCache: false),
+            ),
+          ),
           settingsProvider.overrideWith(_ConnectedSettings.new),
           aniListEffectiveTitleLanguageProvider.overrideWithValue('ENGLISH'),
           anilistAnimeListProvider.overrideWith(
@@ -1096,7 +1169,15 @@ void main() {
     'progress overlay preserves score and notes from the displayed entry',
     () {
       final ProviderContainer container = ProviderContainer(
-        overrides: [settingsProvider.overrideWith(_ConnectedMalSettings.new)],
+        overrides: [
+          libraryRefreshControllerProvider.overrideWithValue(
+            LibraryRefreshController(
+              (_, _) async =>
+                  const TrackerLibrarySnapshot(folders: [], fromCache: false),
+            ),
+          ),
+          settingsProvider.overrideWith(_ConnectedMalSettings.new),
+        ],
       );
       addTearDown(container.dispose);
       final AniListAnimeListEntry entry = AniListAnimeListEntry(
@@ -1160,6 +1241,12 @@ void main() {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
+            libraryRefreshControllerProvider.overrideWithValue(
+              LibraryRefreshController(
+                (_, _) async =>
+                    const TrackerLibrarySnapshot(folders: [], fromCache: false),
+              ),
+            ),
             settingsProvider.overrideWith(_ConnectedMalSettings.new),
             anilistAnimeListProvider.overrideWith(
               () => _TestAniListLibrary(const <AniListAnimeListFolder>[]),

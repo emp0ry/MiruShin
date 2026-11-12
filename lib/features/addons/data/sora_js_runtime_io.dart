@@ -226,8 +226,12 @@ class SoraJsRuntime {
     required SoraInstalledAddon addon,
     required SoraEpisode episode,
     String? voiceover,
+    bool Function()? shouldCancel,
   }) {
     return _serialized(() async {
+      if (shouldCancel?.call() ?? false) {
+        throw const SoraAddonException('Stream resolution cancelled.');
+      }
       final List<Object?> args = <Object?>[
         episode.href,
         if (voiceover != null && voiceover.trim().isNotEmpty) voiceover.trim(),
@@ -241,6 +245,7 @@ class SoraJsRuntime {
           'streams',
         ],
         args: args,
+        shouldCancel: shouldCancel,
       );
       return SoraResolvedStreams(
         addonId: addon.id,
@@ -255,7 +260,13 @@ class SoraJsRuntime {
     required SoraInstalledAddon addon,
     required SoraEpisode episode,
     String? voiceover,
-  }) => extractStreams(addon: addon, episode: episode, voiceover: voiceover);
+    bool Function()? shouldCancel,
+  }) => extractStreams(
+    addon: addon,
+    episode: episode,
+    voiceover: voiceover,
+    shouldCancel: shouldCancel,
+  );
 
   void invalidate(String addonId) {
     unawaited(_serialized<void>(() async => _removeModule(addonId)));
@@ -352,6 +363,7 @@ class SoraJsRuntime {
     required List<Object?> args,
     bool required = true,
     bool settlePending = true,
+    bool Function()? shouldCancel,
   }) async {
     final _LoadedSoraModule module = await _load(addon);
     final JavascriptRuntime rt = _runtime();
@@ -373,6 +385,7 @@ class SoraJsRuntime {
           addon: addon,
           functionName: functionName,
           argsJson: argsJson,
+          shouldCancel: shouldCancel,
         );
         module.activeFunctionName = null;
         if (_isMissingFunction(decoded)) {
@@ -394,6 +407,7 @@ class SoraJsRuntime {
       if (settlePending) {
         await _settlePending(rt, module);
       }
+      module.activeFunctionName = null;
     }
   }
 
@@ -408,6 +422,7 @@ class SoraJsRuntime {
     required SoraInstalledAddon addon,
     required String functionName,
     required String argsJson,
+    bool Function()? shouldCancel,
   }) async {
     final String callId = 'c${_reqSeq++}';
     final Completer<String> completer = Completer<String>();
@@ -444,7 +459,12 @@ class SoraJsRuntime {
       }
       // Drive the engine until the call settles. The pump already runs on
       // QuickJS; we also nudge it here so JSC (no pump) makes progress.
-      final String payload = await _awaitCall(rt, completer);
+      final String payload = await _awaitCall(
+        rt,
+        completer,
+        shouldCancel: shouldCancel,
+        module: _loaded[addon.id],
+      );
       return _decodeCallPayload(payload);
     } finally {
       _pendingCalls.remove(callId);
@@ -453,13 +473,20 @@ class SoraJsRuntime {
 
   Future<String> _awaitCall(
     JavascriptRuntime rt,
-    Completer<String> completer,
-  ) async {
+    Completer<String> completer, {
+    bool Function()? shouldCancel,
+    _LoadedSoraModule? module,
+  }) async {
     // Safety valve: an addon that never resolves must not hang the queue.
     const Duration callTimeout = Duration(seconds: 45);
     Duration executionElapsed = Duration.zero;
     DateTime lastTick = DateTime.now();
     while (!completer.isCompleted) {
+      if (shouldCancel?.call() ?? false) {
+        module?.cancelPendingFetches();
+        module?.cancelPendingDelays();
+        throw const SoraAddonException('Stream resolution cancelled.');
+      }
       try {
         rt.executePendingJob();
       } catch (_) {}

@@ -7,6 +7,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mirushin/core/diagnostics/player_diagnostics.dart';
+import 'package:mirushin/features/addons/domain/sora_models.dart';
 import 'package:mirushin/features/library/application/canonical_library_repository.dart';
 import 'package:mirushin/features/library/application/local_library_provider.dart';
 import 'package:mirushin/features/library/data/canonical_library_database.dart';
@@ -30,6 +31,157 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues(<String, Object>{});
   });
+
+  for (final cancel in [false, true]) {
+    test(
+      'stream retry refreshes URLs/headers and cancels safely ($cancel)',
+      () async {
+        SharedPreferences.setMockInitialValues({
+          'mirushin.player.settings': '{"seekPreviewsEnabled":false}',
+        });
+        final database = CanonicalLibraryDatabase(NativeDatabase.memory());
+        final oldEngine = _LifecyclePlayerEngine(
+          initialState: const PlayerEngineState(
+            position: Duration(seconds: 95),
+          ),
+        );
+        final newEngine = _LifecyclePlayerEngine();
+        final entered = Completer<void>();
+        final response = Completer<NormalizedStreamBundle>();
+        bool Function()? cancelled;
+        var refreshes = 0;
+        var builds = 0;
+        final c = ProviderContainer(
+          overrides: [
+            canonicalLibraryDatabaseProvider.overrideWithValue(database),
+            playerEngineBuilderProvider.overrideWithValue(({
+              double? initialAspectRatio,
+              required PlayerBackend backend,
+              required bool youtubeEmbed,
+              required String trailerBackLabel,
+            }) {
+              builds++;
+              return newEngine;
+            }),
+          ],
+        );
+        addTearDown(() async {
+          c.dispose();
+          await database.close();
+          oldEngine.disposeNotifier();
+          newEngine.disposeNotifier();
+        });
+        final bundle = _refreshFixtureBundle(
+          'expired',
+          refresh: (check) {
+            refreshes++;
+            cancelled = check;
+            entered.complete();
+            return response.future;
+          },
+        );
+        final item = _testPlaybackItem('anilist:10').withStreams(bundle);
+        final controller = c.read(playbackControllerProvider.notifier);
+        controller.debugSetPlaybackState(
+          PlaybackState(
+            item: item,
+            engine: oldEngine,
+            server: item.servers.first,
+            quality: const StreamQuality(
+              id: '720p',
+              label: '720p',
+              url: 'https://example.invalid/expired',
+            ),
+            desiredPlaying: true,
+          ),
+        );
+        final retry = controller.retry();
+        expect(identical(retry, controller.retry()), isTrue);
+        await entered.future;
+        if (cancel) await controller.stop();
+        response.complete(_refreshFixtureBundle('fresh'));
+        await retry;
+        expect(refreshes, 1);
+        expect(oldEngine.disposeCalls, 1);
+        if (cancel) {
+          expect(cancelled!(), isTrue);
+          expect(builds, 0);
+        } else {
+          expect(newEngine.openedSource!.url, 'https://example.invalid/fresh');
+          expect(newEngine.openedSource!.headers['Authorization'], 'fresh');
+          expect(newEngine.openedAt, const Duration(seconds: 95));
+          expect(c.read(playbackControllerProvider).quality!.label, '720p');
+        }
+      },
+    );
+  }
+
+  test(
+    'a failed refreshed URL does not trigger another automatic source refresh',
+    () async {
+      SharedPreferences.setMockInitialValues({
+        'mirushin.player.settings': '{"seekPreviewsEnabled":false}',
+      });
+      final database = CanonicalLibraryDatabase(NativeDatabase.memory());
+      final engines = <_FailedLinkEngine>[];
+      final entered = Completer<void>();
+      final response = Completer<NormalizedStreamBundle>();
+      var refreshes = 0;
+      final c = ProviderContainer(
+        overrides: [
+          canonicalLibraryDatabaseProvider.overrideWithValue(database),
+          playerEngineBuilderProvider.overrideWithValue(({
+            double? initialAspectRatio,
+            required PlayerBackend backend,
+            required bool youtubeEmbed,
+            required String trailerBackLabel,
+          }) {
+            final engine = _FailedLinkEngine();
+            engines.add(engine);
+            return engine;
+          }),
+        ],
+      );
+      addTearDown(() async {
+        c.dispose();
+        await database.close();
+        for (final engine in engines) {
+          engine.disposeNotifier();
+        }
+      });
+      final item = _testPlaybackItem('anilist:10')
+          .withIgnoreProgress(true)
+          .withStreams(
+            _refreshFixtureBundle(
+              'expired',
+              refresh: (_) {
+                refreshes++;
+                entered.complete();
+                return response.future;
+              },
+            ),
+          );
+      final controller = c.read(playbackControllerProvider.notifier);
+      await controller.load(item);
+      await entered.future;
+      final pending = controller.retry();
+      response.complete(_refreshFixtureBundle('fresh'));
+      await pending;
+      await Future.doWhile(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+        return c.read(playbackControllerProvider).error == null;
+      }).timeout(const Duration(seconds: 5));
+      expect(refreshes, 1);
+      expect(engines.first.openedSource!.url, contains('expired'));
+      expect(
+        engines
+            .skip(1)
+            .every((engine) => engine.openedSource!.url.contains('fresh')),
+        isTrue,
+      );
+      expect(isRecoverableStreamFailure('unsupported decoder codec'), isFalse);
+    },
+  );
 
   ProviderContainer container() {
     final CanonicalLibraryDatabase database = CanonicalLibraryDatabase(
@@ -155,7 +307,10 @@ void main() {
               )
               .get();
           expect(
-            deliveries.every((delivery) => delivery.target == 'drive'),
+            deliveries.every(
+              (delivery) =>
+                  {'drive', 'drive.playback'}.contains(delivery.target),
+            ),
             isTrue,
           );
         },
@@ -2497,4 +2652,50 @@ class _FakePlaybackSyncSink implements PlaybackSyncSink {
     bool playing, {
     bool temporary = false,
   }) {}
+}
+
+NormalizedStreamBundle _refreshFixtureBundle(
+  String version, {
+  Future<NormalizedStreamBundle> Function(bool Function())? refresh,
+}) {
+  final server = NormalizedServer(
+    id: 'server',
+    title: 'Server',
+    streamUrl: 'https://example.invalid/$version',
+    headers: {'Authorization': version},
+    qualities: [
+      NormalizedQuality(
+        label: '720p',
+        streamUrl: 'https://example.invalid/$version',
+        headers: {'Authorization': version},
+      ),
+    ],
+  );
+  return NormalizedStreamBundle(
+    addonId: 'test',
+    episode: const SoraEpisode(
+      number: 1,
+      href: '/1',
+      title: '',
+      image: '',
+      description: '',
+      duration: '',
+    ),
+    selectedServer: server,
+    availableServers: [server],
+    streamType: 'HLS',
+    refreshCancellable: refresh,
+  );
+}
+
+class _FailedLinkEngine extends _LifecyclePlayerEngine {
+  @override
+  Future<void> open(
+    PlayerSource source, {
+    Duration? startAt,
+    bool autoplay = false,
+  }) async {
+    openedSource = source;
+    throw StateError('HTTP 403 expired link');
+  }
 }

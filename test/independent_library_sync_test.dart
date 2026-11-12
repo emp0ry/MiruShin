@@ -82,6 +82,7 @@ Future<ProviderReconciliationResult> ingest(
   List<UserMediaState> remote, {
   Set<TrackerSource> targets = const {},
   bool complete = true,
+  bool followCatalog = false,
 }) => repo.reconcileProviderSnapshot(
   source: source,
   accountId: source.name,
@@ -90,6 +91,8 @@ Future<ProviderReconciliationResult> ingest(
   journal: const [],
   propagationTargets: targets,
   completeSnapshot: complete,
+  authoritativeSource: followCatalog ? source : null,
+  catalogAuthoritative: followCatalog,
 );
 
 Future<void> approve(CanonicalLibraryRepository repo, TrackerSource source) =>
@@ -222,6 +225,136 @@ Future<TrackerSyncCoordinator> coordinator(
 }
 
 void main() {
+  Future<CanonicalLibraryRepository> sourceLibrary() async {
+    final repo = memory();
+    await ingest(repo, TrackerSource.anilist, [sample()], followCatalog: true);
+    await approve(repo, TrackerSource.anilist);
+    await ingest(repo, TrackerSource.anilist, [sample()], followCatalog: true);
+    return repo;
+  }
+
+  test(
+    'catalog mode accepts another device edit even with equal dates',
+    () async {
+      final repo = await sourceLibrary();
+      await ingest(repo, TrackerSource.anilist, [
+        sample(progress: 8),
+      ], followCatalog: true);
+      expect((await repo.loadTrackingStates()).single.progress, 8);
+      expect(await repo.watchConflicts().first, isEmpty);
+    },
+  );
+
+  test('catalog mode accepts an external edit without a timestamp', () async {
+    final repo = await sourceLibrary();
+    final zero = DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+    final incoming = sample(progress: 5)
+        .apply(UserMediaPatch(progress: 5), zero)
+        .withProviderSnapshot(
+          ProviderUserMediaState(
+            provider: TrackerSource.anilist,
+            updatedAt: zero,
+          ),
+        );
+    await ingest(repo, TrackerSource.anilist, [incoming], followCatalog: true);
+    expect((await repo.loadTrackingStates()).single.progress, 5);
+    expect(await repo.watchConflicts().first, isEmpty);
+    final row =
+        (await repo.database
+                .select(repo.database.canonicalLibraryRecords)
+                .get())
+            .single;
+    final revision =
+        (jsonDecode(row.fieldRevisionsJson) as Map)['progress'] as Map;
+    expect(revision['editTimeVerified'], isFalse);
+  });
+
+  test(
+    'complete source deletion applies; partial snapshot cannot delete',
+    () async {
+      final repo = await sourceLibrary();
+      await ingest(
+        repo,
+        TrackerSource.anilist,
+        [],
+        complete: false,
+        followCatalog: true,
+      );
+      expect(await repo.loadTrackingStates(), hasLength(1));
+      await ingest(repo, TrackerSource.anilist, [], followCatalog: true);
+      expect(await repo.loadTrackingStates(), isEmpty);
+      expect(await repo.watchConflicts().first, isEmpty);
+      await ingest(repo, TrackerSource.anilist, [], followCatalog: true);
+      expect(await repo.loadTrackingStates(), isEmpty);
+    },
+  );
+
+  for (final remoteHour in [2, 3, 4]) {
+    test(
+      'source versus a pending edit uses edit dates ($remoteHour)',
+      () async {
+        final repo = await sourceLibrary();
+        await edit(
+          repo,
+          UserMediaPatch(progress: 7),
+          3,
+          targets: {TrackerSource.anilist},
+        );
+        await ingest(repo, TrackerSource.anilist, [
+          sample(progress: 4, hour: remoteHour),
+        ], followCatalog: true);
+        expect(
+          (await repo.loadTrackingStates()).single.progress,
+          remoteHour > 3 ? 4 : 7,
+        );
+        expect(await repo.watchConflicts().first, isEmpty);
+        if (remoteHour <= 3) {
+          expect(
+            (await repo.loadJournal()).any(
+              (job) =>
+                  job.tracks(TrackerSource.anilist) && job.patch.progress == 7,
+            ),
+            isTrue,
+          );
+        }
+      },
+    );
+  }
+
+  test('source re-add supersedes an older pending local deletion', () async {
+    final repo = await sourceLibrary();
+    await edit(
+      repo,
+      UserMediaPatch(delete: true),
+      3,
+      targets: {TrackerSource.anilist},
+    );
+    await ingest(repo, TrackerSource.anilist, [
+      sample(hour: 4),
+    ], followCatalog: true);
+    expect(await repo.loadTrackingStates(), hasLength(1));
+    expect(
+      (await repo.loadJournal()).any(
+        (job) => job.patch.delete && job.tracks(TrackerSource.anilist),
+      ),
+      isFalse,
+    );
+  });
+
+  test(
+    'source mode settles old provider conflicts without removing history',
+    () async {
+      final repo = await sourceLibrary();
+      await ingest(repo, TrackerSource.anilist, [sample(progress: 8)]);
+      expect(await repo.watchConflicts().first, isNotEmpty);
+      await ingest(repo, TrackerSource.anilist, [
+        sample(progress: 8),
+      ], followCatalog: true);
+      expect((await repo.loadTrackingStates()).single.progress, 8);
+      expect(await repo.watchConflicts().first, isEmpty);
+    },
+  );
+
   setUpAll(() {
     driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
   });

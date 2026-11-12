@@ -29,12 +29,14 @@ final trackingSyncStoreProvider = Provider<TrackingSyncStore>((Ref ref) {
         settings.malViewerId,
         settings.shikimoriViewerId,
         settings.primaryTrackerSource,
+        settings.googleDriveLibrarySyncEnabled,
       ),
     ),
   );
   return CanonicalTrackingSyncStore(
     repository: ref.watch(canonicalLibraryRepositoryProvider),
     authoritativeSource: accounts.$4,
+    catalogAuthoritative: !accounts.$5,
     healthAccountIds: {
       if (accounts.$1 != null) TrackerSource.anilist: '${accounts.$1}',
       if (accounts.$2 != null) TrackerSource.mal: '${accounts.$2}',
@@ -518,6 +520,37 @@ class TrackerSyncCoordinator {
     }
   }
 
+  /// Manual Library refresh reads only the chosen source/kind. Delivery and
+  /// initialization of other kinds continue independently in the background.
+  Future<TrackerLibrarySnapshot> refreshSelectedLibrary({
+    required String mediaKind,
+    bool force = false,
+  }) async {
+    final source = _settings.primaryTrackerSource;
+    if (!_accountIds.containsKey(source) || !await _canContactTrackers()) {
+      return _cachedSnapshot(mediaKind);
+    }
+    final result = await _refreshSource(
+      source,
+      mediaKind,
+      force: force,
+      initializeOtherKind: false,
+      deliverAfterRefresh: false,
+    );
+    if (!result.fromCache && !result.requiresAccountApproval) {
+      unawaited(flushPending());
+    }
+    return TrackerLibrarySnapshot(
+      folders: foldersFromUserMediaStates(
+        result.states
+            .where((state) => state.identity.mediaKind == mediaKind)
+            .toList(),
+      ),
+      remoteSource: result.remoteSource,
+      fromCache: result.fromCache || result.requiresAccountApproval,
+    );
+  }
+
   Future<TrackerLibrarySnapshot> refreshAnimeLibrary({
     required TrackerSource preferred,
     Set<TrackerSource> excluded = const <TrackerSource>{},
@@ -574,6 +607,8 @@ class TrackerSyncCoordinator {
     TrackerSource source,
     String kind, {
     bool force = false,
+    bool initializeOtherKind = true,
+    bool deliverAfterRefresh = true,
   }) {
     final requestedAt = DateTime.now().toUtc();
     return _serialProvider(source, () async {
@@ -598,7 +633,7 @@ class TrackerSyncCoordinator {
       final result = await _pullSnapshot(engine, source, kind);
       if (!result.fromCache && !result.requiresAccountApproval) {
         // Reconcile the other kind before the first replay of this account.
-        if (!_initializedProviders.contains(source)) {
+        if (initializeOtherKind && !_initializedProviders.contains(source)) {
           final other = await _pullSnapshot(
             engine,
             source,
@@ -608,7 +643,9 @@ class TrackerSyncCoordinator {
             _initializedProviders.add(source);
           }
         }
-        if (_initializedProviders.contains(source)) await engine.flush();
+        if (deliverAfterRefresh && _initializedProviders.contains(source)) {
+          await engine.flush();
+        }
       }
       await _scheduleRetry(source);
       _invalidateHealth();

@@ -1,12 +1,14 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show SliverConstraints;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../app/app_routes.dart';
 import '../../../app/localization/app_localizations.dart';
 import '../../../app/theme/app_spacing.dart';
+import '../../../core/network/catalog_request_context.dart';
 import '../../../core/platform/tv_platform.dart';
 import '../../../core/responsive/responsive_grid.dart';
 import '../../../core/widgets/adaptive_page.dart';
@@ -318,6 +320,7 @@ class DiscoveryPage extends ConsumerStatefulWidget {
 class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
   late final ScrollController _scrollController;
   Timer? _searchDebounce;
+  CatalogRequestContext? _activeRequest;
   MediaType? _selectedType;
   _AniListDiscoveryKind _selectedAniListKind = _AniListDiscoveryKind.anime;
   String _query = '';
@@ -353,6 +356,7 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
   @override
   void dispose() {
     _searchDebounce?.cancel();
+    _activeRequest?.cancel();
     _scrollController
       ..removeListener(_onScroll)
       ..dispose();
@@ -388,12 +392,15 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
       settings.effectiveTmdbLanguage,
       settings.anilistAccessToken,
       settings.anilistViewerId,
+      ref.watch(aniListEffectiveTitleLanguageProvider),
+      ref.watch(aniListEffectiveAdultContentProvider),
     ).toString();
   }
 
   List<MediaItem> _visibleItems() => List<MediaItem>.of(_items);
 
   void _setQuery(String value) {
+    _cancelRequest();
     setState(() => _query = value);
     _searchDebounce?.cancel();
     _searchDebounce = Timer(
@@ -487,9 +494,32 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
     }
   }
 
+  void _cancelRequest() {
+    _requestSerial++;
+    _activeRequest?.cancel();
+    _activeRequest = null;
+  }
+
+  CatalogRequestContext _newRequest(int requestId) {
+    return _activeRequest = CatalogRequestContext(
+      onItemsUpdated: (updates) {
+        if (!mounted || requestId != _requestSerial) return;
+        final byId = {for (final item in updates) item.id: item};
+        setState(() {
+          for (var i = 0; i < _items.length; i++) {
+            _items[i] = byId[_items[i].id] ?? _items[i];
+          }
+        });
+      },
+    );
+  }
+
   Future<void> _reload() async {
     if (!mounted || _pageSize < 1) return;
-    final int requestId = ++_requestSerial;
+    _searchDebounce?.cancel();
+    _cancelRequest();
+    final int requestId = _requestSerial;
+    final request = _newRequest(requestId);
     setState(() {
       _loadingInitial = true;
       _loadingMore = false;
@@ -498,7 +528,7 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
       _page = 0;
       _items.clear();
     });
-    final List<MediaItem> firstPage = await _fetchPage(1);
+    final List<MediaItem> firstPage = await _fetchPage(1, request, requestId);
     if (!mounted || requestId != _requestSerial) return;
     setState(() {
       _items
@@ -513,9 +543,18 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
   Future<void> _loadMore() async {
     if (!_hasMore || _loadingMore || _loadingInitial) return;
     final int requestId = _requestSerial;
-    setState(() => _loadingMore = true);
+    _activeRequest?.cancel();
+    final request = _newRequest(requestId);
+    setState(() {
+      _loadingMore = true;
+      _error = null;
+    });
     final int nextPage = _page + 1;
-    final List<MediaItem> nextItems = await _fetchPage(nextPage);
+    final List<MediaItem> nextItems = await _fetchPage(
+      nextPage,
+      request,
+      requestId,
+    );
     if (!mounted || requestId != _requestSerial) return;
     setState(() {
       final List<MediaItem> merged = _dedupe(<MediaItem>[
@@ -526,123 +565,148 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
         ..clear()
         ..addAll(merged);
       _page = nextItems.isEmpty ? _page : nextPage;
-      _hasMore = nextItems.isNotEmpty;
+      _hasMore = _error != null || nextItems.isNotEmpty;
       _loadingMore = false;
     });
   }
 
-  Future<List<MediaItem>> _fetchPage(int page) async {
+  Future<List<MediaItem>> _fetchPage(
+    int page,
+    CatalogRequestContext request,
+    int requestId,
+  ) async {
     try {
-      final int pageSize = _pageSize;
-      if (pageSize < 1) return const <MediaItem>[];
-      final String search = _query.trim();
-      final CatalogMode mode = ref.read(catalogModeProvider);
-
-      if (mode == CatalogMode.tmdb &&
-          _tmdbAdvancedFilter.hasAnyFilter &&
-          search.isEmpty) {
-        final TmdbMetadataProvider? tmdb = ref.read(tmdbProviderProvider);
-        if (tmdb == null) return const <MediaItem>[];
-        return loadLogicalMediaPage(
-          page: page,
-          pageSize: pageSize,
-          fetchPage: (int sourcePage) => tmdb.discoverPageAdvanced(
-            filter: _filter,
-            type: _selectedType,
-            page: sourcePage,
-            genreIds: _tmdbAdvancedFilter.genreIds.isEmpty
-                ? null
-                : _tmdbAdvancedFilter.genreIds,
-            withoutGenreIds: _tmdbAdvancedFilter.genreNotIds.isEmpty
-                ? null
-                : _tmdbAdvancedFilter.genreNotIds,
-            yearFrom: _tmdbAdvancedFilter.yearFrom,
-            yearTo: _tmdbAdvancedFilter.yearTo,
-            minRating: _tmdbAdvancedFilter.minRating,
-            originalLanguage: _tmdbAdvancedFilter.originalLanguage,
-            includeAdult: _tmdbAdvancedFilter.includeAdult,
-          ),
-        );
-      }
-
-      if (mode == CatalogMode.anilist &&
+      // Provider initialization may start unrelated account/settings work.
+      // Give that work its own lifetime before entering this UI request zone.
+      if (ref.read(catalogModeProvider) == CatalogMode.anilist &&
           _advancedFilter.hasAnyFilter &&
-          search.isEmpty) {
-        final String type = _selectedAniListKind == _AniListDiscoveryKind.manga
-            ? 'MANGA'
-            : 'ANIME';
-        final List<String> sourceIn = _effectiveAniListSourceIn(
-          _advancedFilter,
-        );
-        if (_aniListSourceFilterHasNoMatches(_advancedFilter)) {
-          return const <MediaItem>[];
-        }
-        return ref
-            .read(aniListProfileClientProvider)
-            .getAdvancedFilteredCatalog(
-              type: type,
-              sort: _sortStringForFilter(_filter),
-              formatIn: _advancedFilter.formatIn.isEmpty
-                  ? null
-                  : _advancedFilter.formatIn,
-              formatNotIn: _advancedFilter.formatNotIn.isEmpty
-                  ? null
-                  : _advancedFilter.formatNotIn,
-              statusIn: _advancedFilter.statusIn.isEmpty
-                  ? null
-                  : _advancedFilter.statusIn,
-              statusNotIn: _advancedFilter.statusNotIn.isEmpty
-                  ? null
-                  : _advancedFilter.statusNotIn,
-              sourceIn: sourceIn.isEmpty ? null : sourceIn,
-              season: _advancedFilter.season,
-              startDateGreater: _advancedFilter.yearFrom != null
-                  ? int.parse('${_advancedFilter.yearFrom}0101')
-                  : null,
-              startDateLesser: _advancedFilter.yearTo != null
-                  ? int.parse('${_advancedFilter.yearTo}1231')
-                  : null,
-              countryOfOrigin: _advancedFilter.countryOfOrigin,
-              genreIn: _advancedFilter.genreIn.isEmpty
-                  ? null
-                  : _advancedFilter.genreIn,
-              genreNotIn: _advancedFilter.genreNotIn.isEmpty
-                  ? null
-                  : _advancedFilter.genreNotIn,
-              tagIn: _advancedFilter.tagIn.isEmpty
-                  ? null
-                  : _advancedFilter.tagIn,
-              tagNotIn: _advancedFilter.tagNotIn.isEmpty
-                  ? null
-                  : _advancedFilter.tagNotIn,
-              isAdult: _advancedFilter.isAdult,
-              isLicensed: _advancedFilter.isLicensed,
-              onList: _advancedFilter.onList,
-              page: page,
-              perPage: pageSize,
-            );
+          _query.trim().isEmpty) {
+        ref.read(aniListProfileClientProvider);
+      } else {
+        ref.read(activeCatalogRepositoryProvider);
       }
+      final items = await request.run(() => _fetchPageData(page));
+      return request.enrichedItems ?? items;
+    } on CatalogRequestCancelled {
+      return const [];
+    } catch (error) {
+      if (mounted && requestId == _requestSerial) {
+        final retryAt = request.retryAt;
+        setState(
+          () => _error = retryAt != null && retryAt.isAfter(DateTime.now())
+              ? context.tf('AniList is busy. Try again in {seconds}s.', {
+                  'seconds': retryAt.difference(DateTime.now()).inSeconds + 1,
+                })
+              : error is CatalogRequestTimeout
+              ? context.t('Search took too long. Please try again.')
+              : context.t('Could not load search results. Please try again.'),
+        );
+      }
+      return const [];
+    }
+  }
 
-      final CatalogRepository? repository = ref.read(
-        activeCatalogRepositoryProvider,
-      );
-      if (repository == null) return const <MediaItem>[];
-      return repository.discover(
-        search: search,
-        filter: _filter,
-        type: mode == CatalogMode.tmdb ? _selectedType : null,
+  Future<List<MediaItem>> _fetchPageData(int page) async {
+    final int pageSize = _pageSize;
+    if (pageSize < 1) return const <MediaItem>[];
+    final String search = _query.trim();
+    final CatalogMode mode = ref.read(catalogModeProvider);
+
+    if (mode == CatalogMode.tmdb &&
+        _tmdbAdvancedFilter.hasAnyFilter &&
+        search.isEmpty) {
+      final TmdbMetadataProvider? tmdb = ref.read(tmdbProviderProvider);
+      if (tmdb == null) return const <MediaItem>[];
+      return loadLogicalMediaPage(
         page: page,
         pageSize: pageSize,
-        anilistKind: mode == CatalogMode.anilist
-            ? _selectedAniListKind.key
-            : null,
+        fetchPage: (int sourcePage) => tmdb.discoverPageAdvanced(
+          filter: _filter,
+          type: _selectedType,
+          page: sourcePage,
+          genreIds: _tmdbAdvancedFilter.genreIds.isEmpty
+              ? null
+              : _tmdbAdvancedFilter.genreIds,
+          withoutGenreIds: _tmdbAdvancedFilter.genreNotIds.isEmpty
+              ? null
+              : _tmdbAdvancedFilter.genreNotIds,
+          yearFrom: _tmdbAdvancedFilter.yearFrom,
+          yearTo: _tmdbAdvancedFilter.yearTo,
+          minRating: _tmdbAdvancedFilter.minRating,
+          originalLanguage: _tmdbAdvancedFilter.originalLanguage,
+          includeAdult: _tmdbAdvancedFilter.includeAdult,
+        ),
       );
-    } catch (error) {
-      if (mounted) {
-        setState(() => _error = error.toString());
-      }
-      return <MediaItem>[];
     }
+
+    if (mode == CatalogMode.anilist &&
+        _advancedFilter.hasAnyFilter &&
+        search.isEmpty) {
+      final String type = _selectedAniListKind == _AniListDiscoveryKind.manga
+          ? 'MANGA'
+          : 'ANIME';
+      final List<String> sourceIn = _effectiveAniListSourceIn(_advancedFilter);
+      if (_aniListSourceFilterHasNoMatches(_advancedFilter)) {
+        return const <MediaItem>[];
+      }
+      return ref
+          .read(aniListProfileClientProvider)
+          .getAdvancedFilteredCatalog(
+            type: type,
+            sort: _sortStringForFilter(_filter),
+            formatIn: _advancedFilter.formatIn.isEmpty
+                ? null
+                : _advancedFilter.formatIn,
+            formatNotIn: _advancedFilter.formatNotIn.isEmpty
+                ? null
+                : _advancedFilter.formatNotIn,
+            statusIn: _advancedFilter.statusIn.isEmpty
+                ? null
+                : _advancedFilter.statusIn,
+            statusNotIn: _advancedFilter.statusNotIn.isEmpty
+                ? null
+                : _advancedFilter.statusNotIn,
+            sourceIn: sourceIn.isEmpty ? null : sourceIn,
+            season: _advancedFilter.season,
+            startDateGreater: _advancedFilter.yearFrom != null
+                ? int.parse('${_advancedFilter.yearFrom}0101')
+                : null,
+            startDateLesser: _advancedFilter.yearTo != null
+                ? int.parse('${_advancedFilter.yearTo}1231')
+                : null,
+            countryOfOrigin: _advancedFilter.countryOfOrigin,
+            genreIn: _advancedFilter.genreIn.isEmpty
+                ? null
+                : _advancedFilter.genreIn,
+            genreNotIn: _advancedFilter.genreNotIn.isEmpty
+                ? null
+                : _advancedFilter.genreNotIn,
+            tagIn: _advancedFilter.tagIn.isEmpty ? null : _advancedFilter.tagIn,
+            tagNotIn: _advancedFilter.tagNotIn.isEmpty
+                ? null
+                : _advancedFilter.tagNotIn,
+            isAdult: _advancedFilter.isAdult,
+            isLicensed: _advancedFilter.isLicensed,
+            onList: _advancedFilter.onList,
+            page: page,
+            perPage: pageSize,
+          );
+    }
+
+    final CatalogRepository? repository = ref.read(
+      activeCatalogRepositoryProvider,
+    );
+    if (repository == null) return const <MediaItem>[];
+    return repository.discover(
+      search: search,
+      filter: _filter,
+      type: mode == CatalogMode.tmdb ? _selectedType : null,
+      page: page,
+      pageSize: pageSize,
+      anilistKind: mode == CatalogMode.anilist
+          ? _selectedAniListKind.key
+          : null,
+    );
   }
 
   static String _sortStringForFilter(String filter) {
@@ -687,6 +751,7 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
     final CatalogMode mode = ref.watch(catalogModeProvider);
     final String settingsKey = _settingsKey(settings, mode);
     if (_settingsSignature != settingsKey) {
+      _cancelRequest();
       _settingsSignature = settingsKey;
       WidgetsBinding.instance.addPostFrameCallback((_) => _reload());
     }
@@ -763,178 +828,217 @@ class _DiscoveryPageState extends ConsumerState<DiscoveryPage> {
       ],
     );
     final Widget page = AdaptivePage(
-      child: SingleChildScrollView(
+      child: CustomScrollView(
         key: const ValueKey<String>('discovery-page-scroll-view'),
         controller: _scrollController,
         clipBehavior: Clip.none,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            const CatalogOfflineBanner(),
-            SectionHeader(
-              title: context.t('Discovery'),
-              subtitle: context.t('Search media, genres, people, moods'),
-            ),
-            const SizedBox(height: AppSpacing.md),
-            GlassCard(
-              padding: const EdgeInsets.all(AppSpacing.md),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  TvTextFieldFocus(
-                    releaseHorizontal: true,
-                    child: TextField(
-                      onChanged: _setQuery,
-                      textInputAction: TextInputAction.search,
-                      decoration: InputDecoration(
-                        hintText: context.t(
-                          'Search media, genres, people, moods',
+        slivers: <Widget>[
+          SliverToBoxAdapter(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                const CatalogOfflineBanner(),
+                SectionHeader(
+                  title: context.t('Discovery'),
+                  subtitle: context.t('Search media, genres, people, moods'),
+                ),
+                const SizedBox(height: AppSpacing.md),
+                GlassCard(
+                  padding: const EdgeInsets.all(AppSpacing.md),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      TvTextFieldFocus(
+                        releaseHorizontal: true,
+                        child: TextField(
+                          onChanged: _setQuery,
+                          textInputAction: TextInputAction.search,
+                          decoration: InputDecoration(
+                            hintText: context.t(
+                              'Search media, genres, people, moods',
+                            ),
+                            prefixIcon: const Icon(Icons.search_rounded),
+                          ),
                         ),
-                        prefixIcon: const Icon(Icons.search_rounded),
                       ),
-                    ),
+                      const SizedBox(height: AppSpacing.md),
+                      if (mode == CatalogMode.tmdb) ...<Widget>[
+                        _TypeTabs(
+                          mode: mode,
+                          selectedType: _selectedType,
+                          selectedAniListKind: _selectedAniListKind,
+                          onTypeChanged: _setType,
+                          onAniListKindChanged: _setAniListKind,
+                        ),
+                        const SizedBox(height: AppSpacing.md),
+                      ],
+                      _FilterBar(
+                        mode: mode,
+                        selected: _filter,
+                        onSelected: _setFilter,
+                      ),
+                      const SizedBox(height: AppSpacing.sm),
+                      if (mode == CatalogMode.anilist)
+                        LayoutBuilder(
+                          key: const ValueKey<String>(
+                            'discovery-primary-controls',
+                          ),
+                          builder:
+                              (
+                                BuildContext context,
+                                BoxConstraints constraints,
+                              ) {
+                                final Widget typeTabs = _TypeTabs(
+                                  mode: mode,
+                                  selectedType: _selectedType,
+                                  selectedAniListKind: _selectedAniListKind,
+                                  onTypeChanged: _setType,
+                                  onAniListKindChanged: _setAniListKind,
+                                );
+                                final double minimumInlineWidth =
+                                    hasAdvancedFilters ? 480 : 420;
+                                if (constraints.maxWidth < minimumInlineWidth) {
+                                  return Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: <Widget>[
+                                      typeTabs,
+                                      const SizedBox(height: AppSpacing.sm),
+                                      Align(
+                                        alignment: Alignment.centerRight,
+                                        child: advancedFilterActions,
+                                      ),
+                                    ],
+                                  );
+                                }
+                                return Row(
+                                  crossAxisAlignment: CrossAxisAlignment.center,
+                                  children: <Widget>[
+                                    typeTabs,
+                                    const Spacer(),
+                                    advancedFilterActions,
+                                  ],
+                                );
+                              },
+                        )
+                      else
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: advancedFilterActions,
+                        ),
+                    ],
                   ),
-                  const SizedBox(height: AppSpacing.md),
-                  if (mode == CatalogMode.tmdb) ...<Widget>[
-                    _TypeTabs(
-                      mode: mode,
-                      selectedType: _selectedType,
-                      selectedAniListKind: _selectedAniListKind,
-                      onTypeChanged: _setType,
-                      onAniListKindChanged: _setAniListKind,
-                    ),
-                    const SizedBox(height: AppSpacing.md),
-                  ],
-                  _FilterBar(
-                    mode: mode,
-                    selected: _filter,
-                    onSelected: _setFilter,
-                  ),
-                  const SizedBox(height: AppSpacing.sm),
-                  if (mode == CatalogMode.anilist)
-                    LayoutBuilder(
-                      key: const ValueKey<String>('discovery-primary-controls'),
-                      builder:
-                          (BuildContext context, BoxConstraints constraints) {
-                            final Widget typeTabs = _TypeTabs(
-                              mode: mode,
-                              selectedType: _selectedType,
-                              selectedAniListKind: _selectedAniListKind,
-                              onTypeChanged: _setType,
-                              onAniListKindChanged: _setAniListKind,
-                            );
-                            final double minimumInlineWidth = hasAdvancedFilters
-                                ? 480
-                                : 420;
-                            if (constraints.maxWidth < minimumInlineWidth) {
-                              return Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: <Widget>[
-                                  typeTabs,
-                                  const SizedBox(height: AppSpacing.sm),
-                                  Align(
-                                    alignment: Alignment.centerRight,
-                                    child: advancedFilterActions,
-                                  ),
-                                ],
-                              );
-                            }
-                            return Row(
-                              crossAxisAlignment: CrossAxisAlignment.center,
-                              children: <Widget>[
-                                typeTabs,
-                                const Spacer(),
-                                advancedFilterActions,
-                              ],
-                            );
-                          },
-                    )
-                  else
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: advancedFilterActions,
-                    ),
-                ],
-              ),
+                ),
+                const SizedBox(height: AppSpacing.xl),
+              ],
             ),
-            const SizedBox(height: AppSpacing.xl),
-            LayoutBuilder(
-              builder: (BuildContext context, BoxConstraints constraints) {
-                final int columns = responsiveGridColumnCount(
-                  availableWidth: constraints.maxWidth,
-                  minItemWidth: 168,
-                  maxColumns: 8,
-                  maxColumnsForWidth: _discoveryMaxColumnsForWidth,
+          ),
+          SliverLayoutBuilder(
+            builder: (BuildContext context, SliverConstraints constraints) {
+              final int columns = responsiveGridColumnCount(
+                availableWidth: constraints.crossAxisExtent,
+                minItemWidth: 168,
+                maxColumns: 8,
+                maxColumnsForWidth: _discoveryMaxColumnsForWidth,
+              );
+              _schedulePageSize(columns * 4);
+              if (_loadingInitial || _pageSize == 0) {
+                return const SliverToBoxAdapter(
+                  child: _DiscoverySkeletonGrid(),
                 );
-                _schedulePageSize(columns * 4);
-                if (_loadingInitial || _pageSize == 0) {
-                  return const _DiscoverySkeletonGrid();
-                }
-                if (_error != null && items.isEmpty) {
-                  return NeutralPlaceholder(
+              }
+              if (_error != null && items.isEmpty) {
+                return SliverToBoxAdapter(
+                  child: NeutralPlaceholder(
                     icon: Icons.cloud_off_rounded,
                     title: context.t('Discovery is offline'),
                     message: _error!,
                     height: 320,
-                  );
-                }
-                if (items.isEmpty) {
-                  return NeutralPlaceholder(
+                    action: TextButton(
+                      onPressed: _reload,
+                      child: Text(context.t('Retry')),
+                    ),
+                  ),
+                );
+              }
+              if (items.isEmpty) {
+                return SliverToBoxAdapter(
+                  child: NeutralPlaceholder(
                     icon: Icons.manage_search_rounded,
                     title: context.t('No Results Yet'),
                     message: context.t(
                       'Configure a metadata source in Settings to browse content.',
                     ),
                     height: 320,
-                  );
-                }
-                return Column(
-                  children: <Widget>[
-                    ResponsiveGrid(
-                      key: const ValueKey<String>('discovery-grid'),
-                      itemCount: items.length,
-                      maxColumns: 8,
-                      maxColumnsForWidth: _discoveryMaxColumnsForWidth,
-                      clipBehavior: Clip.none,
-                      itemBuilder: (BuildContext context, int index) {
-                        final MediaItem item = items[index];
-                        final AniListAnimeListEntry? entry =
-                            anilistEntryMap[item.id];
-                        final VoidCallback? editAniListEntry =
-                            mode == CatalogMode.anilist
-                            ? () => unawaited(
-                                _openAniListEntryEditor(
-                                  context,
-                                  ref,
-                                  item: item,
-                                  entry: entry,
-                                ),
-                              )
-                            : null;
-                        return MediaPosterCard(
-                          item: item,
-                          statusBadgeLabel: statusBadges[item.id],
-                          onTap: () => context.push(
-                            AppRoutes.mediaDetailsPath(item.id),
-                            extra: item,
-                          ),
-                          onLongPress: editAniListEntry,
-                          onSecondaryTap: editAniListEntry,
-                        );
-                      },
-                    ),
-                    const SizedBox(height: AppSpacing.xl),
-                    _DiscoveryFooter(
-                      loadingMore: _loadingMore,
-                      hasMore: _hasMore,
-                      onLoadMore: _loadMore,
-                    ),
-                  ],
+                  ),
                 );
-              },
-            ),
-          ],
-        ),
+              }
+              return SliverMainAxisGroup(
+                slivers: [
+                  SliverGrid(
+                    key: const ValueKey<String>('discovery-grid'),
+                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: columns,
+                      crossAxisSpacing: AppSpacing.lg,
+                      mainAxisSpacing: AppSpacing.lg,
+                      childAspectRatio: 0.62,
+                    ),
+                    delegate: SliverChildBuilderDelegate((
+                      BuildContext context,
+                      int index,
+                    ) {
+                      final MediaItem item = items[index];
+                      final AniListAnimeListEntry? entry =
+                          anilistEntryMap[item.id];
+                      final VoidCallback? editAniListEntry =
+                          mode == CatalogMode.anilist
+                          ? () => unawaited(
+                              _openAniListEntryEditor(
+                                context,
+                                ref,
+                                item: item,
+                                entry: entry,
+                              ),
+                            )
+                          : null;
+                      return MediaPosterCard(
+                        key: ValueKey(item.id),
+                        item: item,
+                        statusBadgeLabel: statusBadges[item.id],
+                        onTap: () => context.push(
+                          AppRoutes.mediaDetailsPath(item.id),
+                          extra: item,
+                        ),
+                        onLongPress: editAniListEntry,
+                        onSecondaryTap: editAniListEntry,
+                      );
+                    }, childCount: items.length),
+                  ),
+                  const SliverToBoxAdapter(
+                    child: SizedBox(height: AppSpacing.xl),
+                  ),
+                  SliverToBoxAdapter(
+                    child: _error != null
+                        ? Column(
+                            children: [
+                              Text(_error!),
+                              TextButton(
+                                onPressed: _loadMore,
+                                child: Text(context.t('Retry')),
+                              ),
+                            ],
+                          )
+                        : _DiscoveryFooter(
+                            loadingMore: _loadingMore,
+                            hasMore: _hasMore,
+                            onLoadMore: _loadMore,
+                          ),
+                  ),
+                ],
+              );
+            },
+          ),
+        ],
       ),
     );
     return TvPlatform.isAndroidTv ? TvDirectionalFocus(child: page) : page;

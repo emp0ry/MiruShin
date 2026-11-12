@@ -204,6 +204,8 @@ NormalizedStreamBundle parseSoraStreamBundle(
   SoraResolvedStreams streams, {
   String streamType = '',
   Future<NormalizedStreamBundle> Function()? refresh,
+  Future<NormalizedStreamBundle> Function(bool Function() isCancelled)?
+  refreshCancellable,
 }) {
   final List<SoraStreamCandidate> candidates = streams.candidates;
 
@@ -221,6 +223,7 @@ NormalizedStreamBundle parseSoraStreamBundle(
       availableServers: const <NormalizedServer>[],
       streamType: streamType,
       refresh: refresh,
+      refreshCancellable: refreshCancellable,
     );
   }
 
@@ -341,6 +344,7 @@ NormalizedStreamBundle parseSoraStreamBundle(
     endingStart: ending.start,
     endingEnd: ending.end,
     refresh: refresh,
+    refreshCancellable: refreshCancellable,
   );
 }
 

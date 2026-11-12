@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -16,6 +15,7 @@ import '../../../app/theme/app_spacing.dart';
 import '../../../app/theme/app_theme_extension.dart';
 import '../../../core/widgets/include_exclude_filter_chip.dart';
 import '../../../core/widgets/neutral_placeholder.dart';
+import '../../../core/widgets/poster_image.dart';
 import '../../../core/widgets/tv_focusable.dart';
 import '../../../core/widgets/tv_text_field_focus.dart';
 import '../../../shared/models/anilist_models.dart';
@@ -37,6 +37,7 @@ import '../../tracking/domain/tracking_sync_models.dart';
 import '../../tracking/presentation/anilist_entry_editor.dart';
 import '../application/canonical_library_repository.dart';
 import '../application/google_drive_sync_controller.dart';
+import '../application/library_refresh_controller.dart';
 import '../application/local_library_provider.dart';
 import 'local_library_editor.dart';
 
@@ -231,24 +232,72 @@ class _LibraryPageState extends ConsumerState<LibraryPage>
   Timer? _drivePoll;
   late final AppLifecycleListener _driveLifecycle;
   bool _foreground = true;
+  final Set<String> _refreshing = {};
 
   @override
   void initState() {
     super.initState();
-    _mainTab = TabController(length: 2, vsync: this);
+    _mainTab = TabController(length: 2, vsync: this)
+      ..addListener(_onMainTabChanged);
     _driveLifecycle = AppLifecycleListener(
       onResume: () {
         _foreground = true;
         _pullDriveChanges();
+        unawaited(_refreshLibrary(force: false));
       },
       onPause: () => _foreground = false,
     );
-    WidgetsBinding.instance.addPostFrameCallback((_) => _pullDriveChanges());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _pullDriveChanges();
+      unawaited(_refreshLibrary(force: false));
+    });
     _drivePoll = Timer.periodic(
       const Duration(seconds: 12),
       (_) => _pullDriveChanges(),
     );
   }
+
+  void _onMainTabChanged() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _refreshLibrary({String? kind, bool force = true}) async {
+    if (!mounted || !_foreground) return;
+    final mediaKind = kind ?? (_mainTab.index == 1 ? 'manga' : 'anime');
+    final settings = ref.read(settingsProvider);
+    if (ref.read(catalogModeProvider) != CatalogMode.anilist) return;
+    if (!force &&
+        !settings.hasAniListSession &&
+        !settings.hasMalSession &&
+        !settings.hasShikimoriSession) {
+      return;
+    }
+    setState(() => _refreshing.add(mediaKind));
+    try {
+      await ref
+          .read(libraryRefreshControllerProvider)
+          .refresh(mediaKind, force: force);
+    } catch (_) {
+      if (mounted && force) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(
+            content: Text(
+              context.t(
+                'Could not refresh library. Your saved library is still available.',
+              ),
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _refreshing.remove(mediaKind));
+    }
+  }
+
+  Widget _refreshable(String kind, Widget child) => _LibraryRefreshScope(
+    onRefresh: () => _refreshLibrary(kind: kind),
+    child: child,
+  );
 
   void _pullDriveChanges() {
     if (!mounted || !_foreground || ModalRoute.of(context)?.isCurrent != true) {
@@ -314,11 +363,35 @@ class _LibraryPageState extends ConsumerState<LibraryPage>
               AppSpacing.lg,
               AppSpacing.sm,
             ),
-            child: TabBar(
-              controller: _mainTab,
-              tabs: <Widget>[
-                Tab(text: context.t('Anime')),
-                Tab(text: context.t('Manga')),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TabBar(
+                    controller: _mainTab,
+                    tabs: <Widget>[
+                      Tab(text: context.t('Anime')),
+                      Tab(text: context.t('Manga')),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  tooltip: context.t('Refresh library'),
+                  onPressed:
+                      _refreshing.contains(
+                        _mainTab.index == 1 ? 'manga' : 'anime',
+                      )
+                      ? null
+                      : () => _refreshLibrary(),
+                  icon:
+                      _refreshing.contains(
+                        _mainTab.index == 1 ? 'manga' : 'anime',
+                      )
+                      ? const SizedBox.square(
+                          dimension: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.refresh_rounded),
+                ),
               ],
             ),
           ),
@@ -326,21 +399,27 @@ class _LibraryPageState extends ConsumerState<LibraryPage>
             child: TabBarView(
               controller: _mainTab,
               children: <Widget>[
-                _AniListDataTab(
-                  key: ValueKey<String>('anime-library:$workspaceId'),
-                  connected: animeConnected,
-                  mediaType: 'ANIME',
-                  defaultPage: settings.anilistLibraryDefaultPage,
-                  emptyMessage:
-                      'Add anime to your MiruShin Library to see it here.',
+                _refreshable(
+                  'anime',
+                  _AniListDataTab(
+                    key: ValueKey<String>('anime-library:$workspaceId'),
+                    connected: animeConnected,
+                    mediaType: 'ANIME',
+                    defaultPage: settings.anilistLibraryDefaultPage,
+                    emptyMessage:
+                        'Add anime to your MiruShin Library to see it here.',
+                  ),
                 ),
-                _AniListDataTab(
-                  key: ValueKey<String>('manga-library:$workspaceId'),
-                  connected: mangaConnected,
-                  mediaType: 'MANGA',
-                  defaultPage: settings.anilistLibraryDefaultPage,
-                  emptyMessage:
-                      'Add manga to your MiruShin Library to see it here.',
+                _refreshable(
+                  'manga',
+                  _AniListDataTab(
+                    key: ValueKey<String>('manga-library:$workspaceId'),
+                    connected: mangaConnected,
+                    mediaType: 'MANGA',
+                    defaultPage: settings.anilistLibraryDefaultPage,
+                    emptyMessage:
+                        'Add manga to your MiruShin Library to see it here.',
+                  ),
                 ),
               ],
             ),
@@ -895,11 +974,22 @@ class _AniListTabContent extends StatelessWidget {
       );
     }
     if (state.phase == _AniListTabPhase.empty) {
-      final Widget placeholder = NeutralPlaceholder(
-        title: 'Library is empty',
-        message: emptyMessage,
-        icon: Icons.video_library_rounded,
-        height: 300,
+      final Widget placeholder = _LibraryRefreshScope.wrap(
+        context,
+        CustomScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          slivers: [
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: NeutralPlaceholder(
+                title: 'Library is empty',
+                message: emptyMessage,
+                icon: Icons.video_library_rounded,
+                height: 300,
+              ),
+            ),
+          ],
+        ),
       );
       if (state.banner == null) return placeholder;
       return Column(
@@ -1621,9 +1711,42 @@ class _FolderViewState extends ConsumerState<_FolderView>
     await _preferenceWriteTail;
   }
 
+  List<AniListAnimeListEntry>? _cachedEntries;
+  Map<int, String>? _cachedAliases;
+  String? _cachedFilterKey;
+  List<AniListAnimeListEntry>? _cachedFiltered;
+
   List<AniListAnimeListEntry> get _filtered {
     final String q = _search.text.toLowerCase().trim();
     final Map<int, String> russianAliasesByMalId = _russianAliasesByMalId;
+    final filterKey = jsonEncode([
+      q,
+      _sort.name,
+      _adultFilter,
+      _licensedFilter,
+      _minScore,
+      if (_sort == _Sort.airingNearest)
+        DateTime.now().millisecondsSinceEpoch ~/ 60000,
+      (_statuses.map((value) => value.toString()).toList()..sort()),
+      (_statusExcludes.map((value) => value.toString()).toList()..sort()),
+      (_mediaStatuses.map((value) => value.toString()).toList()..sort()),
+      (_mediaStatusExcludes.map((value) => value.toString()).toList()..sort()),
+      (_genres.map((value) => value.toString()).toList()..sort()),
+      (_genreExcludes.map((value) => value.toString()).toList()..sort()),
+      (_formats.map((value) => value.toString()).toList()..sort()),
+      (_formatExcludes.map((value) => value.toString()).toList()..sort()),
+      (_sources.map((value) => value.toString()).toList()..sort()),
+      (_sourceExcludes.map((value) => value.toString()).toList()..sort()),
+      (_tags.map((value) => value.toString()).toList()..sort()),
+      (_tagExcludes.map((value) => value.toString()).toList()..sort()),
+      (_flags.map((value) => value.toString()).toList()..sort()),
+      (_flagExcludes.map((value) => value.toString()).toList()..sort()),
+    ]);
+    if (identical(_cachedEntries, widget.folder.entries) &&
+        identical(_cachedAliases, russianAliasesByMalId) &&
+        _cachedFilterKey == filterKey) {
+      return _cachedFiltered!;
+    }
     List<AniListAnimeListEntry> list = widget.folder.entries;
 
     if (q.isNotEmpty) {
@@ -1828,7 +1951,10 @@ class _FolderViewState extends ConsumerState<_FolderView>
       case _Sort.avgScoreLow:
         list.sort((a, b) => (a.avgScore ?? 0).compareTo(b.avgScore ?? 0));
     }
-    return list;
+    _cachedEntries = widget.folder.entries;
+    _cachedAliases = russianAliasesByMalId;
+    _cachedFilterKey = filterKey;
+    return _cachedFiltered = list;
   }
 
   Map<int, String> get _russianAliasesByMalId {
@@ -2516,30 +2642,34 @@ class _FolderViewState extends ConsumerState<_FolderView>
     final bool filterActive = activeFilterCount > 0;
     final List<AniListAnimeListEntry> upcoming = _upcomingEntries(entries);
 
-    return CustomScrollView(
-      slivers: <Widget>[
-        SliverToBoxAdapter(
-          child: _buildActionBar(
-            context,
-            palette: palette,
-            activeFilterCount: activeFilterCount,
-            filterActive: filterActive,
+    return _LibraryRefreshScope.wrap(
+      context,
+      CustomScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        slivers: <Widget>[
+          SliverToBoxAdapter(
+            child: _buildActionBar(
+              context,
+              palette: palette,
+              activeFilterCount: activeFilterCount,
+              filterActive: filterActive,
+            ),
           ),
-        ),
-        // _LibrarySummaryBar(
-        //   entries: entries,
-        //   totalCount: widget.folder.entries.length,
-        // ),
-        if (upcoming.isNotEmpty)
-          SliverToBoxAdapter(child: _AiringSoonStrip(entries: upcoming)),
-        // Entry list / grid
-        if (entries.isEmpty)
-          _buildEmptySliver(context, palette, filterActive)
-        else if (_isGrid)
-          _buildGrid(entries)
-        else
-          _buildList(entries),
-      ],
+          // _LibrarySummaryBar(
+          //   entries: entries,
+          //   totalCount: widget.folder.entries.length,
+          // ),
+          if (upcoming.isNotEmpty)
+            SliverToBoxAdapter(child: _AiringSoonStrip(entries: upcoming)),
+          // Entry list / grid
+          if (entries.isEmpty)
+            _buildEmptySliver(context, palette, filterActive)
+          else if (_isGrid)
+            _buildGrid(entries)
+          else
+            _buildList(entries),
+        ],
+      ),
     );
   }
 
@@ -2896,7 +3026,7 @@ class _AiringSoonStrip extends StatelessWidget {
                     width: 52,
                     height: double.infinity,
                     child: media.posterUrl.isNotEmpty
-                        ? CachedNetworkImage(
+                        ? PosterImage(
                             imageUrl: media.posterUrl,
                             fit: BoxFit.cover,
                             errorWidget: (_, _, _) =>
@@ -3240,7 +3370,7 @@ class _CollectionTileState extends ConsumerState<_CollectionTile> {
                   width: _kCoverWidth,
                   height: _kTileHeight,
                   child: media.posterUrl.isNotEmpty
-                      ? CachedNetworkImage(
+                      ? PosterImage(
                           imageUrl: media.posterUrl,
                           fit: BoxFit.cover,
                           errorWidget: (_, _, _) => _CoverFallback(media.title),
@@ -3969,7 +4099,7 @@ class _GridCell extends ConsumerWidget {
           children: <Widget>[
             // Poster
             media.posterUrl.isNotEmpty
-                ? CachedNetworkImage(
+                ? PosterImage(
                     imageUrl: media.posterUrl,
                     fit: BoxFit.cover,
                     errorWidget: (_, _, _) => _CoverFallback(media.title),
@@ -5226,7 +5356,7 @@ class _LocalTileState extends ConsumerState<_LocalTile> {
                   width: _kCoverWidth,
                   height: _kTileHeight,
                   child: media.posterUrl.isNotEmpty
-                      ? CachedNetworkImage(
+                      ? PosterImage(
                           imageUrl: media.posterUrl,
                           fit: BoxFit.cover,
                           errorWidget: (_, _, _) => _CoverFallback(media.title),
@@ -5384,7 +5514,7 @@ class _LocalGridCell extends ConsumerWidget {
           fit: StackFit.expand,
           children: <Widget>[
             media.posterUrl.isNotEmpty
-                ? CachedNetworkImage(
+                ? PosterImage(
                     imageUrl: media.posterUrl,
                     fit: BoxFit.cover,
                     errorWidget: (_, _, _) => _CoverFallback(media.title),
@@ -5451,4 +5581,21 @@ class _LocalGridCell extends ConsumerWidget {
       ),
     );
   }
+}
+
+class _LibraryRefreshScope extends InheritedWidget {
+  const _LibraryRefreshScope({required this.onRefresh, required super.child});
+  final Future<void> Function() onRefresh;
+
+  static Widget wrap(BuildContext context, Widget scrollView) {
+    final scope = context
+        .dependOnInheritedWidgetOfExactType<_LibraryRefreshScope>();
+    return scope == null
+        ? scrollView
+        : RefreshIndicator(onRefresh: scope.onRefresh, child: scrollView);
+  }
+
+  @override
+  bool updateShouldNotify(_LibraryRefreshScope oldWidget) =>
+      onRefresh != oldWidget.onRefresh;
 }

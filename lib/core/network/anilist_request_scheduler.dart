@@ -4,6 +4,8 @@ import 'dart:collection';
 import 'package:dio/dio.dart';
 import 'package:http_parser/http_parser.dart' show parseHttpDate;
 
+import 'catalog_request_context.dart';
+
 /// One budget for every AniList client, including unauthenticated enrichment.
 /// Only AniList traffic is queued; other providers keep their independent lanes.
 class AniListRequestScheduler {
@@ -11,6 +13,7 @@ class AniListRequestScheduler {
     this.requestLimit = 28,
     this.window = const Duration(minutes: 1),
     this.minimumSpacing = const Duration(milliseconds: 600),
+    this.maxConcurrentRequests = 3,
     DateTime Function()? now,
   }) : _now = now ?? DateTime.now;
 
@@ -20,7 +23,11 @@ class AniListRequestScheduler {
   final Duration minimumSpacing;
   final DateTime Function() _now;
   final Queue<DateTime> _starts = Queue();
-  Future<void> _tail = Future.value();
+  final int maxConcurrentRequests;
+  final List<_Waiter> _waiting = [];
+  Timer? _wake;
+  int _active = 0;
+  int _activeBackground = 0;
   DateTime? _blockedUntil;
   DateTime? _lastStart;
   int? _serverLimit;
@@ -32,45 +39,88 @@ class AniListRequestScheduler {
     dio.interceptors.add(_AniListBudgetInterceptor(this));
   }
 
-  Future<_Permit> _acquire(CancelToken? token) async {
-    final previous = _tail;
-    final release = Completer<void>();
-    // A cancelled waiter cannot release the next request ahead of its predecessor.
-    _tail = previous.then((_) => release.future);
-    try {
-      await _cancellable(previous, token);
-      while (true) {
-        if (token?.isCancelled == true) throw token!.cancelError!;
-        final now = _now().toUtc();
-        while (_starts.isNotEmpty && !now.isBefore(_starts.first.add(window))) {
-          _starts.removeFirst();
-        }
-        DateTime ready = now;
-        void waitUntil(DateTime? at) {
-          if (at != null && at.isAfter(ready)) ready = at;
-        }
-
-        waitUntil(_blockedUntil);
-        waitUntil(_lastStart?.add(minimumSpacing));
-        final limit = (_serverLimit ?? requestLimit).clamp(1, requestLimit);
-        if (_starts.length >= limit) waitUntil(_starts.first.add(window));
-        if (!ready.isAfter(now)) {
-          _lastStart = now;
-          _starts.addLast(now);
-          return _Permit(release);
-        }
-        final wake = Completer<void>();
-        final timer = Timer(ready.difference(now), wake.complete);
-        try {
-          await _cancellable(wake.future, token);
-        } finally {
-          timer.cancel();
-        }
+  Future<_Permit> _acquire(RequestOptions options) {
+    final token = options.cancelToken;
+    if (token?.isCancelled == true) return Future.error(token!.cancelError!);
+    final waiter = _Waiter(options, _now().toUtc());
+    _waiting.add(waiter);
+    token?.whenCancel.then((error) {
+      if (_waiting.remove(waiter)) {
+        waiter.result.completeError(error);
+        _drain();
+      } else {
+        // Cancellation may beat onRequest's assignment of the granted permit
+        // into RequestOptions. Release here too; close() is idempotent.
+        waiter.permit?.close();
       }
-    } catch (_) {
-      release.complete();
-      rethrow;
+    });
+    _drain();
+    return waiter.result.future;
+  }
+
+  void _drain() {
+    _wake?.cancel();
+    _wake = null;
+    if (_waiting.isEmpty || _active >= maxConcurrentRequests) return;
+    // Keep a launch slot available for a user search even when two slow
+    // background reads are still awaiting their responses.
+    final backgroundLimit = maxConcurrentRequests > 1
+        ? maxConcurrentRequests - 1
+        : 1;
+    final eligible = _waiting
+        .where(
+          (waiter) =>
+              waiter.priority > 0 || _activeBackground < backgroundLimit,
+        )
+        .toList();
+    if (eligible.isEmpty) return;
+    final now = _now().toUtc();
+    while (_starts.isNotEmpty && !now.isBefore(_starts.first.add(window))) {
+      _starts.removeFirst();
     }
+    DateTime ready = now;
+    void waitUntil(DateTime? at) {
+      if (at != null && at.isAfter(ready)) ready = at;
+    }
+
+    waitUntil(_blockedUntil);
+    waitUntil(_lastStart?.add(minimumSpacing));
+    final limit = (_serverLimit ?? requestLimit).clamp(1, requestLimit);
+    if (_starts.length >= limit) waitUntil(_starts.first.add(window));
+    if (ready.isAfter(now)) {
+      for (final waiter in _waiting) {
+        CatalogRequestContext.fromOptions(waiter.options)?.waitingUntil(ready);
+      }
+      _wake = Timer(ready.difference(now), _drain);
+      return;
+    }
+    // Age waiting work so continuous foreground searches cannot starve sync.
+    _Waiter selected = eligible.first;
+    if (now.difference(selected.queuedAt) < const Duration(seconds: 5)) {
+      for (final waiter in eligible) {
+        if (waiter.priority > selected.priority) selected = waiter;
+      }
+    }
+    _waiting.remove(selected);
+    if (selected.options.cancelToken?.isCancelled == true) {
+      selected.result.completeError(selected.options.cancelToken!.cancelError!);
+    } else {
+      _active++;
+      final background = selected.priority == 0;
+      if (background) _activeBackground++;
+      _lastStart = now;
+      _starts.addLast(now);
+      final permit = _Permit(() {
+        _active--;
+        if (background) _activeBackground--;
+        _drain();
+      });
+      selected.permit = permit;
+      selected.result.complete(permit);
+    }
+    // Release the launch lane independently of the response lifetime.
+    // A microtask also lets a synchronous response publish its rate headers.
+    scheduleMicrotask(_drain);
   }
 
   void _observe(Response<dynamic>? response) {
@@ -124,16 +174,24 @@ class AniListRequestScheduler {
   }
 }
 
-Future<void> _cancellable(Future<void> future, CancelToken? token) =>
-    token == null
-    ? future
-    : Future.any([future, token.whenCancel.then<void>((error) => throw error)]);
+class _Waiter {
+  _Waiter(this.options, this.queuedAt);
+  final RequestOptions options;
+  final DateTime queuedAt;
+  final result = Completer<_Permit>();
+  _Permit? permit;
+  int get priority =>
+      CatalogRequestContext.fromOptions(options)?.priority.index ?? 0;
+}
 
 class _Permit {
   _Permit(this.release);
-  final Completer<void> release;
+  final void Function() release;
+  bool _closed = false;
   void close() {
-    if (!release.isCompleted) release.complete();
+    if (_closed) return;
+    _closed = true;
+    release();
   }
 }
 
@@ -152,7 +210,7 @@ class _AniListBudgetInterceptor extends Interceptor {
       return;
     }
     try {
-      options.extra[_permitKey] = await scheduler._acquire(options.cancelToken);
+      options.extra[_permitKey] = await scheduler._acquire(options);
       handler.next(options);
     } catch (error) {
       handler.reject(
@@ -168,6 +226,10 @@ class _AniListBudgetInterceptor extends Interceptor {
     if (permit == null) return;
     try {
       scheduler._observe(response);
+      final blockedUntil = scheduler._blockedUntil;
+      if (blockedUntil != null) {
+        CatalogRequestContext.fromOptions(options)?.waitingUntil(blockedUntil);
+      }
     } finally {
       permit.close();
     }

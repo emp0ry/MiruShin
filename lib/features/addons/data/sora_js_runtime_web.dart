@@ -123,8 +123,12 @@ class SoraJsRuntime {
     required SoraInstalledAddon addon,
     required SoraEpisode episode,
     String? voiceover,
+    bool Function()? shouldCancel,
   }) {
     return _serialized(() async {
+      if (shouldCancel?.call() ?? false) {
+        throw const SoraAddonException('Stream resolution cancelled.');
+      }
       final List<Object?> args = <Object?>[
         episode.href,
         if (voiceover != null && voiceover.trim().isNotEmpty) voiceover.trim(),
@@ -138,6 +142,7 @@ class SoraJsRuntime {
           'streams',
         ],
         args: args,
+        shouldCancel: shouldCancel,
       );
       return _withWebProxy(
         SoraResolvedStreams(
@@ -154,7 +159,13 @@ class SoraJsRuntime {
     required SoraInstalledAddon addon,
     required SoraEpisode episode,
     String? voiceover,
-  }) => extractStreams(addon: addon, episode: episode, voiceover: voiceover);
+    bool Function()? shouldCancel,
+  }) => extractStreams(
+    addon: addon,
+    episode: episode,
+    voiceover: voiceover,
+    shouldCancel: shouldCancel,
+  );
 
   void invalidate(String addonId) {
     unawaited(_serialized<void>(() async => _dispose(addonId)));
@@ -205,7 +216,11 @@ class SoraJsRuntime {
     required List<Object?> args,
     bool required = true,
     int drainTimeoutMs = _callDrainTimeoutMs,
+    bool Function()? shouldCancel,
   }) async {
+    if (shouldCancel?.call() ?? false) {
+      throw const SoraAddonException('Stream resolution cancelled.');
+    }
     final _LoadedSoraModule module = await _load(addon);
     final String argsJson = jsonEncode(args);
     for (final String functionName in functionNames) {

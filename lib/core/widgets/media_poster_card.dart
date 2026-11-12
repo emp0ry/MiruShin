@@ -1,4 +1,3 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -11,6 +10,7 @@ import '../../app/theme/app_theme_extension.dart';
 import '../../features/catalog/application/catalog_mode.dart';
 import '../../shared/models/media_item.dart';
 import 'metadata_chip.dart';
+import 'poster_image.dart';
 import 'skeleton_box.dart';
 import 'tv_focusable.dart';
 
@@ -123,7 +123,7 @@ class _MediaPosterCardState extends ConsumerState<MediaPosterCard> {
                     Positioned.fill(
                       child: item.posterUrl.isEmpty
                           ? _PosterFallback(title: item.title)
-                          : CachedNetworkImage(
+                          : PosterImage(
                               imageUrl: item.posterUrl,
                               fit: BoxFit.cover,
                               placeholder: (BuildContext context, String url) =>

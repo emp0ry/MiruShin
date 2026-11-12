@@ -421,6 +421,7 @@ class _RecordingCatalogRepository implements CatalogRepository {
     required int page,
     int pageSize = 20,
     String? anilistKind,
+    CatalogRequestContext? context,
   }) async {
     lastSearch = search;
     lastType = type;

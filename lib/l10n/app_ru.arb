@@ -1619,5 +1619,10 @@
   "Some data could not be synced: {items}. MiruShin will retry.": "Не удалось синхронизировать часть данных: {items}. MiruShin повторит попытку.",
   "Syncing watch positions…": "Синхронизация позиций просмотра…",
   "Watch progress": "Прогресс просмотра",
-  "Google Drive · Watch progress": "Google Drive · Прогресс просмотра"
+  "Google Drive · Watch progress": "Google Drive · Прогресс просмотра",
+  "AniList is busy. Try again in {seconds}s.": "AniList занят. Повторите через {seconds} с.",
+  "Search took too long. Please try again.": "Поиск занял слишком много времени. Попробуйте ещё раз.",
+  "Could not load search results. Please try again.": "Не удалось загрузить результаты поиска. Попробуйте ещё раз.",
+  "Refresh library": "Обновить библиотеку",
+  "Could not refresh library. Your saved library is still available.": "Не удалось обновить библиотеку. Сохранённая библиотека остаётся доступной."
 }

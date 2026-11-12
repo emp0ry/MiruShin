@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 
 import '../../../core/constants/app_constants.dart';
+import '../../../core/network/catalog_request_context.dart';
 import '../../../core/network/request_cancellation_scope.dart';
 import '../../../shared/models/anilist_models.dart';
 import '../../../shared/models/media_item.dart';
@@ -613,7 +614,12 @@ class MalApiClient {
           (cancelToken == null
               ? null
               : RequestCancellationScope.linkedTo(cancelToken!));
-      return await (scope == null ? send(null) : scope.run(send));
+      final context = CatalogRequestContext.current;
+      return await (context != null
+          ? context.request(send)
+          : scope == null
+          ? send(null)
+          : scope.run(send));
     } on DioException catch (error) {
       if (!retried &&
           error.response?.statusCode == 401 &&

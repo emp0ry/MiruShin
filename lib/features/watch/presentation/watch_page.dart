@@ -629,12 +629,11 @@ class _WatchPageState extends ConsumerState<WatchPage> {
     _retryPendingAdvance = failedEpisode == null || failedSource == null
         ? null
         : () {
-            ref.invalidate(
-              soraStreamBundleProvider(
-                SoraStreamRequest(
-                  addonId: failedSource.addonId,
-                  episode: failedEpisode,
-                ),
+            invalidateSoraStreamCaches(
+              ref.invalidate,
+              SoraStreamRequest(
+                addonId: failedSource.addonId,
+                episode: failedEpisode,
               ),
             );
             _pickEpisode(failedEpisode);
@@ -682,10 +681,9 @@ class _WatchPageState extends ConsumerState<WatchPage> {
         if (!mounted || !_isCurrentAdvance(transitionId)) {
           return;
         }
-        ref.invalidate(
-          soraStreamBundleProvider(
-            SoraStreamRequest(addonId: source.addonId, episode: target),
-          ),
+        invalidateSoraStreamCaches(
+          ref.invalidate,
+          SoraStreamRequest(addonId: source.addonId, episode: target),
         );
         _pickEpisode(
           target,
@@ -1645,10 +1643,9 @@ class _WatchPageState extends ConsumerState<WatchPage> {
       null,
     );
     // Drop any stale cached stream so the picked episode resolves a fresh URL.
-    ref.invalidate(
-      soraStreamBundleProvider(
-        SoraStreamRequest(addonId: source.addonId, episode: selected),
-      ),
+    invalidateSoraStreamCaches(
+      ref.invalidate,
+      SoraStreamRequest(addonId: source.addonId, episode: selected),
     );
     _pickEpisode(selected);
   }
