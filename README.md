@@ -151,7 +151,7 @@ Just install and open the app. Discovery and metadata work right away. No setup 
 Want more? Two optional steps unlock the rest:
 
 - **Sign in to AniList, MyAnimeList, or Shikimori** to sync library status and progress. AniList also unlocks profile pages, social surfaces, exports, and the AniList catalog.
-- **Choose Library sync source** in Settings → Library Log. AniList is the default; only the selected catalog imports tracking changes. Local edits are sent to all connected catalogs, and an outage never silently changes the source.
+- **Choose Library sync source** in Settings → Library Log. AniList is the default; only the selected catalog imports tracking changes. Local edits are sent to all connected catalogs, and an outage never silently changes the source. With full-library Drive sync off, changes from that catalog apply automatically; a newer pending local edit is preserved. Pull down in Library or use its refresh button to fetch the current list.
 - **Add modules to watch** by opening the **Addons** page and pasting a trusted module manifest URL, then install and enable it. Need modules? Join the [Sora Discord](https://discord.gg/XR3SrmUbpd) to find them.
 - **Watch with friends** from Settings or the player. The host creates a short-lived room code/QR, guests join on their own device, and playback events sync after pairing.
 - **Connect Google Drive Sync** to sync compact episode positions (including resets and rewatch cycles), stream choices, per-account settings, addons, API connections, persistent Watch with Friends relay preferences, AniList accounts, and their MAL/Shikimori sessions. Library reads and tracker delivery do not wait for Drive in this default mode. Playback sync sends current values and media identifiers, without catalog metadata or library history.
@@ -203,7 +203,7 @@ For the full terms, see the [Legal Notice](LEGAL.md).
 
 ### Requirements
 
-- Flutter (stable channel)
+- Flutter (stable channel; Android CI pins 3.47.9 for the current Gradle/AGP toolchain)
 - Dart SDK compatible with `sdk: ^3.11.4`
 
 ### Run locally

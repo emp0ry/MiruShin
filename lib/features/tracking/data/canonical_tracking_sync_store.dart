@@ -19,6 +19,7 @@ class CanonicalTrackingSyncStore
     required CanonicalLibraryRepository repository,
     Map<TrackerSource, String> healthAccountIds = const {},
     this.authoritativeSource,
+    this.catalogAuthoritative = false,
     SharedPreferencesTrackingSyncStore legacy =
         const SharedPreferencesTrackingSyncStore(),
   }) : _repository = repository,
@@ -30,6 +31,7 @@ class CanonicalTrackingSyncStore
   /// The app always binds its persisted selection. Null is reserved for
   /// migration/reconciliation tools that explicitly work without a sync policy.
   final TrackerSource? authoritativeSource;
+  final bool catalogAuthoritative;
   final Map<TrackerSource, String> _healthAccountIds;
   final SharedPreferencesTrackingSyncStore _legacy;
   Future<void>? _migration;
@@ -270,6 +272,7 @@ class CanonicalTrackingSyncStore
       completeSnapshot: completeSnapshot,
       propagationAccountIds: propagationAccountIds,
       authoritativeSource: authoritativeSource,
+      catalogAuthoritative: catalogAuthoritative,
     );
   }
 

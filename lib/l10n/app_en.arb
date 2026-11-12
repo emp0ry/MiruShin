@@ -1614,5 +1614,10 @@
   "Some data could not be synced: {items}. MiruShin will retry.": "Some data could not be synced: {items}. MiruShin will retry.",
   "Syncing watch positions…": "Syncing watch positions…",
   "Watch progress": "Watch progress",
-  "Google Drive · Watch progress": "Google Drive · Watch progress"
+  "Google Drive · Watch progress": "Google Drive · Watch progress",
+  "AniList is busy. Try again in {seconds}s.": "AniList is busy. Try again in {seconds}s.",
+  "Search took too long. Please try again.": "Search took too long. Please try again.",
+  "Could not load search results. Please try again.": "Could not load search results. Please try again.",
+  "Refresh library": "Refresh library",
+  "Could not refresh library. Your saved library is still available.": "Could not refresh library. Your saved library is still available."
 }

@@ -183,6 +183,7 @@ class NormalizedStreamBundle {
     this.endingStart,
     this.endingEnd,
     this.refresh,
+    this.refreshCancellable,
   });
 
   final String addonId;
@@ -201,6 +202,8 @@ class NormalizedStreamBundle {
   final int? endingStart;
   final int? endingEnd;
   final Future<NormalizedStreamBundle> Function()? refresh;
+  final Future<NormalizedStreamBundle> Function(bool Function() isCancelled)?
+  refreshCancellable;
 
   String get activeUrl =>
       selectedQuality?.streamUrl ?? selectedServer.streamUrl;
@@ -223,6 +226,7 @@ class NormalizedStreamBundle {
         endingStart: endingStart,
         endingEnd: endingEnd,
         refresh: refresh,
+        refreshCancellable: refreshCancellable,
       );
 
   NormalizedStreamBundle withVoiceOver(NormalizedVoiceOver? vo) =>
@@ -243,6 +247,7 @@ class NormalizedStreamBundle {
         endingStart: endingStart,
         endingEnd: endingEnd,
         refresh: refresh,
+        refreshCancellable: refreshCancellable,
       );
 
   NormalizedStreamBundle withQuality(NormalizedQuality? q) =>
@@ -263,6 +268,7 @@ class NormalizedStreamBundle {
         endingStart: endingStart,
         endingEnd: endingEnd,
         refresh: refresh,
+        refreshCancellable: refreshCancellable,
       );
 
   NormalizedStreamBundle withRefresh(
@@ -284,5 +290,6 @@ class NormalizedStreamBundle {
     endingStart: endingStart,
     endingEnd: endingEnd,
     refresh: cb,
+    refreshCancellable: refreshCancellable,
   );
 }

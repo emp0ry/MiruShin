@@ -580,9 +580,8 @@ bool _touchesEveryEditableField(UserMediaPatch patch) {
   }.every(patch.touches);
 }
 
-/// Local-first anime library backed by independent complete snapshots from
-/// every connected tracker. The preferred source only controls fetch order;
-/// it no longer prevents AniList, MAL or Shikimori reconciliation.
+/// Local view refreshed from the selected inbound catalog. Other connected
+/// trackers reconcile outgoing deliveries without becoming Library sources.
 final trackerAnimeListProvider = FutureProvider<List<AniListAnimeListFolder>>((
   Ref ref,
 ) async {

@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mirushin/app/localization/app_localizations.dart';
 import 'package:mirushin/app/theme/app_theme.dart';
+import 'package:mirushin/core/widgets/media_poster_card.dart';
 import 'package:mirushin/features/catalog/application/catalog_mode.dart';
 import 'package:mirushin/features/catalog/application/catalog_repository.dart';
 import 'package:mirushin/features/discovery/presentation/discovery_page.dart';
@@ -29,6 +32,48 @@ void main() {
       'catalog.mode': 'anilist',
       'settings.appLanguage': 'en',
     });
+  });
+
+  testWidgets('a thousand results build only cards near the viewport', (
+    tester,
+  ) async {
+    await _pumpDiscovery(
+      tester,
+      const Size(1280, 800),
+      repository: _DiscoveryCatalogRepository(count: 1000),
+    );
+    expect(find.byType(MediaPosterCard).evaluate().length, lessThan(100));
+    await tester.drag(
+      find.byKey(const ValueKey('discovery-page-scroll-view')),
+      const Offset(0, -2500),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byType(MediaPosterCard).evaluate().length, lessThan(100));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('an old search error cannot replace newer results', (
+    tester,
+  ) async {
+    final repository = _ControlledDiscoveryRepository();
+    await _pumpDiscovery(tester, const Size(1280, 800), repository: repository);
+    final input = find.byType(TextField).first;
+    await tester.enterText(input, 'old');
+    await tester.pump(const Duration(milliseconds: 361));
+    await tester.enterText(input, 'new');
+    await tester.pump(const Duration(milliseconds: 361));
+    repository.pending['new']!.complete([_result('new')]);
+    await tester.pumpAndSettle();
+    repository.pending['old']!.completeError(StateError('stale failure'));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widgetList<MediaPosterCard>(find.byType(MediaPosterCard))
+          .map((card) => card.item.title),
+      contains('new'),
+    );
+    expect(find.text('Discovery is offline'), findsNothing);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets(
@@ -62,15 +107,16 @@ void main() {
     },
   );
 
-  testWidgets('Discovery grid does not clip poster hover overflow', (
+  testWidgets('Discovery uses one lazy sliver viewport with hover overflow', (
     WidgetTester tester,
   ) async {
     await _pumpDiscovery(tester, const Size(1600, 1000));
 
-    expect(_discoveryGrid(tester).clipBehavior, Clip.none);
+    expect(find.byType(SliverGrid), findsOneWidget);
+    expect(find.byType(GridView), findsNothing);
     expect(
       tester
-          .widget<SingleChildScrollView>(
+          .widget<CustomScrollView>(
             find.byKey(const ValueKey<String>('discovery-page-scroll-view')),
           )
           .clipBehavior,
@@ -145,13 +191,9 @@ int _gridColumns(WidgetTester tester) {
       .crossAxisCount;
 }
 
-GridView _discoveryGrid(WidgetTester tester) {
-  final Finder grid = find.descendant(
-    of: find.byKey(const ValueKey<String>('discovery-grid')),
-    matching: find.byType(GridView),
-  );
-  return tester.widget<GridView>(grid);
-}
+SliverGrid _discoveryGrid(WidgetTester tester) => tester.widget<SliverGrid>(
+  find.byKey(const ValueKey<String>('discovery-grid')),
+);
 
 class _EmptyAniListLibrary extends AniListLibraryNotifier {
   @override
@@ -160,6 +202,8 @@ class _EmptyAniListLibrary extends AniListLibraryNotifier {
 }
 
 class _DiscoveryCatalogRepository implements CatalogRepository {
+  _DiscoveryCatalogRepository({this.count});
+  final int? count;
   int? lastPageSize;
 
   @override
@@ -185,11 +229,12 @@ class _DiscoveryCatalogRepository implements CatalogRepository {
     required int page,
     int pageSize = 20,
     String? anilistKind,
+    CatalogRequestContext? context,
   }) async {
     lastPageSize = pageSize;
     if (page != 1) return const <MediaItem>[];
     return List<MediaItem>.generate(
-      pageSize,
+      count ?? pageSize,
       (int index) => MediaItem(
         id: 'anilist:$index',
         title: 'Title $index',
@@ -207,5 +252,48 @@ class _DiscoveryCatalogRepository implements CatalogRepository {
       ),
       growable: false,
     );
+  }
+}
+
+MediaItem _result(String title) => MediaItem(
+  id: 'anilist:$title',
+  title: title,
+  originalTitle: title,
+  overview: '',
+  type: MediaType.anime,
+  year: 2026,
+  posterUrl: '',
+  backdropUrl: '',
+  rating: 0,
+  genres: [],
+  sourceProvider: 'AniList',
+  externalIds: {},
+  statusLabel: '',
+);
+
+class _ControlledDiscoveryRepository extends _DiscoveryCatalogRepository {
+  final pending = <String, Completer<List<MediaItem>>>{};
+  @override
+  Future<List<MediaItem>> discover({
+    required String search,
+    required MediaType? type,
+    required String filter,
+    required int page,
+    int pageSize = 20,
+    String? anilistKind,
+    CatalogRequestContext? context,
+  }) {
+    if (search.isEmpty) {
+      return super.discover(
+        search: search,
+        type: type,
+        filter: filter,
+        page: page,
+        pageSize: pageSize,
+        anilistKind: anilistKind,
+        context: context,
+      );
+    }
+    return (pending[search] = Completer<List<MediaItem>>()).future;
   }
 }

@@ -1,4 +1,5 @@
 import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,11 +9,13 @@ import 'package:mirushin/app/theme/app_theme.dart';
 import 'package:mirushin/features/downloads/application/downloads_provider.dart';
 import 'package:mirushin/features/downloads/domain/download_models.dart';
 import 'package:mirushin/features/library/application/google_drive_sync_controller.dart';
+import 'package:mirushin/features/library/application/library_refresh_controller.dart';
 import 'package:mirushin/features/library/presentation/library_page.dart';
 import 'package:mirushin/features/profile/application/anilist_user_settings_provider.dart';
 import 'package:mirushin/features/profile/domain/anilist_profile_models.dart';
 import 'package:mirushin/features/settings/application/settings_state.dart';
 import 'package:mirushin/features/tracking/application/tracker_library_provider.dart';
+import 'package:mirushin/features/tracking/application/tracker_sync_coordinator.dart';
 import 'package:mirushin/shared/models/anilist_models.dart';
 import 'package:mirushin/shared/models/media_item.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -104,6 +107,12 @@ void main() {
     ];
     final container = ProviderContainer(
       overrides: [
+        libraryRefreshControllerProvider.overrideWithValue(
+          LibraryRefreshController(
+            (_, _) async =>
+                const TrackerLibrarySnapshot(folders: [], fromCache: false),
+          ),
+        ),
         settingsProvider.overrideWith(AuditSettings.new),
         aniListUserSettingsProvider.overrideWith(AuditUserSettings.new),
         googleDriveSyncControllerProvider.overrideWith(IdleDrive.new),

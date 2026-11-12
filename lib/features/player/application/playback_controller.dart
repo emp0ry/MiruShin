@@ -303,7 +303,6 @@ class PlaybackController extends Notifier<PlaybackState> {
   Timer? _seekPreviewTimer;
   Timer? _seekSettleTimer;
   Timer? _manualSeekEofQuarantineTimer;
-  int _retryCount = 0;
   int _playbackGeneration = 0;
   int _playbackActivityEpoch = 0;
   PlaybackRouteHint? _provenPlaybackRoute;
@@ -312,6 +311,10 @@ class PlaybackController extends Notifier<PlaybackState> {
   int? _manualSeekEofEpoch;
   Duration? _manualSeekEofTarget;
   int _engineStateEventEpoch = 0;
+  int _streamRecoveryEpoch = 0;
+  Future<void>? _streamRecovery;
+  bool _automaticStreamRefreshUsed = false;
+  Duration _retryPosition = Duration.zero;
   int? _manualSeekSettledAfterEngineEvent;
   DateTime? _manualSeekEofQuarantineUntil;
   int? _manualSeekRejectedBackendEofEpoch;
@@ -647,6 +650,7 @@ class PlaybackController extends Notifier<PlaybackState> {
     ref.onDispose(() {
       // Do not mutate another provider while Riverpod is tearing this one down.
       scheduleMicrotask(() => activity.setActive(false));
+      _streamRecoveryEpoch++;
       _playbackGeneration++;
       _playPauseIntentEpoch++;
       _resumeStabilizeEpoch++;
@@ -894,6 +898,10 @@ class PlaybackController extends Notifier<PlaybackState> {
     MediaPlaybackItem item, {
     PlaybackRouteHint? preferredPlaybackRoute,
   }) async {
+    _streamRecoveryEpoch++;
+    _streamRecovery = null;
+    _automaticStreamRefreshUsed = false;
+    _retryPosition = item.startPosition;
     _playbackActivityEpoch++;
     ref.read(playbackActivityProvider.notifier).setActive(true);
     debugPrint(
@@ -1155,6 +1163,9 @@ class PlaybackController extends Notifier<PlaybackState> {
     List<String> attemptFailures = const <String>[],
     bool respectDesiredPlaying = false,
   }) async {
+    _streamRecoveryEpoch++;
+    _streamRecovery = null;
+    _retryPosition = position;
     _stopOfflineStallWatch();
     _playPauseIntentEpoch++;
     _resumeStabilizeEpoch++;
@@ -1364,7 +1375,6 @@ class PlaybackController extends Notifier<PlaybackState> {
         playPauseOperationInFlight: false,
         resumeStabilizing: false,
       );
-      _retryCount = 0;
       _updateMediaSession();
       _startProgressSaver();
       _watchPlaybackProgress(engine, generation, attempt, position);
@@ -1417,6 +1427,8 @@ class PlaybackController extends Notifier<PlaybackState> {
         );
         return;
       }
+      _retryPosition = fallbackPosition;
+      if (_tryRefreshFailedStream(error, fallbackPosition)) return;
       final List<String> failures = _appendPlaybackFailure(
         attemptFailures,
         attempts[attemptIndex],
@@ -1963,6 +1975,10 @@ class PlaybackController extends Notifier<PlaybackState> {
           return;
         }
 
+        _retryPosition = _fallbackPositionFor(engine);
+        if (_tryRefreshFailedStream(errorDescription ?? '', _retryPosition)) {
+          return;
+        }
         final List<String> failures = _appendPlaybackFailure(
           attemptFailures,
           attempts[attemptIndex],
@@ -2187,6 +2203,8 @@ class PlaybackController extends Notifier<PlaybackState> {
   }
 
   Future<void> stop() async {
+    _streamRecoveryEpoch++;
+    _streamRecovery = null;
     final int activityEpoch = _playbackActivityEpoch;
     unawaited(MediaSessionService.clearNowPlaying());
     unawaited(_ignorePlaybackTeardownErrors(DiscordRpcService.clearActivity()));
@@ -3631,23 +3649,129 @@ class PlaybackController extends Notifier<PlaybackState> {
     }
   }
 
-  Future<void> retry() async {
-    final MediaPlaybackItem? item = state.item;
-    final MediaServer? server = state.server;
-    final StreamQuality? quality = state.quality;
-    if (item == null || server == null || quality == null) return;
-    _retryCount += 1;
-    await Future<void>.delayed(
-      Duration(milliseconds: 300 * _retryCount.clamp(1, 5)),
-    );
-    await _open(
-      item: item,
-      server: server,
-      quality: quality,
-      position: _currentPositionFor(state.engine),
-      autoplay: true,
-      subtitle: state.subtitle,
-    );
+  bool _tryRefreshFailedStream(Object error, Duration position) {
+    if (_automaticStreamRefreshUsed ||
+        state.item?.refreshStreams == null ||
+        !isRecoverableStreamFailure(error)) {
+      return false;
+    }
+    _automaticStreamRefreshUsed = true;
+    _retryPosition = position;
+    unawaited(retry());
+    return true;
+  }
+
+  Future<void> retry() {
+    final pending = _streamRecovery;
+    if (pending != null) return pending;
+    final item = state.item;
+    final server = state.server;
+    final quality = state.quality;
+    if (item == null || server == null || quality == null) {
+      return Future.value();
+    }
+    final engine = _engineForDispose ?? state.engine;
+    final position = engine == null
+        ? _retryPosition
+        : _fallbackPositionFor(engine, requestedPosition: _retryPosition);
+    final autoplay = state.desiredPlaying;
+    final subtitle = state.subtitle;
+    final voiceover = state.voiceover;
+    final epoch = ++_streamRecoveryEpoch;
+    _playbackGeneration++;
+    _stopOfflineStallWatch();
+    _progressTimer?.cancel();
+    bool cancelled() => !ref.mounted || epoch != _streamRecoveryEpoch;
+    late final Future<void> task;
+    task =
+        Future<void>.sync(() async {
+          state = state.copyWith(
+            loading: true,
+            clearError: true,
+            clearEngine: true,
+          );
+          if (identical(_engineForDispose, engine)) _engineForDispose = null;
+          try {
+            if (engine != null) await _disposeEngineOnce(engine);
+            if (cancelled()) return;
+            var nextItem = item;
+            var nextServer = server;
+            var nextQuality = quality;
+            SubtitleTrack? nextSubtitle = subtitle;
+            VoiceOverTrack? nextVoiceover = voiceover;
+            if (item.refreshStreams != null) {
+              final fresh = await item.refreshStreams!(cancelled).timeout(
+                const Duration(seconds: 45),
+              );
+              if (cancelled()) return;
+              final applied = applyStreamSelectionPreference(
+                fresh,
+                StreamSelectionPreference(
+                  serverId: server.id,
+                  serverTitle: server.name,
+                  qualityId: quality.id,
+                  qualityLabel: quality.label,
+                  voiceoverId: voiceover?.id ?? item.initialVoiceoverId ?? '',
+                  voiceoverTitle: voiceover?.label ?? '',
+                ),
+              );
+              nextItem = item.withStreams(applied.bundle);
+              if (nextItem.servers.isEmpty) {
+                throw StateError('No playable streams returned.');
+              }
+              nextServer = nextItem.servers.first;
+              nextQuality =
+                  nextServer.qualities
+                      .where(
+                        (q) => q.id == quality.id || q.label == quality.label,
+                      )
+                      .firstOrNull ??
+                  _initialQuality(nextServer);
+              nextSubtitle = subtitle == null
+                  ? null
+                  : nextServer.subtitles
+                            .where(
+                              (track) =>
+                                  track.id == subtitle.id ||
+                                  (track.language == subtitle.language &&
+                                      track.label == subtitle.label),
+                            )
+                            .firstOrNull ??
+                        subtitle;
+              nextVoiceover = voiceover == null
+                  ? null
+                  : nextServer.voiceovers
+                        .where((track) => track.id == voiceover.id)
+                        .firstOrNull;
+            }
+            if (cancelled()) return;
+            await _open(
+              item: nextItem,
+              server: nextServer,
+              quality: nextQuality,
+              position: position,
+              autoplay: autoplay,
+              voiceover: nextVoiceover,
+              subtitle: nextSubtitle,
+            );
+          } catch (error) {
+            if (cancelled()) return;
+            _streamRecoveryEpoch++; // Also cancels the timed-out extractor.
+            state = state.copyWith(
+              loading: false,
+              clearEngine: true,
+              error: PlayerError(
+                title: 'Stream failed',
+                message: redactMediaUrlsInText(error.toString()),
+                canRetry: true,
+              ),
+            );
+          }
+        }).whenComplete(() {
+          if (identical(_streamRecovery, task)) _streamRecovery = null;
+        });
+    _streamRecovery = task;
+    return task;
   }
 
   Future<bool> skipTo(Duration target) async {
@@ -4471,4 +4595,22 @@ MediaItem _trackingMediaItem(MediaPlaybackItem item) {
     episodeCount: item.episodeCount,
     statusLabel: item.mediaStatusLabel,
   );
+}
+
+/// Transport/link failures can benefit from a fresh URL; decoder errors cannot.
+bool isRecoverableStreamFailure(Object error) {
+  if (error is TimeoutException) return true;
+  final message = error.toString().toLowerCase();
+  return RegExp(r'\b(401|403|410)\b').hasMatch(message) ||
+      [
+        'expired',
+        'timed out',
+        'timeout',
+        'connection',
+        'socket',
+        'network',
+        'http error',
+        'failed to open',
+        'server returned',
+      ].any(message.contains);
 }

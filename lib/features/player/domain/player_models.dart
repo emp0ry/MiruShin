@@ -620,6 +620,7 @@ class MediaPlaybackItem {
     this.ignoreProgress = false,
     this.initialQualityId,
     this.initialVoiceoverId,
+    this.refreshStreams,
   });
 
   final String id;
@@ -649,6 +650,9 @@ class MediaPlaybackItem {
   /// Voiceover already resolved into this item's stream URLs, when applicable.
   final String? initialVoiceoverId;
 
+  final Future<NormalizedStreamBundle> Function(bool Function() isCancelled)?
+  refreshStreams;
+
   MediaPlaybackItem withIgnoreProgress(bool value) {
     if (value == ignoreProgress) return this;
     return MediaPlaybackItem(
@@ -673,6 +677,34 @@ class MediaPlaybackItem {
       ignoreProgress: value,
       initialQualityId: initialQualityId,
       initialVoiceoverId: initialVoiceoverId,
+      refreshStreams: refreshStreams,
+    );
+  }
+
+  MediaPlaybackItem withStreams(NormalizedStreamBundle bundle) {
+    return MediaPlaybackItem(
+      id: id,
+      title: title,
+      mediaType: mediaType,
+      servers: mediaServersFromBundle(bundle),
+      subtitle: subtitle,
+      originalTitle: originalTitle,
+      posterUrl: posterUrl,
+      backdropUrl: backdropUrl,
+      externalIds: externalIds,
+      seasons: seasons,
+      currentEpisodeId: currentEpisodeId,
+      skipMarkers: skipMarkers,
+      startPosition: startPosition,
+      startPolicy: startPolicy,
+      seasonNumber: seasonNumber,
+      episodeNumber: episodeNumber,
+      episodeCount: episodeCount,
+      mediaStatusLabel: mediaStatusLabel,
+      ignoreProgress: ignoreProgress,
+      initialQualityId: initialQualityId,
+      initialVoiceoverId: initialVoiceoverId,
+      refreshStreams: bundle.refreshCancellable ?? refreshStreams,
     );
   }
 
@@ -697,64 +729,7 @@ class MediaPlaybackItem {
     String? initialVoiceoverId,
     bool useBundleSelectedVoiceover = true,
   }) {
-    final StreamType streamType = streamTypeFrom(bundle.streamType);
-
-    final List<SubtitleTrack> subtitleTracks = bundle.subtitles
-        .map(
-          (NormalizedSubtitle s) => SubtitleTrack(
-            id: s.url,
-            label: s.label.isNotEmpty ? s.label : s.language,
-            url: s.url,
-            language: s.language,
-            format: _subtitleFormat(s.url),
-            headers: s.headers,
-          ),
-        )
-        .toList(growable: false);
-
-    final List<VoiceOverTrack> voiceovers = bundle.availableVoiceOvers
-        .map(
-          (NormalizedVoiceOver v) => VoiceOverTrack(id: v.id, label: v.label),
-        )
-        .toList(growable: false);
-
-    final String selectedServerId = bundle.selectedServer.id;
-
-    final List<NormalizedServer> orderedServers = <NormalizedServer>[
-      ...bundle.availableServers.where(
-        (NormalizedServer s) => s.id == selectedServerId,
-      ),
-      ...bundle.availableServers.where(
-        (NormalizedServer s) => s.id != selectedServerId,
-      ),
-    ];
-
-    final List<MediaServer> servers = orderedServers
-        .map((NormalizedServer s) {
-          final List<StreamQuality> serverQualities = s.qualities
-              .map(
-                (NormalizedQuality q) => StreamQuality(
-                  id: q.label,
-                  label: q.label,
-                  url: q.streamUrl,
-                  headers: q.headers.isNotEmpty ? q.headers : s.headers,
-                ),
-              )
-              .toList(growable: false);
-
-          return MediaServer(
-            id: s.id,
-            name: s.title,
-            sourceName: bundle.addonId,
-            url: s.streamUrl,
-            headers: s.headers.isNotEmpty ? s.headers : bundle.headers,
-            streamType: streamType,
-            qualities: serverQualities,
-            voiceovers: voiceovers,
-            subtitles: subtitleTracks,
-          );
-        })
-        .toList(growable: false);
+    final servers = mediaServersFromBundle(bundle);
 
     final double episodeNumber = bundle.episode.number;
 
@@ -766,6 +741,9 @@ class MediaPlaybackItem {
     );
 
     return MediaPlaybackItem(
+      refreshStreams:
+          bundle.refreshCancellable ??
+          (bundle.refresh == null ? null : (_) => bundle.refresh!()),
       id: item.id,
       title: item.title,
       mediaType: item.type,
@@ -902,4 +880,65 @@ class PlayerError {
   final String title;
   final String message;
   final bool canRetry;
+}
+
+List<MediaServer> mediaServersFromBundle(NormalizedStreamBundle bundle) {
+  final StreamType streamType = streamTypeFrom(bundle.streamType);
+
+  final List<SubtitleTrack> subtitleTracks = bundle.subtitles
+      .map(
+        (NormalizedSubtitle s) => SubtitleTrack(
+          id: s.url,
+          label: s.label.isNotEmpty ? s.label : s.language,
+          url: s.url,
+          language: s.language,
+          format: _subtitleFormat(s.url),
+          headers: s.headers,
+        ),
+      )
+      .toList(growable: false);
+
+  final List<VoiceOverTrack> voiceovers = bundle.availableVoiceOvers
+      .map((NormalizedVoiceOver v) => VoiceOverTrack(id: v.id, label: v.label))
+      .toList(growable: false);
+
+  final String selectedServerId = bundle.selectedServer.id;
+
+  final List<NormalizedServer> orderedServers = <NormalizedServer>[
+    ...bundle.availableServers.where(
+      (NormalizedServer s) => s.id == selectedServerId,
+    ),
+    ...bundle.availableServers.where(
+      (NormalizedServer s) => s.id != selectedServerId,
+    ),
+  ];
+
+  final List<MediaServer> servers = orderedServers
+      .map((NormalizedServer s) {
+        final List<StreamQuality> serverQualities = s.qualities
+            .map(
+              (NormalizedQuality q) => StreamQuality(
+                id: q.label,
+                label: q.label,
+                url: q.streamUrl,
+                headers: q.headers.isNotEmpty ? q.headers : s.headers,
+              ),
+            )
+            .toList(growable: false);
+
+        return MediaServer(
+          id: s.id,
+          name: s.title,
+          sourceName: bundle.addonId,
+          url: s.streamUrl,
+          headers: s.headers.isNotEmpty ? s.headers : bundle.headers,
+          streamType: streamType,
+          qualities: serverQualities,
+          voiceovers: voiceovers,
+          subtitles: subtitleTracks,
+        );
+      })
+      .toList(growable: false);
+
+  return servers;
 }

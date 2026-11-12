@@ -2504,6 +2504,7 @@ class CanonicalLibraryRepository {
     required Set<TrackerSource> propagationTargets,
     required bool completeSnapshot,
     TrackerSource? authoritativeSource,
+    bool catalogAuthoritative = false,
     Map<TrackerSource, String> propagationAccountIds =
         const <TrackerSource, String>{},
   }) async {
@@ -2515,6 +2516,8 @@ class CanonicalLibraryRepository {
       );
     }
     return database.transaction(() async {
+      final bool followCatalog =
+          catalogAuthoritative && source == authoritativeSource;
       final DateTime now = DateTime.now().toUtc();
       final int nowMs = now.millisecondsSinceEpoch;
       final List<UserMediaState> states = await loadTrackingStates();
@@ -2750,15 +2753,37 @@ class CanonicalLibraryRepository {
             ? null
             : states[currentIndex];
         UserMediaPatch changed = _providerPatchBetween(
-          forceInitialImport ? null : previousProvider,
+          forceInitialImport || (followCatalog && current == null)
+              ? null
+              : previousProvider,
           incoming,
           source,
         );
         if (current == null) {
+          // A pending local deletion wins an unknown/equal source edit date.
+          final pendingDelete = liveJournal
+              .where(
+                (job) =>
+                    job.identity.matches(incoming.identity) &&
+                    job.tracks(source) &&
+                    (job.targetAccountIds[source] == null ||
+                        job.targetAccountIds[source] == accountId) &&
+                    job.patch.delete,
+              )
+              .lastOrNull;
+          final remoteAt =
+              (incoming.providerStates[source]?.updatedAt ?? incoming.updatedAt)
+                  .millisecondsSinceEpoch;
+          if (followCatalog &&
+              pendingDelete != null &&
+              (remoteAt <= 0 ||
+                  remoteAt <= pendingDelete.updatedAt.millisecondsSinceEpoch)) {
+            continue;
+          }
           final deleted = await (database.select(
             database.canonicalLibraryRecords,
           )..where((table) => table.localId.equals(localId))).getSingleOrNull();
-          if (deleted != null && !deleted.inLibrary) {
+          if (!followCatalog && deleted != null && !deleted.inLibrary) {
             final remoteMs =
                 (incoming.providerStates[source]?.updatedAt ??
                         incoming.updatedAt)
@@ -2871,6 +2896,11 @@ class CanonicalLibraryRepository {
               ),
             );
           }
+          if (followCatalog) {
+            changed = changed.mergedWith(
+              _providerPatchBetween(current, incoming, source),
+            );
+          }
           final acceptedFields = <UserMediaField>{};
           final acceptedEditTimes = <UserMediaField, int>{};
           bool needsReview = false;
@@ -2921,6 +2951,35 @@ class CanonicalLibraryRepository {
               incoming,
               source,
             )) {
+              await _resolveProviderReviewsLocked(
+                localId,
+                field.name,
+                source,
+                accountId,
+              );
+              continue;
+            }
+            if (followCatalog) {
+              final pending = liveJournal
+                  .where(
+                    (job) =>
+                        job.identity.matches(incoming.identity) &&
+                        job.tracks(source) &&
+                        (job.targetAccountIds[source] == null ||
+                            job.targetAccountIds[source] == accountId) &&
+                        (job.patch.delete || job.patch.touches(field)),
+                  )
+                  .toList();
+              final localEditMs = pending.fold<int>(
+                0,
+                (latest, job) => job.updatedAt.millisecondsSinceEpoch > latest
+                    ? job.updatedAt.millisecondsSinceEpoch
+                    : latest,
+              );
+              if (pending.isEmpty || (remoteMs > 0 && remoteMs > localEditMs)) {
+                acceptedFields.add(field);
+                acceptedEditTimes[field] = remoteMs;
+              }
               await _resolveProviderReviewsLocked(
                 localId,
                 field.name,
@@ -3068,11 +3127,34 @@ class CanonicalLibraryRepository {
         }
       }
 
-      for (final ProviderSnapshotRecord previousRow in previousRows) {
-        if (incomingByLocal.containsKey(previousRow.localId)) continue;
+      final ambiguousIds = followCatalog
+          ? (await (database.select(database.libraryConflictRecords)..where(
+                      (row) =>
+                          row.fieldName.equals('identity') &
+                          row.state.equals('open'),
+                    ))
+                    .get())
+                .map((row) => row.localId)
+                .toSet()
+          : const <String>{};
+      final deletionCandidates = <String>{
+        ...previousRows.map((row) => row.localId),
+        if (followCatalog)
+          ...states
+              .where(
+                (state) =>
+                    state.identity.mediaKind == mediaKind &&
+                    state.identity.idFor(source) != null,
+              )
+              .map((state) => state.identity.localId),
+      };
+      for (final localId in deletionCandidates) {
+        if (incomingByLocal.containsKey(localId) ||
+            ambiguousIds.contains(localId)) {
+          continue;
+        }
         final int stateIndex = states.indexWhere(
-          (UserMediaState state) =>
-              state.identity.localId == previousRow.localId,
+          (UserMediaState state) => state.identity.localId == localId,
         );
         if (stateIndex < 0) continue;
         final UserMediaState current = states[stateIndex];
@@ -3082,8 +3164,53 @@ class CanonicalLibraryRepository {
           source,
         );
         if (pending != null && !pending.patch.delete) continue;
+        if (followCatalog) {
+          states.removeAt(stateIndex);
+          final operationId = const Uuid().v7();
+          await _appendOperationLocked(
+            LibraryOperationDraft(
+              operationId: operationId,
+              localId: localId,
+              originKind: LibraryOriginKind.provider,
+              originId: '${source.name}:$accountId',
+              intent: LibraryMutationIntent.remoteImport,
+              fields: const {'membership'},
+              before: {'state': current.toJson()},
+              after: const {},
+              targets: propagationTargets.map((target) => target.name).toSet(),
+              occurredAt: now,
+              title: current.mediaItem.title,
+              targetAccountIds: {
+                for (final target in propagationTargets)
+                  if (propagationAccountIds[target] != null)
+                    target.name: propagationAccountIds[target]!,
+              },
+            ),
+          );
+          if (propagationTargets.isNotEmpty) {
+            liveJournal.add(
+              SyncJournalEntry(
+                operationId: operationId,
+                identity: current.identity,
+                patch: UserMediaPatch(delete: true),
+                pendingTargets: propagationTargets,
+                createdAt: now,
+                updatedAt: now,
+                targetAccountIds: propagationAccountIds,
+                mediaTitle: current.mediaItem.title,
+              ),
+            );
+          }
+          await _resolveProviderReviewsLocked(
+            localId,
+            'membership',
+            source,
+            accountId,
+          );
+          continue;
+        }
         await _recordProviderReviewLocked(
-          localId: previousRow.localId,
+          localId: localId,
           field: 'membership',
           source: source,
           accountId: accountId,
@@ -3094,6 +3221,41 @@ class CanonicalLibraryRepository {
         );
         pendingDeletions++;
         continue;
+      }
+
+      if (followCatalog) {
+        final activeIds = states.map((state) => state.identity.localId).toSet();
+        for (final previous in previousRows) {
+          if (!incomingByLocal.containsKey(previous.localId) &&
+              !activeIds.contains(previous.localId)) {
+            await (database.delete(
+              database.providerSnapshotRecords,
+            )..where((row) => row.snapshotId.equals(previous.snapshotId))).go();
+          }
+        }
+        final conflicts =
+            await (database.select(database.libraryConflictRecords)..where(
+                  (row) =>
+                      row.state.equals('open') &
+                      row.fieldName.isNotValue('identity'),
+                ))
+                .get();
+        for (final conflict in conflicts) {
+          final scope = _jsonMap(conflict.incomingValueJson);
+          final supported =
+              conflict.fieldName == 'membership' ||
+              providerEntryFields(
+                source,
+                mediaKind: mediaKind,
+              ).any((field) => field.name == conflict.fieldName);
+          if (supported &&
+              (localIdsForKind.contains(conflict.localId) ||
+                  incomingByLocal.containsKey(conflict.localId)) &&
+              scope['provider'] == source.name &&
+              scope['accountId'] == accountId) {
+            await _markConflictResolvedLocked(conflict.conflictId);
+          }
+        }
       }
 
       // Old count-only warnings are superseded by the per-entry review above.
@@ -3214,11 +3376,17 @@ class CanonicalLibraryRepository {
                 (!mirrorOperationIds.contains(job.operationId) &&
                     !foreignOperationIds.contains(job.operationId) &&
                     !job.updatedAt.isBefore(editAt)) ||
-                job.patch.delete) {
+                (job.patch.delete && !(followCatalog && before == null))) {
               continue;
             }
-            final remaining = job.patch.fields.difference(acceptedPatch.fields);
-            if (remaining.length == job.patch.fields.length) continue;
+            final remaining =
+                job.patch.delete && followCatalog && before == null
+                ? <UserMediaField>{}
+                : job.patch.fields.difference(acceptedPatch.fields);
+            if (remaining.length == job.patch.fields.length &&
+                !job.patch.delete) {
+              continue;
+            }
             if (remaining.isEmpty) {
               nextJournal.removeAt(i);
               if (job.operationId != null) {

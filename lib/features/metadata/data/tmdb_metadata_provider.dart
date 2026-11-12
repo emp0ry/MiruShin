@@ -1,5 +1,7 @@
 import 'package:dio/dio.dart';
 
+import '../../../core/network/catalog_request_context.dart';
+
 import '../../../shared/models/calendar_item.dart';
 import '../../../shared/models/media_item.dart';
 import '../domain/metadata_provider.dart';
@@ -905,7 +907,8 @@ class TmdbMetadataProvider implements PagedDiscoveryProvider {
     Map<String, dynamic> query = const <String, dynamic>{},
     String? languageOverride,
   ]) {
-    return _dio.get<dynamic>(
+    return catalogGet<dynamic>(
+      _dio,
       path,
       queryParameters: <String, dynamic>{
         'language': languageOverride ?? language,

@@ -1,13 +1,16 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mirushin/core/network/anilist_request_scheduler.dart';
+import 'package:mirushin/core/network/catalog_request_context.dart';
 
 class _Adapter implements HttpClientAdapter {
   final List<String> paths = [];
   ResponseBody Function(int index)? respond;
+  Future<ResponseBody> Function(RequestOptions)? pending;
   @override
   Future<ResponseBody> fetch(
     RequestOptions options,
@@ -15,6 +18,7 @@ class _Adapter implements HttpClientAdapter {
     Future<void>? cancel,
   ) async {
     paths.add(options.uri.toString());
+    if (pending != null) return pending!(options);
     return respond?.call(paths.length) ?? response(200);
   }
 
@@ -44,6 +48,75 @@ Dio _client(AniListRequestScheduler scheduler, _Adapter adapter) {
 }
 
 void main() {
+  test(
+    'slow responses do not hold the launch lane; at most three run',
+    () async {
+      final gates = List.generate(4, (_) => Completer<ResponseBody>());
+      final entered = List.generate(4, (_) => Completer<void>());
+      final adapter = _Adapter()
+        ..pending = (options) {
+          final index = int.parse(options.uri.pathSegments.last);
+          entered[index].complete();
+          return gates[index].future;
+        };
+      final dio = _client(
+        AniListRequestScheduler(
+          minimumSpacing: const Duration(milliseconds: 1),
+        ),
+        adapter,
+      );
+      final context = CatalogRequestContext();
+      final requests = List.generate(
+        4,
+        (i) => dio.post(
+          '/$i',
+          options: Options(
+            extra: {if (i == 2) CatalogRequestContext.optionsKey: context},
+          ),
+        ),
+      );
+      await Future.wait(entered.take(3).map((entry) => entry.future));
+      expect(adapter.paths, hasLength(3));
+      expect(entered[3].isCompleted, isFalse);
+      gates[1].complete(response(200));
+      await entered[3].future;
+      expect(adapter.paths, hasLength(4));
+      for (final gate in gates) {
+        if (!gate.isCompleted) gate.complete(response(200));
+      }
+      await Future.wait(requests);
+      context.cancel();
+    },
+  );
+
+  testWidgets('interactive searches overtake queued background work', (
+    tester,
+  ) async {
+    final scheduler = AniListRequestScheduler(
+      minimumSpacing: const Duration(seconds: 1),
+      now: tester.binding.clock.now,
+    );
+    final adapter = _Adapter();
+    final dio = _client(scheduler, adapter);
+    final first = dio.post('/first');
+    final background = dio.post('/background');
+    final context = CatalogRequestContext();
+    addTearDown(context.cancel);
+    final search = dio.post(
+      '/search',
+      options: Options(extra: {CatalogRequestContext.optionsKey: context}),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    expect(adapter.paths.map((url) => Uri.parse(url).path), [
+      '/first',
+      '/search',
+    ]);
+    await tester.pump(const Duration(seconds: 1));
+    await Future.wait([first, background, search]);
+    context.cancel();
+  });
+
   testWidgets(
     'independent clients share spacing and the rolling request budget',
     (tester) async {
@@ -79,6 +152,7 @@ void main() {
     final now = tester.binding.clock.now();
     final scheduler = AniListRequestScheduler(
       minimumSpacing: Duration.zero,
+      maxConcurrentRequests: 1,
       now: tester.binding.clock.now,
     );
     final adapter = _Adapter()
@@ -151,6 +225,7 @@ void main() {
       final scheduler = AniListRequestScheduler(
         window: const Duration(seconds: 2),
         minimumSpacing: Duration.zero,
+        maxConcurrentRequests: 1,
         now: tester.binding.clock.now,
       );
       final adapter = _Adapter()

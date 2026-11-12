@@ -27,6 +27,9 @@ jobs:
       - name: Setup Flutter (stable)
         uses: subosito/flutter-action@v2
         with:
+          # Keep the released Gradle 8 / AGP 8 Android toolchain. Flutter 3.50
+          # requires Gradle 9; 3.47.9 built the last successful Android release.
+          flutter-version: '3.47.9'
           channel: stable
           cache: true
 

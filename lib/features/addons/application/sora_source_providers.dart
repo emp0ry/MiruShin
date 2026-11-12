@@ -552,19 +552,40 @@ final soraStreamBundleProvider =
         soraStreamResolveProvider(request).future,
       );
       final SoraJsRuntime runtime = ref.watch(soraJsRuntimeProvider);
+      final container = ref.container;
+      Future<NormalizedStreamBundle> refreshBundle(
+        bool Function() isCancelled,
+      ) async {
+        if (isCancelled()) {
+          throw const SoraAddonException('Stream resolution cancelled.');
+        }
+        invalidateSoraStreamCaches(container.invalidate, request);
+        final refreshed = await runtime.refreshStream(
+          addon: addon,
+          episode: request.episode,
+          voiceover: request.voiceover,
+          shouldCancel: isCancelled,
+        );
+        if (isCancelled()) {
+          throw const SoraAddonException('Stream resolution cancelled.');
+        }
+        final result = parseSoraStreamBundle(
+          refreshed,
+          streamType: addon.manifest.streamType,
+          refresh: () => refreshBundle(() => false),
+          refreshCancellable: refreshBundle,
+        );
+        if (result.availableServers.isEmpty) {
+          throw const SoraAddonException('No playable streams returned.');
+        }
+        return result;
+      }
+
       final NormalizedStreamBundle bundle = parseSoraStreamBundle(
         streams,
         streamType: addon.manifest.streamType,
-        refresh: () async {
-          final SoraResolvedStreams refreshed = await runtime.refreshStream(
-            addon: addon,
-            episode: request.episode,
-          );
-          return parseSoraStreamBundle(
-            refreshed,
-            streamType: addon.manifest.streamType,
-          );
-        },
+        refresh: () => refreshBundle(() => false),
+        refreshCancellable: refreshBundle,
       );
       if (bundle.availableServers.isEmpty) {
         throw SoraAddonException(
@@ -1386,4 +1407,9 @@ String _soraSearchCacheKey(SoraSourceSearchRequest request) {
     request.customQuery ?? '',
     request.languageCodes.join('\u0001'),
   ].join('\u0002');
+}
+
+void invalidateSoraStreamCaches(dynamic invalidate, SoraStreamRequest request) {
+  invalidate(soraStreamResolveProvider(request));
+  invalidate(soraStreamBundleProvider(request));
 }

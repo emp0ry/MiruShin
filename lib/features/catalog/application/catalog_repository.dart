@@ -1,6 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
+
+import 'package:crypto/crypto.dart';
 
 import '../../../core/cache/metadata_cache_store.dart';
+import '../../../core/network/catalog_request_context.dart';
 import '../../../shared/models/calendar_item.dart';
 import '../../../shared/models/media_item.dart';
 import '../../metadata/application/media_catalog.dart';
@@ -8,6 +12,9 @@ import '../../metadata/data/tmdb_metadata_provider.dart';
 import '../../tracking/data/anilist_api_client.dart';
 import '../../tracking/data/mal_api_client.dart';
 import 'catalog_mode.dart';
+
+export '../../../core/network/catalog_request_context.dart'
+    show CatalogRequestContext;
 
 typedef CatalogOfflineCallback =
     void Function(
@@ -30,6 +37,7 @@ abstract interface class CatalogRepository {
     required int page,
     int pageSize = 20,
     String? anilistKind,
+    CatalogRequestContext? context,
   });
 
   Future<MediaItem?> details(String id);
@@ -108,11 +116,24 @@ class TmdbCatalogRepository implements CatalogRepository {
     required int page,
     int pageSize = 20,
     String? anilistKind,
+    CatalogRequestContext? context,
   }) {
+    if (context != null) {
+      return context.run(
+        () => discover(
+          search: search,
+          type: type,
+          filter: filter,
+          page: page,
+          pageSize: pageSize,
+          anilistKind: anilistKind,
+        ),
+      );
+    }
     final String normalizedSearch = search.trim();
     final String typeKey = type?.name ?? 'all';
     final String key =
-        '$cacheScope.discovery.${_safe(normalizedSearch)}.$filter.$typeKey.$page.$pageSize';
+        '$cacheScope.discovery.v2.${_searchKey(normalizedSearch)}.$filter.$typeKey.$page.$pageSize';
     return _cachedThenRefresh(
       cache: cache,
       key: key,
@@ -296,14 +317,27 @@ class AniListCatalogRepository implements CatalogRepository {
     required int page,
     int pageSize = 20,
     String? anilistKind,
+    CatalogRequestContext? context,
   }) {
+    if (context != null) {
+      return context.run(
+        () => discover(
+          search: search,
+          type: type,
+          filter: filter,
+          page: page,
+          pageSize: pageSize,
+          anilistKind: anilistKind,
+        ),
+      );
+    }
     final String requestedKind = (anilistKind?.trim().isNotEmpty ?? false)
         ? anilistKind!.trim()
         : 'anime';
     final String kind = requestedKind;
     final String normalizedSearch = search.trim();
     final String key =
-        '$cacheScope.discovery.$kind.${_safe(normalizedSearch)}.$filter.$page.$pageSize';
+        '$cacheScope.discovery.v2.$kind.${_searchKey(normalizedSearch)}.$filter.$page.$pageSize';
     return _cachedThenRefresh(
       cache: cache,
       key: key,
@@ -403,6 +437,7 @@ class AniListCatalogRepository implements CatalogRepository {
       onPrimarySuccess?.call();
       return result;
     } catch (error) {
+      CatalogRequestContext.current?.check();
       onPrimaryFailure?.call(error);
       rethrow;
     }
@@ -427,6 +462,7 @@ class AniListCatalogRepository implements CatalogRepository {
     try {
       return await _primaryRead(primary);
     } catch (error) {
+      CatalogRequestContext.current?.check();
       final MalApiClient? mal = availableFallback;
       if (mal == null) rethrow;
       final T result = await fallback(mal);
@@ -567,6 +603,7 @@ Future<BoardRails> _cachedBoardThenRefreshForNextLaunch({
       );
       return cached;
     } catch (_) {
+      CatalogRequestContext.current?.check();
       // Treat an invalid snapshot as a cold cache and replace it from network.
     }
   }
@@ -630,6 +667,27 @@ Future<T> _cachedThenRefresh<T>({
     try {
       final T cached = decode(cachedJson);
       if (cached != null) {
+        if (operation == 'discovery') {
+          final fetchedAt = DateTime.tryParse(
+            cachedJson['fetchedAtUtc']?.toString() ?? '',
+          );
+          if (fetchedAt != null &&
+              DateTime.now().toUtc().difference(fetchedAt) <
+                  const Duration(minutes: 5)) {
+            return cached;
+          }
+          return _networkFirst(
+            cache: cache,
+            key: key,
+            operation: operation,
+            fallback: fallback,
+            fetch: fetch,
+            decode: decode,
+            encode: encode,
+            onOffline: onOffline,
+            onOnline: onOnline,
+          );
+        }
         unawaited(
           _refreshCachedValue(
             cache: cache,
@@ -644,6 +702,7 @@ Future<T> _cachedThenRefresh<T>({
         return cached;
       }
     } catch (_) {
+      CatalogRequestContext.current?.check();
       // Treat an invalid or incomplete snapshot as a cold cache.
     }
   }
@@ -704,12 +763,16 @@ Future<T> _networkFirst<T>({
     onOnline?.call(operation: operation);
     return value;
   } catch (error) {
+    CatalogRequestContext.current?.check();
     final Map<String, dynamic>? cached = await cache.read(key);
     if (cached != null) {
       onOffline?.call(error, operation: operation, usingCache: true);
       return decode(cached);
     }
     onOffline?.call(error, operation: operation, usingCache: false);
+    if (operation == 'discovery' && CatalogRequestContext.current != null) {
+      rethrow;
+    }
     return fallback;
   }
 }
@@ -808,6 +871,7 @@ Map<String, List<MediaItem>> _mediaSectionMap(Object? value) {
 
 Map<String, dynamic> _mediaListToJson(List<MediaItem> items) {
   return <String, dynamic>{
+    'fetchedAtUtc': DateTime.now().toUtc().toIso8601String(),
     'items': items
         .map((MediaItem item) => item.toJson())
         .toList(growable: false),
@@ -890,3 +954,6 @@ String _safe(String value) {
   if (value.trim().isEmpty) return 'empty';
   return value.replaceAll(RegExp(r'[^a-zA-Z0-9._-]+'), '_');
 }
+
+String _searchKey(String value) =>
+    sha256.convert(utf8.encode(value)).toString();

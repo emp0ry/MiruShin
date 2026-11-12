@@ -1,5 +1,7 @@
 import 'package:dio/dio.dart';
 
+import '../../../core/network/catalog_request_context.dart';
+
 import '../domain/shikimori_franchise.dart';
 
 typedef ShikimoriRussianDetails = ({
@@ -53,7 +55,8 @@ class ShikimoriClient {
     );
     final Response<dynamic> response;
     try {
-      response = await _dio.get<dynamic>(
+      response = await catalogGet<dynamic>(
+        _dio,
         '$_restUrl/$malId/franchise',
         options: options,
       );
@@ -81,7 +84,8 @@ class ShikimoriClient {
         offset,
         (offset + 50).clamp(0, sortedIds.length),
       );
-      final result = await _dio.post<dynamic>(
+      final result = await catalogPost<dynamic>(
+        _dio,
         _graphqlUrl,
         data: <String, dynamic>{
           'query':
@@ -166,6 +170,13 @@ class ShikimoriClient {
     );
   }
 
+  String? cachedRussianTitle(int malId) {
+    final cached = _cache['mal:$malId'];
+    return cached != null && cached.expiry.isAfter(DateTime.now())
+        ? cached.value
+        : null;
+  }
+
   // Direct GraphQL lookup by MAL ID avoids redirects.
   Future<String?> findRussianTitleByMalId(int malId) async {
     final String key = 'mal:$malId';
@@ -175,7 +186,8 @@ class ShikimoriClient {
     }
 
     try {
-      final Response<dynamic> response = await _dio.post<dynamic>(
+      final Response<dynamic> response = await catalogPost<dynamic>(
+        _dio,
         _graphqlUrl,
         data: <String, dynamic>{
           'query': '{ animes(ids: "$malId") { russian } }',
@@ -218,7 +230,8 @@ class ShikimoriClient {
     }
 
     try {
-      final Response<dynamic> response = await _dio.get<dynamic>(
+      final Response<dynamic> response = await catalogGet<dynamic>(
+        _dio,
         _restUrl,
         queryParameters: <String, String>{
           'search': query.trim(),
@@ -261,7 +274,8 @@ class ShikimoriClient {
     final String trimmed = query.trim();
     if (trimmed.isEmpty) return const <ShikimoriSearchHit>[];
     try {
-      final Response<dynamic> response = await _dio.get<dynamic>(
+      final Response<dynamic> response = await catalogGet<dynamic>(
+        _dio,
         isManga ? _mangasUrl : _restUrl,
         queryParameters: <String, String>{
           'search': trimmed,
@@ -342,7 +356,8 @@ class ShikimoriClient {
     if (ids.isEmpty) return const <int, String>{};
     final String joined = ids.join(',');
     try {
-      final Response<dynamic> response = await _dio.get<dynamic>(
+      final Response<dynamic> response = await catalogGet<dynamic>(
+        _dio,
         _restUrl,
         queryParameters: <String, String>{
           'ids': joined,
@@ -388,7 +403,8 @@ class ShikimoriClient {
     bool isManga = false,
   }) async {
     try {
-      final Response<dynamic> response = await _dio.get<dynamic>(
+      final Response<dynamic> response = await catalogGet<dynamic>(
+        _dio,
         '${isManga ? _mangasUrl : _restUrl}/$id',
         options: Options(
           headers: const <String, String>{

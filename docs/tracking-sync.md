@@ -24,6 +24,39 @@ fallback results use a short cache lifetime so AniList is retried after
 recovery. MAL-backed detail pages can open Watch Order directly, and progress
 is matched by stable MAL identity when no AniList id is available.
 
+## Catalog-only Library
+
+With **Sync full library** off, a complete successful snapshot from the selected
+source controls Library membership and the fields that source actually returns.
+An addition, edit, or deletion made on another device is applied automatically;
+settled local history and equal/missing provider timestamps do not require a
+Library conflict. Partial responses and cached fallbacks never delete entries.
+
+Pending local changes remain protected field by field. A verified newer source
+edit supersedes an older pending edit; equal or unknown times keep the pending
+local action until delivery/read-back confirms it. Unknown source edit times
+remain unverified in audit revisions. Identity conflicts and account approval
+remain separate. Enabling full-library Drive sync retains its existing review
+and merge policy.
+
+Library pull-to-refresh and the refresh button read the selected source directly,
+without waiting for other catalogs. Repeated calls share one operation per media
+kind. Foreground/resume refreshes reuse a successful read for one minute; manual
+refresh bypasses that freshness window while respecting provider backoff.
+Rendered entries, folder selection and scroll position remain available while
+refreshing or offline.
+
+## Interactive catalog requests
+
+AniList clients share a rolling request budget and a maximum of three concurrent
+requests. Background work uses at most two slots, leaving room for Discovery.
+Queued work supports cancellation and ages to avoid starving tracker delivery.
+Server rate-limit headers apply to every client. Discovery has a 15-second
+operation deadline including queue time, cancels superseded requests, and ignores
+old errors/results. Search cache keys retain Unicode through a digest; fresh pages
+are reused for five minutes. Optional Russian-title enrichment does not delay the
+initial page.
+
 ## Data flow
 
 ```text

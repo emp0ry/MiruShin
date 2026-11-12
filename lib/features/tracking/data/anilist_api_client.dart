@@ -1,7 +1,7 @@
 import 'package:dio/dio.dart';
 
 import '../../../core/network/anilist_request_scheduler.dart';
-
+import '../../../core/network/catalog_request_context.dart';
 import '../../../core/network/request_cancellation_scope.dart';
 import '../../../shared/models/anilist_models.dart';
 import '../../../shared/models/anime_airing.dart';
@@ -641,6 +641,29 @@ class AniListApiClient {
       );
     }
     return enriched;
+  }
+
+  Future<List<MediaItem>> _catalogRussianTitles(List<MediaItem> items) async {
+    final context = CatalogRequestContext.current;
+    if (context == null) return _enrichWithRussian(items);
+    final cached = items
+        .map((item) {
+          final malId = int.tryParse(item.externalIds['mal'] ?? '');
+          final title = malId == null || _itemIsManga(item)
+              ? null
+              : shikimori?.cachedRussianTitle(malId);
+          return title == null ? item : item.copyWith(title: title);
+        })
+        .toList(growable: false);
+    context.background(() async {
+      try {
+        final enriched = await _enrichWithRussian(cached);
+        context.publish(enriched);
+      } catch (_) {
+        // Translation is optional; never replace usable catalog results.
+      }
+    });
+    return cached;
   }
 
   static bool _itemIsManga(MediaItem item) {
@@ -1984,7 +2007,7 @@ class AniListApiClient {
     Map<String, dynamic> variables,
   ) async {
     final List<MediaItem> items = await _mediaPage(query, variables);
-    return _wantsRussian ? _enrichWithRussian(items) : items;
+    return _wantsRussian ? _catalogRussianTitles(items) : items;
   }
 
   Future<List<MediaItem>> _mediaPage(
@@ -2110,7 +2133,7 @@ class AniListApiClient {
   }) async {
     final List<MediaItem> items = await _mediaPage(query, variables);
     if (type == 'ANIME' && _wantsRussian) {
-      return _enrichWithRussian(items);
+      return _catalogRussianTitles(items);
     }
     return items;
   }
@@ -2419,12 +2442,14 @@ class AniListApiClient {
       throw StateError('AniList access token is not configured.');
     }
 
+    final context = CatalogRequestContext.current;
     Future<Response<dynamic>> sendWithToken(CancelToken? token) =>
         _dio.post<dynamic>(
           '',
           cancelToken: token,
           data: <String, dynamic>{'query': query, 'variables': variables},
           options: Options(
+            extra: {CatalogRequestContext.optionsKey: ?context},
             headers: <String, String>{
               'Content-Type': 'application/json',
               'Accept': 'application/json',
@@ -2438,8 +2463,11 @@ class AniListApiClient {
         (cancelToken == null
             ? null
             : RequestCancellationScope.linkedTo(cancelToken!));
-    Future<Response<dynamic>> send() =>
-        scope == null ? sendWithToken(null) : scope.run(sendWithToken);
+    Future<Response<dynamic>> send() => context != null
+        ? context.request(sendWithToken)
+        : scope == null
+        ? sendWithToken(null)
+        : scope.run(sendWithToken);
 
     Response<dynamic> response;
     try {
@@ -2448,7 +2476,11 @@ class AniListApiClient {
       // A receive timeout can happen after AniList applied a mutation. Retrying
       // toggle-style writes could undo the first request, while read failures
       // are safe to retry before the catalog falls back to cache.
-      if (!retryTimeoutReads || !_isTimeout(error) || _isMutation(query)) {
+      context?.check();
+      if (context != null ||
+          !retryTimeoutReads ||
+          !_isTimeout(error) ||
+          _isMutation(query)) {
         rethrow;
       }
       await Future<void>.delayed(_timeoutRetryDelay);
