@@ -50,4 +50,61 @@ void main() {
       expect(calls, 2);
     },
   );
+
+  testWidgets('UI timeout keeps one queued read and accepts its late result', (
+    tester,
+  ) async {
+    var calls = 0;
+    final gate = Completer<TrackerLibrarySnapshot>();
+    final refresh = LibraryRefreshController((_, _) {
+      calls++;
+      return gate.future;
+    }, now: tester.binding.clock.now);
+    final first = refresh.refresh('anime');
+    expect(identical(first, refresh.refresh('anime')), isTrue);
+    final failure = expectLater(first, throwsA(isA<TimeoutException>()));
+    await tester.pump(const Duration(seconds: 30));
+    await failure;
+
+    final retry = refresh.refresh('anime');
+    await tester.pump();
+    expect(calls, 1, reason: 'Retry joins the existing queued source read');
+    gate.complete(const TrackerLibrarySnapshot(folders: [], fromCache: false));
+    await tester.pump();
+    await retry;
+    await refresh.refresh('anime', force: false);
+    expect(calls, 1, reason: 'A late successful result is still fresh');
+    await refresh.refresh('anime');
+    expect(
+      calls,
+      2,
+      reason: 'Manual refresh can start after the read finishes',
+    );
+  });
+
+  testWidgets('late failure after timeout releases work for the next attempt', (
+    tester,
+  ) async {
+    var calls = 0;
+    final gate = Completer<TrackerLibrarySnapshot>();
+    final refresh = LibraryRefreshController((_, _) {
+      calls++;
+      return calls == 1
+          ? gate.future
+          : Future.value(
+              const TrackerLibrarySnapshot(folders: [], fromCache: false),
+            );
+    });
+    final failure = expectLater(
+      refresh.refresh('anime'),
+      throwsA(isA<TimeoutException>()),
+    );
+    await tester.pump(const Duration(seconds: 30));
+    await failure;
+    gate.completeError(StateError('late source failure'));
+    await tester.pump();
+    await refresh.refresh('anime');
+    expect(calls, 2);
+    expect(tester.takeException(), isNull);
+  });
 }

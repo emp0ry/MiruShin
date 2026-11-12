@@ -19,7 +19,7 @@ void main() {
   setUpAll(() => AppLocalizations.load(const Locale('en')));
   for (final platform in [TargetPlatform.android, TargetPlatform.macOS]) {
     testWidgets(
-      'empty Library supports pull refresh and retry after failure ($platform)',
+      'empty Library stops waiting for a stalled refresh without a header spinner ($platform)',
       (tester) async {
         SharedPreferences.setMockInitialValues({
           'catalog.mode': 'anilist',
@@ -76,9 +76,26 @@ void main() {
         await tester.pump(const Duration(seconds: 1));
         expect(calls, ['anime']);
         expect(find.text('Library is empty'), findsOneWidget);
-        gate.complete(
-          const TrackerLibrarySnapshot(folders: [], fromCache: true),
+        final refreshButton = find.byWidgetPredicate(
+          (widget) =>
+              widget is IconButton && widget.tooltip == 'Refresh library',
         );
+        expect(
+          find.descendant(
+            of: refreshButton,
+            matching: find.byType(CircularProgressIndicator),
+          ),
+          findsNothing,
+          reason: 'The header never shows background sync as a loading spinner',
+        );
+        expect(
+          find.descendant(
+            of: refreshButton,
+            matching: find.byIcon(Icons.refresh_rounded),
+          ),
+          findsOneWidget,
+        );
+        await tester.pump(const Duration(seconds: 30));
         await tester.pumpAndSettle();
         expect(
           find.text(
@@ -98,6 +115,10 @@ void main() {
               .onPressed,
           isNotNull,
         );
+        gate.complete(
+          const TrackerLibrarySnapshot(folders: [], fromCache: true),
+        );
+        await tester.pump();
         await tester.tap(find.text('Manga'));
         await tester.pumpAndSettle();
         await tester.tap(find.byTooltip('Refresh library'));

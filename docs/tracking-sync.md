@@ -43,6 +43,10 @@ Library pull-to-refresh and the refresh button read the selected source directly
 without waiting for other catalogs. Repeated calls share one operation per media
 kind. Foreground/resume refreshes reuse a successful read for one minute; manual
 refresh bypasses that freshness window while respecting provider backoff.
+The UI waits at most 30 seconds, including time queued behind existing sync.
+After that it stops its refresh indication while the ordered background work
+continues; repeated attempts share that work until it finishes. The header
+refresh button stays a static icon and does not display a background spinner.
 Rendered entries, folder selection and scroll position remain available while
 refreshing or offline.
 

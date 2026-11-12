@@ -382,15 +382,7 @@ class _LibraryPageState extends ConsumerState<LibraryPage>
                       )
                       ? null
                       : () => _refreshLibrary(),
-                  icon:
-                      _refreshing.contains(
-                        _mainTab.index == 1 ? 'manga' : 'anime',
-                      )
-                      ? const SizedBox.square(
-                          dimension: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.refresh_rounded),
+                  icon: const Icon(Icons.refresh_rounded),
                 ),
               ],
             ),
