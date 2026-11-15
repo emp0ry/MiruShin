@@ -105,6 +105,30 @@ void main() {
     expect(find.byKey(engine.surfaceKey), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
   });
+
+  testWidgets('fill respects display aspect for anamorphic and rotated video', (
+    tester,
+  ) async {
+    final engine = _TestEngine();
+    addTearDown(engine.notifier.dispose);
+    await tester.pumpWidget(surface(engine, stretch: true));
+    for (final aspect in [4 / 3, 9 / 16]) {
+      engine.notifier.value = engine.value.copyWith(
+        videoSize: const Size(720, 480),
+        aspectRatio: aspect,
+      );
+      await tester.pump();
+      final box =
+          tester.widget<FittedBox>(find.byType(FittedBox)).child! as SizedBox;
+      expect(box.width! / box.height!, closeTo(aspect, 0.0001));
+      expect(
+        engine.surfaceBuilds,
+        1,
+        reason: 'Changing layout must retain the existing video surface',
+      );
+    }
+    await tester.pumpWidget(const SizedBox());
+  });
 }
 
 class _TestEngine extends PlayerEngine {

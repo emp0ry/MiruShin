@@ -93,6 +93,7 @@ assumed MAL ID, and only fields supported by its importer (which has no date fie
 - 🖼️ **Picture-in-Picture** and native player handoff where the platform supports it.
 - 🔐 **Host-controlled watch-party permissions** for guest play/pause, seek, and speed changes.
 - 🎮 **Discord Rich Presence** on supported desktops.
+- 🖥️ **Full-display fullscreen on macOS**, including the space beside the camera housing, with an optional switch in Player settings. [Behavior and validation](docs/macos-fullscreen.md).
 - 🔄 **Tracker sync** for AniList, MyAnimeList, and Shikimori account workflows.
 - 🔐 **Per-account workspaces** so switching AniList accounts also switches that account's Local Library and MAL/Shikimori connections.
 - 📤 **Exports** to MyAnimeList XML and Shikimori JSON.

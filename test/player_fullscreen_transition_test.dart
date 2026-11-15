@@ -11,10 +11,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mirushin/app/localization/app_localizations.dart';
 import 'package:mirushin/features/player/application/playback_controller.dart';
+import 'package:mirushin/features/player/application/player_settings.dart';
 import 'package:mirushin/features/player/data/pip_controller.dart';
 import 'package:mirushin/features/player/domain/player_models.dart';
 import 'package:mirushin/features/player/engine/player_engine.dart';
 import 'package:mirushin/features/player/presentation/player_page.dart';
+import 'package:mirushin/features/player/presentation/widgets/player_video_surface.dart';
 import 'package:mirushin/features/watch_party/application/watch_party_controller.dart';
 import 'package:mirushin/features/watch_party/domain/watch_party_models.dart';
 import 'package:mirushin/shared/models/media_item.dart';
@@ -24,6 +26,9 @@ void main() {
   final TestWidgetsFlutterBinding binding =
       TestWidgetsFlutterBinding.ensureInitialized();
   const MethodChannel windowChannel = MethodChannel('mirushin/window');
+  const MethodChannel nativePlayerChannel = MethodChannel(
+    'mirushin/native_player',
+  );
 
   setUpAll(() async {
     await AppLocalizations.load(const Locale('en'));
@@ -119,6 +124,217 @@ void main() {
     expect(tracker.isActive, isFalse);
     expect(activeChanges, 4);
   });
+
+  for (final platform in [TargetPlatform.macOS, TargetPlatform.windows]) {
+    testWidgets(
+      'edge-to-edge setting, safe controls and zoom stay scoped to macOS ($platform)',
+      (tester) async {
+        debugDefaultTargetPlatformOverride = platform;
+        addTearDown(() => debugDefaultTargetPlatformOverride = null);
+        tester.view.physicalSize = const Size(1100, 800);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        SharedPreferences.setMockInitialValues({
+          'settings.appLanguage': 'en',
+          'mirushin.player.settings': jsonEncode(
+            const PlayerSettings(
+              autoplayNext: false,
+              macosEdgeToEdgeFullscreen: true,
+            ).toJson(),
+          ),
+        });
+        var nativeFullscreen = false;
+        var edgeEnabled = false;
+        final configurations = <Map<Object?, Object?>>[];
+        final ended = <String>[];
+        Map<String, Object> layout() => {
+          'fullscreen': nativeFullscreen,
+          'edgeToEdge': nativeFullscreen && edgeEnabled,
+          'top': nativeFullscreen && edgeEnabled ? 38.0 : 0.0,
+        };
+        binding.defaultBinaryMessenger.setMockMethodCallHandler(windowChannel, (
+          call,
+        ) async {
+          switch (call.method) {
+            case 'configurePlayerFullscreen':
+              final args = call.arguments as Map<Object?, Object?>;
+              configurations.add(args);
+              edgeEnabled = args['enabled'] == true;
+              return layout();
+            case 'getFullscreenLayout':
+              return layout();
+            case 'isFullscreen':
+              return nativeFullscreen;
+            case 'setFullscreen':
+              nativeFullscreen = call.arguments as bool;
+              return nativeFullscreen;
+            case 'endPlayerFullscreen':
+              ended.add((call.arguments as Map)['session'] as String);
+              return layout();
+          }
+          return null;
+        });
+        final engine = _FullscreenTestEngine();
+        final controller = _FullscreenTestPlaybackController(_item, engine);
+        final container = ProviderContainer(
+          overrides: [
+            playbackControllerProvider.overrideWith(() => controller),
+            watchPartyProvider.overrideWith(_IdleWatchPartyController.new),
+            pipControllerProvider.overrideWithValue(
+              const UnsupportedPipController(),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+        addTearDown(engine.disposeNotifier);
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: MaterialApp(
+              locale: const Locale('en'),
+              supportedLocales: AppLocalizations.supportedLocales,
+              localizationsDelegates: const [
+                AppLocalizations.delegate,
+                GlobalMaterialLocalizations.delegate,
+                GlobalWidgetsLocalizations.delegate,
+                GlobalCupertinoLocalizations.delegate,
+              ],
+              home: const PlayerPage(item: _item, startInFullscreen: true),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        PlayerVideoSurface surface() =>
+            tester.widget<PlayerVideoSurface>(find.byType(PlayerVideoSurface));
+        final mac = platform == TargetPlatform.macOS;
+        expect(surface().stretchVertical, mac);
+        expect(
+          tester.getSize(find.byType(PlayerVideoSurface)),
+          const Size(1100, 800),
+          reason: 'Only chrome is inset; video keeps the camera row',
+        );
+        expect(
+          container.read(playerSettingsProvider).value!.verticalStretch,
+          isFalse,
+        );
+        if (mac) {
+          expect(
+            tester.getTopLeft(find.byIcon(Icons.arrow_back_rounded)).dy,
+            greaterThanOrEqualTo(38),
+          );
+          await tester.sendKeyEvent(LogicalKeyboardKey.keyZ);
+          await tester.pumpAndSettle();
+          expect(surface().stretchVertical, isFalse);
+          expect(
+            container.read(playerSettingsProvider).value!.verticalStretch,
+            isFalse,
+            reason:
+                'Fullscreen zoom must not replace the normal-window preference',
+          );
+          var pipPresented = false;
+          binding.defaultBinaryMessenger.setMockMethodCallHandler(
+            nativePlayerChannel,
+            (call) async {
+              if (call.method == 'present') {
+                expect(
+                  nativeFullscreen,
+                  isFalse,
+                  reason:
+                      'Restore the normal desktop before handing off to PiP',
+                );
+                pipPresented = true;
+              }
+              return null;
+            },
+          );
+          addTearDown(
+            () => binding.defaultBinaryMessenger.setMockMethodCallHandler(
+              nativePlayerChannel,
+              null,
+            ),
+          );
+          await tester.sendKeyEvent(LogicalKeyboardKey.keyP);
+          await tester.pumpAndSettle();
+          expect(pipPresented, isTrue);
+          expect(nativeFullscreen, isFalse);
+          final reply = Completer<ByteData?>();
+          binding.defaultBinaryMessenger.handlePlatformMessage(
+            nativePlayerChannel.name,
+            nativePlayerChannel.codec.encodeMethodCall(
+              const MethodCall('dismissed', {
+                'positionMs': 1234,
+                'durationMs': 1440000,
+                'wasPlaying': true,
+              }),
+            ),
+            reply.complete,
+          );
+          await reply.future;
+          await tester.pumpAndSettle();
+          expect(nativeFullscreen, isTrue);
+          expect(
+            surface().stretchVertical,
+            isFalse,
+            reason: 'PiP return preserves the user-selected fit mode',
+          );
+          expect(controller.lastNativePosition, 1234);
+          expect(controller.lastSeek, const Duration(milliseconds: 1234));
+        }
+        await tester.tap(find.byIcon(Icons.settings_rounded));
+        await tester.pump(const Duration(milliseconds: 350));
+        await tester.pumpAndSettle();
+        final toggle = find.text('Use the entire display in fullscreen');
+        expect(toggle, mac ? findsOneWidget : findsNothing);
+        if (mac) {
+          await tester.ensureVisible(toggle);
+          await tester.pumpAndSettle();
+          await tester.tap(toggle);
+          await tester.pumpAndSettle();
+          expect(
+            container
+                .read(playerSettingsProvider)
+                .value!
+                .macosEdgeToEdgeFullscreen,
+            isFalse,
+          );
+          expect(configurations.last['enabled'], isFalse);
+          Navigator.of(tester.element(toggle)).pop();
+          await tester.pumpAndSettle();
+          await container
+              .read(playerSettingsProvider.notifier)
+              .setMacosEdgeToEdgeFullscreen(true);
+          await tester.pumpAndSettle();
+          final preferences = await SharedPreferences.getInstance();
+          expect(
+            (jsonDecode(preferences.getString('mirushin.player.settings')!)
+                as Map)['macosEdgeToEdgeFullscreen'],
+            isTrue,
+            reason: 'The switch must survive restarting the application',
+          );
+          expect(surface().stretchVertical, isTrue);
+          expect(
+            controller.loadCalls,
+            1,
+            reason: 'A fullscreen preference must not reload the stream',
+          );
+          await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+          await tester.pumpAndSettle();
+          expect(nativeFullscreen, isFalse);
+          expect(surface().stretchVertical, isFalse);
+          expect(find.byType(PlayerPage), findsOneWidget);
+        } else {
+          expect(configurations, isEmpty);
+          Navigator.of(tester.element(find.text('Player Settings'))).pop();
+          await tester.pumpAndSettle();
+        }
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pump();
+        if (mac) expect(ended, [configurations.last['session']]);
+        debugDefaultTargetPlatformOverride = null;
+      },
+    );
+  }
 
   testWidgets(
     'release sequence carries start fullscreen through player exit and next result',
@@ -530,6 +746,9 @@ class _FullscreenTestPlaybackController extends PlaybackController {
   final MediaPlaybackItem item;
   final PlayerEngine engine;
   int stopCalls = 0;
+  int loadCalls = 0;
+  int? lastNativePosition;
+  Duration? lastSeek;
   int markWatchedCalls = 0;
   int testPlaybackGeneration = 0;
   PlaybackRouteHint? provenRouteForTest;
@@ -569,10 +788,44 @@ class _FullscreenTestPlaybackController extends PlaybackController {
   }
 
   @override
+  Future<void> pause() async {
+    state = state.copyWith(desiredPlaying: false);
+    await engine.pause();
+  }
+
+  @override
+  Future<void> togglePlay() async {
+    state = state.copyWith(desiredPlaying: !state.desiredPlaying);
+    if (state.desiredPlaying) {
+      await engine.play();
+    } else {
+      await engine.pause();
+    }
+  }
+
+  @override
+  Future<bool> skipTo(Duration target) async {
+    lastSeek = target;
+    await engine.seekTo(target);
+    return true;
+  }
+
+  @override
+  Future<void> saveNativeProgress({
+    required int positionMs,
+    required int durationMs,
+    bool completed = false,
+  }) async {
+    lastNativePosition = positionMs;
+  }
+
+  @override
   Future<void> load(
     MediaPlaybackItem item, {
     PlaybackRouteHint? preferredPlaybackRoute,
-  }) async {}
+  }) async {
+    loadCalls++;
+  }
 
   @override
   Future<void> stop() async {
@@ -627,13 +880,19 @@ class _FullscreenTestEngine extends PlayerEngine {
   }) async {}
 
   @override
-  Future<void> play() async {}
+  Future<void> play() async {
+    _state.value = _state.value.copyWith(isPlaying: true);
+  }
 
   @override
-  Future<void> pause() async {}
+  Future<void> pause() async {
+    _state.value = _state.value.copyWith(isPlaying: false);
+  }
 
   @override
-  Future<void> seekTo(Duration position) async {}
+  Future<void> seekTo(Duration position) async {
+    _state.value = _state.value.copyWith(position: position);
+  }
 
   @override
   Future<void> setPlaybackSpeed(double speed) async {}

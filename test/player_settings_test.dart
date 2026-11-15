@@ -3,6 +3,29 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mirushin/features/player/domain/player_models.dart';
 
 void main() {
+  group('macOS edge-to-edge fullscreen settings', () {
+    test('existing installations keep standard fullscreen', () {
+      expect(PlayerSettings.fromJson({}).macosEdgeToEdgeFullscreen, isFalse);
+    });
+    test(
+      'round-trips opt-in without changing the saved normal zoom choice',
+      () {
+        final restored = PlayerSettings.fromJson(
+          const PlayerSettings(
+            macosEdgeToEdgeFullscreen: true,
+          ).copyWith(playbackSpeed: 1.25).toJson(),
+        );
+        expect(restored.macosEdgeToEdgeFullscreen, isTrue);
+        expect(restored.verticalStretch, isFalse);
+        expect(
+          restored
+              .copyWith(macosEdgeToEdgeFullscreen: false)
+              .macosEdgeToEdgeFullscreen,
+          isFalse,
+        );
+      },
+    );
+  });
   group('PlayerSettings horizontal swipe seeking', () {
     test('stays enabled when loading settings saved by an older version', () {
       final PlayerSettings settings = PlayerSettings.fromJson(

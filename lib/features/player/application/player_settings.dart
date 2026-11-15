@@ -95,6 +95,11 @@ class PlayerSettingsController extends AsyncNotifier<PlayerSettings> {
     await _update(current.copyWith(verticalStretch: value));
   }
 
+  Future<void> setMacosEdgeToEdgeFullscreen(bool value) async {
+    final current = state.value ?? const PlayerSettings();
+    await _update(current.copyWith(macosEdgeToEdgeFullscreen: value));
+  }
+
   Future<void> setHorizontalSwipeSeekEnabled(bool value) async {
     final PlayerSettings current = state.value ?? const PlayerSettings();
     await _update(current.copyWith(horizontalSwipeSeekEnabled: value));

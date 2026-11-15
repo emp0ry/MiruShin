@@ -2412,6 +2412,17 @@ class _PlayerEngineSection extends ConsumerWidget {
             onChanged: controller.setHorizontalSwipeSeekEnabled,
           ),
         ),
+        if (!kIsWeb && defaultTargetPlatform == TargetPlatform.macOS)
+          SettingsRow(
+            title: context.t('Use the entire display in fullscreen'),
+            subtitle: context.t(
+              'Fill the area beside the camera. Uses the current desktop. Pinch to fit the video.',
+            ),
+            trailing: Switch(
+              value: settings.macosEdgeToEdgeFullscreen,
+              onChanged: controller.setMacosEdgeToEdgeFullscreen,
+            ),
+          ),
         const PlayerDiagnosticsControls(),
       ],
     );

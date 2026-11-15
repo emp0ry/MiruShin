@@ -22,6 +22,7 @@ import '../data/native_player_service.dart';
 import '../data/pip_controller.dart';
 import '../data/subtitle_loader.dart';
 import '../domain/auto_skip.dart';
+import '../domain/player_fullscreen_layout.dart';
 import '../domain/player_models.dart';
 import '../domain/player_volume_policy.dart';
 import '../engine/player_engine.dart';
@@ -231,6 +232,16 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
   bool _exitingPlayer = false;
   bool _allowRoutePop = false;
   bool _isFullscreen = false;
+  PlayerFullscreenLayout _fullscreenLayout = const PlayerFullscreenLayout(
+    fullscreen: false,
+    edgeToEdge: false,
+  );
+  bool _edgeToEdgeVideoZoomed = true;
+  bool _restoreEdgeFullscreenAfterPip = false;
+  bool _zoomBeforeNativePip = true;
+  late final String _fullscreenSession;
+  bool? _configuredMacEdgePreference;
+  Future<void> _macConfiguration = Future.value();
   bool? _pendingFullscreenTarget;
   int _fullscreenRequestGeneration = 0;
   int _timelineHoverEpoch = 0;
@@ -281,6 +292,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
       _handleTimelineInteractionChanged,
     );
     _windowChannelOwner = Object();
+    _fullscreenSession =
+        'player-${DateTime.now().microsecondsSinceEpoch}-${identityHashCode(_windowChannelOwner)}';
     _windowChannelHandlerOwner = _windowChannelOwner;
     _windowChannel.setMethodCallHandler(_handleWindowMethodCall);
     _playbackNotifier.setNextEpisodeHandler(
@@ -315,6 +328,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     _inPipMode = ref.read(pipControllerProvider).isInPipMode;
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_prepareMacFullscreen());
       unawaited(_syncFullscreenState());
       if (_shouldStartFullscreen) {
         unawaited(_setFullscreen(true));
@@ -405,7 +419,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     );
     if (!mounted) return;
     if (confirmed) {
-      if (!_playbackNotifier.allowsEpisodeNavigation) return;
+      if (!_playbackNotifier.allowsEpisodeNavigation) {
+        await _restoreFullscreenAfterNativePip();
+        return;
+      }
       await _exitPlayer(playNext: true);
       return;
     }
@@ -417,6 +434,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     if (engine != null && !engine.state.value.isPlaying) {
       await _playbackNotifier.togglePlay();
     }
+    await _restoreFullscreenAfterNativePip();
   }
 
   Future<void> _restoreFromNativeDismiss({
@@ -435,6 +453,17 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
       if (engine != null && !engine.state.value.isPlaying) {
         await _playbackNotifier.togglePlay();
       }
+    }
+    await _restoreFullscreenAfterNativePip();
+  }
+
+  Future<void> _restoreFullscreenAfterNativePip() async {
+    final restore = _restoreEdgeFullscreenAfterPip;
+    _restoreEdgeFullscreenAfterPip = false;
+    if (!restore || !mounted || _exitingPlayer) return;
+    await _setFullscreen(true);
+    if (mounted && _fullscreenLayout.edgeToEdge) {
+      setState(() => _edgeToEdgeVideoZoomed = _zoomBeforeNativePip);
     }
   }
 
@@ -501,6 +530,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
         ref.read(playerSettingsProvider).value ?? const PlayerSettings();
 
     // Pause FVP and show the "Playing in PiP" overlay.
+    if (_fullscreenLayout.edgeToEdge) {
+      _restoreEdgeFullscreenAfterPip = true;
+      _zoomBeforeNativePip = _edgeToEdgeVideoZoomed;
+      await _setFullscreen(false);
+      if (!mounted || _exitingPlayer) return;
+    }
     await _playbackNotifier.pause();
     if (mounted) setState(() => _nativePipActive = true);
 
@@ -523,9 +558,11 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     } on PlatformException {
       if (mounted) setState(() => _nativePipActive = false);
       if (wasPlaying && mounted) await _playbackNotifier.togglePlay();
+      await _restoreFullscreenAfterNativePip();
     } on MissingPluginException {
       if (mounted) setState(() => _nativePipActive = false);
       if (wasPlaying && mounted) await _playbackNotifier.togglePlay();
+      await _restoreFullscreenAfterNativePip();
     }
   }
 
@@ -546,6 +583,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     _timelineInteractions.detach();
     _arrowSeekKeyTracker.reset();
     if (identical(_windowChannelHandlerOwner, _windowChannelOwner)) {
+      unawaited(_endMacFullscreenSession());
       _windowChannelHandlerOwner = null;
       _windowChannel.setMethodCallHandler(null);
     }
@@ -944,7 +982,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
         if (!mounted) return;
       }
     }
-    final bool wasFullscreen = _isFullscreen;
+    final bool wasFullscreen = _isFullscreen || _restoreEdgeFullscreenAfterPip;
+    _restoreEdgeFullscreenAfterPip = false;
     final int playbackGeneration = _playbackNotifier.playbackGeneration;
     final bool shouldStartNextFullscreen = playerContinuationStartsFullscreen(
       advancing: advancing,
@@ -1069,6 +1108,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
         'isFullscreen',
       );
       if (fullscreen != null) _applyFullscreenState(fullscreen);
+      await _syncMacFullscreenLayout();
     } on MissingPluginException {
       // Non-desktop platforms do not need a native window toggle.
     } on PlatformException {
@@ -1080,6 +1120,99 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     if (call.method == 'fullscreenChanged' && call.arguments is bool) {
       _applyFullscreenState(call.arguments! as bool);
     }
+    if (call.method == 'fullscreenLayoutChanged') {
+      _applyFullscreenLayout(call.arguments);
+    }
+  }
+
+  bool get _isMacOS => !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS;
+
+  Future<void> _syncMacFullscreenLayout() async {
+    if (!_isMacOS) return;
+    try {
+      _applyFullscreenLayout(
+        await _windowChannel.invokeMethod<Object?>('getFullscreenLayout'),
+      );
+    } on MissingPluginException {
+      // Standard fullscreen still works with an older native host.
+    } on PlatformException {
+      // A closing window has no additional layout to report.
+    }
+  }
+
+  Future<void> _prepareMacFullscreen() async {
+    if (!_isMacOS || !mounted) return;
+    final settings = await ref.read(playerSettingsProvider.future);
+    if (mounted) {
+      await _configureMacFullscreen(settings.macosEdgeToEdgeFullscreen);
+    }
+  }
+
+  Future<void> _configureMacFullscreen(bool enabled) {
+    if (!_isMacOS || !mounted) return Future.value();
+    if (_configuredMacEdgePreference == enabled) return _macConfiguration;
+    _configuredMacEdgePreference = enabled;
+    return _macConfiguration = _macConfiguration.then((_) async {
+      if (!mounted ||
+          !identical(_windowChannelHandlerOwner, _windowChannelOwner)) {
+        return;
+      }
+      try {
+        _applyFullscreenLayout(
+          await _windowChannel.invokeMethod<Object?>(
+            'configurePlayerFullscreen',
+            {'session': _fullscreenSession, 'enabled': enabled},
+          ),
+        );
+      } on MissingPluginException {
+        _configuredMacEdgePreference = null;
+      } on PlatformException {
+        _configuredMacEdgePreference = null;
+      }
+    });
+  }
+
+  Future<void> _endMacFullscreenSession() async {
+    if (!_isMacOS) return;
+    try {
+      await _windowChannel.invokeMethod<Object?>('endPlayerFullscreen', {
+        'session': _fullscreenSession,
+      });
+    } on MissingPluginException {
+      // Older/non-native hosts keep their standard fullscreen behavior.
+    } on PlatformException {
+      // The window may already be closing.
+    }
+  }
+
+  void _applyFullscreenLayout(Object? value) {
+    final layout = PlayerFullscreenLayout.fromNative(value);
+    if (!mounted || layout == null) return;
+    _applyFullscreenState(layout.fullscreen);
+    if (_fullscreenLayout.edgeToEdge != layout.edgeToEdge ||
+        _fullscreenLayout.safeInsets != layout.safeInsets) {
+      setState(() {
+        if (!_fullscreenLayout.edgeToEdge && layout.edgeToEdge) {
+          _edgeToEdgeVideoZoomed = true;
+        }
+        _fullscreenLayout = layout;
+        _timelineHoverEpoch++;
+      });
+    }
+  }
+
+  bool _videoZoomed(PlayerSettings settings) => _fullscreenLayout.edgeToEdge
+      ? _edgeToEdgeVideoZoomed
+      : settings.verticalStretch;
+
+  Future<void> _setVideoZoomed(bool zoomed) async {
+    if (_fullscreenLayout.edgeToEdge) {
+      setState(() => _edgeToEdgeVideoZoomed = zoomed);
+    } else {
+      await ref
+          .read(playerSettingsProvider.notifier)
+          .setVerticalStretch(zoomed);
+    }
   }
 
   void _applyFullscreenState(bool fullscreen) {
@@ -1089,6 +1222,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
       _playbackNotifier.cancelSeekPreview();
       setState(() {
         _isFullscreen = fullscreen;
+        if (!fullscreen) {
+          _fullscreenLayout = const PlayerFullscreenLayout(
+            fullscreen: false,
+            edgeToEdge: false,
+          );
+        }
         // A macOS full-screen transition changes coordinate spaces. Recreate
         // only the hover region so MouseTracker establishes fresh ownership at
         // the pointer's real post-transition position.
@@ -1191,6 +1330,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
   Future<void> _setFullscreen(bool fullscreen) async {
     final int requestGeneration = ++_fullscreenRequestGeneration;
     _pendingFullscreenTarget = fullscreen;
+    if (fullscreen && _isMacOS) {
+      await _prepareMacFullscreen();
+      if (!mounted || requestGeneration != _fullscreenRequestGeneration) return;
+    }
     await SystemChrome.setEnabledSystemUIMode(
       fullscreen ? SystemUiMode.immersiveSticky : SystemUiMode.edgeToEdge,
     );
@@ -1215,6 +1358,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     if (actualFullscreen != null) {
       _applyFullscreenState(actualFullscreen);
     }
+    await _syncMacFullscreenLayout();
     if (requestGeneration == _fullscreenRequestGeneration) {
       _pendingFullscreenTarget = null;
     }
@@ -1372,11 +1516,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     }
     if (key == LogicalKeyboardKey.keyZ) {
       if (event is! KeyDownEvent) return KeyEventResult.handled;
-      unawaited(
-        ref
-            .read(playerSettingsProvider.notifier)
-            .setVerticalStretch(!settings.verticalStretch),
-      );
+      unawaited(_setVideoZoomed(!_videoZoomed(settings)));
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.keyE) {
@@ -1509,6 +1649,14 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     _syncTvPlaybackObserver(state.engine);
     final PlayerSettings settings =
         ref.watch(playerSettingsProvider).value ?? const PlayerSettings();
+    ref.listen<bool?>(
+      playerSettingsProvider.select(
+        (value) => value.value?.macosEdgeToEdgeFullscreen,
+      ),
+      (_, enabled) {
+        if (enabled != null) unawaited(_configureMacFullscreen(enabled));
+      },
+    );
     final SkipMarkers markers = _effectiveSkipMarkers(
       ref.watch(skipMarkersProvider).value,
       state.item?.skipMarkers ?? widget.item.skipMarkers,
@@ -1699,9 +1847,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
           ),
           _ZoomIntent: CallbackAction<_ZoomIntent>(
             onInvoke: (_) {
-              ref
-                  .read(playerSettingsProvider.notifier)
-                  .setVerticalStretch(!settings.verticalStretch);
+              _setVideoZoomed(!_videoZoomed(settings));
               return null;
             },
           ),
@@ -1755,7 +1901,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
             },
             child: Scaffold(
               backgroundColor: Colors.black,
-              body: ExcludeSemantics(
+              body: _PlayerFullscreenViewport(
+                layout: _fullscreenLayout,
                 child: Stack(
                   children: <Widget>[
                     if (isYoutubeTrailer)
@@ -1811,7 +1958,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
                           onActivity: _showControls,
                           seekInterval: settings.seekInterval,
                           isMobile: _isMobile,
-                          isZoomed: settings.verticalStretch,
+                          isZoomed: _videoZoomed(settings),
                           horizontalSwipeSeekEnabled:
                               settings.horizontalSwipeSeekEnabled,
                           enableGestures: !_inPipMode,
@@ -1819,13 +1966,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
                           onTogglePlay: () => ref
                               .read(playbackControllerProvider.notifier)
                               .togglePlay(),
-                          onZoomChanged: (bool zoomed) {
-                            unawaited(
-                              ref
-                                  .read(playerSettingsProvider.notifier)
-                                  .setVerticalStretch(zoomed),
-                            );
-                          },
+                          onZoomChanged: (zoomed) =>
+                              unawaited(_setVideoZoomed(zoomed)),
                           child: Stack(
                             fit: StackFit.expand,
                             children: <Widget>[
@@ -1833,7 +1975,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
                                 controller: _exitingPlayer
                                     ? null
                                     : state.engine,
-                                stretchVertical: settings.verticalStretch,
+                                stretchVertical: _videoZoomed(settings),
                               ),
                               // Auto-skip always runs (logic widget, no UI).
                               _AutoSkipWorker(
@@ -1873,6 +2015,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
                                               !forceChromeForLoading) ||
                                           state.locked,
                                       child: _PlayerChrome(
+                                        isZoomed: _videoZoomed(settings),
+                                        onToggleZoom: () => unawaited(
+                                          _setVideoZoomed(
+                                            !_videoZoomed(settings),
+                                          ),
+                                        ),
                                         isFullscreen: _isFullscreen,
                                         isMobile: _isMobile,
                                         volumeControlsEnabled:
@@ -2039,6 +2187,17 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
       ),
     );
   }
+}
+
+class _PlayerFullscreenViewport extends StatelessWidget {
+  const _PlayerFullscreenViewport({required this.layout, required this.child});
+  final PlayerFullscreenLayout layout;
+  final Widget child;
+  @override
+  Widget build(BuildContext context) => MediaQuery(
+    data: layout.applyTo(MediaQuery.of(context)),
+    child: ExcludeSemantics(child: child),
+  );
 }
 
 bool _isYoutubeTrailerPlayback(PlaybackState state, MediaPlaybackItem item) {
@@ -2430,6 +2589,8 @@ String _temporarySpeedLabel(double speed) {
 
 class _PlayerChrome extends ConsumerWidget {
   const _PlayerChrome({
+    required this.isZoomed,
+    required this.onToggleZoom,
     required this.isFullscreen,
     required this.isMobile,
     required this.volumeControlsEnabled,
@@ -2442,6 +2603,8 @@ class _PlayerChrome extends ConsumerWidget {
     this.tvSeedFocusNode,
   });
 
+  final bool isZoomed;
+  final VoidCallback onToggleZoom;
   final bool isFullscreen;
   final bool isMobile;
   final bool volumeControlsEnabled;
@@ -2748,22 +2911,15 @@ class _PlayerChrome extends ConsumerWidget {
                                               ),
                                             ),
                                             _ChromeButton(
-                                              icon: settings.verticalStretch
+                                              icon: isZoomed
                                                   ? Icons
                                                         .fullscreen_exit_rounded
                                                   : Icons.zoom_out_map_rounded,
-                                              label: settings.verticalStretch
+                                              label: isZoomed
                                                   ? 'Normal'
                                                   : 'Zoom',
                                               showLabel: !compactZoom,
-                                              onTap: () => ref
-                                                  .read(
-                                                    playerSettingsProvider
-                                                        .notifier,
-                                                  )
-                                                  .setVerticalStretch(
-                                                    !settings.verticalStretch,
-                                                  ),
+                                              onTap: onToggleZoom,
                                             ),
                                             if (controller == null)
                                               speedButton(
@@ -4881,6 +5037,20 @@ class _PlayerSettingsTiles extends ConsumerWidget {
               .read(playerSettingsProvider.notifier)
               .setHorizontalSwipeSeekEnabled(value),
         ),
+        if (!kIsWeb && defaultTargetPlatform == TargetPlatform.macOS)
+          SwitchListTile(
+            value: settings.macosEdgeToEdgeFullscreen,
+            secondary: const Icon(Icons.fullscreen_rounded),
+            title: Text(context.t('Use the entire display in fullscreen')),
+            subtitle: Text(
+              context.t(
+                'Fill the area beside the camera. Uses the current desktop. Pinch to fit the video.',
+              ),
+            ),
+            onChanged: ref
+                .read(playerSettingsProvider.notifier)
+                .setMacosEdgeToEdgeFullscreen,
+          ),
         ListTile(
           leading: const Icon(Icons.keyboard_double_arrow_right_rounded),
           title: Text(context.t('Seek interval')),

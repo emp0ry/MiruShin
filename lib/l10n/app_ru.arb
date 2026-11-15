@@ -1623,6 +1623,8 @@
   "AniList is busy. Try again in {seconds}s.": "AniList занят. Повторите через {seconds} с.",
   "Search took too long. Please try again.": "Поиск занял слишком много времени. Попробуйте ещё раз.",
   "Could not load search results. Please try again.": "Не удалось загрузить результаты поиска. Попробуйте ещё раз.",
+  "Use the entire display in fullscreen": "Использовать весь дисплей в полноэкранном режиме",
+  "Fill the area beside the camera. Uses the current desktop. Pinch to fit the video.": "Видео заполняет область по бокам чёлки на текущем рабочем столе. Сведите пальцы, чтобы вписать кадр.",
   "Refresh library": "Обновить библиотеку",
   "Could not refresh library. Your saved library is still available.": "Не удалось обновить библиотеку. Сохранённая библиотека остаётся доступной."
 }
