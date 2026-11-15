@@ -197,6 +197,7 @@ final class PlayerFullscreenController {
 
   private func enterEdgeToEdge() -> Bool {
     guard let window = window, let screen = window.screen ?? NSScreen.main else { return false }
+    let firstResponder = window.firstResponder
     saved = SavedWindow(
       frame: window.frame, screenID: Self.screenID(screen), style: window.styleMask,
       collection: window.collectionBehavior, level: window.level, shadow: window.hasShadow,
@@ -215,7 +216,16 @@ final class PlayerFullscreenController {
     window.setFrame(screen.frame, display: true)
     updatingFrame = false
     window.makeKeyAndOrderFront(nil)
+    restoreFirstResponder(firstResponder, in: window)
     return true
+  }
+
+  private func restoreFirstResponder(_ responder: NSResponder?, in window: NSWindow) {
+    // Changing styleMask replaces the content's first responder with NSWindow.
+    // Making the window key alone does not return keyboard input to Flutter.
+    if let responder = responder, responder.acceptsFirstResponder {
+      window.makeFirstResponder(responder)
+    }
   }
 
   /// Called on hot-plug, display scaling changes, and moves between displays.
@@ -244,6 +254,7 @@ final class PlayerFullscreenController {
 
   private func restoreWindow(foreground: Bool = true) {
     guard let saved = saved, let window = window else { return }
+    let firstResponder = window.firstResponder
     updatingFrame = true
     window.styleMask = saved.style
     window.collectionBehavior = saved.collection
@@ -262,6 +273,7 @@ final class PlayerFullscreenController {
     if !saved.autosave.isEmpty { window.saveFrame(usingName: saved.autosave) }
     updatingFrame = false
     if foreground { window.makeKeyAndOrderFront(nil) }
+    restoreFirstResponder(firstResponder, in: window)
   }
 
   func close() {

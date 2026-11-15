@@ -6,11 +6,21 @@ import Cocoa
 
 private final class TestWindow: NSWindow {
   weak var fullscreen: PlayerFullscreenController?
-  override var canBecomeKey: Bool { true }
-  override var canBecomeMain: Bool { true }
+  override var canBecomeKey: Bool { fullscreen?.isEdgeToEdge == true || super.canBecomeKey }
+  override var canBecomeMain: Bool { fullscreen?.isEdgeToEdge == true || super.canBecomeMain }
   override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
     if fullscreen?.isEdgeToEdge == true { return frameRect }
     return super.constrainFrameRect(frameRect, to: screen)
+  }
+}
+
+private final class KeyboardView: NSView {
+  var onToggle: (() -> Void)?
+  var receivedKeys = 0
+  override var acceptsFirstResponder: Bool { true }
+  override func keyDown(with event: NSEvent) {
+    receivedKeys += 1
+    if event.charactersIgnoringModifiers == "f" { onToggle?() }
   }
 }
 
@@ -28,7 +38,8 @@ struct FullscreenSmoke {
     )
     window.isReleasedWhenClosed = false
     window.title = "MiruShin fullscreen check"
-    window.contentView = NSView(frame: NSRect(x: 0, y: 0, width: 640, height: 360))
+    let keyboard = KeyboardView(frame: NSRect(x: 0, y: 0, width: 640, height: 360))
+    window.contentView = keyboard
     let autosave = NSWindow.FrameAutosaveName("MiruShin.FullscreenCheck.\(UUID().uuidString)")
     _ = window.setFrameAutosaveName(autosave)
     window.makeKeyAndOrderFront(nil)
@@ -47,6 +58,36 @@ struct FullscreenSmoke {
       case .failure(let failure): fatalError("Unexpected transition failure: \(failure)")
       }
     }
+    func pumpEvents() {
+      let deadline = Date(timeIntervalSinceNow: 0.15)
+      while Date() < deadline {
+        if let event = app.nextEvent(matching: .any, until: deadline,
+                                     inMode: .default, dequeue: true) {
+          app.sendEvent(event)
+        }
+      }
+    }
+    func pressF() {
+      let event = NSEvent.keyEvent(
+        with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+        windowNumber: window.windowNumber, context: nil,
+        characters: "f", charactersIgnoringModifiers: "f", isARepeat: false, keyCode: 3
+      )!
+      app.sendEvent(event)
+      pumpEvents()
+    }
+    func requireKeyboardFocus(_ stage: String) {
+      guard app.isActive, window.isKeyWindow, window.isMainWindow,
+            window.firstResponder === keyboard else {
+        fputs("FAIL: Keyboard focus lost \(stage)\n", stderr)
+        exit(1)
+      }
+    }
+    app.activate(ignoringOtherApps: true)
+    window.makeFirstResponder(keyboard)
+    pumpEvents()
+    requireKeyboardFocus("before fullscreen")
+    keyboard.onToggle = { fullscreen.request(!fullscreen.pendingFullscreen, completion: success) }
     defer {
       fullscreen.close()
       window.orderOut(nil)
@@ -54,7 +95,19 @@ struct FullscreenSmoke {
     }
 
     fullscreen.configure(session: "first", enabled: true, completion: success)
-    fullscreen.request(true, completion: success)
+    // Route actual key events through NSApplication, without mouse clicks or
+    // calling the view directly. A style change must not replace its responder.
+    for _ in 0..<3 {
+      pressF()
+      precondition(fullscreen.mode == .edgeToEdge)
+      requireKeyboardFocus("after F enters fullscreen")
+      pressF()
+      precondition(fullscreen.mode == .windowed)
+      requireKeyboardFocus("after F exits fullscreen")
+    }
+    precondition(keyboard.receivedKeys == 6)
+    pressF()
+    requireKeyboardFocus("after repeated F toggles")
     precondition(fullscreen.mode == .edgeToEdge && nativeCalls == 0)
     precondition(window.frame == screen.frame, "Fullscreen must include the camera row")
     precondition(window.contentView?.bounds.size == screen.frame.size,
@@ -73,6 +126,7 @@ struct FullscreenSmoke {
     precondition(nativeCalls == 2)
     fullscreen.nativeDidChange(to: false)
     precondition(fullscreen.mode == .edgeToEdge && window.frame == screen.frame)
+    requireKeyboardFocus("after native-to-edge conversion")
 
     fullscreen.configure(session: "next-episode", enabled: true, completion: success)
     fullscreen.endSession("first", completion: success)
@@ -82,6 +136,7 @@ struct FullscreenSmoke {
     precondition(window.frame == originalFrame && window.styleMask == originalStyle)
     precondition(window.frameAutosaveName == autosave)
     precondition(app.presentationOptions == originalPresentation)
+    requireKeyboardFocus("after session cleanup")
 
     // Rapid opposite requests retain native ordering and finish in windowed mode.
     fullscreen.configure(session: "rapid", enabled: false, completion: success)
@@ -113,6 +168,6 @@ struct FullscreenSmoke {
     let cameraInset: CGFloat
     if #available(macOS 12.0, *) { cameraInset = screen.safeAreaInsets.top }
     else { cameraInset = 0 }
-    print("PASS: edge-to-edge geometry, native mode conversion, ordered toggles, stale session, failure, restore and close; cameraInset=\(cameraInset), resetInset=\(top), completions=\(results.count)")
+    print("PASS: F keyboard focus in both directions, edge-to-edge geometry, native mode conversion, ordered toggles, stale session, failure, restore and close; cameraInset=\(cameraInset), resetInset=\(top), completions=\(results.count)")
   }
 }

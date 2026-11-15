@@ -40,10 +40,12 @@ swiftc macos/Runner/PlayerFullscreenController.swift \
 /tmp/mirushin-fullscreen-check
 ```
 
-The check creates a temporary test window, exercises geometry, ordered native
-transitions, stale session cleanup, failure handling and frame restoration, then
-closes it. Display hot-plug fallback geometry is checked without requiring an
-actual monitor disconnection.
+The check creates a temporary test window and sends repeated F key events through
+AppKit, checking that the window stays active and its content keeps keyboard focus
+when entering and leaving fullscreen without mouse clicks. It also exercises
+geometry, ordered native transitions, stale session cleanup, failure handling and
+frame restoration, then closes the window. Display hot-plug fallback geometry is
+checked without requiring an actual monitor disconnection.
 
 A separate Flutter/AppKit profile probe was run on a camera-equipped display
 with **SIP enabled**. The full-display viewport measured `1710×1107` logical
