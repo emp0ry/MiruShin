@@ -85,9 +85,9 @@ class _PlayerVideoSurfaceState extends State<PlayerVideoSurface> {
           );
         }
         final width = layout.size.width > 0 ? layout.size.width : 1920.0;
-        final height = layout.size.height > 0
-            ? layout.size.height
-            : width / layout.aspectRatio;
+        // Coded dimensions may have non-square pixels or a rotation. Use the
+        // engine's display ratio for cover, just as the fitted mode does.
+        final height = width / layout.aspectRatio;
         return ClipRect(
           child: SizedBox.expand(
             child: FittedBox(
