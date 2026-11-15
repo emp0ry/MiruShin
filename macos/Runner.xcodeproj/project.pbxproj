@@ -21,6 +21,7 @@
 /* End PBXAggregateTarget section */
 
 /* Begin PBXBuildFile section */
+		A9F002012F00000100000001 /* PlayerFullscreenController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9F002002F00000100000001 /* PlayerFullscreenController.swift */; };
 		0D1056627C04725F7E38E3BE /* Pods_Runner.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D65E0B08A798260364E5889D /* Pods_Runner.framework */; };
 		331C80D8294CF71000263BE5 /* RunnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C80D7294CF71000263BE5 /* RunnerTests.swift */; };
 		335BBD1B22A9A15E00E9071D /* GeneratedPluginRegistrant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 335BBD1A22A9A15E00E9071D /* GeneratedPluginRegistrant.swift */; };
@@ -63,6 +64,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		A9F002002F00000100000001 /* PlayerFullscreenController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerFullscreenController.swift; sourceTree = "<group>"; };
 		331C80D5294CF71000263BE5 /* RunnerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RunnerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		331C80D7294CF71000263BE5 /* RunnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunnerTests.swift; sourceTree = "<group>"; };
 		333000ED22D3DE5D00554162 /* Warnings.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Warnings.xcconfig; sourceTree = "<group>"; };
@@ -180,6 +182,7 @@
 				33CC10F02044A3C60003C045 /* AppDelegate.swift */,
 				A9F001002F00000100000001 /* SeekThumbnailDecoder.mm */,
 				33CC11122044BFA00003C045 /* MainFlutterWindow.swift */,
+				A9F002002F00000100000001 /* PlayerFullscreenController.swift */,
 				33E51913231747F40026EE4D /* DebugProfile.entitlements */,
 				33E51914231749380026EE4D /* Release.entitlements */,
 				33CC11242044D66E0003C045 /* Resources */,
@@ -460,6 +463,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				33CC11132044BFA00003C045 /* MainFlutterWindow.swift in Sources */,
+				A9F002012F00000100000001 /* PlayerFullscreenController.swift in Sources */,
 				33CC10F12044A3C60003C045 /* AppDelegate.swift in Sources */,
 				A9F001012F00000100000001 /* SeekThumbnailDecoder.mm in Sources */,
 				335BBD1B22A9A15E00E9071D /* GeneratedPluginRegistrant.swift in Sources */,

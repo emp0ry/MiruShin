@@ -1618,6 +1618,8 @@
   "AniList is busy. Try again in {seconds}s.": "AniList is busy. Try again in {seconds}s.",
   "Search took too long. Please try again.": "Search took too long. Please try again.",
   "Could not load search results. Please try again.": "Could not load search results. Please try again.",
+  "Use the entire display in fullscreen": "Use the entire display in fullscreen",
+  "Fill the area beside the camera. Uses the current desktop. Pinch to fit the video.": "Fill the area beside the camera. Uses the current desktop. Pinch to fit the video.",
   "Refresh library": "Refresh library",
   "Could not refresh library. Your saved library is still available.": "Could not refresh library. Your saved library is still available."
 }

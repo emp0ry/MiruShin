@@ -5,16 +5,6 @@ import AVKit
 import WebKit
 import webview_flutter_wkwebview
 
-private final class FullscreenRequestBatch {
-  let target: Bool
-  var results: [FlutterResult]
-
-  init(target: Bool, result: @escaping FlutterResult) {
-    self.target = target
-    self.results = [result]
-  }
-}
-
 class MainFlutterWindow: NSWindow, NSWindowDelegate {
   private static let frameAutosaveName = NSWindow.FrameAutosaveName(
     "MiruShin.MainWindow"
@@ -26,10 +16,7 @@ class MainFlutterWindow: NSWindow, NSWindowDelegate {
   private var commandsRegistered = false
   private var lastArtworkUrl = ""
   private var cachedArtwork: NSImage?
-  private var confirmedFullscreen = false
-  private var fullscreenTransitionTarget: Bool?
-  private var fullscreenRequestInFlightTarget: Bool?
-  private var fullscreenRequests: [FullscreenRequestBatch] = []
+  private var fullscreenController: PlayerFullscreenController?
 
   override func awakeFromNib() {
     _ = self.setFrameAutosaveName(Self.frameAutosaveName)
@@ -38,8 +25,12 @@ class MainFlutterWindow: NSWindow, NSWindowDelegate {
     self.contentViewController = flutterViewController
     self.setFrame(windowFrame, display: true)
     self.collectionBehavior.insert(.fullScreenPrimary)
-    self.confirmedFullscreen = self.styleMask.contains(.fullScreen)
     self.delegate = self
+    self.fullscreenController = PlayerFullscreenController(
+      window: self,
+      toggleNative: { [weak self] in self?.toggleNativeFullscreen() },
+      onChange: { [weak self] state in self?.publishFullscreenState(state) }
+    )
 
     RegisterGeneratedPlugins(registry: flutterViewController)
     let messenger = flutterViewController.engine.binaryMessenger
@@ -53,7 +44,7 @@ class MainFlutterWindow: NSWindow, NSWindowDelegate {
       switch call.method {
       case "isFullscreen":
         DispatchQueue.main.async {
-          result(self.confirmedFullscreen)
+          result(self.fullscreenController?.state.fullscreen ?? false)
         }
       case "setFullscreen":
         guard let fullscreen = Self.boolArgument(call.arguments) else {
@@ -61,7 +52,29 @@ class MainFlutterWindow: NSWindow, NSWindowDelegate {
           return
         }
         DispatchQueue.main.async {
-          self.enqueueFullscreenRequest(fullscreen, result: result)
+          self.fullscreenController?.request(fullscreen) { response in
+            self.completeFullscreenRequest(response, result: result, layout: false)
+          }
+        }
+      case "getFullscreenLayout":
+        result(self.fullscreenController?.state.dictionary)
+      case "configurePlayerFullscreen", "endPlayerFullscreen":
+        guard let args = call.arguments as? [String: Any],
+              let session = args["session"] as? String else {
+          result(FlutterError(code: "bad_args", message: "Missing player session", details: nil))
+          return
+        }
+        DispatchQueue.main.async {
+          let complete: PlayerFullscreenController.Completion = { response in
+            self.completeFullscreenRequest(response, result: result, layout: true)
+          }
+          if call.method == "endPlayerFullscreen" {
+            self.fullscreenController?.endSession(session, completion: complete)
+          } else if let enabled = Self.boolArgument(args["enabled"]) {
+            self.fullscreenController?.configure(session: session, enabled: enabled, completion: complete)
+          } else {
+            result(FlutterError(code: "bad_args", message: "Missing fullscreen preference", details: nil))
+          }
         }
       case "foreground":
         DispatchQueue.main.async {
@@ -134,144 +147,77 @@ class MainFlutterWindow: NSWindow, NSWindowDelegate {
     super.awakeFromNib()
   }
 
-  private func enqueueFullscreenRequest(
-    _ target: Bool,
-    result: @escaping FlutterResult
-  ) {
-    if let last = fullscreenRequests.last, last.target == target {
-      last.results.append(result)
-    } else {
-      fullscreenRequests.append(
-        FullscreenRequestBatch(target: target, result: result)
-      )
-    }
-    processNextFullscreenRequest()
-  }
+  private func toggleNativeFullscreen() { super.toggleFullScreen(nil) }
 
-  private func processNextFullscreenRequest() {
-    guard fullscreenTransitionTarget == nil else { return }
-    guard let request = fullscreenRequests.first else { return }
-
-    if request.target == confirmedFullscreen {
-      fullscreenRequests.removeFirst()
-      request.results.forEach { $0(confirmedFullscreen) }
-      processNextFullscreenRequest()
+  override func toggleFullScreen(_ sender: Any?) {
+    guard let fullscreen = fullscreenController, fullscreen.hasPlayerSession else {
+      super.toggleFullScreen(sender)
       return
     }
-
-    collectionBehavior.insert(.fullScreenPrimary)
-    if !isKeyWindow { makeKeyAndOrderFront(nil) }
-    fullscreenTransitionTarget = request.target
-    fullscreenRequestInFlightTarget = request.target
-    toggleFullScreen(nil)
+    fullscreen.request(!fullscreen.pendingFullscreen) { _ in }
   }
 
-  private func fullscreenTransitionWillBegin(target: Bool) {
-    // This also tracks transitions initiated outside Flutter (for example the
-    // standard macOS full-screen menu item). A conflicting queued Flutter
-    // request remains pending and is processed after this transition finishes.
-    fullscreenTransitionTarget = target
+  override var canBecomeKey: Bool {
+    fullscreenController?.isEdgeToEdge == true || super.canBecomeKey
   }
 
-  private func fullscreenTransitionDidFinish(fullscreen: Bool) {
-    let requestInFlightTarget = fullscreenRequestInFlightTarget
-    confirmedFullscreen = fullscreen
-    fullscreenTransitionTarget = nil
-    fullscreenRequestInFlightTarget = nil
-    windowChannel?.invokeMethod("fullscreenChanged", arguments: fullscreen)
+  override var canBecomeMain: Bool {
+    fullscreenController?.isEdgeToEdge == true || super.canBecomeMain
+  }
 
-    if let request = fullscreenRequests.first {
-      if request.target == fullscreen {
-        fullscreenRequests.removeFirst()
-        request.results.forEach { $0(fullscreen) }
-      } else if requestInFlightTarget != nil {
-        fullscreenRequests.removeFirst()
-        let error = FlutterError(
-          code: "fullscreen_transition_mismatch",
-          message: "AppKit completed the opposite full-screen transition.",
-          details: ["requested": request.target, "actual": fullscreen]
-        )
-        request.results.forEach { $0(error) }
-      }
-    }
-    DispatchQueue.main.async { [weak self] in
-      self?.processNextFullscreenRequest()
+  override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+    if fullscreenController?.isEdgeToEdge == true { return frameRect }
+    return super.constrainFrameRect(frameRect, to: screen)
+  }
+
+  private func publishFullscreenState(_ state: PlayerFullscreenController.State) {
+    windowChannel?.invokeMethod("fullscreenChanged", arguments: state.fullscreen)
+    windowChannel?.invokeMethod("fullscreenLayoutChanged", arguments: state.dictionary)
+  }
+
+  private func completeFullscreenRequest(
+    _ response: Result<PlayerFullscreenController.State, PlayerFullscreenController.Failure>,
+    result: FlutterResult, layout: Bool
+  ) {
+    switch response {
+    case .success(let state): result(layout ? state.dictionary : state.fullscreen)
+    case .failure(let failure):
+      result(FlutterError(
+        code: failure == .windowClosed ? "window_closed" : "fullscreen_transition_failed",
+        message: "The fullscreen transition could not be completed.", details: nil
+      ))
     }
   }
 
-  private func fullscreenTransitionDidFail(target: Bool) {
-    confirmedFullscreen = styleMask.contains(.fullScreen)
-    fullscreenTransitionTarget = nil
-    fullscreenRequestInFlightTarget = nil
-    windowChannel?.invokeMethod(
-      "fullscreenChanged",
-      arguments: confirmedFullscreen
-    )
-
-    if let request = fullscreenRequests.first, request.target == target {
-      fullscreenRequests.removeFirst()
-      let error = FlutterError(
-        code: "fullscreen_transition_failed",
-        message: target
-          ? "AppKit failed to enter full-screen mode."
-          : "AppKit failed to exit full-screen mode.",
-        details: ["requested": target, "actual": confirmedFullscreen]
-      )
-      request.results.forEach { $0(error) }
-    }
-    DispatchQueue.main.async { [weak self] in
-      self?.processNextFullscreenRequest()
-    }
-  }
-
-  private func failPendingFullscreenRequestsBecauseWindowClosed() {
-    fullscreenTransitionTarget = nil
-    fullscreenRequestInFlightTarget = nil
-    let requests = fullscreenRequests
-    fullscreenRequests.removeAll()
-    let error = FlutterError(
-      code: "window_closed",
-      message: "The window closed during a full-screen transition.",
-      details: nil
-    )
-    requests.flatMap(\.results).forEach { $0(error) }
-  }
-
-  // MARK: - NSWindowDelegate (main-window full-screen lifecycle)
+  // MARK: - NSWindowDelegate
 
   func windowWillEnterFullScreen(_ notification: Notification) {
-    fullscreenTransitionWillBegin(target: true)
+    fullscreenController?.nativeWillChange(to: true)
   }
-
   func windowDidEnterFullScreen(_ notification: Notification) {
-    fullscreenTransitionDidFinish(fullscreen: true)
+    fullscreenController?.nativeDidChange(to: true)
   }
-
   func windowWillExitFullScreen(_ notification: Notification) {
-    fullscreenTransitionWillBegin(target: false)
+    fullscreenController?.nativeWillChange(to: false)
   }
-
   func windowDidExitFullScreen(_ notification: Notification) {
-    fullscreenTransitionDidFinish(fullscreen: false)
+    fullscreenController?.nativeDidChange(to: false)
   }
-
   func windowDidFailToEnterFullScreen(_ window: NSWindow) {
-    fullscreenTransitionDidFail(target: true)
+    fullscreenController?.nativeDidFail()
   }
-
   func windowDidFailToExitFullScreen(_ window: NSWindow) {
-    fullscreenTransitionDidFail(target: false)
+    fullscreenController?.nativeDidFail()
   }
-
+  func windowDidChangeScreen(_ notification: Notification) {
+    fullscreenController?.updateScreen(preferred: screen)
+  }
   func windowShouldClose(_ sender: NSWindow) -> Bool {
-    // Closing the Flutter view first destroys the UI isolate before async DB
-    // cleanup can finish. Keep it alive and use the same handshake as Cmd-Q.
     NSApp.terminate(sender)
     return false
   }
-
   func windowWillClose(_ notification: Notification) {
-    failPendingFullscreenRequestsBecauseWindowClosed()
+    fullscreenController?.close()
   }
 
   // MARK: - Now Playing

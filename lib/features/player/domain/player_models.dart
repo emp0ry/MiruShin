@@ -354,6 +354,7 @@ class PlayerSettings {
     this.volume = 1,
     this.lastAudibleVolume = 1,
     this.verticalStretch = false,
+    this.macosEdgeToEdgeFullscreen = false,
     this.horizontalSwipeSeekEnabled = true,
     this.preferredQuality = 'auto',
     this.preferredVoiceover = '',
@@ -391,6 +392,7 @@ class PlayerSettings {
   /// after a player/backend restart.
   final double lastAudibleVolume;
   final bool verticalStretch;
+  final bool macosEdgeToEdgeFullscreen;
   final bool horizontalSwipeSeekEnabled;
   final String preferredQuality;
   final String preferredVoiceover;
@@ -425,6 +427,7 @@ class PlayerSettings {
     double? volume,
     double? lastAudibleVolume,
     bool? verticalStretch,
+    bool? macosEdgeToEdgeFullscreen,
     bool? horizontalSwipeSeekEnabled,
     String? preferredQuality,
     String? preferredVoiceover,
@@ -459,6 +462,8 @@ class PlayerSettings {
       volume: volume ?? this.volume,
       lastAudibleVolume: lastAudibleVolume ?? this.lastAudibleVolume,
       verticalStretch: verticalStretch ?? this.verticalStretch,
+      macosEdgeToEdgeFullscreen:
+          macosEdgeToEdgeFullscreen ?? this.macosEdgeToEdgeFullscreen,
       horizontalSwipeSeekEnabled:
           horizontalSwipeSeekEnabled ?? this.horizontalSwipeSeekEnabled,
       preferredQuality: preferredQuality ?? this.preferredQuality,
@@ -501,6 +506,7 @@ class PlayerSettings {
     'volume': volume,
     'lastAudibleVolume': lastAudibleVolume,
     'verticalStretch': verticalStretch,
+    'macosEdgeToEdgeFullscreen': macosEdgeToEdgeFullscreen,
     'horizontalSwipeSeekEnabled': horizontalSwipeSeekEnabled,
     'preferredQuality': preferredQuality,
     'preferredVoiceover': preferredVoiceover,
@@ -548,6 +554,8 @@ class PlayerSettings {
       volume: volume,
       lastAudibleVolume: lastAudibleVolume > 0 ? lastAudibleVolume : 1,
       verticalStretch: json['verticalStretch'] as bool? ?? false,
+      macosEdgeToEdgeFullscreen:
+          json['macosEdgeToEdgeFullscreen'] as bool? ?? false,
       horizontalSwipeSeekEnabled:
           json['horizontalSwipeSeekEnabled'] as bool? ?? true,
       preferredQuality: json['preferredQuality'] as String? ?? 'auto',

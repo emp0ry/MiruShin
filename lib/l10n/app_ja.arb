@@ -1618,6 +1618,8 @@
   "AniList is busy. Try again in {seconds}s.": "AniList が混雑しています。{seconds}秒後に再試行してください。",
   "Search took too long. Please try again.": "検索がタイムアウトしました。もう一度お試しください。",
   "Could not load search results. Please try again.": "検索結果を読み込めませんでした。もう一度お試しください。",
+  "Use the entire display in fullscreen": "フルスクリーンでディスプレイ全体を使用",
+  "Fill the area beside the camera. Uses the current desktop. Pinch to fit the video.": "カメラの左右も映像で埋めます。現在のデスクトップで表示します。ピンチインで映像全体を表示できます。",
   "Refresh library": "ライブラリを更新",
   "Could not refresh library. Your saved library is still available.": "ライブラリを更新できませんでした。保存済みのライブラリは引き続き利用できます。"
 }
